@@ -31,8 +31,8 @@
 # waiting in its Crewly queue at the next tool boundary (main agent only).
 #
 # Owner board (crewly#1247): for PreToolUse ONLY, the script also sends the tool
-# name and a `toolInput` object holding at most three top-level string fields of
-# tool_input — file_path/notebook_path/path (as filePath), command and url, each cut to 600
+# name and a `toolInput` object holding at most four top-level string fields of
+# tool_input — file_path/notebook_path/path (as filePath), command, url and (WebSearch only) query, each cut to 600
 # characters. The backend reduces them at once to "what kind of work" (a repo-relative
 # path, the executable and subcommand, host + path) and never stores or logs the
 # raw values; the POST goes to the local backend only. `CREWLY_BOARD_PUSH=0` in
@@ -79,11 +79,11 @@ field() {
 	fi
 }
 
-# Pick the board's three tool_input fields (see the header). Prints a compact JSON
+# Pick the board's tool_input fields (see the header). Prints a compact JSON
 # object, or nothing. Top-level `tool_input` only.
 tool_input_json() {
 	if command -v jq >/dev/null 2>&1; then
-		printf '%s' "$INPUT" | jq -c 'if type == "object" and (.tool_input | type) == "object" then (.tool_input | {filePath: (.file_path // .notebook_path // .path), command: .command, url: .url} | with_entries(select(.value | type == "string")) | with_entries(.value |= .[0:600]) | select(length > 0)) else empty end' 2>/dev/null
+		printf '%s' "$INPUT" | jq -c 'if type == "object" and (.tool_input | type) == "object" then (. as $root | .tool_input | {filePath: (.file_path // .notebook_path // .path), command: .command, url: .url, query: (if $root.tool_name == "WebSearch" then .query else null end)} | with_entries(select(.value | type == "string")) | with_entries(.value |= .[0:600]) | select(length > 0)) else empty end' 2>/dev/null
 	elif command -v node >/dev/null 2>&1; then
 		printf '%s' "$INPUT" | node -e '
 			let s = "";
@@ -94,7 +94,7 @@ tool_input_json() {
 					const t = o && typeof o === "object" && !Array.isArray(o) ? o.tool_input : undefined;
 					if (!t || typeof t !== "object" || Array.isArray(t)) return;
 					const out = {};
-					for (const [k, v] of [["filePath", t.file_path ?? t.notebook_path ?? t.path], ["command", t.command], ["url", t.url]]) {
+					for (const [k, v] of [["filePath", t.file_path ?? t.notebook_path ?? t.path], ["command", t.command], ["url", t.url], ["query", o.tool_name === "WebSearch" ? t.query : undefined]]) {
 						if (typeof v === "string") out[k] = v.slice(0, 600);
 					}
 					if (Object.keys(out).length > 0) process.stdout.write(JSON.stringify(out));

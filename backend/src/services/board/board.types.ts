@@ -5,6 +5,8 @@
  * @module services/board/board.types
  */
 
+import type { AgentCapabilities, StepEvent } from './canvas/canvas.types.js';
+
 /** What an agent is doing right now. */
 export type BoardActivityType = 'coding' | 'browsing' | 'command' | 'writing' | 'messaging' | 'waiting_owner' | 'thinking' | 'other';
 
@@ -32,6 +34,8 @@ export interface BoardAgent {
 	lastAction?: { text: string; at: string };
 	todayUsd?: number;
 	todayTokens?: number;
+	/** What the owner can do with this agent from the canvas (crewly#1247 v2) */
+	capabilities?: AgentCapabilities;
 }
 
 /** One team card. */
@@ -114,4 +118,6 @@ export interface BoardDelta {
 	generatedAt: string;
 	agents: Array<BoardAgent & { teamId: string }>;
 	timeline?: BoardTimelineEvent[];
+	/** Canvas step stream: new steps and steps whose status changed (same `id`, upsert) */
+	steps?: StepEvent[];
 }

@@ -34,6 +34,8 @@ export interface ToolInput {
 	filePath?: string;
 	command?: string;
 	url?: string;
+	/** A web search query (WebSearch only); the canvas shows it, scrubbed */
+	query?: string;
 }
 
 /** Context for path relativization. */
@@ -59,6 +61,8 @@ export function parseToolInput(raw: unknown): ToolInput {
 	const filePath = pick('filePath');
 	const command = pick('command');
 	const url = pick('url');
+	const query = pick('query');
+	if (query) out.query = query.slice(0, 300);
 	if (filePath) out.filePath = filePath;
 	if (command) out.command = command;
 	if (url) out.url = url;
@@ -72,13 +76,13 @@ const done = (type: BoardActivityType, detail: string, text: string): Normalized
 });
 
 /** Skills by what they do for the owner. */
-const MESSAGING_SKILLS = new Set([
+export const MESSAGING_SKILLS = new Set([
 	'reply-chat', 'reply', 'reply-channel', 'send-chat-response', 'reply-slack', 'slack-post', 'slack-file', 'send-message', 'send-file', 'gmail-send',
 	'whatsapp-send', 'whatsapp-draft', 'reply-gchat', 'reply-remote', 'broadcast', 'broadcast-to-org', 'ask-owner',
 ]);
-const BROWSING_SKILLS = new Set(['remote-browser', 'web-search', 'browse-stealth', 'chrome-attach']);
+export const BROWSING_SKILLS = new Set(['remote-browser', 'web-search', 'browse-stealth', 'chrome-attach']);
 /** Writing skills and what to call the place they write to. */
-const WRITING_SKILLS: Record<string, string> = {
+export const WRITING_SKILLS: Record<string, string> = {
 	'docs-write': 'Google Docs',
 	'docs-comment': 'Google Docs',
 	'sheets-write': 'Google Sheets',
@@ -98,7 +102,7 @@ const WRITING_SKILLS: Record<string, string> = {
 };
 
 /** A chat / channel name as it may be shown: `#name`-like, short, no tokens. */
-const CHANNEL_NAME = /^#?[A-Za-z0-9][\w.-]{0,38}$/;
+export const CHANNEL_NAME = /^#?[A-Za-z0-9][\w.-]{0,38}$/;
 
 /**
  * The value after a flag in a skill's arguments.
@@ -107,7 +111,7 @@ const CHANNEL_NAME = /^#?[A-Za-z0-9][\w.-]{0,38}$/;
  * @param flags - Accepted flag spellings
  * @returns The value, or undefined
  */
-function flagValue(args: readonly string[], flags: readonly string[]): string | undefined {
+export function flagValue(args: readonly string[], flags: readonly string[]): string | undefined {
 	for (let i = 0; i < args.length - 1; i += 1) {
 		if (flags.includes(args[i])) return args[i + 1];
 	}

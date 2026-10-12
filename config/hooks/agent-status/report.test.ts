@@ -217,6 +217,16 @@ describe('agent-status hook (report.sh)', () => {
 			expect(received[0].body).not.toContain(SECRET);
 		});
 
+		it('sends the search query for WebSearch only', async () => {
+			await runHook({ hook_event_name: 'PreToolUse', tool_name: 'WebSearch', tool_input: { query: 'open swarm rivals', prompt: SECRET } });
+			expect(JSON.parse(received[0].body).toolInput).toEqual({ query: 'open swarm rivals' });
+			expect(received[0].body).not.toContain(SECRET);
+			received.length = 0;
+			await runHook({ hook_event_name: 'PreToolUse', tool_name: 'mcp__db__query', tool_input: { query: `select * from t where k = '${SECRET}'` } });
+			expect(received[0].body).not.toContain('toolInput');
+			expect(received[0].body).not.toContain(SECRET);
+		});
+
 		it('cuts long values to 600 characters and skips non-strings', async () => {
 			await runHook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'a'.repeat(5000), url: 42 } });
 			const body = JSON.parse(received[0].body);

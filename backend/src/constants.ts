@@ -8387,3 +8387,74 @@ export const BOARD_CONSTANTS = {
 	/** Project-ticket scan is cached this long (ms) */
 	PROJECT_TICKET_CACHE_MS: 5 * 60_000,
 } as const;
+
+/**
+ * Crewly Canvas, machine side (crewly#1247 v2): the live step stream, the
+ * owner actions Cloud relays to this machine, the masked terminal tail and the
+ * per-agent capabilities. Shared contract: CANVAS-CONTRACT.md.
+ */
+export const CANVAS_CONSTANTS = {
+	/** Steps kept per agent in memory */
+	STEPS_MAX_PER_AGENT: 300,
+	/** Steps older than this are dropped from memory (ms) */
+	STEPS_MAX_AGE_MS: 24 * 60 * 60 * 1000,
+	/** Steps sent in one delta (all agents) and per agent */
+	DELTA_STEPS_MAX: 120,
+	DELTA_STEPS_PER_AGENT_MAX: 40,
+	/** Unsent steps kept per agent (a failed push loses nothing, up to this) */
+	UNSENT_MAX_PER_AGENT: 200,
+	/** The agent's own text lines: longest (chars) */
+	TEXT_MAX: 280,
+	/** An instant step equal to the previous one within this long is dropped (ms) */
+	STEP_DEDUPE_MS: 5_000,
+	/** A tool start without an end is closed after this long (ms) */
+	OPEN_STEP_MAX_MS: 30 * 60_000,
+
+	/** While Cloud says viewers are watching, a change is pushed within this long (ms) */
+	LIVE_DELTA_DELAY_MS: 1_000,
+	/** A "live" answer from Cloud is believed this long (ms) */
+	LIVE_TTL_MS: 30_000,
+
+	/** Transcript tail: poll cadence with viewers / without (ms) */
+	TAIL_LIVE_INTERVAL_MS: 2_000,
+	TAIL_IDLE_INTERVAL_MS: 8_000,
+	/** A transcript path found (or not found) is trusted this long (ms) */
+	TAIL_LOCATE_TTL_MS: 30_000,
+	/** First look at a transcript reads at most this many bytes from its end */
+	TAIL_FIRST_READ_BYTES: 64 * 1024,
+	/** One pass reads at most this many new bytes per file */
+	TAIL_MAX_READ_BYTES: 512 * 1024,
+	/** First look only keeps text newer than this (ms) */
+	TAIL_FIRST_MAX_AGE_MS: 10 * 60_000,
+
+	/** Relay message `type` Cloud pushes for an owner action (ids only) */
+	RELAY_MESSAGE_TYPE: 'canvas_action',
+	/** Capability advertised to Cloud once the action handler runs */
+	CAPABILITY: 'canvas_actions',
+	/** `GET <path>/:actionId?instanceId=` fetches an action; `POST <path>/:actionId/result` reports it */
+	ACTIONS_PATH: '/api/cloud/canvas/actions',
+	/** Machine -> Cloud: one masked terminal frame */
+	TERMINAL_FRAME_PATH: '/api/cloud/canvas/terminal/frame',
+	/** Kinds of owner action */
+	ACTION_KINDS: ['message', 'stop', 'terminal_open', 'terminal_renew', 'terminal_close'] as const,
+	/** Longest owner message accepted (chars) */
+	MESSAGE_MAX: 4_000,
+	/** Delays before retrying a failed action fetch (ms) */
+	FETCH_RETRY_DELAYS_MS: [1_000, 5_000, 15_000],
+	REQUEST_TIMEOUT_MS: 15_000,
+	/** Actions already carried out are remembered this long / this many */
+	DONE_ACTIONS_TTL_MS: 60 * 60 * 1000,
+	DONE_ACTIONS_MAX: 500,
+
+	/** Terminal stream: frame cadence, lease without a renew, longest total, and streams at once */
+	TERMINAL_FRAME_INTERVAL_MS: 1_000,
+	TERMINAL_LEASE_MS: 2 * 60_000,
+	TERMINAL_MAX_STREAM_MS: 30 * 60_000,
+	TERMINAL_MAX_STREAMS: 3,
+	TERMINAL_TAIL_LINES: 200,
+	TERMINAL_MAX_LINE_CHARS: 400,
+	/** Failed frame posts in a row before the stream stops */
+	TERMINAL_MAX_FAILURES: 5,
+	/** A Chrome session counts as the agent's browser while it was active this recently (ms) */
+	BROWSER_ACTIVE_MS: 10 * 60_000,
+} as const;

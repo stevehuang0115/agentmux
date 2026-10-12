@@ -22,6 +22,8 @@ import {
 	type NormalizeContext,
 	type ToolInput,
 } from './board-activity.normalizer.js';
+import { StepStream } from './canvas/canvas-step.stream.js';
+import { stepOfBrowserAction, stepOfMessage, stepOfOwnerWait, stepOfTool } from './canvas/canvas-step.normalizer.js';
 import type { BoardActivity, BoardTimelineEvent } from './board.types.js';
 
 const C = BOARD_CONSTANTS;
@@ -43,6 +45,8 @@ interface SessionActivity {
 	/** Timeline events not yet sent to Cloud */
 	unsent: BoardTimelineEvent[];
 	seq: number;
+	/** Canvas step of the current wait on the owner */
+	waitStep: string | null;
 }
 
 /** What a session shows right now. */
@@ -60,6 +64,8 @@ export class BoardActivityTracker {
 	private readonly listeners = new Set<BoardChangeListener>();
 	/** Project roots by session, for relative paths */
 	private rootsOf: (session: string) => readonly string[] = () => [];
+	/** The canvas step stream: the same events, one line per tool call with its duration */
+	readonly steps = new StepStream();
 
 	/** @returns The process-wide tracker */
 	static getInstance(): BoardActivityTracker {
@@ -105,7 +111,7 @@ export class BoardActivityTracker {
 	private get(session: string): SessionActivity {
 		let s = this.sessions.get(session);
 		if (!s) {
-			s = { open: new Map(), current: null, last: null, ownerWait: null, timeline: [], unsent: [], seq: 0 };
+			s = { open: new Map(), current: null, last: null, ownerWait: null, timeline: [], unsent: [], seq: 0, waitStep: null };
 			this.sessions.set(session, s);
 		}
 		return s;
@@ -134,7 +140,9 @@ export class BoardActivityTracker {
 				const roots = this.safeRoots(session);
 				const activity = normalizeToolUse(info.toolName, info.toolInput ?? {}, { roots } as NormalizeContext);
 				s.open.set(info.toolUseId ?? `anon-${(s.seq += 1)}`, now);
+				this.endWaitStep(session, s, now);
 				s.ownerWait = null;
+				this.steps.start(session, stepOfTool(info.toolName, info.toolInput ?? {}, { roots } as NormalizeContext), { ...(info.toolUseId ? { id: info.toolUseId } : {}) }, now);
 				this.show(session, s, activity, now);
 				return;
 			}
@@ -142,19 +150,25 @@ export class BoardActivityTracker {
 				if (info.toolUseId) s.open.delete(info.toolUseId);
 				else if (s.open.size > 0) s.open.delete(s.open.keys().next().value as string);
 				if (s.current) s.current.lastEventAt = now;
+				this.endWaitStep(session, s, now);
 				s.ownerWait = null;
+				this.steps.finish(session, info.toolUseId, 'done', now);
 				return;
 			}
 			case 'UserPromptSubmit':
 			case 'SessionStart':
 				s.open.clear();
+				this.endWaitStep(session, s, now);
 				s.ownerWait = null;
+				this.steps.closeAll(session, now);
 				s.current = { activity: THINKING, since: now, lastEventAt: now };
 				this.emit(session);
 				return;
 			case 'Stop':
 				s.open.clear();
+				this.endWaitStep(session, s, now);
 				s.ownerWait = null;
+				this.steps.closeAll(session, now);
 				s.current = null;
 				this.emit(session);
 				return;
@@ -181,6 +195,7 @@ export class BoardActivityTracker {
 	 */
 	recordBrowser(session: string, tool: string, url?: string, now: number = Date.now()): void {
 		const s = this.get(session);
+		this.steps.instant(session, stepOfBrowserAction(tool, url), now);
 		this.show(session, s, normalizeBrowserAction(tool, url), now);
 	}
 
@@ -193,6 +208,7 @@ export class BoardActivityTracker {
 	 */
 	recordMessage(session: string, channel: string, now: number = Date.now()): void {
 		const s = this.get(session);
+		this.steps.instant(session, stepOfMessage(channel), now);
 		this.show(session, s, normalizeMessage(channel), now);
 	}
 
@@ -208,6 +224,7 @@ export class BoardActivityTracker {
 		if (s.ownerWait) return;
 		const activity = normalizeOwnerWait(what);
 		s.ownerWait = { activity, since: now };
+		s.waitStep = this.steps.start(session, stepOfOwnerWait(what), {}, now);
 		this.pushTimeline(s, session, activity, now);
 		this.emit(session);
 	}
@@ -220,8 +237,16 @@ export class BoardActivityTracker {
 	clearOwnerWait(session: string): void {
 		const s = this.sessions.get(session);
 		if (!s?.ownerWait) return;
+		this.endWaitStep(session, s, Date.now());
 		s.ownerWait = null;
 		this.emit(session);
+	}
+
+	/** The wait on the owner is over: its canvas step ends. */
+	private endWaitStep(session: string, s: SessionActivity, now: number): void {
+		if (!s.waitStep) return;
+		this.steps.finish(session, s.waitStep, 'done', now);
+		s.waitStep = null;
 	}
 
 	/** Make `activity` current and the last action; notify when the row changed. */
@@ -349,6 +374,7 @@ export class BoardActivityTracker {
 	 */
 	forget(session: string): void {
 		this.sessions.delete(session);
+		this.steps.forget(session);
 	}
 }
 

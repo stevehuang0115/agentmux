@@ -2,8 +2,11 @@
  * Pushes the owner board to Crewly Cloud (crewly#1247).
  *
  * - a full snapshot every 60 s (Cloud may ask for another cadence);
- * - a delta (only the agent rows that changed, plus new timeline events)
- *   within {@link BOARD_CONSTANTS.DELTA_DELAY_MS} of an activity change;
+ * - a delta (only the agent rows that changed, plus new timeline events and
+ *   canvas steps) within {@link BOARD_CONSTANTS.DELTA_DELAY_MS} of an activity
+ *   change, or within {@link CANVAS_CONSTANTS.LIVE_DELTA_DELAY_MS} while Cloud
+ *   says someone is watching the canvas (`live: true` / `viewers > 0` in its
+ *   answer, believed for {@link CANVAS_CONSTANTS.LIVE_TTL_MS});
  * - gzip bodies, exponential backoff on failure, an hour's pause when Cloud
  *   does not take board pushes (not deployed / refusing);
  * - nothing is sent when the machine is not signed in to Cloud, or when
@@ -17,13 +20,14 @@
  */
 
 import { gzipSync } from 'zlib';
-import { BOARD_CONSTANTS } from '../../constants.js';
+import { BOARD_CONSTANTS, CANVAS_CONSTANTS } from '../../constants.js';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
 import type { BoardActivityTracker } from './board-activity.tracker.js';
 import type { BoardSnapshotBuilder } from './board-snapshot.builder.js';
 import type { BoardDelta, BoardSnapshot } from './board.types.js';
 
 const C = BOARD_CONSTANTS;
+const CV = CANVAS_CONSTANTS;
 
 /** The Cloud session (CloudClientService). */
 export interface BoardCloudSession {
@@ -106,6 +110,8 @@ export class BoardPushService {
 	private failures = 0;
 	private pausedUntil = 0;
 	private pauseLogged = false;
+	/** Cloud said viewers are watching until this time (epoch ms) */
+	private liveUntil = 0;
 	private inFlight: Promise<unknown> = Promise.resolve();
 
 	constructor(private readonly deps: BoardPushDeps) {
@@ -122,6 +128,23 @@ export class BoardPushService {
 		this.clearTimer = deps.clearTimeout ?? ((h) => clearTimeout(h));
 	}
 
+	/**
+	 * Whether Cloud recently said someone is watching the canvas.
+	 *
+	 * @returns True while the live answer is believed
+	 */
+	isLive(): boolean {
+		return this.now() < this.liveUntil;
+	}
+
+	/**
+	 * Treat the canvas as watched for a while (an owner action just arrived, so
+	 * someone is there).
+	 */
+	noteViewer(): void {
+		this.liveUntil = Math.max(this.liveUntil, this.now() + CV.LIVE_TTL_MS);
+	}
+
 	/** Whether the push is switched off in the environment. */
 	get disabled(): boolean {
 		return isBoardPushDisabled(this.deps.env ?? process.env);
@@ -131,7 +154,13 @@ export class BoardPushService {
 	start(): void {
 		if (this.started || this.disabled) return;
 		this.started = true;
-		this.unsubscribe = this.deps.tracker.onChange((session) => this.markDirty(session));
+		// A step changed: the agent's row did not necessarily, but a delta is due
+		const offRows = this.deps.tracker.onChange((session) => this.markDirty(session));
+		const offSteps = this.deps.tracker.steps.onChange((session) => this.markDirty(session));
+		this.unsubscribe = () => {
+			offRows();
+			offSteps();
+		};
 		this.scheduleFull(0);
 	}
 
@@ -159,7 +188,7 @@ export class BoardPushService {
 		this.deltaTimer = this.setTimer(() => {
 			this.deltaTimer = null;
 			void this.flushDelta();
-		}, C.DELTA_DELAY_MS);
+		}, this.isLive() ? CV.LIVE_DELTA_DELAY_MS : C.DELTA_DELAY_MS);
 	}
 
 	private scheduleFull(delayMs: number): void {
@@ -216,8 +245,8 @@ export class BoardPushService {
 		for (const team of snapshot.teams) for (const a of team.agents) this.lastSent.set(a.session, JSON.stringify(a));
 		this.dirty.clear();
 		// Timeline events ride in deltas
-		const pending = this.deps.tracker.sessionsWithUnsent();
-		if (pending.length > 0) await this.doDelta(new Set(pending));
+		const pending = new Set([...this.deps.tracker.sessionsWithUnsent(), ...this.deps.tracker.steps.sessionsWithUnsent()]);
+		if (pending.size > 0) await this.doDelta(pending);
 		return 'sent';
 	}
 
@@ -243,7 +272,8 @@ export class BoardPushService {
 		const rows = this.deps.builder.rows(sessions);
 		const changed = rows.filter((r) => this.lastSent.get(r.session) !== JSON.stringify(stripTeam(r)));
 		const timeline = this.deps.tracker.peekUnsent(sessions);
-		if (changed.length === 0 && timeline.length === 0) return 'nothing';
+		let steps = this.deps.tracker.steps.peekUnsent(sessions);
+		if (changed.length === 0 && timeline.length === 0 && steps.length === 0) return 'nothing';
 		const instanceId = (await this.deps.builder.identity()).instanceId;
 		const body: BoardDelta = {
 			v: 1,
@@ -251,16 +281,41 @@ export class BoardPushService {
 			generatedAt: new Date(this.now()).toISOString(),
 			agents: changed,
 			...(timeline.length > 0 ? { timeline } : {}),
+			...(steps.length > 0 ? { steps } : {}),
 		};
+		// The body limit is on the uncompressed JSON: the newest steps go first when it does not fit
+		for (let guard = 0; guard < 20 && body.steps && Buffer.byteLength(JSON.stringify(body)) > C.MAX_BODY_BYTES; guard += 1) {
+			steps = steps.slice(Math.ceil(steps.length / 2));
+			if (steps.length > 0) body.steps = steps;
+			else delete body.steps;
+		}
 		const outcome = await this.post(target, C.DELTA_PATH, body, instanceId);
 		if (outcome === 'sent') {
 			for (const r of changed) this.lastSent.set(r.session, JSON.stringify(stripTeam(r)));
 			this.deps.tracker.ackUnsent(timeline);
+			this.deps.tracker.steps.ackUnsent(steps);
+			// Steps the per-delta limit held back go in the next one
+			const left = this.deps.tracker.steps.sessionsWithUnsent();
+			for (const session of left) this.markDirty(session);
 		} else if (outcome === 'failed') {
 			// keep them dirty for the next try (the full push also repairs everything)
 			for (const s of sessions) this.dirty.add(s);
 		}
 		return outcome;
+	}
+
+	/** Cloud's answer says whether anyone is watching (`live: true` or `viewers > 0`, at the top or under `next`). */
+	private noteLiveAnswer(data: { live?: unknown; viewers?: unknown; next?: { live?: unknown; viewers?: unknown } } | undefined): void {
+		if (!data) return;
+		const live = (o: { live?: unknown; viewers?: unknown } | undefined): boolean | null => {
+			if (!o) return null;
+			if (typeof o.live === 'boolean') return o.live;
+			if (typeof o.viewers === 'number' && Number.isFinite(o.viewers)) return o.viewers > 0;
+			return null;
+		};
+		const answer = live(data) ?? live(data.next);
+		if (answer === true) this.liveUntil = this.now() + CV.LIVE_TTL_MS;
+		else if (answer === false) this.liveUntil = 0;
 	}
 
 	private async post(target: { base: string; token: string }, path: string, body: unknown, instanceId: string): Promise<BoardPushOutcome> {
@@ -282,9 +337,12 @@ export class BoardPushService {
 			});
 			status = response.status;
 			if (response.ok) {
-				const parsed = (await response.json().catch(() => null)) as { data?: { next?: { fullAfterSec?: unknown } } } | null;
+				const parsed = (await response.json().catch(() => null)) as {
+					data?: { live?: unknown; viewers?: unknown; next?: { fullAfterSec?: unknown; live?: unknown; viewers?: unknown } };
+				} | null;
 				const sec = parsed?.data?.next?.fullAfterSec;
 				if (typeof sec === 'number' && Number.isFinite(sec)) this.fullAfterMs = Math.min(600, Math.max(15, sec)) * 1000;
+				this.noteLiveAnswer(parsed?.data);
 				this.failures = 0;
 				if (this.pauseLogged) {
 					this.pauseLogged = false;
