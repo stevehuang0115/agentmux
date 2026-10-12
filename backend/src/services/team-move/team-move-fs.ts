@@ -137,6 +137,21 @@ export class StagingArea {
   }
 
   /**
+   * Record a file that was written into the area by someone else (a git
+   * bundle written by `git` directly), hashing it as a stream.
+   *
+   * @param rel - POSIX package path of an existing file
+   * @returns The recorded entry
+   */
+  async adopt(rel: string): Promise<PackageFileEntry> {
+    const dest = this.abs(rel);
+    const stat = await fs.stat(dest);
+    const entry = { path: rel, sha256: await sha256File(dest), bytes: stat.size };
+    this.entries.set(rel, entry);
+    return entry;
+  }
+
+  /**
    * Write a text/JSON file, recording its hash.
    *
    * @param rel - POSIX package path

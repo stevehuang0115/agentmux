@@ -4,6 +4,7 @@
  * arriving with the move, and the machine-readable failure detail.
  */
 
+import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -18,6 +19,7 @@ import { FIXTURE, buildSourceFixture, type Fixture } from './team-move.fixture.j
 import type { TeamMoveView } from './team-move.types.js';
 
 const F = FIXTURE;
+const git = (cwd: string, ...args: string[]): string => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 const PF_ID = 'preflight-000000001';
 const FAKE_SLACK = ['xoxb', '123456789012', '123456789012', 'abcdefghijklmnop'].join('-');
 
@@ -193,9 +195,16 @@ describe('TeamMoveDriver preflight', () => {
     const intent = JSON.parse(await fs.readFile(path.join(fx.home, 'team-moves', 'move-created-0001', 'intent.json'), 'utf8')) as Record<string, boolean>;
     expect(intent).toMatchObject({ carryChanges: true, skipFlagged: true, allowDirty: false });
 
-    // A repository without a remote cannot be carried: still blocked.
-    await fs.rm(path.join(fx.projectDir, '.git', 'config'));
-    await expect(driver.startMove({ teamId: F.teamId, targetInstanceId: 'dst', carryChanges: true })).rejects.toThrow(/Push this work before moving/);
+    // A repository without a remote travels as a git bundle: not blocked...
+    git(fx.projectDir, 'remote', 'remove', 'origin');
+    await expect(driver.startMove({ teamId: F.teamId, targetInstanceId: 'dst' })).resolves.toBeDefined();
+    // ...unless it is over the bundle cap.
+    process.env['CREWLY_TEAM_MOVE_BUNDLE_MAX_MB'] = '0.0001';
+    try {
+      await expect(driver.startMove({ teamId: F.teamId, targetInstanceId: 'dst', carryChanges: true })).rejects.toThrow(/Push this work before moving.*over the/);
+    } finally {
+      delete process.env['CREWLY_TEAM_MOVE_BUNDLE_MAX_MB'];
+    }
   });
 
   describe('packaging for a move started in the portal', () => {

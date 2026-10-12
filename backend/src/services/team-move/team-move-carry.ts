@@ -39,6 +39,31 @@ export const DEFAULT_CARRY_LIMITS: CarryLimits = {
   maxFiles: C.CARRY_MAX_FILES,
 };
 
+/**
+ * The carry caps: constants, overridable in megabytes by
+ * `CREWLY_TEAM_MOVE_CARRY_MAX_MB` and `CREWLY_TEAM_MOVE_CARRY_FILE_MAX_MB`.
+ *
+ * @param env - Environment to read overrides from
+ * @returns The caps
+ */
+export function resolveCarryLimits(env: NodeJS.ProcessEnv = process.env): CarryLimits {
+  const mb = (name: string, fallback: number): number => {
+    const n = Number(env[name]);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n * 1024 * 1024) : fallback;
+  };
+  return { ...DEFAULT_CARRY_LIMITS, totalBytes: mb(C.CARRY_MAX_MB_ENV, C.CARRY_MAX_BYTES), fileBytes: mb(C.CARRY_FILE_MAX_MB_ENV, C.CARRY_FILE_MAX_BYTES) };
+}
+
+/** Options of {@link collectCarry}. */
+export interface CollectCarryOptions {
+  /**
+   * Express the changes against HEAD instead of the newest commit the remote
+   * has: the repository's commits travel separately (a git bundle), so only
+   * the working-tree delta is carried.
+   */
+  atHead?: boolean;
+}
+
 /** Never part of carried work: Crewly's own data folder. */
 const EXCLUDE_CREWLY = ':(exclude).crewly';
 
@@ -70,12 +95,14 @@ export type CollectCarryResult = { ok: true; carry: CollectedCarry } | { ok: fal
  * everything is pushed, otherwise the newest commit below the local-only ones.
  *
  * @param repoPath - Repository folder
+ * @param options - `atHead`: use HEAD as the base
  * @returns Base commit and the number of local-only commits
  * @throws Error when the repository has no commit or no remote branch to build on
  */
-export async function findCarryBase(repoPath: string): Promise<{ baseSha: string; flattenedCommits: number }> {
+export async function findCarryBase(repoPath: string, options: CollectCarryOptions = {}): Promise<{ baseSha: string; flattenedCommits: number }> {
   const head = (await git(repoPath, ['rev-parse', '--verify', 'HEAD']).catch(() => '')).trim();
   if (!head) throw new Error('the repository has no commits yet');
+  if (options.atHead) return { baseSha: head, flattenedCommits: 0 };
   const lines = (await git(repoPath, ['rev-list', '--boundary', 'HEAD', '--not', '--remotes']).catch(() => ''))
     .split('\n')
     .map((l) => l.trim())
@@ -92,12 +119,13 @@ export async function findCarryBase(repoPath: string): Promise<{ baseSha: string
  *
  * @param repoPath - Repository folder
  * @param limits - Size caps
+ * @param options - `atHead`: changes against HEAD (the commits travel as a bundle)
  * @returns The changes, or why they cannot be carried (never throws)
  */
-export async function collectCarry(repoPath: string, limits: CarryLimits = DEFAULT_CARRY_LIMITS): Promise<CollectCarryResult> {
+export async function collectCarry(repoPath: string, limits: CarryLimits = DEFAULT_CARRY_LIMITS, options: CollectCarryOptions = {}): Promise<CollectCarryResult> {
   let base: { baseSha: string; flattenedCommits: number };
   try {
-    base = await findCarryBase(repoPath);
+    base = await findCarryBase(repoPath, options);
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : String(error) };
   }

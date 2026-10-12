@@ -260,12 +260,13 @@ describe('team move: carry uncommitted changes and preflight', () => {
       expect(quick.repos[0]!.untracked).toBe(1);
     });
 
-    it('notes a repository without a remote', async () => {
+    it('says a repository without a remote will be carried in the package, with its size', async () => {
       git(fx.projectDir, 'remote', 'remove', 'origin');
       await fs.writeFile(path.join(fx.projectDir, 'x.txt'), 'x');
       const report = await exporter().preflight({ teamId: F.teamId, stagingDir: path.join(fx.root, 'pf'), carryChanges: true, quick: true });
       expect(report.repos[0]).toMatchObject({ noRemote: true, remote: null });
-      expect(report.repos[0]!.carry).toMatchObject({ possible: false, reason: expect.stringMatching(/no remote/) });
+      expect(report.repos[0]!.carry).toMatchObject({ possible: true, files: 1, flattenedCommits: 0 });
+      expect(report.repos[0]!.bundle).toMatchObject({ mode: 'full', possible: true, message: expect.stringMatching(/^no remote — will be carried in the package \(\d+ KB\)$/) });
     });
   });
 });

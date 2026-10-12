@@ -431,8 +431,8 @@ export class TeamMoveDriver {
   private async carryBlockers(teamId: string): Promise<{ blocking: string[] }> {
     const report = await this.sourcePreflight({ teamId, carryChanges: true, quick: true });
     const blocking = report.repos
-      .filter((r) => r.isRepo && (r.modified > 0 || r.untracked > 0 || r.unpushed > 0) && !r.carry?.possible)
-      .map((r) => `${r.projectName} (${r.path}): ${r.carry?.reason ?? 'uncommitted changes (commit and push them)'}`);
+      .filter((r) => r.isRepo && (r.modified > 0 || r.untracked > 0 || r.unpushed > 0 || !!r.bundle) && !(r.bundle ? r.bundle.possible && (r.carry === null || r.carry.possible) : r.carry?.possible))
+      .map((r) => `${r.projectName} (${r.path}): ${r.bundle && !r.bundle.possible ? r.bundle.message : (r.carry?.reason ?? 'uncommitted changes (commit and push them)')}`);
     return { blocking };
   }
 

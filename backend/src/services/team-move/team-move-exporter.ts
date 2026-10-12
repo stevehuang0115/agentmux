@@ -39,7 +39,8 @@ import { PACKAGE_TREE_STORES, getCrewlyHomePath, isInsidePackageTree, resolvePro
 import { readTeamChat } from './team-move-chat.js';
 import { createEncryptStream, createHashTap } from './team-move-crypto.js';
 import { StagingArea, walkFiles } from './team-move-fs.js';
-import { DEFAULT_CARRY_LIMITS, collectCarry, describeLeft, type CarryLimits, type CollectedCarry } from './team-move-carry.js';
+import { collectCarry, describeLeft, resolveCarryLimits, type CarryLimits, type CollectCarryResult, type CollectedCarry } from './team-move-carry.js';
+import { createBundle, estimateRepoBytes, formatBytes, resolveBundleLimits, type BundleLimits, type BundleMode } from './team-move-bundle.js';
 import { describeBlockingRepos, displayRemote, inspectRepo as defaultInspectRepo, readRepoChanges } from './team-move-git.js';
 import { TeamMoveSecretScanError, isSkippableFinding, scanStaging, type SecretFinding } from './team-move-secret-scan.js';
 import {
@@ -118,8 +119,49 @@ export interface ExportDeps {
   now?: () => string;
   /** Caps for the working files of non-git projects; default from constants / env. */
   workLimits?: WorkFileLimits;
-  /** Caps for carried uncommitted changes; default from constants. */
+  /** Caps for carried uncommitted changes; default from constants / env. */
   carryLimits?: CarryLimits;
+  /** Caps for repositories carried as git bundles; default from constants / env. */
+  bundleLimits?: BundleLimits;
+  /** Caps for project-local `.crewly` files; default from constants / env. */
+  projectLimits?: ProjectFileLimits;
+}
+
+/** Size caps for project-local `.crewly` files. */
+export interface ProjectFileLimits {
+  /** All projects together. */
+  totalBytes: number;
+  /** One file. */
+  fileBytes: number;
+}
+
+/**
+ * The caps for project `.crewly` files: constants, overridable in megabytes by
+ * `CREWLY_TEAM_MOVE_PROJECT_FILES_MAX_MB` and `CREWLY_TEAM_MOVE_PROJECT_FILE_MAX_MB`.
+ *
+ * @param env - Environment to read overrides from
+ * @returns The caps in bytes
+ */
+export function resolveProjectFileLimits(env: NodeJS.ProcessEnv = process.env): ProjectFileLimits {
+  const mb = (name: string, fallback: number): number => {
+    const n = Number(env[name]);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n * 1024 * 1024) : fallback;
+  };
+  return { totalBytes: mb(C.PROJECT_FILES_MAX_MB_ENV, C.PROJECT_FILES_MAX_BYTES), fileBytes: mb(C.PROJECT_FILE_MAX_MB_ENV, C.PROJECT_FILE_MAX_BYTES) };
+}
+
+/** How one repository travels, decided before anything is built. */
+interface RepoPlan {
+  /** Uncommitted work (and, without a bundle, local commits flattened into patches) that travels as patches and files. */
+  carry?: CollectedCarry;
+  /** Raw outcome of collecting that work (preflight reports it even when carrying is not requested). */
+  carryRes?: CollectCarryResult;
+  /** Why the repository cannot be carried. */
+  carryError?: string;
+  /** The repository itself travels as a git bundle. */
+  bundle?: { mode: BundleMode; estimate: number | null; possible: boolean; reason?: string };
+  /** The move is not blocked by this repository. */
+  resolved: boolean;
 }
 
 /** Size caps for the working files of projects that are not git repositories. */
@@ -205,6 +247,19 @@ export function sanitizeTeamForMove(raw: Record<string, unknown>): Record<string
   return team;
 }
 
+/**
+ * What the owner reads about a repository that travels in the package.
+ *
+ * @param repo - The repository record
+ * @param bundle - Its bundle plan
+ * @returns One line, e.g. `no remote — will be carried in the package (0.8 GB)`
+ */
+export function bundleMessage(repo: Pick<PackageRepo, 'remoteUrl' | 'unpushed'>, bundle: { mode: BundleMode; estimate: number | null }): string {
+  const size = bundle.estimate !== null ? ` (${formatBytes(bundle.estimate)})` : '';
+  if (bundle.mode === 'full') return `no remote — will be carried in the package${size}`;
+  return `${repo.unpushed} commit${repo.unpushed === 1 ? '' : 's'} not pushed — will be carried in the package as a git bundle${size}`;
+}
+
 /** Escape a string for use in a RegExp. */
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -222,10 +277,103 @@ export class TeamMoveExporter {
     this.inspect = deps.inspectRepo ?? defaultInspectRepo;
   }
 
+  /** Whether a repo record is a git repository with at least one commit. */
+  private hasCommits(r: PackageRepo): boolean {
+    return !!r.headSha && !r.note?.startsWith('not a git repository') && !r.note?.startsWith('project folder does not exist');
+  }
+
+  /** Whether a repository holds work the remote (if any) lacks. */
+  private needsWork(r: PackageRepo): boolean {
+    return r.dirty || r.unpushed > 0;
+  }
+
+  private async planBundle(mode: BundleMode, repoPath: string, limits: BundleLimits): Promise<NonNullable<RepoPlan['bundle']>> {
+    // A full bundle is about the size of the object store; the size of an
+    // unpushed-commits bundle cannot be known cheaply and is checked once built.
+    const estimate = mode === 'full' ? await estimateRepoBytes(repoPath) : null;
+    if (estimate !== null && estimate > limits.repoBytes) {
+      return { mode, estimate, possible: false, reason: `the repository is about ${formatBytes(estimate)}, over the ${formatBytes(limits.repoBytes)} limit for carrying it (raise ${C.BUNDLE_REPO_MAX_MB_ENV} to allow it)` };
+    }
+    return { mode, estimate, possible: true };
+  }
+
+  /**
+   * Decide how each repository travels.
+   *
+   * - No remote: the repository is carried as a full git bundle plus its
+   *   working-tree changes (always; there is nothing to clone).
+   * - Remote, nothing local: cloned on the target.
+   * - Remote, local work and `assess`: uncommitted work and local commits are
+   *   flattened into patches when that fits; otherwise the unpushed commits
+   *   travel as a git bundle and the working-tree changes as patches on top.
+   *
+   * @param repos - Inspected repositories
+   * @param assess - Also assess carrying for repositories that have a remote
+   * @returns Plan by project id
+   */
+  private async planRepos(repos: PackageRepo[], assess: boolean): Promise<Map<string, RepoPlan>> {
+    const carryLimits = this.deps.carryLimits ?? resolveCarryLimits();
+    const bundleLimits = this.deps.bundleLimits ?? resolveBundleLimits();
+    const plans = new Map<string, RepoPlan>();
+    let bundleTotal = 0;
+    for (const r of repos) {
+      if (!this.hasCommits(r)) {
+        plans.set(r.projectId, { resolved: false });
+        continue;
+      }
+      if (!r.remoteUrl || (assess && this.needsWork(r))) {
+        let plan: RepoPlan | null = null;
+        if (r.remoteUrl) {
+          const flat = await collectCarry(r.path, carryLimits);
+          if (flat.ok && flat.carry.left.length === 0) plan = { carry: flat.carry, carryRes: flat, resolved: true };
+          else if (r.unpushed === 0) plan = { carryRes: flat, carryError: flat.ok ? describeLeft(flat.carry.left) : flat.reason, resolved: false };
+        }
+        if (!plan) {
+          const mode: BundleMode = r.remoteUrl ? 'unpushed' : 'full';
+          const bundle = await this.planBundle(mode, r.path, bundleLimits);
+          if (bundle.possible && bundle.estimate !== null && bundleTotal + bundle.estimate > bundleLimits.totalBytes) {
+            bundle.possible = false;
+            bundle.reason = `the repositories to carry total about ${formatBytes(bundleTotal + bundle.estimate)}, over the ${formatBytes(bundleLimits.totalBytes)} limit (raise ${C.BUNDLES_MAX_MB_ENV} to allow it)`;
+          }
+          if (!bundle.possible) {
+            plan = { bundle, carryError: bundle.reason, resolved: false };
+          } else {
+            bundleTotal += bundle.estimate ?? 0;
+            const res = await collectCarry(r.path, carryLimits, { atHead: true });
+            const ok = res.ok && res.carry.left.length === 0;
+            plan = {
+              bundle,
+              carryRes: res,
+              ...(res.ok && ok ? { carry: res.carry } : {}),
+              ...(ok ? {} : { carryError: res.ok ? describeLeft(res.carry.left) : res.reason }),
+              resolved: ok,
+            };
+          }
+        }
+        plans.set(r.projectId, plan);
+      } else {
+        plans.set(r.projectId, { resolved: false });
+      }
+    }
+    return plans;
+  }
+
+  /** Put a plan's outcome on the repo record (what `check` and the manifest show). */
+  private annotate(repo: PackageRepo, plan: RepoPlan): void {
+    if (plan.bundle && plan.resolved) {
+      repo.bundle = { mode: plan.bundle.mode, bytes: plan.bundle.estimate ?? 0 };
+      repo.note = bundleMessage(repo, plan.bundle);
+    }
+    if (plan.carryError) repo.carryError = plan.carryError;
+  }
+
   /**
    * Check, before anything is built, that no repository holds work only this
    * machine has. Used by the REST entry point so the owner learns what to
-   * push before a move is even requested.
+   * push before a move is even requested. A repository without a remote does
+   * not block: it is carried in the package as a git bundle (its record says
+   * "no remote — will be carried in the package (x GB)"), unless it is over
+   * the size caps.
    *
    * @param teamId - Team to move
    * @returns The repos and the lines that block the move
@@ -234,7 +382,10 @@ export class TeamMoveExporter {
     const team = await this.requireTeam(teamId);
     const projects = await this.teamProjects(team);
     const repos = await Promise.all(projects.map((p) => this.inspect({ id: p.id, name: p.name, path: p.path })));
-    return { repos, blocking: describeBlockingRepos(repos) };
+    // A repository without a remote travels in the package, so it does not block.
+    const plans = await this.planRepos(repos, false);
+    for (const r of repos) this.annotate(r, plans.get(r.projectId)!);
+    return { repos, blocking: describeBlockingRepos(repos.filter((r) => !plans.get(r.projectId)!.resolved)) };
   }
 
   /** The heavy part of the last preflight (package dry run, secret scan), reused while nothing changed. */
@@ -255,22 +406,32 @@ export class TeamMoveExporter {
     const team = await this.requireTeam(input.teamId);
     const projects = await this.teamProjects(team);
     const inspected = await Promise.all(projects.map((p) => this.inspect({ id: p.id, name: p.name, path: p.path })));
-    const limits = this.deps.carryLimits ?? DEFAULT_CARRY_LIMITS;
+    const plans = await this.planRepos(inspected, true);
 
     const repos: RepoPreflight[] = [];
     for (const r of inspected) {
       const isRepo = !r.note?.startsWith('not a git repository') && !r.note?.startsWith('project folder does not exist');
       const changes = isRepo && (r.dirty || r.unpushed > 0) ? await readRepoChanges(r.path) : { modified: 0, untracked: 0, files: [] };
+      const plan = plans.get(r.projectId)!;
       let carry: RepoPreflight['carry'] = null;
       if (isRepo && (r.dirty || r.unpushed > 0)) {
-        if (!r.remoteUrl) carry = { possible: false, files: 0, bytes: 0, flattenedCommits: 0, reason: 'this repository has no remote' };
+        const res = plan.carryRes;
+        if (!res) carry = { possible: false, files: 0, bytes: 0, flattenedCommits: 0, reason: plan.carryError ?? 'this repository cannot be carried' };
         else {
-          const res = await collectCarry(r.path, limits);
           carry = res.ok
             ? { possible: res.carry.left.length === 0, files: res.carry.patches.length + res.carry.untracked.length, bytes: res.carry.bytes, flattenedCommits: res.carry.flattenedCommits, ...(res.carry.left.length ? { reason: describeLeft(res.carry.left) } : {}) }
             : { possible: false, files: 0, bytes: 0, flattenedCommits: 0, reason: res.reason };
         }
       }
+      const bundle: RepoPreflight['bundle'] = plan.bundle
+        ? {
+            mode: plan.bundle.mode,
+            bytes: plan.bundle.estimate,
+            possible: plan.bundle.possible,
+            ...(plan.bundle.reason ? { reason: plan.bundle.reason } : {}),
+            message: plan.bundle.possible ? bundleMessage(r, plan.bundle) : `${r.remoteUrl ? 'commits not pushed' : 'no remote'} — cannot be carried: ${plan.bundle.reason}`,
+          }
+        : null;
       const top = changes.files.slice(0, C.PREFLIGHT_TOP_FILES);
       repos.push({
         projectId: r.projectId,
@@ -288,6 +449,7 @@ export class TeamMoveExporter {
         topFiles: top,
         filesTruncated: changes.files.length > top.length,
         carry,
+        bundle,
       });
     }
 
@@ -354,17 +516,17 @@ export class TeamMoveExporter {
     const id = identityOf(team);
 
     const repos = await Promise.all(projects.map((p) => this.inspect({ id: p.id, name: p.name, path: p.path })));
-    // Uncommitted work that can travel in the package no longer blocks the move.
+    // Work that can travel in the package no longer blocks the move: uncommitted
+    // changes, and whole repositories that have no remote (git bundle).
+    const plans = await this.planRepos(repos, !!options.carryChanges);
     const carried = new Map<string, CollectedCarry>();
-    if (options.carryChanges) {
-      for (const repo of repos) {
-        if (!repo.remoteUrl || !(repo.dirty || repo.unpushed > 0)) continue;
-        const res = await collectCarry(repo.path, this.deps.carryLimits ?? DEFAULT_CARRY_LIMITS);
-        if (res.ok && res.carry.left.length === 0) carried.set(repo.projectId, res.carry);
-        else repo.carryError = res.ok ? describeLeft(res.carry.left) : res.reason;
-      }
+    for (const repo of repos) {
+      const plan = plans.get(repo.projectId)!;
+      this.annotate(repo, plan);
+      // A bundled repository with a clean working tree has nothing to patch.
+      if (plan.carry && (!plan.bundle || plan.carry.patches.length + plan.carry.untracked.length > 0)) carried.set(repo.projectId, plan.carry);
     }
-    const blocking = describeBlockingRepos(repos.filter((r) => !carried.has(r.projectId)));
+    const blocking = describeBlockingRepos(repos.filter((r) => !plans.get(r.projectId)!.resolved));
     if (blocking.length > 0 && !options.allowDirty) throw new TeamMoveBlockedError(blocking);
 
     const staging = new StagingArea(path.resolve(options.stagingDir));
@@ -436,7 +598,8 @@ export class TeamMoveExporter {
 
     // 7. Secret scan: nothing leaves the machine with a credential in it.
     const known = this.deps.knownSecrets ? await this.deps.knownSecrets() : collectSecretEnvValues(process.env);
-    const scan = await scanStaging(staging, staging.files(), known);
+    // Bundles are not text-scanned: they are binary packs (history that already lives in git), encrypted for the target.
+    const scan = await scanStaging(staging, staging.files(), known, (p) => p.endsWith(`/${C.BUNDLE_FILE}`));
     const scanFindings = this.labelFindings(scan.findings, projects, carried);
     let excludedFiles = 0;
     if (scan.findings.length > 0 && !options.dryRun) {
@@ -463,6 +626,9 @@ export class TeamMoveExporter {
         }
       }
     }
+
+    // 7a. Repositories carried as git bundles (written by git straight into the package).
+    await this.writeBundles(staging, repos, plans, options);
 
     // 7b. Carried changes: the index lists what is really in the package.
     await this.writeCarryIndexes(staging, repos, carried, carriedLost);
@@ -493,7 +659,8 @@ export class TeamMoveExporter {
       requiredRuntimes,
       requiredConnectors,
       files,
-      totalBytes: files.reduce((n, f) => n + f.bytes, 0),
+      // A dry run builds no bundle; its estimate keeps the preflight size honest.
+      totalBytes: files.reduce((n, f) => n + f.bytes, 0) + (options.dryRun ? repos.reduce((n, r) => n + (r.bundle && !r.bundle.file ? r.bundle.bytes : 0), 0) : 0),
       noSecrets: true,
       secretScan: { filesScanned: scan.filesScanned, knownValuesChecked: known.length, findings: 0, excludedFiles },
       notMoved: this.notMovedList(),
@@ -507,6 +674,37 @@ export class TeamMoveExporter {
       dirtyRepos: blocking,
       scanFindings,
     };
+  }
+
+  /**
+   * Create the git bundle of each repository that travels as one, straight
+   * into the staging directory (streamed by git; never held in memory). A dry
+   * run (preflight) builds none.
+   *
+   * @throws TeamMoveBlockedError when a bundle cannot be made (over the caps, ...) and the move is not forced
+   */
+  private async writeBundles(staging: StagingArea, repos: PackageRepo[], plans: Map<string, RepoPlan>, options: ExportOptions): Promise<void> {
+    if (options.dryRun) return;
+    const limits = this.deps.bundleLimits ?? resolveBundleLimits();
+    let remaining = limits.totalBytes;
+    const failures: string[] = [];
+    for (const repo of repos) {
+      const plan = plans.get(repo.projectId)!;
+      if (!plan.bundle || !plan.resolved) continue;
+      const rel = `projects/${repo.projectId}/${C.BUNDLE_FILE}`;
+      const res = await createBundle(repo.path, staging.abs(rel), plan.bundle.mode, Math.min(limits.repoBytes, remaining));
+      if (!res.ok) {
+        delete repo.bundle;
+        repo.carryError = res.reason;
+        failures.push(`${repo.projectName} (${repo.path}): ${res.reason}`);
+        continue;
+      }
+      const entry = await staging.adopt(rel);
+      remaining -= entry.bytes;
+      repo.bundle = { mode: plan.bundle.mode, file: rel, bytes: entry.bytes, sha256: entry.sha256, refs: res.refs };
+      if (plan.bundle.mode === 'full') repo.note = bundleMessage(repo, { ...plan.bundle, estimate: entry.bytes });
+    }
+    if (failures.length > 0 && !options.allowDirty) throw new TeamMoveBlockedError(failures);
   }
 
   /**
@@ -592,7 +790,7 @@ export class TeamMoveExporter {
     return [
       'Credentials, API keys, OAuth/connector grants and runtime logins (Claude, Codex, ...)',
       'Slack bot tokens (Crewly Cloud re-points the agents\' Slack apps to the target)',
-      'Source code of git projects (cloned from each repository on the target; projects that are not git repositories travel in the package)',
+      'Source code of git projects that have a remote (cloned from it on the target; projects that are not git repositories, and repositories without a remote or with unpushed commits, travel in the package)',
       'Chat message history (channels and rooms move, messages stay on the source)',
       'Running sessions, logs, transcripts, build output and node_modules',
       'Short-lived agent reminders (they are set again by the agents)',
@@ -647,7 +845,8 @@ export class TeamMoveExporter {
     counts: Record<string, number>,
   ): Promise<PackageProject[]> {
     const out: PackageProject[] = [];
-    let remaining = C.PROJECT_FILES_MAX_BYTES;
+    const projectLimits = this.deps.projectLimits ?? resolveProjectFileLimits();
+    let remaining = projectLimits.totalBytes;
 
     for (const project of projects) {
       const dataDir = resolveProjectDataDir(project.path);
@@ -685,7 +884,7 @@ export class TeamMoveExporter {
         const skip = (reason: SkippedFile['reason']): void => {
           entry.skipped.push({ path: c.rel, bytes: c.size, reason });
         };
-        if (c.size > C.PROJECT_FILE_MAX_BYTES) skip('too_large');
+        if (c.size > projectLimits.fileBytes) skip('too_large');
         else if (c.size > remaining) skip('size_cap');
         else {
           try {

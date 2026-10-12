@@ -31,6 +31,8 @@ export function pickAskRecipient(team: Team): TeamMember | null {
  * @returns True when it has uncommitted changes or unpushed commits
  */
 export function repoNeedsPush(repo: RepoPreflight): boolean {
+  // A repository that travels in the package (git bundle) needs no push.
+  if (repo.bundle?.possible && (repo.carry === null || repo.carry.possible)) return false;
   return repo.isRepo && (repo.modified > 0 || repo.untracked > 0 || repo.unpushed > 0);
 }
 
@@ -57,7 +59,7 @@ export function buildAskTeamMessage(input: { teamName: string; targetName: strin
     lines.push(`Repository "${repo.projectName}" (${repo.path})${repo.branch ? `, branch ${repo.branch}` : ''}: ${parts.join(', ')}.`);
     for (const file of repo.topFiles.slice(0, FILES_PER_REPO)) lines.push(`  - ${file.status}: ${file.path}`);
     if (repo.filesTruncated || repo.topFiles.length > FILES_PER_REPO) lines.push('  - ... more (run git status to see all of them)');
-    if (repo.noRemote) lines.push('  This repository has no remote: tell the owner in your reply that the code cannot reach the new machine until a remote exists.');
+    if (repo.noRemote) lines.push('  This repository has no remote and is too large to be carried in the package: tell the owner in your reply that the code cannot reach the new machine until a remote exists.');
   }
   if (findings.length > 0) {
     lines.push('', 'The secret scan found credentials in these files. Remove the credential (use an environment variable or the settings store instead) or stop tracking the file:');
