@@ -9,6 +9,7 @@
  */
 
 import { BOARD_CONSTANTS, CLOUD_TALK_CONSTANTS, ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
+import { computeCapabilities } from './canvas/canvas-wiring.js';
 import { resolveMemberSessionName } from '../../utils/member-session-name.utils.js';
 import { DeviceIdentityService } from '../cloud/device-identity.service.js';
 import { DecisionService } from '../decisions/decision.service.js';
@@ -23,6 +24,8 @@ import { InFlightTurnTracker } from '../restart/in-flight-turn-tracker.service.j
 import { StorageService } from '../core/storage.service.js';
 import { TaskPoolService } from '../task-pool/task-pool.service.js';
 import { getUsageLedger } from '../usage-ledger/index.js';
+import { getSessionBackendSync } from '../session/session-backend.factory.js';
+import { getBrowserSessions } from '../browser/browser-session.service.js';
 import { VersionCheckService } from '../system/version-check.service.js';
 import { getTicketIntakeService, resolveTicketIdForSession } from '../v3/ticket-intake.service.js';
 import { RequestService } from '../v3/request.service.js';
@@ -225,6 +228,11 @@ export function createProductionBoardSources(deps: ProductionBoardSourcesDeps): 
 			const s = AgentTurnStateService.getInstance().stalledBackground(session, now);
 			return s ? { since: s.lastProgressAt, ...(s.description ? { description: s.description } : {}) } : null;
 		},
+		capabilities: (session, info) =>
+			computeCapabilities(session, info, {
+				browserSession: (id) => getBrowserSessions().getSession(id),
+				terminalExists: (id) => getSessionBackendSync()?.sessionExists(id) === true,
+			}),
 		workItems,
 		tickets: async () => [...(await harnessTickets()), ...(await projectTickets().catch(() => []))],
 		decisions: async () => {

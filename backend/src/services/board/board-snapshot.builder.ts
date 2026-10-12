@@ -29,6 +29,7 @@ import type {
 	BoardTeam,
 	BoardWaitingItem,
 } from './board.types.js';
+import type { AgentCapabilities } from './canvas/canvas.types.js';
 
 const C = BOARD_CONSTANTS;
 
@@ -129,6 +130,8 @@ export interface BoardSources {
 	usage(now: number): Promise<BoardUsage>;
 	/** What each agent is on now: its running WorkItem or the ticket of its turn */
 	activeWork(): Promise<Map<string, { id?: string; title: string; since: string }>>;
+	/** What the owner can do with an agent from the canvas (crewly#1247 v2); omitted = no capabilities in the rows */
+	capabilities?(session: string, info: { runtime: string; stopped: boolean; now: number }): AgentCapabilities;
 }
 
 /** Cache a full build leaves for the delta rows. */
@@ -305,6 +308,7 @@ export class BoardSnapshotBuilder {
 
 		const task = this.cache.tasks.get(m.session);
 		const usage = this.cache.usage?.perAgent.get(m.session);
+		const capabilities = this.safeSync(() => this.sources.capabilities?.(m.session, { runtime: m.runtime, stopped, now }) ?? null, null);
 		const row: BoardAgent = {
 			session: m.session,
 			name: scrubText(m.name, 60) || m.session,
@@ -316,6 +320,7 @@ export class BoardSnapshotBuilder {
 			...(task && !stopped ? { task: { ...(task.id ? { id: task.id } : {}), title: scrubText(task.title), since: task.since } } : {}),
 			...(live.lastAction ? { lastAction: live.lastAction } : {}),
 			...(usage ? { todayUsd: round4(usage.todayUsd), todayTokens: Math.round(usage.todayTokens) } : {}),
+			...(capabilities ? { capabilities } : {}),
 		};
 		return row;
 	}

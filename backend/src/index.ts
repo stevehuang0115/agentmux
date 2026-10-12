@@ -123,6 +123,8 @@ import { parseSlackThreadKey } from './services/slack/slack-thread-key.js';
 import { LIVENESS_MONITOR_CONSTANTS, INPUT_CIRCUIT_CONSTANTS, INPUT_BLOCKED_RETRY_CONSTANTS } from './constants.js';
 import { InputBlockedRetryService } from './services/messaging/input-blocked-retry.service.js';
 import { driveCapabilities } from './services/drive/drive-agent.service.js';
+import { canvasCapabilities } from './services/board/canvas/canvas-inbound.service.js';
+import { isBoardPushDisabled } from './services/board/board-push.service.js';
 import { teamMoveCapabilities } from './services/team-move/team-move-driver.service.js';
 import { SUB_AGENT_QUEUE_CONSTANTS, CHAT_CONTEXT_CONSTANTS, SAFE_RESTART, AUTO_UPDATE_CONSTANTS, PROCESS_EXIT_CODES, CLAUDE_STARTUP_CONSTANTS, WEB_CONSTANTS, TICKET_CONSTANTS, UNASSIGNED_ROUTE_CONSTANTS, CLOUD_TALK_CONSTANTS, STANDING_ANSWERS_CONSTANTS, TICKET_AUTOPILOT_CONSTANTS, TICKET_HYGIENE_CONSTANTS, EXPERIMENT_CONSTANTS, WORK_ITEM_DESTINATION_CONSTANTS, CODEX_USAGE_SYNC_CONSTANTS, ANTIGRAVITY_USAGE_SYNC_CONSTANTS, OWNER_AUTH_CONSTANTS, CREWLY_APPS_CONSTANTS, SLACK_AGENT_DM_CONSTANTS, BRIEFING_CONSTANTS, DRIVE_CONSTANTS, POOL_PRUNE_CONSTANTS } from './constants.js';
 import { randomUUID } from 'crypto';
@@ -433,6 +435,10 @@ export class CrewlyServer {
 	private livenessMonitor: LivenessMonitorService | null = null;
 	private waitingItemsSync: import('./services/cloud/waiting-items-sync.service.js').WaitingItemsSyncService | null = null;
 	private ownerBoard: import('./services/board/board.service.js').BoardService | null = null;
+	/** Canvas: follows the agents' transcripts for their own text lines (crewly#1247 v2) */
+	private canvasTail: import('./services/board/canvas/canvas-transcript.tail.js').TranscriptTailService | null = null;
+	/** Canvas: masked terminal streams the owner opened in the portal */
+	private canvasTerminal: import('./services/board/canvas/canvas-terminal.service.js').CanvasTerminalService | null = null;
 	/** Epoch ms of the last shutdown signal acted on (dedups process-group delivery) */
 	private lastShutdownSignalAt = 0;
 	/** Interrupted turns loaded at boot, resumed once their agents are back */
@@ -3336,6 +3342,87 @@ void (async () => {
 							});
 						}
 
+						// Crewly Canvas (crewly#1247 v2): the owner's actions from the portal
+						// canvas (message an agent, stop it, open its masked terminal) arrive as
+						// `canvas_action` pushes; the handler fetches each with this machine's
+						// token and runs it. Starting it advertises `canvas_actions` to Cloud.
+						try {
+							// The board's kill switch also keeps the canvas actions off this machine
+							if (isBoardPushDisabled()) throw new Error('CREWLY_BOARD_PUSH=0');
+							const [
+								{ CanvasInboundService },
+								{ CanvasTerminalService },
+								{ createStopAgent, createSecretsProvider },
+								{ CloudClientService },
+								{ buildAgentRoster },
+								{ intakeChatV2OwnerMessage },
+								{ getTicketIntakeService },
+								{ getBoardService },
+								{ getApiToken },
+								{ internalCredentialHeaders },
+							] = await Promise.all([
+								import('./services/board/canvas/canvas-inbound.service.js'),
+								import('./services/board/canvas/canvas-terminal.service.js'),
+								import('./services/board/canvas/canvas-wiring.js'),
+								import('./services/cloud/cloud-client.service.js'),
+								import('./services/cloud/agent-roster.utils.js'),
+								import('./services/v3/ticket-channel-hooks.js'),
+								import('./services/v3/ticket-intake.service.js'),
+								import('./services/board/board.service.js'),
+								import('./services/core/api-token.service.js'),
+								import('./services/core/owner-auth.service.js'),
+							]);
+							const cloudClient = CloudClientService.getInstance();
+							const cloud = {
+								getToken: () => cloudClient.getToken(),
+								getCloudUrl: () => cloudClient.getCloudUrl(),
+								tryRefreshToken: () => cloudClient.tryRefreshToken(),
+							};
+							const identity = async (): Promise<{ instanceId: string; deviceName: string }> => {
+								const id = await DeviceIdentityService.getInstance().getOrCreateIdentity();
+								return { instanceId: id.deviceId, deviceName: id.deviceName };
+							};
+							const terminal = new CanvasTerminalService({
+								cloud,
+								identity,
+								capture: (session, lines) => getSessionBackendSync()?.captureOutput(session, lines) ?? null,
+								exists: (session) => getSessionBackendSync()?.sessionExists(session) === true,
+								secrets: createSecretsProvider(),
+							});
+							this.canvasTerminal = terminal;
+							new CanvasInboundService({
+								source: sync,
+								cloud,
+								chat: chatService,
+								identity,
+								deliver: async (channel, message) => {
+									const toDispatch = await intakeChatV2OwnerMessage(getTicketIntakeService(), channel, message, CLOUD_TALK_CONSTANTS.INTAKE_ORIGIN);
+									await chatDispatcher.dispatchMessage(channel, toDispatch);
+								},
+								agentExists: async (session) => buildAgentRoster(await this.storageService.getTeams()).some((a) => a.agentSession === session),
+								stopAgent: createStopAgent({
+									webPort: this.config.webPort,
+									teams: () => this.storageService.getTeams(),
+									headers: () => {
+										let token: string | null = null;
+										try {
+											token = getApiToken();
+										} catch {
+											token = null;
+										}
+										return { ...(token ? { [API_SECURITY_CONSTANTS.TOKEN_HEADER]: token } : {}), ...internalCredentialHeaders('relay') };
+									},
+								}),
+								terminal,
+								// Someone is at the canvas: push live for a while
+								onAction: () => getBoardService()?.push.noteViewer(),
+							}).start();
+						} catch (canvasErr) {
+							this.logger.warn('Canvas action handler wiring skipped', {
+								error: canvasErr instanceof Error ? canvasErr.message : String(canvasErr),
+							});
+						}
+
 						// Mobile app: generic allowlisted REST passthrough over the same
 						// relay (api_request → local HTTP → api_response). Non-fatal.
 						try {
@@ -5887,7 +5974,7 @@ void (async () => {
 				// whether this machine takes `talk_message` — also for machines
 				// without Slack, which never send the registry heartbeat.
 				roster: async () => buildAgentRoster(await this.storageService.getTeams()),
-				capabilities: () => [...cloudTalkCapabilities(), ...waitingActionCapabilities(), ...talkTranscribeCapabilities(), ...driveCapabilities(), ...teamMoveCapabilities()],
+				capabilities: () => [...cloudTalkCapabilities(), ...waitingActionCapabilities(), ...canvasCapabilities(), ...talkTranscribeCapabilities(), ...driveCapabilities(), ...teamMoveCapabilities()],
 				onNewMessage: (listener) => {
 					chat.on('chat_message', listener);
 					return () => chat.off('chat_message', listener);
@@ -5973,7 +6060,7 @@ void (async () => {
 							.filter((a) => a.displayName)
 							.map((a) => [a.agentSession, a.displayName as string]),
 					),
-				capabilities: () => [...cloudTalkCapabilities(), ...waitingActionCapabilities(), ...talkTranscribeCapabilities(), ...driveCapabilities(), ...teamMoveCapabilities()],
+				capabilities: () => [...cloudTalkCapabilities(), ...waitingActionCapabilities(), ...canvasCapabilities(), ...talkTranscribeCapabilities(), ...driveCapabilities(), ...teamMoveCapabilities()],
 				onTicketChange: (listener) => RequestService.getInstance().onChange(() => listener()),
 			});
 			setWaitingItemsSyncService(service);
@@ -6007,8 +6094,50 @@ void (async () => {
 			setBoardService(service);
 			service.start();
 			this.ownerBoard = service;
+			await this.startCanvasTail(service);
 		} catch (error) {
 			this.logger.warn('Owner board not started (non-fatal)', { error: error instanceof Error ? error.message : String(error) });
+		}
+	}
+
+	/**
+	 * Canvas (crewly#1247 v2): follow the agents' transcripts for their own
+	 * short text lines (and Codex's tool calls). Off with the board push.
+	 */
+	private async startCanvasTail(service: import('./services/board/board.service.js').BoardService): Promise<void> {
+		try {
+			if (service.push.disabled) return;
+			const [{ TranscriptTailService }, { createTranscriptLocator, createSecretsProvider }, recovery] = await Promise.all([
+				import('./services/board/canvas/canvas-transcript.tail.js'),
+				import('./services/board/canvas/canvas-wiring.js'),
+				import('./services/agent/runtime-session-recovery.js'),
+				]);
+			const { findCodexRollout } = await import('./services/monitoring/codex-rollout-sync.service.js');
+			const persistence = getSessionStatePersistence();
+			const locate = createTranscriptLocator({
+				meta: (session) => {
+					try {
+						return persistence.getSessionMetadata(session);
+					} catch {
+						return undefined;
+					}
+				},
+				claudeHomes: (meta) => [meta.env?.CLAUDE_CONFIG_DIR, recovery.defaultClaudeHome()].filter((h): h is string => typeof h === 'string' && h.length > 0),
+				findClaude: recovery.findClaudeTranscript,
+				codexHome: recovery.defaultCodexHome,
+				findCodex: findCodexRollout,
+			});
+			this.canvasTail = new TranscriptTailService({
+				steps: service.tracker.steps,
+				sessions: () => service.builder.knownSessions(),
+				locate,
+				roots: (session) => this.boardProjectRoots(session),
+				secrets: createSecretsProvider(),
+				isLive: () => service.push.isLive(),
+			});
+			this.canvasTail.start();
+		} catch (error) {
+			this.logger.warn('Canvas transcript tail not started (non-fatal)', { error: error instanceof Error ? error.message : String(error) });
 		}
 	}
 
@@ -7360,6 +7489,8 @@ void (async () => {
 		this.conversationCloudSync?.stop();
 		this.waitingItemsSync?.stop();
 		this.ownerBoard?.stop();
+		this.canvasTail?.stop();
+		this.canvasTerminal?.closeAll();
 
 		// Safe restart: stop delivering, wait for agents mid-turn, persist the rest.
 		// Runs before the force-exit timer below, which only bounds the teardown.

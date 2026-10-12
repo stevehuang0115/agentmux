@@ -171,7 +171,7 @@ describe('BoardSnapshotBuilder: teams and agents', () => {
 		expect(rows[0]).toMatchObject({ teamId: 'growth', session: 'growth-vera-2', state: 'working', activity: { type: 'command', detail: 'npm test' } });
 		// only the in-memory runtime reads; no disk or ledger source
 		const called = new Set(spy.mock.calls.map((c) => c[0]));
-		expect([...called].every((n) => ['waitingOnHuman', 'errorOf', 'queuedFor'].includes(String(n)))).toBe(true);
+		expect([...called].every((n) => ['waitingOnHuman', 'errorOf', 'queuedFor', 'capabilities'].includes(String(n)))).toBe(true);
 	});
 
 	it('is not primed before the first build', async () => {

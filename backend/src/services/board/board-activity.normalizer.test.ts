@@ -119,6 +119,11 @@ describe('other sources', () => {
 });
 
 describe('parseToolInput', () => {
+	it('keeps a search query, cut to 300 characters', () => {
+		expect(parseToolInput({ query: 'open swarm rivals', prompt: 'SECRET' })).toEqual({ query: 'open swarm rivals' });
+		expect(parseToolInput({ query: 'q'.repeat(2000) }).query).toHaveLength(300);
+	});
+
 	it('keeps only the three string fields', () => {
 		expect(parseToolInput({ filePath: '/a', command: 'ls', url: 'https://x.io', content: 'SECRET', extra: 1 })).toEqual({ filePath: '/a', command: 'ls', url: 'https://x.io' });
 	});

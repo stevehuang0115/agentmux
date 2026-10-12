@@ -199,7 +199,12 @@ export type MessageType =
   | 'waiting_action'
   // Team move (crewly#1189): Cloud tells this machine what to do in a move.
   // `data` is `{moveId, role, action}`; TeamMoveDriver fetches the truth from Cloud.
-  | 'team_move';
+  | 'team_move'
+  // Crewly Canvas (crewly#1247 v2): the owner's action from the portal canvas
+  // (message an agent, stop it, open / renew / close its terminal). `data` is
+  // `{actionId, instanceId, session, kind}` - no text; CanvasInboundService
+  // fetches the action from Cloud with this machine's token.
+  | 'canvas_action';
 
 /** Valid message type values for runtime validation. */
 export const MESSAGE_TYPES: readonly MessageType[] = [
@@ -221,6 +226,7 @@ export const MESSAGE_TYPES: readonly MessageType[] = [
   'talk_message',
   'waiting_action',
   'team_move',
+  'canvas_action',
 ] as const;
 
 /**
