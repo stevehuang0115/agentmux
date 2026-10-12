@@ -110,6 +110,7 @@ import {
 	getRunningPid,
 	getSystemdState,
 	isLoginItemRegistered,
+	generateWatchdogPlist,
 } from './service.js';
 import { setCliModuleDir } from '../utils/package-root.js';
 
@@ -185,7 +186,12 @@ describe('serviceCommand', () => {
 
 			const output = logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
 			expect(output).toContain('already installed');
-			expect(mockWriteFileSync).not.toHaveBeenCalled();
+			// The .command is not rewritten (only the missing watchdog is added)
+			expect(mockWriteFileSync).not.toHaveBeenCalledWith(
+				expect.stringContaining('crewly-start.command'),
+				expect.anything(),
+				expect.anything(),
+			);
 		});
 
 		it('writes .command file and registers Login Item on fresh install', async () => {
@@ -1297,5 +1303,201 @@ describe('install from an unrelated cwd (finding 8)', () => {
 		);
 		const output = logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
 		expect(output).not.toContain('Could not find');
+	});
+});
+
+
+// ---------------------------------------------------------------------------
+// launchd watchdog (macOS)
+// ---------------------------------------------------------------------------
+
+describe('watchdog LaunchAgent (macOS)', () => {
+	let logSpy: jest.SpyInstance;
+	const originalPlatform = process.platform;
+	const WATCHDOG_SCRIPT = '#!/bin/bash\n# watchdog script body\n';
+
+	/** Written files by path fragment */
+	const written = (fragment: string): unknown[][] =>
+		mockWriteFileSync.mock.calls.filter((c: unknown[]) => String(c[0]).includes(fragment));
+	const commandsRun = (): string[] => mockExecAsync.mock.calls.map((c: unknown[]) => String(c[0]));
+
+	beforeEach(() => {
+		logSpy = jest.spyOn(console, 'log').mockImplementation();
+		jest.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+		jest.clearAllMocks();
+		mockExecAsync.mockReset();
+		mockExecAsync.mockReturnValue('');
+		Object.defineProperty(process, 'platform', { value: 'darwin' });
+		mockReadFileSync.mockImplementation((p: string) =>
+			String(p).endsWith('crewly-watchdog.sh') ? WATCHDOG_SCRIPT : JSON.stringify({ name: 'crewly' }),
+		);
+	});
+
+	afterEach(() => {
+		jest.restoreAllMocks();
+		Object.defineProperty(process, 'platform', { value: originalPlatform });
+	});
+
+	const output = (): string => logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
+
+	describe('generateWatchdogPlist', () => {
+		it('runs the script at load and every 60 s at background priority', () => {
+			const plist = generateWatchdogPlist('/Users/me/.crewly/crewly-watchdog.sh');
+			expect(plist).toContain('<string>com.crewly.watchdog</string>');
+			expect(plist).toContain('<string>/bin/bash</string>');
+			expect(plist).toContain('<string>/Users/me/.crewly/crewly-watchdog.sh</string>');
+			expect(plist).toMatch(/<key>RunAtLoad<\/key>\s*<true\/>/);
+			expect(plist).toMatch(/<key>StartInterval<\/key>\s*<integer>60<\/integer>/);
+			expect(plist).toContain('<string>Background</string>');
+			expect(plist).toMatch(/<key>LowPriorityIO<\/key>\s*<true\/>/);
+			expect(plist).toContain('/usr/sbin');
+		});
+
+		it('escapes XML in the script path', () => {
+			expect(generateWatchdogPlist('/a&b/<x>.sh')).toContain('/a&amp;b/&lt;x&gt;.sh');
+		});
+	});
+
+	describe('install', () => {
+		it('copies the script, writes the plist and bootstraps it on a fresh install', async () => {
+			mockExistsSync.mockImplementation((p: string) => String(p).includes('package.json'));
+
+			await serviceCommand('install', {});
+
+			expect(written('crewly-watchdog.sh')).toEqual([
+				[expect.stringContaining('.crewly/crewly-watchdog.sh'), WATCHDOG_SCRIPT, expect.objectContaining({ mode: 0o755 })],
+			]);
+			const plist = written('com.crewly.watchdog.plist');
+			expect(plist).toHaveLength(1);
+			expect(String(plist[0][0])).toContain('Library/LaunchAgents');
+			expect(commandsRun().some((c) => c.includes('launchctl bootstrap gui/$(id -u)') && c.includes('com.crewly.watchdog.plist'))).toBe(true);
+			expect(output()).toContain('Loaded watchdog LaunchAgent');
+		});
+
+		it('adds only the watchdog when the service is already installed without --force', async () => {
+			mockExistsSync.mockImplementation((p: string) => {
+				const f = String(p);
+				return f.includes('crewly-start.command') || f.includes('package.json');
+			});
+
+			await serviceCommand('install', {});
+
+			expect(written('crewly-start.command')).toHaveLength(0);
+			expect(written('com.crewly.watchdog.plist')).toHaveLength(1);
+		});
+
+		it('does not touch an existing watchdog without --force', async () => {
+			mockExistsSync.mockImplementation((p: string) => {
+				const f = String(p);
+				return f.includes('crewly-start.command') || f.includes('com.crewly.watchdog.plist') || f.includes('package.json');
+			});
+
+			await serviceCommand('install', {});
+
+			expect(written('crewly-watchdog')).toHaveLength(0);
+			expect(written('com.crewly.watchdog.plist')).toHaveLength(0);
+		});
+
+		it('keeps the install going and says how to load it when launchctl fails', async () => {
+			mockExistsSync.mockImplementation((p: string) => String(p).includes('package.json'));
+			mockExecAsync.mockImplementation((cmd: string) =>
+				cmd.includes('launchctl bootstrap') ? new Error('Bootstrap failed: 5') : '',
+			);
+
+			await serviceCommand('install', {});
+
+			expect(output()).toContain('Watchdog written but not loaded');
+			expect(output()).toContain('installed successfully');
+		});
+
+		it('does not fail the install when the packaged script is missing', async () => {
+			mockExistsSync.mockImplementation((p: string) => String(p).includes('package.json'));
+			mockReadFileSync.mockImplementation((p: string) => {
+				if (String(p).endsWith('crewly-watchdog.sh')) throw new Error('ENOENT');
+				return JSON.stringify({ name: 'crewly' });
+			});
+
+			await serviceCommand('install', {});
+
+			expect(output()).toContain('Could not install the watchdog');
+			expect(written('com.crewly.watchdog.plist')).toHaveLength(0);
+			expect(output()).toContain('installed successfully');
+		});
+	});
+
+	describe('uninstall', () => {
+		it('boots the watchdog out and removes its plist and script', async () => {
+			mockExistsSync.mockImplementation((p: string) => {
+				const f = String(p);
+				return f.includes('com.crewly.watchdog.plist') || f.includes('crewly-watchdog.sh');
+			});
+
+			await serviceCommand('uninstall', {});
+
+			expect(commandsRun().some((c) => c.includes('launchctl bootout') && c.includes('com.crewly.watchdog'))).toBe(true);
+			expect(mockUnlinkSync).toHaveBeenCalledWith(expect.stringContaining('com.crewly.watchdog.plist'));
+			expect(mockUnlinkSync).toHaveBeenCalledWith(expect.stringContaining('crewly-watchdog.sh'));
+		});
+	});
+
+	describe('status', () => {
+		const installed = (extra: string[] = []) => (p: string) => {
+			const f = String(p);
+			return (
+				f.includes('crewly-start.command') ||
+				f.includes('com.crewly.watchdog.plist') ||
+				f.includes('crewly-watchdog.sh') ||
+				extra.some((e) => f.includes(e))
+			);
+		};
+
+		it('shows the watchdog as loaded', async () => {
+			mockExistsSync.mockImplementation(installed());
+			await serviceCommand('status', {});
+			expect(output()).toContain('Watchdog: Loaded');
+			expect(commandsRun().some((c) => c.includes('launchctl print gui/$(id -u)/com.crewly.watchdog'))).toBe(true);
+		});
+
+		it('flags a missing watchdog', async () => {
+			mockExistsSync.mockImplementation((p: string) => String(p).includes('crewly-start.command'));
+			await serviceCommand('status', {});
+			expect(output()).toContain('Watchdog: Not installed');
+		});
+
+		it('flags an installed but unloaded watchdog', async () => {
+			mockExistsSync.mockImplementation(installed());
+			mockExecAsync.mockImplementation((cmd: string) => (cmd.includes('launchctl print') ? new Error('not found') : ''));
+			await serviceCommand('status', {});
+			expect(output()).toContain('Watchdog: Installed but not loaded');
+		});
+
+		it('flags a paused watchdog and a deliberate stop', async () => {
+			mockExistsSync.mockImplementation(installed(['watchdog-paused', 'shutdown-requested']));
+			await serviceCommand('status', {});
+			expect(output()).toContain('PAUSED');
+			expect(output()).toContain('Stopped on purpose');
+		});
+	});
+
+	describe('pause / resume / stop marker', () => {
+		it('pause writes the flag the script checks; resume removes it', async () => {
+			await serviceCommand('pause', {});
+			expect(written('run/watchdog-paused')).toHaveLength(1);
+
+			mockExistsSync.mockImplementation((p: string) => String(p).includes('watchdog-paused'));
+			await serviceCommand('resume', {});
+			expect(mockUnlinkSync).toHaveBeenCalledWith(expect.stringContaining('run/watchdog-paused'));
+		});
+
+		it('service stop writes the shutdown marker so the watchdog stays out', async () => {
+			mockExistsSync.mockImplementation((p: string) => String(p).includes('crewly.pid'));
+			mockReadFileSync.mockReturnValue('12345');
+			jest.spyOn(process, 'kill').mockImplementation(() => true);
+			mockExecAsync.mockReturnValue('1');
+
+			await serviceCommand('stop', {});
+
+			expect(written('run/shutdown-requested')).toHaveLength(1);
+		});
 	});
 });
