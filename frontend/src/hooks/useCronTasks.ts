@@ -10,6 +10,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { apiService } from '../services/api.service';
 import type { CronTask, CreateCronTaskRequest, UpdateCronTaskRequest } from '../types/cron-task.types';
+import { setVisibleInterval } from '../utils/visible-interval';
 
 // ========================= Types =========================
 
@@ -112,7 +113,7 @@ export function useCronTasks(): UseCronTasksResult {
 
     init();
 
-    const intervalId = setInterval(fetchTasks, POLL_INTERVAL_MS);
+    const intervalId = setVisibleInterval(fetchTasks, POLL_INTERVAL_MS);
 
     return () => {
       isMountedRef.current = false;

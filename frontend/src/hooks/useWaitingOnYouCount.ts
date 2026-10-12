@@ -10,6 +10,7 @@
 
 import { useEffect, useState } from 'react';
 import { listOpenDecisions } from '../services/decisions.service';
+import { setVisibleInterval } from '../utils/visible-interval';
 
 /** Refresh interval (ms) — same as the Dashboard's "Waiting on you" list. */
 export const WAITING_ON_YOU_BADGE_POLL_MS = 30_000;
@@ -34,7 +35,7 @@ export function useWaitingOnYouCount(pollMs: number = WAITING_ON_YOU_BADGE_POLL_
       }
     };
     void load();
-    const timer = setInterval(() => void load(), pollMs);
+    const timer = setVisibleInterval(() => void load(), pollMs);
     return () => {
       cancelled = true;
       clearInterval(timer);

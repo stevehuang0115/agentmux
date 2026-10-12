@@ -15,6 +15,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import type { PendingLogin } from '../types';
 import { SIGN_IN_CONSTANTS } from '../constants/sign-in.constants';
+import { setVisibleInterval } from '../utils/visible-interval';
 
 /**
  * Return type for the usePendingLogins hook
@@ -61,7 +62,7 @@ export function usePendingLogins(
   useEffect(() => {
     isMountedRef.current = true;
     void refresh();
-    const timer = setInterval(() => {
+    const timer = setVisibleInterval(() => {
       void refresh();
     }, intervalMs);
     const onFocus = (): void => {

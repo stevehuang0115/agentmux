@@ -497,7 +497,13 @@ export const BROWSER_BRIDGE_CONSTANTS = {
 	/** Default TTL for an idle binding in minutes (configurable via CREWLY_TAB_BIND_TTL_MINUTES). */
 	TAB_BIND_TTL_MINUTES: 30,
 	/** Cadence of the orphan/TTL sweep timer in milliseconds. */
-	TAB_BIND_SWEEP_MS: 5 * 60 * 1000,
+	TAB_BIND_SWEEP_MS: 60 * 1000,
+	/**
+	 * Minutes an agent's tab may sit untouched after its turn ended before it
+	 * is closed (env `CREWLY_TAB_IDLE_CLOSE_MINUTES`; 0 disables). The agent
+	 * working again, or touching the tab, resets the clock.
+	 */
+	TAB_IDLE_CLOSE_MINUTES: 10,
 	/** Default tabId on a 503 retry hint (milliseconds the skill should back off). */
 	TAB_BIND_RETRY_AFTER_MS: 30000,
 	/**

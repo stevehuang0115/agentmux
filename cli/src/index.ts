@@ -62,9 +62,10 @@ program
 
 program
   .command('start')
-  .description('Start Crewly backend and open dashboard')
+  .description('Start Crewly backend (prints the dashboard URL; use --open to open it)')
   .option('-p, --port <port>', 'Web server port', DEFAULT_WEB_PORT.toString())
-  .option('--no-browser', 'Don\'t open browser automatically')
+  .option('--open', 'Open the dashboard in your browser (or set CREWLY_OPEN_BROWSER=1); never opens when non-interactive')
+  .option('--no-browser', 'Never open the browser (this is already the default; kept for scripts)')
   .option('--headless', 'Start in headless/API-only mode (no frontend, no browser)')
   .option('--auto-upgrade', 'Automatically upgrade before starting if a new version is available')
   .action(startCommand);

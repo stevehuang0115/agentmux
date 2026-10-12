@@ -18,6 +18,7 @@ import {
 	stopBrowserSession,
 	type BrowserSession,
 } from '../services/browser-session.service';
+import { setVisibleInterval } from '../utils/visible-interval';
 
 /** How often the session list refreshes. */
 const LIST_POLL_MS = 2000;
@@ -47,7 +48,7 @@ export const BrowserView: React.FC = () => {
 
 	useEffect(() => {
 		void load();
-		const id = setInterval(() => void load(), LIST_POLL_MS);
+		const id = setVisibleInterval(() => void load(), LIST_POLL_MS);
 		return () => clearInterval(id);
 	}, [load]);
 
