@@ -31,11 +31,13 @@ import { getCrewlyHomePath, resolveProjectDataDir } from '../core/crewly-home.ut
 import { applyTeamChat, type ApplyChatResult, type ChatRecords } from './team-move-chat.js';
 import { createDecryptStream } from './team-move-crypto.js';
 import { hasTextExtension, looksLikeText, pathExists, rewritePathPrefix, sha256File, slugify, walkFiles, writeFileAtomic } from './team-move-fs.js';
+import { applyCarry } from './team-move-carry.js';
 import { restoreRepo } from './team-move-git.js';
 import { runtimeLabel } from '../runtime-fallback/runtime-fallback.types.js';
 import { MoveJournal } from './team-move-journal.js';
 import { checkTools, hasRoomFor } from './team-move-preflight.js';
 import type {
+  CarryIndex,
   ImportStep,
   PackageProject,
   ReconnectItem,
@@ -197,7 +199,7 @@ export class TeamMoveImporter {
     const manifest = await step('validate', () => this.validate(input, staging));
 
     const mappings = await step('projects', () => this.registerProjects(manifest, journal));
-    const repoOutcome = await step('repos', () => this.cloneRepos(manifest, mappings));
+    const repoOutcome = await step('repos', () => this.cloneRepos(manifest, mappings, staging));
     const dataCounts = await step('data', () => this.importData(staging, manifest, mappings));
     const recordCounts = await step('records', () => this.importRecords(staging, manifest, mappings));
     const teamResult = await step('team', () => this.registerTeam(staging, manifest, mappings));
@@ -310,9 +312,10 @@ export class TeamMoveImporter {
   }
 
   /** Clone each project's repository at the recorded branch and commit. */
-  private async cloneRepos(manifest: TeamMoveManifest, mappings: ProjectMapping[]): Promise<{ repos: TeamMoveImportReport['repos']; warnings: string[] }> {
+  private async cloneRepos(manifest: TeamMoveManifest, mappings: ProjectMapping[], staging: string): Promise<{ repos: TeamMoveImportReport['repos']; warnings: string[] }> {
     const cloned: TeamMoveImportReport['repos']['cloned'] = [];
     const failed: TeamMoveImportReport['repos']['failed'] = [];
+    const carried: NonNullable<TeamMoveImportReport['repos']['carried']> = [];
     const warnings: string[] = [];
     for (const repo of manifest.repos) {
       const mapping = mappings.find((m) => m.projectId === repo.projectId);
@@ -320,6 +323,13 @@ export class TeamMoveImporter {
       if (mapping.existing) {
         // The project was already here under this id: its checkout is not ours to move.
         warnings.push(`${repo.projectName} already exists on this machine (${mapping.to}); its checkout was left as it is.`);
+        if (repo.carry) {
+          // The carried work cannot go on top of a checkout that is not ours; keep it next to it.
+          const kept = path.join(mapping.to, '.crewly', 'move-carry-pending', manifest.moveId);
+          await fs.mkdir(path.dirname(kept), { recursive: true });
+          await fs.cp(path.join(staging, 'projects', repo.projectId, 'carry'), kept, { recursive: true }).catch(() => undefined);
+          warnings.push(`${repo.projectName}: its uncommitted changes from the source were not applied; they are saved in ${kept} (git apply patches/*.patch).`);
+        }
         continue;
       }
       if (!repo.remoteUrl) {
@@ -330,12 +340,39 @@ export class TeamMoveImporter {
         } else failed.push({ name: repo.projectName, reason: repo.note ?? 'no git remote on the source; copy the code by hand' });
         continue;
       }
-      const result = await this.restore(mapping.to, repo);
+      // Carried work sits on top of a commit the remote has (not the source's local head).
+      const result = await this.restore(mapping.to, repo.carry ? { ...repo, headSha: repo.carry.baseSha } : repo);
       for (const w of result.warnings) warnings.push(`${repo.projectName}: ${w}`);
       if (result.ok) cloned.push({ name: repo.projectName, path: mapping.to, branch: result.branch, headSha: result.headSha });
       else failed.push({ name: repo.projectName, reason: result.error ?? 'clone failed' });
+      if (result.ok && repo.carry) {
+        const carryDir = path.join(staging, 'projects', repo.projectId, 'carry');
+        const index = await this.readCarryIndex(carryDir);
+        if (!index) {
+          warnings.push(`${repo.projectName}: the carried changes are missing from the package.`);
+        } else if (result.headSha && result.headSha !== repo.carry.baseSha) {
+          warnings.push(`${repo.projectName}: the checkout is not at the commit the changes were taken from; they were not applied (saved in ${path.join(mapping.to, '.crewly', 'move-carry-pending')}).`);
+          await fs.cp(carryDir, path.join(mapping.to, '.crewly', 'move-carry-pending', manifest.moveId), { recursive: true }).catch(() => undefined);
+        } else {
+          const applied = await applyCarry(mapping.to, carryDir, index);
+          carried.push({ name: repo.projectName, applied: applied.applied, untracked: applied.untracked, failed: applied.failed, flattenedCommits: index.flattenedCommits, leftBehind: index.leftBehind.length });
+          if (index.flattenedCommits > 0) warnings.push(`${repo.projectName}: ${index.flattenedCommits} local commit${index.flattenedCommits === 1 ? '' : 's'} from the source arrived as uncommitted changes on ${result.branch ?? 'the checkout'}; commit and push them from here.`);
+          if (applied.failed.length > 0) warnings.push(`${repo.projectName}: ${applied.failed.length} carried change${applied.failed.length === 1 ? '' : 's'} could not be applied (${applied.failed.slice(0, 3).map((f) => f.path).join(', ')}); the patches are in ${path.join(mapping.to, '.crewly', 'move-carry-failed')}.`);
+          if (index.leftBehind.length > 0) warnings.push(`${repo.projectName}: ${index.leftBehind.length} changed file${index.leftBehind.length === 1 ? ' was' : 's were'} left on the source (flagged by the secret scan).`);
+        }
+      }
     }
-    return { repos: { cloned, failed }, warnings };
+    return { repos: { cloned, failed, ...(carried.length > 0 ? { carried } : {}) }, warnings };
+  }
+
+  /** The parsed `carry.json` of a repository, or null when missing or unreadable. */
+  private async readCarryIndex(carryDir: string): Promise<CarryIndex | null> {
+    try {
+      const parsed = JSON.parse(await fs.readFile(path.join(carryDir, 'carry.json'), 'utf8')) as CarryIndex;
+      return parsed.version === 1 && Array.isArray(parsed.patches) && Array.isArray(parsed.untracked) ? parsed : null;
+    } catch {
+      return null;
+    }
   }
 
   // -------------------------------------------------------------------------

@@ -13,7 +13,7 @@ import * as path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { TEAM_MOVE_CONSTANTS } from '../../constants.js';
-import type { CloudManifestSummary, TeamMovePreflight, TeamMoveReportStatus, TeamMoveView } from './team-move.types.js';
+import type { CloudManifestSummary, SourcePreflightReport, TeamMoveOptions, TeamMovePreflight, TeamMovePreflightAction, TeamMoveReportStatus, TeamMoveRole, TeamMoveView } from './team-move.types.js';
 
 const C = TEAM_MOVE_CONSTANTS;
 
@@ -23,6 +23,30 @@ export interface TeamMoveCloudSession {
   getCloudUrl(): string | null;
   /** Refresh an expired access token; true when a new one is in place. */
   tryRefreshToken?(): Promise<boolean>;
+}
+
+/** A preflight request as Cloud shows it to a machine. */
+export interface PreflightRequest {
+  preflightId: string;
+  teamId: string;
+  teamName: string;
+  /** The machine the team would move to (for wording). */
+  targetName?: string;
+  /** Which side this machine is, and what it has to do now. */
+  role: TeamMoveRole;
+  action: TeamMovePreflightAction;
+  options: TeamMoveOptions;
+  /** Run the dry run again even if the last one is still fresh. */
+  force?: boolean;
+}
+
+/** What a machine reports back for a preflight. */
+export interface PreflightResultBody {
+  /** Source: the team report. Target: the machine's preflight. */
+  report?: SourcePreflightReport | TeamMovePreflight;
+  /** Source, after `ask_team`: who was asked. */
+  ask?: { ok: boolean; agents: string[]; error?: string };
+  error?: string;
 }
 
 /** An error answer from Cloud (or no answer at all). */
@@ -178,8 +202,25 @@ export class TeamMoveCloudClient {
     return this.data<TeamMoveView>(await this.request('GET', `/${encodeURIComponent(moveId)}`));
   }
 
+  /** Preflight requests waiting for this machine. */
+  async listPreflights(): Promise<PreflightRequest[]> {
+    const instanceId = encodeURIComponent(await this.options.getInstanceId());
+    const data = await this.data<unknown>(await this.request('GET', `/preflights?instanceId=${instanceId}`, { retries: 1 }));
+    return Array.isArray(data) ? (data as PreflightRequest[]) : [];
+  }
+
+  /** One preflight request, as this machine has to answer it. */
+  async getPreflight(preflightId: string): Promise<PreflightRequest> {
+    return this.data<PreflightRequest>(await this.request('GET', `/preflights/${encodeURIComponent(preflightId)}`, { retries: 1 }));
+  }
+
+  /** Answer a preflight request. */
+  async postPreflightResult(preflightId: string, body: PreflightResultBody): Promise<void> {
+    await this.request('POST', `/preflights/${encodeURIComponent(preflightId)}/result`, { json: body, retries: 1 });
+  }
+
   /** Ask Cloud to start a move (the owner path, or an instance acting for the owner). */
-  async create(body: { teamId: string; sourceInstanceId: string; targetInstanceId: string }): Promise<{ moveId: string }> {
+  async create(body: { teamId: string; sourceInstanceId: string; targetInstanceId: string; options?: TeamMoveOptions }): Promise<{ moveId: string }> {
     const data = await this.data<Json>(await this.request('POST', '', { json: body, retries: 1, headers: { 'X-Crewly-Acting-For': 'owner', 'X-Crewly-Acting-For-Role': 'owner' } }));
     const moveId = typeof data['moveId'] === 'string' ? data['moveId'] : null;
     if (!moveId) throw new TeamMoveCloudError('Cloud did not return a move id (unexpected answer to the create request)', 502, 'unexpected_response');

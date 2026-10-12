@@ -154,6 +154,22 @@ export class StagingArea {
   }
 
   /**
+   * Write raw bytes (patches, binary files), recording their hash.
+   *
+   * @param rel - POSIX package path
+   * @param content - Bytes
+   * @returns The recorded entry
+   */
+  async writeBytes(rel: string, content: Buffer): Promise<PackageFileEntry> {
+    const dest = this.abs(rel);
+    await fs.mkdir(path.dirname(dest), { recursive: true });
+    await fs.writeFile(dest, content);
+    const entry = { path: rel, sha256: createHash('sha256').update(content).digest('hex'), bytes: content.length };
+    this.entries.set(rel, entry);
+    return entry;
+  }
+
+  /**
    * Write a JSON file.
    *
    * @param rel - POSIX package path

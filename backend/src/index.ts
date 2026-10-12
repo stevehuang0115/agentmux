@@ -3078,7 +3078,25 @@ void (async () => {
 								import('./services/team-move/team-move-runtime.js'),
 								import('./services/team-move/team-move-driver.service.js'),
 							]);
-							const moveDriver = createTeamMoveDriver({ storage: this.storageService, relay: sync });
+							const moveDriver = createTeamMoveDriver({
+								storage: this.storageService,
+								relay: sync,
+								// "Ask the team to commit and push": a harness message to the team lead, waking it if it is stopped.
+								sendToAgent: async (session, text) => {
+									let exists = false;
+									try {
+										exists = getSessionBackendSync()?.sessionExists(session) ?? false;
+									} catch {
+										exists = false;
+									}
+									if (!exists) {
+										const { activateAgentBySession } = await import('./controllers/team/team.controller.js');
+										await activateAgentBySession(this.apiController, session).catch(() => undefined);
+									}
+									const result = await this.apiController.agentRegistrationService.sendMessageToAgent(session, text);
+									return result.success;
+								},
+							});
 							setTeamMoveDriver(moveDriver);
 							moveDriver.start();
 							void moveDriver.housekeeping().catch(() => undefined);

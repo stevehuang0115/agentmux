@@ -39,8 +39,9 @@ import { PACKAGE_TREE_STORES, getCrewlyHomePath, isInsidePackageTree, resolvePro
 import { readTeamChat } from './team-move-chat.js';
 import { createEncryptStream, createHashTap } from './team-move-crypto.js';
 import { StagingArea, walkFiles } from './team-move-fs.js';
-import { describeBlockingRepos, inspectRepo as defaultInspectRepo } from './team-move-git.js';
-import { TeamMoveSecretScanError, isSkippableFinding, scanStaging } from './team-move-secret-scan.js';
+import { DEFAULT_CARRY_LIMITS, collectCarry, describeLeft, type CarryLimits, type CollectedCarry } from './team-move-carry.js';
+import { describeBlockingRepos, displayRemote, inspectRepo as defaultInspectRepo, readRepoChanges } from './team-move-git.js';
+import { TeamMoveSecretScanError, isSkippableFinding, scanStaging, type SecretFinding } from './team-move-secret-scan.js';
 import {
   identityOf,
   resetWorkItemForTarget,
@@ -51,12 +52,16 @@ import {
   type TeamIdentity,
 } from './team-move-select.js';
 import type {
+  CarryIndex,
   CloudManifestSummary,
   PackageFileEntry,
   PackageMember,
   PackageProject,
   PackageRepo,
+  PreflightFinding,
+  RepoPreflight,
   SkippedFile,
+  SourcePreflightReport,
   TeamMoveManifest,
 } from './team-move.types.js';
 
@@ -113,6 +118,8 @@ export interface ExportDeps {
   now?: () => string;
   /** Caps for the working files of non-git projects; default from constants / env. */
   workLimits?: WorkFileLimits;
+  /** Caps for carried uncommitted changes; default from constants. */
+  carryLimits?: CarryLimits;
 }
 
 /** Size caps for the working files of projects that are not git repositories. */
@@ -153,6 +160,17 @@ export interface ExportOptions {
   allowDirty?: boolean;
   /** Leave files with secrets out of the package instead of aborting (only free-form notes and project files). */
   skipFlagged?: boolean;
+  /** Take uncommitted and unpushed work of git projects along (as patches) instead of requiring a push. */
+  carryChanges?: boolean;
+  /** Build and scan the package but never throw for secrets; report every finding (preflight). */
+  dryRun?: boolean;
+}
+
+/** A secret-scan finding with its owner-facing name. */
+export interface LabelledFinding extends SecretFinding {
+  label: string;
+  /** "Leave flagged files behind" may drop it. */
+  removable: boolean;
 }
 
 /** What an export produced. */
@@ -163,6 +181,8 @@ export interface ExportResult {
   summary: CloudManifestSummary;
   /** Lines describing uncommitted/unpushed work that was allowed through. */
   dirtyRepos: string[];
+  /** Every file the secret scan flagged (also those dropped by `skipFlagged`). */
+  scanFindings: LabelledFinding[];
 }
 
 /**
@@ -217,6 +237,98 @@ export class TeamMoveExporter {
     return { repos, blocking: describeBlockingRepos(repos) };
   }
 
+  /** The heavy part of the last preflight (package dry run, secret scan), reused while nothing changed. */
+  private heavy: { key: string; at: number; scan: NonNullable<SourcePreflightReport['scan']>; sizeBytes: number; requiredTools: string[]; requiredRuntimes: string[]; requiredConnectors: string[] } | null = null;
+
+  /**
+   * Everything the owner should know before a move, read without changing
+   * anything: per repository the uncommitted and unpushed work (counts and the
+   * first files), whether it could be carried instead of pushed, then a dry
+   * run of the package for the secret scan, its size and the tools it needs.
+   * The dry run is reused for a couple of minutes while the repositories look
+   * the same, so a live checklist can refresh often.
+   *
+   * @param input - Team, whether carrying is wanted, a scratch directory, whether to ignore the cached dry run, and whether to skip it altogether (`quick`)
+   * @returns The report
+   */
+  async preflight(input: { teamId: string; carryChanges?: boolean; stagingDir: string; force?: boolean; ttlMs?: number; quick?: boolean }): Promise<SourcePreflightReport> {
+    const team = await this.requireTeam(input.teamId);
+    const projects = await this.teamProjects(team);
+    const inspected = await Promise.all(projects.map((p) => this.inspect({ id: p.id, name: p.name, path: p.path })));
+    const limits = this.deps.carryLimits ?? DEFAULT_CARRY_LIMITS;
+
+    const repos: RepoPreflight[] = [];
+    for (const r of inspected) {
+      const isRepo = !r.note?.startsWith('not a git repository') && !r.note?.startsWith('project folder does not exist');
+      const changes = isRepo && (r.dirty || r.unpushed > 0) ? await readRepoChanges(r.path) : { modified: 0, untracked: 0, files: [] };
+      let carry: RepoPreflight['carry'] = null;
+      if (isRepo && (r.dirty || r.unpushed > 0)) {
+        if (!r.remoteUrl) carry = { possible: false, files: 0, bytes: 0, flattenedCommits: 0, reason: 'this repository has no remote' };
+        else {
+          const res = await collectCarry(r.path, limits);
+          carry = res.ok
+            ? { possible: res.carry.left.length === 0, files: res.carry.patches.length + res.carry.untracked.length, bytes: res.carry.bytes, flattenedCommits: res.carry.flattenedCommits, ...(res.carry.left.length ? { reason: describeLeft(res.carry.left) } : {}) }
+            : { possible: false, files: 0, bytes: 0, flattenedCommits: 0, reason: res.reason };
+        }
+      }
+      const top = changes.files.slice(0, C.PREFLIGHT_TOP_FILES);
+      repos.push({
+        projectId: r.projectId,
+        projectName: r.projectName,
+        path: r.path,
+        isRepo,
+        branch: r.branch,
+        remote: displayRemote(r.remoteUrl),
+        noRemote: isRepo && !r.remoteUrl,
+        modified: changes.modified,
+        untracked: changes.untracked,
+        // A repo that is dirty by status but whose files could not be listed still counts as one change.
+        ...(r.dirty && changes.modified + changes.untracked === 0 ? { modified: 1 } : {}),
+        unpushed: r.unpushed,
+        topFiles: top,
+        filesTruncated: changes.files.length > top.length,
+        carry,
+      });
+    }
+
+    const key = JSON.stringify([team.id, !!input.carryChanges, inspected.map((r, i) => [r.path, r.headSha, r.dirty, r.unpushed, repos[i]!.modified, repos[i]!.untracked, repos[i]!.topFiles.map((f) => f.path)])]);
+    const ttl = input.ttlMs ?? C.PREFLIGHT_SCAN_TTL_MS;
+    let heavy = !input.force && this.heavy && this.heavy.key === key && Date.now() - this.heavy.at < ttl ? this.heavy : null;
+    if (!heavy && !input.quick) {
+      const staging = path.resolve(input.stagingDir);
+      try {
+        const result = await this.export({ teamId: team.id, moveId: `preflight-${Date.now()}`, stagingDir: staging, allowDirty: true, carryChanges: !!input.carryChanges, dryRun: true });
+        const findings: PreflightFinding[] = result.scanFindings.slice(0, C.PREFLIGHT_MAX_FINDINGS).map((f) => ({ file: f.label, matches: f.matches, removable: f.removable }));
+        heavy = {
+          key,
+          at: Date.now(),
+          scan: { filesScanned: result.manifest.secretScan.filesScanned, findings },
+          sizeBytes: result.manifest.totalBytes,
+          requiredTools: result.manifest.requiredTools,
+          requiredRuntimes: result.manifest.requiredRuntimes,
+          requiredConnectors: result.manifest.requiredConnectors ?? [],
+        };
+        this.heavy = heavy;
+      } finally {
+        await fs.rm(staging, { recursive: true, force: true }).catch(() => undefined);
+      }
+    }
+    return {
+      checkedAt: this.now(),
+      teamId: team.id,
+      teamName: team.name,
+      crewlyVersion: this.deps.crewlyVersion,
+      members: team.members.length,
+      repos,
+      scan: heavy?.scan ?? null,
+      sizeBytes: heavy?.sizeBytes ?? null,
+      requiredTools: heavy?.requiredTools ?? [],
+      requiredRuntimes: heavy?.requiredRuntimes ?? [],
+      requiredConnectors: heavy?.requiredConnectors ?? [],
+      carryRequested: !!input.carryChanges,
+    };
+  }
+
   private async requireTeam(teamId: string): Promise<Team> {
     const team = (await this.deps.getTeams()).find((t) => t.id === teamId);
     if (!team) throw new Error(`team ${teamId} not found on this machine`);
@@ -242,11 +354,22 @@ export class TeamMoveExporter {
     const id = identityOf(team);
 
     const repos = await Promise.all(projects.map((p) => this.inspect({ id: p.id, name: p.name, path: p.path })));
-    const blocking = describeBlockingRepos(repos);
+    // Uncommitted work that can travel in the package no longer blocks the move.
+    const carried = new Map<string, CollectedCarry>();
+    if (options.carryChanges) {
+      for (const repo of repos) {
+        if (!repo.remoteUrl || !(repo.dirty || repo.unpushed > 0)) continue;
+        const res = await collectCarry(repo.path, this.deps.carryLimits ?? DEFAULT_CARRY_LIMITS);
+        if (res.ok && res.carry.left.length === 0) carried.set(repo.projectId, res.carry);
+        else repo.carryError = res.ok ? describeLeft(res.carry.left) : res.reason;
+      }
+    }
+    const blocking = describeBlockingRepos(repos.filter((r) => !carried.has(r.projectId)));
     if (blocking.length > 0 && !options.allowDirty) throw new TeamMoveBlockedError(blocking);
 
     const staging = new StagingArea(path.resolve(options.stagingDir));
     await staging.init();
+    const carriedLost = await this.writeCarry(staging, carried);
 
     const counts: Record<string, number> = {};
     const bump = (key: string, n = 1): void => {
@@ -314,8 +437,9 @@ export class TeamMoveExporter {
     // 7. Secret scan: nothing leaves the machine with a credential in it.
     const known = this.deps.knownSecrets ? await this.deps.knownSecrets() : collectSecretEnvValues(process.env);
     const scan = await scanStaging(staging, staging.files(), known);
+    const scanFindings = this.labelFindings(scan.findings, projects, carried);
     let excludedFiles = 0;
-    if (scan.findings.length > 0) {
+    if (scan.findings.length > 0 && !options.dryRun) {
       const removable = scan.findings.filter((f) => isSkippableFinding(f.path));
       if (!options.skipFlagged || removable.length !== scan.findings.length) throw new TeamMoveSecretScanError(scan.findings);
       for (const finding of removable) {
@@ -339,6 +463,9 @@ export class TeamMoveExporter {
         }
       }
     }
+
+    // 7b. Carried changes: the index lists what is really in the package.
+    await this.writeCarryIndexes(staging, repos, carried, carriedLost);
 
     // 8. Manifest.
     const members: PackageMember[] = team.members.map((m) => ({
@@ -378,7 +505,86 @@ export class TeamMoveExporter {
       staging,
       summary: summarize(manifest),
       dirtyRepos: blocking,
+      scanFindings,
     };
+  }
+
+  /**
+   * Write the patches and untracked files of carried repositories into the
+   * package.
+   *
+   * @returns Files that vanished or could not be read while copying (left behind), by project id
+   */
+  private async writeCarry(staging: StagingArea, carried: Map<string, CollectedCarry>): Promise<Map<string, string[]>> {
+    const lost = new Map<string, string[]>();
+    for (const [projectId, carry] of carried) {
+      const gone: string[] = [];
+      for (const [n, patch] of carry.patches.entries()) await staging.writeBytes(`projects/${projectId}/carry/patches/${n}.patch`, patch.data);
+      for (const file of carry.untracked) {
+        try {
+          await staging.copyIn(file.abs, `projects/${projectId}/carry/files/${file.path}`);
+        } catch {
+          gone.push(file.path);
+        }
+      }
+      lost.set(projectId, gone);
+    }
+    return lost;
+  }
+
+  /** Write `carry.json` of each carried repository from the files that are really in the package. */
+  private async writeCarryIndexes(staging: StagingArea, repos: PackageRepo[], carried: Map<string, CollectedCarry>, lost: Map<string, string[]>): Promise<void> {
+    for (const [projectId, carry] of carried) {
+      const index: CarryIndex = {
+        version: 1,
+        baseSha: carry.baseSha,
+        branch: carry.branch,
+        flattenedCommits: carry.flattenedCommits,
+        patches: [],
+        untracked: [],
+        leftBehind: [...(lost.get(projectId) ?? [])],
+      };
+      for (const [n, patch] of carry.patches.entries()) {
+        if (staging.has(`projects/${projectId}/carry/patches/${n}.patch`)) index.patches.push({ path: patch.path, file: `patches/${n}.patch`, deleted: patch.deleted });
+        else index.leftBehind.push(patch.path);
+      }
+      for (const file of carry.untracked) {
+        if (staging.has(`projects/${projectId}/carry/files/${file.path}`)) index.untracked.push({ path: file.path, file: `files/${file.path}`, executable: file.executable });
+        else if (!index.leftBehind.includes(file.path)) index.leftBehind.push(file.path);
+      }
+      await staging.writeJson(`projects/${projectId}/carry/carry.json`, index);
+      const repo = repos.find((r) => r.projectId === projectId);
+      if (repo) {
+        repo.carry = {
+          baseSha: carry.baseSha,
+          patches: index.patches.length,
+          untracked: index.untracked.length,
+          bytes: carry.bytes,
+          flattenedCommits: carry.flattenedCommits,
+          leftBehind: index.leftBehind,
+        };
+      }
+    }
+  }
+
+  /** Name flagged files the way the owner knows them (project and path), not by package path. */
+  private labelFindings(findings: SecretFinding[], projects: Project[], carried: Map<string, CollectedCarry>): LabelledFinding[] {
+    return findings.map((f) => {
+      let label = f.path;
+      const m = /^projects\/([^/]+)\/(data|files|carry)\/(.*)$/.exec(f.path);
+      if (m) {
+        const project = projects.find((p) => p.id === m[1]);
+        const name = project?.name ?? m[1]!;
+        if (m[2] === 'data') label = `${name}/.crewly/${m[3]}`;
+        else if (m[2] === 'files') label = `${name}/${m[3]}`;
+        else {
+          const patch = /^patches\/(\d+)\.patch$/.exec(m[3]!);
+          const carry = carried.get(m[1]!);
+          label = patch && carry?.patches[Number(patch[1])] ? `${name}/${carry.patches[Number(patch[1])]!.path}` : `${name}/${m[3]!.replace(/^files\//, '')}`;
+        }
+      }
+      return { ...f, label, removable: isSkippableFinding(f.path) };
+    });
   }
 
   /** The things a move deliberately leaves out, shown to the owner. */

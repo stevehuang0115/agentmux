@@ -52,6 +52,27 @@ describe('TeamMoveCloudClient', () => {
     await expect(make([json(201, { success: true, data: {} })]).create({ teamId: 't', sourceInstanceId: 's', targetInstanceId: 'd' })).rejects.toThrow(/move id/);
   });
 
+  it('reads the preflight requests waiting for this machine and answers them', async () => {
+    const request = { preflightId: 'pf-1', teamId: 't', teamName: 'T', role: 'source', action: 'preflight', options: { carryChanges: true } };
+    const list = await make([json(200, { success: true, data: [request] })]).listPreflights();
+    expect(list).toEqual([request]);
+    expect(calls[0]!.url).toBe('https://cloud.test/api/cloud/team-moves/preflights?instanceId=inst-1');
+    expect(await make([json(200, { success: true, data: request })]).getPreflight('pf-1')).toEqual(request);
+    expect(calls[1]!.url).toBe('https://cloud.test/api/cloud/team-moves/preflights/pf-1');
+    await make([json(200, { success: true, data: {} })]).postPreflightResult('pf-1', { ask: { ok: true, agents: ['Lena'] } });
+    expect(calls[2]!.url).toBe('https://cloud.test/api/cloud/team-moves/preflights/pf-1/result');
+    expect(calls[2]!.init.method).toBe('POST');
+    expect(JSON.parse(calls[2]!.init.body as string)).toEqual({ ask: { ok: true, agents: ['Lena'] } });
+    expect(header(2, 'X-Crewly-Instance-Id')).toBe('inst-1');
+    expect(await make([json(200, { success: true, data: { nope: 1 } })]).listPreflights()).toEqual([]);
+  });
+
+  it('sends the owner\'s choices with the move', async () => {
+    const c = make([json(201, { success: true, data: { moveId: 'abc' } })]);
+    await c.create({ teamId: 't', sourceInstanceId: 's', targetInstanceId: 'd', options: { carryChanges: true, skipFlagged: true } });
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({ teamId: 't', sourceInstanceId: 's', targetInstanceId: 'd', options: { carryChanges: true, skipFlagged: true } });
+  });
+
   it('never follows a redirect: a 301 on the create POST is an error, not a list read as a move id', async () => {
     const c = make([new Response(null, { status: 301, headers: { Location: 'https://cloud.test/api/cloud/team-moves/' } })]);
     const error = await c.create({ teamId: 't', sourceInstanceId: 's', targetInstanceId: 'd' }).catch((e) => e);

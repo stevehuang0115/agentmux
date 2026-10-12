@@ -4,6 +4,8 @@
  *   GET  /api/team-moves             moves of this account (Cloud) with local progress
  *   GET  /api/team-moves/machines    the account's other live machines (with canReceive and update hints)
  *   POST /api/team-moves/check       what would block a move of a team (unpushed work)
+ *   POST /api/team-moves/preflight   what the owner should know before a move: per repository the uncommitted and unpushed work,
+ *                                    whether it can be carried, the secret scan, size and tools (nothing is sent)
  *   POST /api/team-moves/preview     dry run: build the package here, report what and how big (nothing is sent)
  *   POST /api/team-moves             start a move (owner, or the orchestrator after the owner said yes)
  *   GET  /api/team-moves/:moveId     one move with its local journal
@@ -140,6 +142,20 @@ export function createTeamMovesRouter(deps: Partial<TeamMoveControllerDeps> = {}
     }
   });
 
+  router.post('/preflight', requireOwner, async (req: Request, res: Response) => {
+    try {
+      const d = needDriver(res);
+      if (!d) return;
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const team = (await teams()).find((t) => t.id === body['teamId'] || t.name.toLowerCase() === String(body['teamName'] ?? '').toLowerCase());
+      if (!team) return fail(res, 404, 'Team not found on this machine');
+      const report = await d.sourcePreflight({ teamId: team.id, carryChanges: body['carryChanges'] === true, quick: body['quick'] === true, force: body['force'] === true });
+      res.json({ success: true, data: report });
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
   router.post('/preview', requireOwner, async (req: Request, res: Response) => {
     let staging: string | null = null;
     try {
@@ -177,6 +193,7 @@ export function createTeamMovesRouter(deps: Partial<TeamMoveControllerDeps> = {}
         targetInstanceId: resolved.targetInstanceId,
         allowDirty: body['allowDirty'] === true,
         skipFlagged: body['skipFlagged'] === true,
+        carryChanges: body['carryChanges'] === true,
       });
       res.status(202).json({ success: true, data: { moveId: started.moveId, target: resolved.targetName } });
     } catch (error) {

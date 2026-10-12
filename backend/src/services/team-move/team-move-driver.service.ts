@@ -17,26 +17,36 @@
  *                            target: stop + archive its copy (`target_stopped`).
  *                            Also "abort and clean up" after a failure.
  *
+ * Before a move exists, the portal asks Cloud for a preflight and Cloud
+ * pushes `{preflightId, role, action}`:
+ *
+ *   source  preflight     -> read the repositories, dry-run the package, report
+ *   target  preflight     -> report version, disk, tools and logins
+ *   source  ask_team      -> message the team lead to commit and push, report who
+ *
  * Starting the driver advertises the `teamMove:1` capability to Cloud.
  *
  * @module services/team-move/team-move-driver.service
  */
 
 import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { TEAM_MOVE_CONSTANTS } from '../../constants.js';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
 import { getCrewlyHomePath } from '../core/crewly-home.utils.js';
 import type { IncomingMessage } from './../cloud/cloud-sync.types.js';
 import { TeamMoveArchiver } from './team-move-archive.js';
-import { TeamMoveCloudClient, TeamMoveCloudError } from './team-move-cloud.client.js';
+import { TeamMoveCloudClient, TeamMoveCloudError, type PreflightRequest } from './team-move-cloud.client.js';
+import { buildAskTeamMessage, pickAskRecipient } from './team-move-ask.js';
 import { generateTargetKeyPair, isPublicKeyString } from './team-move-crypto.js';
 import { TeamMoveBlockedError, TeamMoveExporter, buildEncryptedPackage } from './team-move-exporter.js';
 import { TeamMoveImportError, TeamMoveImporter } from './team-move-importer.js';
 import { MoveJournal, isMoveId, moveDirFor } from './team-move-journal.js';
+import { readRepoChanges } from './team-move-git.js';
 import { hasRoomFor } from './team-move-preflight.js';
 import { TeamMoveSecretScanError } from './team-move-secret-scan.js';
-import type { PackageRepo, TeamMoveAction, TeamMovePreflight, TeamMoveRelayData, TeamMoveRole, TeamMoveView } from './team-move.types.js';
+import type { PackageRepo, SourcePreflightReport, TeamMoveAction, TeamMoveOptions, TeamMovePreflight, TeamMovePreflightRelayData, TeamMoveRelayData, TeamMoveRole, TeamMoveView } from './team-move.types.js';
 
 const C = TEAM_MOVE_CONSTANTS;
 
@@ -103,6 +113,10 @@ export interface TeamMoveDriverDeps {
   importer: () => TeamMoveImporter;
   archiver: TeamMoveArchiver;
   preflight: (requiredTools?: readonly string[]) => Promise<TeamMovePreflight>;
+  /** Deliver a harness message to an agent of a team (waking it when stopped); returns false when it could not be delivered. */
+  sendToAgent?: (sessionName: string, text: string) => Promise<boolean>;
+  /** The teams on this machine (to find the lead to ask). */
+  getTeams?: () => Promise<Array<import('../../types/index.js').Team>>;
   /** True when no member of the team is working. */
   isTeamIdle: (teamId: string) => Promise<boolean>;
   sleep?: (ms: number) => Promise<void>;
@@ -114,6 +128,7 @@ export interface TeamMoveDriverDeps {
 interface Intent {
   allowDirty?: boolean;
   skipFlagged?: boolean;
+  carryChanges?: boolean;
 }
 
 /** The driver. */
@@ -170,6 +185,11 @@ export class TeamMoveDriver {
    */
   async handleRelay(msg: IncomingMessage): Promise<boolean> {
     if (msg?.type !== C.RELAY_MESSAGE_TYPE) return false;
+    const preflight = parsePreflightRelayData(msg.payload);
+    if (preflight) {
+      void this.runPreflightRequest(preflight.preflightId, preflight.role, preflight.action);
+      return true;
+    }
     const data = parseRelayData(msg.payload);
     if (!data) {
       this.logger.warn('Ignored a malformed team_move relay message');
@@ -197,6 +217,7 @@ export class TeamMoveDriver {
       return 0;
     }
     let started = 0;
+    started += await this.pollPreflights();
     for (const view of views) {
       if (!view.role || !view.action || !isMoveId(view.moveId)) continue;
       void this.dispatch(view, { moveId: view.moveId, role: view.role, action: view.action }).catch(() => undefined);
@@ -261,9 +282,21 @@ export class TeamMoveDriver {
     const fresh = await this.deps.cloud.get(view.moveId);
     if (!isPublicKeyString(fresh.targetPublicKey)) throw new Error('Cloud has no public key of the target yet');
     const targetKey = fresh.targetPublicKey;
-    const intent = await this.readIntent(view.moveId);
+    // The owner's choices: made in the portal (stored by Cloud) or locally (intent.json).
+    const local = await this.readIntent(view.moveId);
+    const intent: Intent = {
+      allowDirty: local.allowDirty || fresh.options?.allowDirty,
+      skipFlagged: local.skipFlagged || fresh.options?.skipFlagged,
+      carryChanges: local.carryChanges || fresh.options?.carryChanges,
+    };
     const stagingDir = path.join(journal.dir, 'package-staging');
     const cipherFile = path.join(journal.dir, 'package.enc');
+
+    // Work that exists only here stops the move before anything else: no waiting for the team to go quiet first.
+    if (!intent.allowDirty && !(await journal.isDone('export'))) {
+      const check = intent.carryChanges ? await this.carryBlockers(view.teamId) : await this.deps.exporter.checkRepos(view.teamId);
+      if (check.blocking.length > 0) throw new TeamMoveBlockedError(check.blocking);
+    }
 
     const built = await journal.run('export', async () => {
       await this.waitForIdle(view.teamId);
@@ -274,6 +307,7 @@ export class TeamMoveDriver {
         stagingDir,
         allowDirty: intent.allowDirty,
         skipFlagged: intent.skipFlagged,
+        carryChanges: intent.carryChanges,
       });
       const enc = await buildEncryptedPackage(stagingDir, cipherFile, targetKey, view.moveId);
       await fs.rm(stagingDir, { recursive: true, force: true });
@@ -374,17 +408,126 @@ export class TeamMoveDriver {
    * @returns The new move id
    * @throws TeamMoveBlockedError when a repository holds unpushed work (unless allowed)
    */
-  async startMove(input: { teamId: string; targetInstanceId: string; allowDirty?: boolean; skipFlagged?: boolean }): Promise<{ moveId: string }> {
-    const check = await this.deps.exporter.checkRepos(input.teamId);
+  async startMove(input: { teamId: string; targetInstanceId: string; allowDirty?: boolean; skipFlagged?: boolean; carryChanges?: boolean }): Promise<{ moveId: string }> {
+    // With "carry changes" the work travels in the package, so only what cannot be carried blocks.
+    const check = input.carryChanges ? await this.carryBlockers(input.teamId) : await this.deps.exporter.checkRepos(input.teamId);
     if (check.blocking.length > 0 && !input.allowDirty) throw new TeamMoveBlockedError(check.blocking);
     const { instanceId } = await this.deps.identity();
-    const created = await this.deps.cloud.create({ teamId: input.teamId, sourceInstanceId: instanceId, targetInstanceId: input.targetInstanceId });
-    if (input.allowDirty || input.skipFlagged) {
+    const options: TeamMoveOptions = {
+      ...(input.allowDirty ? { allowDirty: true } : {}),
+      ...(input.skipFlagged ? { skipFlagged: true } : {}),
+      ...(input.carryChanges ? { carryChanges: true } : {}),
+    };
+    const created = await this.deps.cloud.create({ teamId: input.teamId, sourceInstanceId: instanceId, targetInstanceId: input.targetInstanceId, ...(Object.keys(options).length ? { options } : {}) });
+    if (input.allowDirty || input.skipFlagged || input.carryChanges) {
       const journal = new MoveJournal(created.moveId, this.home, this.now);
       await journal.ensure();
-      await fs.writeFile(path.join(journal.dir, 'intent.json'), JSON.stringify({ allowDirty: !!input.allowDirty, skipFlagged: !!input.skipFlagged } satisfies Intent));
+      await fs.writeFile(path.join(journal.dir, 'intent.json'), JSON.stringify({ allowDirty: !!input.allowDirty, skipFlagged: !!input.skipFlagged, carryChanges: !!input.carryChanges } satisfies Intent));
     }
     return created;
+  }
+
+  /** Blocking lines when uncommitted work would be carried: only repositories that cannot be carried. */
+  private async carryBlockers(teamId: string): Promise<{ blocking: string[] }> {
+    const report = await this.sourcePreflight({ teamId, carryChanges: true, quick: true });
+    const blocking = report.repos
+      .filter((r) => r.isRepo && (r.modified > 0 || r.untracked > 0 || r.unpushed > 0) && !r.carry?.possible)
+      .map((r) => `${r.projectName} (${r.path}): ${r.carry?.reason ?? 'uncommitted changes (commit and push them)'}`);
+    return { blocking };
+  }
+
+  /**
+   * The preflight report of a team on this machine (also served by the local
+   * REST API and, over Cloud, to the portal).
+   *
+   * @param input - Team, whether carrying is wanted, whether to skip the package dry run, whether to ignore its cache
+   * @returns The report
+   */
+  async sourcePreflight(input: { teamId: string; carryChanges?: boolean; quick?: boolean; force?: boolean }): Promise<SourcePreflightReport> {
+    const stagingDir = await fs.mkdtemp(path.join(os.tmpdir(), 'crewly-team-move-preflight-'));
+    try {
+      return await this.deps.exporter.preflight({ teamId: input.teamId, carryChanges: input.carryChanges, stagingDir, force: input.force, quick: input.quick });
+    } finally {
+      await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // preflight requests (before a move exists)
+  // -------------------------------------------------------------------------
+
+  /** Answer the preflight requests Cloud is holding for this machine. */
+  private async pollPreflights(): Promise<number> {
+    let requests: PreflightRequest[] = [];
+    try {
+      requests = await this.deps.cloud.listPreflights();
+    } catch (error) {
+      this.logger.debug('Preflight poll failed', { error: messageOf(error) });
+      return 0;
+    }
+    for (const r of requests) void this.runPreflightRequest(r.preflightId, r.role, r.action);
+    return requests.length;
+  }
+
+  /** Run one preflight request (one at a time per request and action). */
+  private runPreflightRequest(preflightId: string, role: TeamMoveRole, action: TeamMovePreflightRelayData['action']): Promise<void> {
+    const key = `preflight:${preflightId}:${role}:${action}`;
+    const running = this.inFlight.get(key);
+    if (running) return running;
+    const task = this.answerPreflight(preflightId, role, action)
+      .catch((error) => this.logger.warn('Team move preflight failed', { preflightId, role, action, error: messageOf(error) }))
+      .finally(() => this.inFlight.delete(key));
+    this.inFlight.set(key, task);
+    return task;
+  }
+
+  private async answerPreflight(preflightId: string, role: TeamMoveRole, action: TeamMovePreflightRelayData['action']): Promise<void> {
+    const request = await this.deps.cloud.getPreflight(preflightId);
+    // Cloud's record says what this machine has to do; the push is only a hint.
+    const effectiveRole = request.role ?? role;
+    const effectiveAction = request.action ?? action;
+    try {
+      if (effectiveRole === 'target') {
+        await this.deps.cloud.postPreflightResult(preflightId, { report: await this.deps.preflight() });
+      } else if (effectiveAction === 'ask_team') {
+        await this.deps.cloud.postPreflightResult(preflightId, { ask: await this.askTeam(request) });
+      } else {
+        const report = await this.sourcePreflight({ teamId: request.teamId, carryChanges: request.options?.carryChanges, force: request.force });
+        await this.deps.cloud.postPreflightResult(preflightId, { report });
+      }
+    } catch (error) {
+      if (error instanceof TeamMoveCloudError && error.retryable) throw error;
+      // Tell the portal why instead of leaving the checklist spinning.
+      await this.deps.cloud.postPreflightResult(preflightId, { error: friendlyError(error).slice(0, MAX_ERROR_CHARS) }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  /**
+   * Message the team lead about the work that blocks the move.
+   *
+   * @param request - The preflight request
+   * @returns Who was asked, and whether it worked
+   */
+  private async askTeam(request: PreflightRequest): Promise<{ ok: boolean; agents: string[]; error?: string }> {
+    if (!this.deps.sendToAgent || !this.deps.getTeams) return { ok: false, agents: [], error: 'this machine cannot message its agents' };
+    const team = (await this.deps.getTeams()).find((t) => t.id === request.teamId);
+    if (!team) return { ok: false, agents: [], error: 'the team is not on this machine' };
+    const recipient = pickAskRecipient(team);
+    if (!recipient?.sessionName) return { ok: false, agents: [], error: 'the team has no agent to ask' };
+    const report = await this.sourcePreflight({ teamId: request.teamId, carryChanges: false, force: true });
+    // The report names a few files; the agent gets a longer list.
+    const repos = await Promise.all(
+      report.repos.map(async (r) => {
+        if (!r.isRepo || (r.modified === 0 && r.untracked === 0)) return r;
+        const changes = await readRepoChanges(r.path);
+        return { ...r, topFiles: changes.files.slice(0, 25), filesTruncated: changes.files.length > 25 };
+      }),
+    );
+    const text = buildAskTeamMessage({ teamName: team.name, targetName: request.targetName ?? 'another machine', repos, findings: report.scan?.findings ?? [] });
+    if (!text) return { ok: true, agents: [] };
+    const delivered = await this.deps.sendToAgent(recipient.sessionName, text);
+    return delivered ? { ok: true, agents: [recipient.name] } : { ok: false, agents: [recipient.name], error: `could not reach ${recipient.name}` };
   }
 
   /**
@@ -497,7 +640,7 @@ export class TeamMoveDriver {
     if (error instanceof TeamMoveCloudError && error.retryable) return;
     const text = friendlyError(error).slice(0, MAX_ERROR_CHARS);
     try {
-      await this.deps.cloud.postStatus(moveId, { status: 'failed', error: text });
+      await this.deps.cloud.postStatus(moveId, { status: 'failed', error: text, ...(failureReport(error) ? { report: failureReport(error) } : {}) });
     } catch (err) {
       this.logger.warn('Could not report a team move failure', { moveId, error: messageOf(err) });
     }
@@ -515,6 +658,19 @@ export function friendlyError(error: unknown): string {
   return messageOf(error);
 }
 
+/**
+ * Machine-readable detail of a failure, so the portal can word it (and offer
+ * the right fix) in the owner's language.
+ *
+ * @param error - Thrown value
+ * @returns `{failure: {code, ...}}` for the failures the portal knows, else undefined
+ */
+export function failureReport(error: unknown): { failure: Record<string, unknown> } | undefined {
+  if (error instanceof TeamMoveBlockedError) return { failure: { code: 'unpushed_work', repos: error.lines.slice(0, 20) } };
+  if (error instanceof TeamMoveSecretScanError) return { failure: { code: 'secrets_found', files: error.findings.slice(0, 30).map((f) => f.path) } };
+  return undefined;
+}
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -528,6 +684,23 @@ async function readKey(file: string): Promise<{ publicKey: string; privateKey: s
   } catch {
     return null;
   }
+}
+
+/**
+ * Parse the data of a `team_move` push that belongs to a preflight (it names a
+ * `preflightId` instead of a `moveId`).
+ *
+ * @param payload - Relay payload
+ * @returns Parsed data, or null when it is not a preflight push
+ */
+export function parsePreflightRelayData(payload: unknown): TeamMovePreflightRelayData | null {
+  const raw = (payload && typeof payload === 'object' ? ((payload as { data?: unknown }).data ?? payload) : null) as Record<string, unknown> | null;
+  if (!raw) return null;
+  const { preflightId, role, action } = raw;
+  if (typeof preflightId !== 'string' || !isMoveId(preflightId)) return null;
+  if (role !== 'source' && role !== 'target') return null;
+  if (!(C.PREFLIGHT_ACTIONS as readonly string[]).includes(String(action))) return null;
+  return { preflightId, role, action: action as TeamMovePreflightRelayData['action'] };
 }
 
 /**
