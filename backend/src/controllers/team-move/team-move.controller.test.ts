@@ -26,6 +26,7 @@ describe('team moves routes', () => {
     rollbackMove: jest.fn(),
     checkRepos: jest.fn(),
     preview: jest.fn(),
+    sourcePreflight: jest.fn(),
   };
   let owner: string[];
 
@@ -81,7 +82,7 @@ describe('team moves routes', () => {
     const res = await request(app()).post('/api/team-moves').send({ teamName: 'ce', targetName: 'air' });
     expect(res.status).toBe(202);
     expect(res.body.data).toEqual({ moveId: 'move-aaaaaaaa', target: 'Air' });
-    expect(driver.startMove).toHaveBeenCalledWith({ teamId: 't1', targetInstanceId: 'air-id', allowDirty: false, skipFlagged: false });
+    expect(driver.startMove).toHaveBeenCalledWith({ teamId: 't1', targetInstanceId: 'air-id', allowDirty: false, skipFlagged: false, carryChanges: false });
   });
 
   it('answers 404 with the machine names when the target is unknown, and never moves to itself', async () => {
@@ -131,6 +132,26 @@ describe('team moves routes', () => {
     expect(res.body.data).toEqual({ encryptedBytes: 10 });
     expect(driver.preview).toHaveBeenCalledWith(expect.objectContaining({ teamId: 't1', allowDirty: true }));
     expect((await request(app()).post('/api/team-moves/check').send({ teamName: 'Nope' })).status).toBe(404);
+  });
+
+  it('serves the preflight to the owner only, for a team by id or name, with the owner\'s options', async () => {
+    driver.sourcePreflight.mockResolvedValue({ teamId: 't1', repos: [] });
+    const res = await request(app()).post('/api/team-moves/preflight').send({ teamName: 'ce', carryChanges: true, quick: true });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ teamId: 't1', repos: [] });
+    expect(driver.sourcePreflight).toHaveBeenCalledWith({ teamId: 't1', carryChanges: true, quick: true, force: false });
+    await request(app()).post('/api/team-moves/preflight').send({ teamId: 't1' });
+    expect(driver.sourcePreflight).toHaveBeenLastCalledWith({ teamId: 't1', carryChanges: false, quick: false, force: false });
+    expect((await request(app()).post('/api/team-moves/preflight').send({ teamName: 'Nope' })).status).toBe(404);
+    expect((await request(app()).post('/api/team-moves/preflight').set('x-test-caller', 'agent').send({ teamName: 'CE' })).status).toBe(403);
+    expect((await request(app(null)).post('/api/team-moves/preflight').send({ teamName: 'CE' })).status).toBe(503);
+  });
+
+  it('passes "carry uncommitted changes" on when starting a move', async () => {
+    driver.startMove.mockResolvedValue({ moveId: 'move-aaaaaaaa' });
+    const res = await request(app()).post('/api/team-moves').send({ teamName: 'CE', targetName: 'Air', carryChanges: true, skipFlagged: true });
+    expect(res.status).toBe(202);
+    expect(driver.startMove).toHaveBeenCalledWith({ teamId: 't1', targetInstanceId: 'air-id', allowDirty: false, skipFlagged: true, carryChanges: true });
   });
 
   it('rolls back for the owner only', async () => {

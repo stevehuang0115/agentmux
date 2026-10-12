@@ -33,6 +33,26 @@ export type TeamMoveRole = 'source' | 'target';
 /** What Cloud asks a machine to do. */
 export type TeamMoveAction = 'prepare' | 'package' | 'import' | 'stop_archive' | 'rollback';
 
+/** What Cloud asks a machine to do before a move exists. */
+export type TeamMovePreflightAction = 'preflight' | 'ask_team';
+
+/** Relay push `data` of a preflight (`type: 'team_move'`, no `moveId`). */
+export interface TeamMovePreflightRelayData {
+  preflightId: string;
+  role: TeamMoveRole;
+  action: TeamMovePreflightAction;
+}
+
+/** Choices the owner made for a move (stored by Cloud on the move). */
+export interface TeamMoveOptions {
+  /** Move although repositories hold work that exists only on the source. */
+  allowDirty?: boolean;
+  /** Leave files with secrets behind instead of stopping. */
+  skipFlagged?: boolean;
+  /** Carry uncommitted work in the package instead of requiring a push. */
+  carryChanges?: boolean;
+}
+
 /** Relay push `data` (`type: 'team_move'`). */
 export interface TeamMoveRelayData {
   moveId: string;
@@ -92,6 +112,67 @@ export interface TeamMoveView {
   /** Set on instance requests: what this instance should do now. */
   role?: TeamMoveRole;
   action?: TeamMoveAction;
+  /** The owner's choices (carry changes, leave flagged files, move anyway). */
+  options?: TeamMoveOptions;
+}
+
+// ---------------------------------------------------------------------------
+// Preflight (before a move)
+// ---------------------------------------------------------------------------
+
+/** How a changed file differs from the last commit. */
+export type RepoFileStatus = 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked' | 'conflict';
+
+/** One repository of the team as the preflight sees it. */
+export interface RepoPreflight {
+  projectId: string;
+  projectName: string;
+  path: string;
+  /** False for a plain folder (its files travel in the package). */
+  isRepo: boolean;
+  branch: string | null;
+  /** `host/owner/repo` of origin (credentials and scheme removed). */
+  remote: string | null;
+  noRemote: boolean;
+  /** Tracked files with uncommitted changes. */
+  modified: number;
+  /** Untracked files that are not ignored. */
+  untracked: number;
+  /** Local commits the remote does not have. */
+  unpushed: number;
+  /** The first few changed files, modified before untracked. */
+  topFiles: Array<{ path: string; status: RepoFileStatus }>;
+  filesTruncated: boolean;
+  /** Whether the changes can travel in the package ("Carry uncommitted changes"). */
+  carry: { possible: boolean; files: number; bytes: number; flattenedCommits: number; reason?: string } | null;
+}
+
+/** A file the secret scan flagged. */
+export interface PreflightFinding {
+  /** Where it lives, in the owner's words (`Project/path`). */
+  file: string;
+  matches: number;
+  /** "Leave flagged files behind" can drop it (otherwise it is part of the team's own records). */
+  removable: boolean;
+}
+
+/** What the source machine finds out about a team before it moves. */
+export interface SourcePreflightReport {
+  checkedAt: string;
+  teamId: string;
+  teamName: string;
+  crewlyVersion: string;
+  members: number;
+  repos: RepoPreflight[];
+  /** Null when the package was not dry-run (a quick refresh without cached results). */
+  scan: { filesScanned: number; findings: PreflightFinding[] } | null;
+  /** Uncompressed size of the package (null as above). */
+  sizeBytes: number | null;
+  requiredTools: string[];
+  requiredRuntimes: string[];
+  requiredConnectors: string[];
+  /** Whether carrying was requested for this run (it changes the scan). */
+  carryRequested: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +203,37 @@ export interface PackageRepo {
   unpushed: number;
   /** Why the state could not be read (not a repo, no remote, ...). */
   note?: string;
+  /** Uncommitted work that travels in the package instead of being pushed. */
+  carry?: PackageCarry;
+  /** Why uncommitted work could not be carried (asked for, but too big, ...). */
+  carryError?: string;
+}
+
+/** Uncommitted work of a repository that travels in the package. */
+export interface PackageCarry {
+  /** A commit the remote has; the target checks it out and applies the changes on top. */
+  baseSha: string;
+  /** Tracked files whose changes (edits, deletions, binary files) travel as patches. */
+  patches: number;
+  /** Untracked, not-ignored files that travel as they are. */
+  untracked: number;
+  bytes: number;
+  /** Local commits the remote does not have; their changes are part of the patches (uncommitted on the target). */
+  flattenedCommits: number;
+  /** Changes left on the source because the secret scan flagged them (repository-relative paths). */
+  leftBehind: string[];
+}
+
+/** `projects/<id>/carry/carry.json`: how to apply a repository's carried changes. */
+export interface CarryIndex {
+  version: 1;
+  baseSha: string;
+  branch: string | null;
+  flattenedCommits: number;
+  /** One `git apply` patch per changed tracked file. */
+  patches: Array<{ path: string; file: string; deleted: boolean }>;
+  untracked: Array<{ path: string; file: string; executable: boolean }>;
+  leftBehind: string[];
 }
 
 /** A project-local file left out of the package. */
@@ -251,6 +363,8 @@ export interface TeamMoveImportReport {
   repos: {
     cloned: Array<{ name: string; path: string; branch: string | null; headSha: string | null }>;
     failed: Array<{ name: string; reason: string }>;
+    /** Uncommitted work carried from the source and applied on top of the clone. */
+    carried?: Array<{ name: string; applied: number; untracked: number; failed: Array<{ path: string; reason: string }>; flattenedCommits: number; leftBehind: number }>;
   };
   missingTools: string[];
   /** Runtimes the team uses that are not logged in here. */

@@ -8328,6 +8328,20 @@ export const TEAM_MOVE_CONSTANTS = {
 	BOOT_DELAY_MS: 20_000,
 	/** `git clone`/`fetch` timeout (ms). */
 	GIT_TIMEOUT_MS: 15 * 60 * 1000,
+	/** "Carry uncommitted changes": most bytes of patches and untracked files taken from one repository. */
+	CARRY_MAX_BYTES: 100 * 1024 * 1024,
+	/** ...largest single patch or untracked file. */
+	CARRY_FILE_MAX_BYTES: 25 * 1024 * 1024,
+	/** ...most changed files (patches plus untracked files) per repository. */
+	CARRY_MAX_FILES: 2000,
+	/** Changed files named per repository in a preflight report. */
+	PREFLIGHT_TOP_FILES: 8,
+	/** Flagged files named in a preflight report. */
+	PREFLIGHT_MAX_FINDINGS: 30,
+	/** The heavy part of a preflight (package dry run + secret scan) is reused this long while nothing changed (ms). */
+	PREFLIGHT_SCAN_TTL_MS: 2 * 60 * 1000,
+	/** Relay actions Cloud pushes for a preflight (before any move exists). */
+	PREFLIGHT_ACTIONS: ['preflight', 'ask_team'],
 	/** Tools a package may require; found by name in prompts, norms and SOPs. */
 	KNOWN_TOOLS: ['ffmpeg', 'docker', 'xcodebuild', 'gh', 'python3', 'node', 'git', 'jq', 'yt-dlp', 'imagemagick', 'whisper-cli'],
 	/** Binary each known tool is looked up by on PATH. */

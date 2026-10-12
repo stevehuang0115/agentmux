@@ -43,6 +43,8 @@ export interface TeamMoveRuntimeInput {
   storage: StorageService;
   relay: TeamMoveRelaySource;
   home?: string;
+  /** Deliver a message to an agent, waking it when stopped (used to ask a team's lead to commit and push). */
+  sendToAgent?: (sessionName: string, text: string) => Promise<boolean>;
 }
 
 /**
@@ -201,6 +203,8 @@ export function createTeamMoveDriver(input: TeamMoveRuntimeInput): TeamMoveDrive
         freeDisk: freeDiskBytes,
       }),
     preflight: (tools) => runPreflight({ crewlyVersion: version(), diskPath: home, runtimeLogins }, tools),
+    sendToAgent: input.sendToAgent,
+    getTeams: () => storage.getTeams(),
     isTeamIdle: async (teamId) => {
       const team = (await storage.getTeams()).find((t) => t.id === teamId);
       return !team || team.members.every((m) => m.workingStatus !== 'in_progress');

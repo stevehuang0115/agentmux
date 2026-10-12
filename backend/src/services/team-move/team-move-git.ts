@@ -15,7 +15,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
 import { TEAM_MOVE_CONSTANTS } from '../../constants.js';
-import type { PackageRepo } from './team-move.types.js';
+import type { PackageRepo, RepoFileStatus } from './team-move.types.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -48,6 +48,33 @@ export async function git(cwd: string, args: string[], timeoutMs: number = PROBE
   } catch (error) {
     const e = error as { stderr?: string; message?: string };
     throw new Error((e.stderr?.trim() || e.message || 'git failed').split('\n').slice(0, 3).join(' | '));
+  }
+}
+
+/**
+ * Run git and return stdout untouched (bytes), for output where leading
+ * whitespace or binary content matters (porcelain status, patches).
+ *
+ * @param cwd - Working directory
+ * @param args - Git arguments
+ * @param maxBytes - Fail when the output is larger than this
+ * @returns Raw stdout
+ * @throws Error with git's stderr, or `output too large`
+ */
+export async function gitBuffer(cwd: string, args: string[], maxBytes: number = 16 * 1024 * 1024): Promise<Buffer> {
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', cwd, ...args], {
+      timeout: PROBE_TIMEOUT_MS * 3,
+      env: { ...process.env, ...NON_INTERACTIVE_ENV },
+      maxBuffer: maxBytes,
+      encoding: 'buffer',
+    });
+    return stdout;
+  } catch (error) {
+    const e = error as { stderr?: Buffer | string; message?: string; code?: string };
+    if (e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') throw new Error('output too large');
+    const stderr = Buffer.isBuffer(e.stderr) ? e.stderr.toString('utf8') : (e.stderr ?? '');
+    throw new Error((stderr.trim() || e.message || 'git failed').split('\n').slice(0, 3).join(' | '));
   }
 }
 
@@ -123,6 +150,7 @@ export function describeBlockingRepos(repos: readonly PackageRepo[]): string[] {
     const problems: string[] = [];
     if (r.dirty) problems.push('uncommitted changes (commit and push them)');
     if (r.unpushed > 0) problems.push(`${r.unpushed} commit${r.unpushed === 1 ? '' : 's'} not pushed${r.branch ? ` on ${r.branch}` : ''}`);
+    if (problems.length > 0 && r.carryError) problems.push(`could not be carried instead: ${r.carryError}`);
     if (problems.length > 0) lines.push(`${r.projectName} (${r.path}): ${problems.join(', ')}`);
   }
   return lines;
@@ -201,4 +229,79 @@ export async function restoreRepo(
   } catch (error) {
     return { ok: false, branch: null, headSha: null, warnings, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/** One changed file of a repository. */
+export interface RepoChange {
+  path: string;
+  status: RepoFileStatus;
+}
+
+/** Uncommitted changes of a repository. */
+export interface RepoChanges {
+  modified: number;
+  untracked: number;
+  /** All changed files, modified before untracked, each group in git's order. */
+  files: RepoChange[];
+}
+
+/** Longest changed-file list read from one repository. */
+const MAX_CHANGE_ENTRIES = 20_000;
+
+/**
+ * Read a repository's uncommitted changes (`.crewly/` is ignored, like in
+ * {@link inspectRepo}).
+ *
+ * @param repoPath - Repository folder
+ * @returns Counts and the changed files; empty when git cannot say
+ */
+export async function readRepoChanges(repoPath: string): Promise<RepoChanges> {
+  let out: Buffer;
+  try {
+    out = await gitBuffer(repoPath, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.', ':(exclude).crewly']);
+  } catch {
+    return { modified: 0, untracked: 0, files: [] };
+  }
+  const parts = out.toString('utf8').split('\0');
+  const tracked: RepoChange[] = [];
+  const untracked: RepoChange[] = [];
+  for (let i = 0; i < parts.length && tracked.length + untracked.length < MAX_CHANGE_ENTRIES; i++) {
+    const entry = parts[i]!;
+    if (entry.length < 4) continue;
+    const x = entry[0]!;
+    const y = entry[1]!;
+    const file = entry.slice(3);
+    if (x === 'R' || x === 'C') i += 1; // the next field is the origin of the rename/copy
+    if (x === '?' && y === '?') {
+      untracked.push({ path: file, status: 'untracked' });
+      continue;
+    }
+    let status: RepoFileStatus = 'modified';
+    if (x === 'U' || y === 'U' || (x === 'A' && y === 'A') || (x === 'D' && y === 'D')) status = 'conflict';
+    else if (x === 'D' || y === 'D') status = 'deleted';
+    else if (x === 'R' || x === 'C') status = 'renamed';
+    else if (x === 'A') status = 'added';
+    tracked.push({ path: file, status });
+  }
+  return { modified: tracked.length, untracked: untracked.length, files: [...tracked, ...untracked] };
+}
+
+/**
+ * `host/owner/repo` of a remote URL for display: no credentials, no scheme.
+ *
+ * @param url - Remote URL or path as configured
+ * @returns Display form, or null for an empty URL
+ */
+export function displayRemote(url: string | null): string | null {
+  if (!url) return null;
+  const trimmed = url.trim().replace(/\.git$/, '').replace(/\/+$/, '');
+  const scp = /^[^@/\s]+@([^:/\s]+):(.+)$/.exec(trimmed);
+  if (scp) return `${scp[1]}/${scp[2]}`;
+  try {
+    const u = new URL(trimmed);
+    if (u.hostname) return `${u.hostname}${u.pathname}`;
+  } catch {
+    /* a local path */
+  }
+  return trimmed.split('/').filter(Boolean).slice(-2).join('/');
 }

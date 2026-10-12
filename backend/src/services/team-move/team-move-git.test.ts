@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { describeBlockingRepos, git, inspectRepo, restoreRepo } from './team-move-git.js';
+import { describeBlockingRepos, displayRemote, git, gitBuffer, inspectRepo, readRepoChanges, restoreRepo } from './team-move-git.js';
 
 const run = (cwd: string, ...args: string[]): string =>
   execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, encoding: 'utf8' }).trim();
@@ -123,5 +123,52 @@ describe('team-move-git', () => {
 
   it('reports git errors with git\'s own words', async () => {
     await expect(git(root, ['rev-parse', 'HEAD'])).rejects.toThrow(/not a git repository/i);
+  });
+  it('reads the uncommitted changes of a repository: counts, kinds and the files, modified before untracked', async () => {
+    expect(await readRepoChanges(work)).toEqual({ modified: 0, untracked: 0, files: [] });
+    await fs.writeFile(path.join(work, 'a.txt'), 'changed');
+    await fs.writeFile(path.join(work, 'staged.txt'), 's');
+    run(work, 'add', 'staged.txt');
+    await fs.writeFile(path.join(work, 'z-new.txt'), 'n');
+    await fs.mkdir(path.join(work, 'dir with space'));
+    await fs.writeFile(path.join(work, 'dir with space', 'b.txt'), 'b');
+    await fs.mkdir(path.join(work, '.crewly'));
+    await fs.writeFile(path.join(work, '.crewly', 'x.md'), 'x');
+    const changes = await readRepoChanges(work);
+    expect(changes.modified).toBe(2);
+    expect(changes.untracked).toBe(2);
+    expect(changes.files).toEqual([
+      { path: 'a.txt', status: 'modified' },
+      { path: 'staged.txt', status: 'added' },
+      { path: 'dir with space/b.txt', status: 'untracked' },
+      { path: 'z-new.txt', status: 'untracked' },
+    ]);
+    run(work, 'rm', '-q', '-f', 'a.txt');
+    expect((await readRepoChanges(work)).files[0]).toEqual({ path: 'a.txt', status: 'deleted' });
+  });
+
+  it('reads nothing from a folder that is not a repository', async () => {
+    expect(await readRepoChanges(root)).toEqual({ modified: 0, untracked: 0, files: [] });
+  });
+
+  it('shows remotes without credentials or scheme', () => {
+    expect(displayRemote('https://user:ghp_secret@github.com/acme/app.git')).toBe('github.com/acme/app');
+    expect(displayRemote('git@github.com:acme/app.git')).toBe('github.com/acme/app');
+    expect(displayRemote('ssh://git@host.example:2222/acme/app.git')).toBe('host.example/acme/app');
+    expect(displayRemote('/Users/me/remotes/app.git')).toBe('remotes/app');
+    expect(displayRemote(null)).toBeNull();
+    expect(displayRemote('https://user:ghp_secret@github.com/acme/app')).not.toContain('ghp_secret');
+  });
+
+  it('returns raw git output and fails on oversized output', async () => {
+    await fs.writeFile(path.join(work, 'a.txt'), 'x'.repeat(5000));
+    expect((await gitBuffer(work, ['diff', '--binary'])).toString()).toContain('+xxxx');
+    await expect(gitBuffer(work, ['diff'], 100)).rejects.toThrow('output too large');
+  });
+
+  it('names why a repository could not be carried when it still blocks', async () => {
+    await fs.writeFile(path.join(work, 'big.bin'), 'x');
+    const r = await inspectRepo({ id: 'p', name: 'P', path: work });
+    expect(describeBlockingRepos([{ ...r, carryError: '1 file is too large' }])[0]).toMatch(/uncommitted changes.*could not be carried instead: 1 file is too large/);
   });
 });
