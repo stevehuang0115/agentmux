@@ -437,7 +437,7 @@ export class TeamMoveDriver {
    * @returns Moves, newest first
    */
   async listMoves(): Promise<Array<TeamMoveView & { local?: { phase: string; action: string | null; error?: string } }>> {
-    const views = this.deps.cloud.isConnected() ? await this.deps.cloud.list() : [];
+    const views = this.deps.cloud.isConnected() ? await this.deps.cloud.listRecent() : [];
     const out = [];
     for (const v of views) {
       const state = isMoveId(v.moveId) ? await new MoveJournal(v.moveId, this.home).readState() : null;

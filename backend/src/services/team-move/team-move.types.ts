@@ -224,6 +224,26 @@ export interface ReconnectItem {
   detail?: string;
 }
 
+/** A member that runs on a stand-in runtime because its own is not available on the target. */
+export interface RuntimeStandIn {
+  member: string;
+  /** Configured runtime, as a label ("Antigravity"). */
+  configured: string;
+  /** Runtime it runs on now ("Claude Code"). */
+  runningOn: string;
+}
+
+/** What starting the team on the target came to. */
+export interface TeamMoveStartResult {
+  requested: boolean;
+  ok: boolean;
+  error?: string;
+  /** Start attempts made (more than one when the first ones failed). */
+  attempts?: number;
+  /** Members running on a stand-in runtime until their own is installed / signed in here. */
+  fallbacks?: RuntimeStandIn[];
+}
+
 /** The target's import report (owner-facing). */
 export interface TeamMoveImportReport {
   /** Moved counts by kind; Cloud shows these. */
@@ -239,7 +259,7 @@ export interface TeamMoveImportReport {
   /** Projects placed on a different path than on the source. */
   paths: Array<{ projectId: string; name: string; from: string; to: string }>;
   /** Team start result. */
-  started: { requested: boolean; ok: boolean; error?: string };
+  started: TeamMoveStartResult;
   /** Warnings that need no action. */
   warnings: string[];
   /** Things not moved (copied from the manifest). */

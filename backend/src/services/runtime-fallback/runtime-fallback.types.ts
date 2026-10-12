@@ -114,6 +114,8 @@ export interface RuntimeAvailability {
 	reason?: string;
 	/** Not selectable because its Terms are not accepted (the owner can still add it: that asks again) */
 	termsBlocked?: boolean;
+	/** Not selectable because it is not installed / not signed in on this machine (it comes back by itself once it is) */
+	loginProblem?: boolean;
 }
 
 /**

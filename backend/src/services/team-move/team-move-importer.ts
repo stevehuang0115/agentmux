@@ -32,17 +32,23 @@ import { applyTeamChat, type ApplyChatResult, type ChatRecords } from './team-mo
 import { createDecryptStream } from './team-move-crypto.js';
 import { hasTextExtension, looksLikeText, pathExists, rewritePathPrefix, sha256File, slugify, walkFiles, writeFileAtomic } from './team-move-fs.js';
 import { restoreRepo } from './team-move-git.js';
+import { runtimeLabel } from '../runtime-fallback/runtime-fallback.types.js';
 import { MoveJournal } from './team-move-journal.js';
 import { checkTools, hasRoomFor } from './team-move-preflight.js';
 import type {
   ImportStep,
   PackageProject,
   ReconnectItem,
+  RuntimeStandIn,
   TeamMoveImportReport,
+  TeamMoveStartResult,
   TeamMoveManifest,
 } from './team-move.types.js';
 
 const C = TEAM_MOVE_CONSTANTS;
+
+/** Delays before the 2nd..5th start attempt: 20 s, 40 s, 80 s, 120 s (the first attempt itself can take minutes). */
+const START_RETRY_DELAYS_MS: readonly number[] = [20_000, 40_000, 80_000, 120_000];
 
 /** Where the owner reconnects connectors (Google, Zoho, ...). */
 const CONNECTIONS_URL = 'https://crewlyai.com/connections';
@@ -80,6 +86,14 @@ export interface ImportDeps {
   applyChat?: (records: ChatRecords) => ApplyChatResult;
   /** Start the team; returns ok/error. Omit to import without starting. */
   startTeam?: (teamId: string) => Promise<{ ok: boolean; error?: string }>;
+  /** Members of the team that run on a stand-in runtime right now (the runtime fallback). */
+  getStandIns?: (teamId: string) => Promise<RuntimeStandIn[]>;
+  /** Display name of this machine ("iriss-air"), for the checklist. */
+  machineName?: () => string | Promise<string>;
+  /** Wait between start attempts (tests inject a no-op). */
+  sleep?: (ms: number) => Promise<void>;
+  /** Delays before the 2nd, 3rd, ... start attempt (default: about 3.5 minutes in total). */
+  startRetryDelaysMs?: readonly number[];
   /** Which tools exist here (default: PATH lookup). */
   hasCommand?: (binary: string) => boolean;
   /** Runtime id to logged-in. */
@@ -491,11 +505,33 @@ export class TeamMoveImporter {
     return { paused: !!(config['paused'] as unknown) };
   }
 
-  private async startTeam(manifest: TeamMoveManifest, paused: boolean): Promise<{ requested: boolean; ok: boolean; error?: string }> {
+  /**
+   * Start the team. A start that fails is tried again with backoff (a runtime
+   * may still be warming up, or a login may land meanwhile); members whose own
+   * runtime is not available here start on their fallback chain (the launch
+   * decides that) and are listed in the result.
+   */
+  private async startTeam(manifest: TeamMoveManifest, paused: boolean): Promise<TeamMoveStartResult> {
     if (!this.deps.startTeam) return { requested: false, ok: false };
     if (paused) return { requested: false, ok: false, error: 'the team is paused (the owner paused it before the move)' };
-    const result = await this.deps.startTeam(manifest.team.id);
-    return { requested: true, ok: result.ok, ...(result.error ? { error: result.error } : {}) };
+    const delays = this.deps.startRetryDelaysMs ?? START_RETRY_DELAYS_MS;
+    const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    let result: { ok: boolean; error?: string } = { ok: false, error: 'not started' };
+    let attempts = 0;
+    for (let i = 0; i <= delays.length; i++) {
+      if (i > 0) await sleep(delays[i - 1]!);
+      attempts++;
+      result = await this.deps.startTeam(manifest.team.id).catch((error: unknown) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+      if (result.ok) break;
+    }
+    const fallbacks = this.deps.getStandIns ? await this.deps.getStandIns(manifest.team.id).catch((): RuntimeStandIn[] => []) : [];
+    return {
+      requested: true,
+      ok: result.ok,
+      ...(result.error && !result.ok ? { error: result.error } : {}),
+      ...(attempts > 1 ? { attempts } : {}),
+      ...(fallbacks.length > 0 ? { fallbacks } : {}),
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -508,7 +544,7 @@ export class TeamMoveImporter {
     repoOutcome: { repos: TeamMoveImportReport['repos']; warnings: string[] },
     data: Record<string, number>,
     records: Record<string, number>,
-    started: { requested: boolean; ok: boolean; error?: string },
+    started: TeamMoveStartResult,
   ): Promise<TeamMoveImportReport> {
     const repos = repoOutcome.repos;
     const toolMap = checkTools(manifest.requiredTools, this.deps.hasCommand);
@@ -517,11 +553,15 @@ export class TeamMoveImporter {
     const runtimesNotLoggedIn = manifest.requiredRuntimes.filter((r) => logins[r] !== true);
 
     const reconnect: ReconnectItem[] = [];
+    const machine = (await Promise.resolve(this.deps.machineName?.()).catch(() => undefined)) || 'this machine';
     for (const runtime of runtimesNotLoggedIn) {
+      const label = runtimeLabel(runtime);
+      const standIns = (started.fallbacks ?? []).filter((f) => f.configured === label);
+      const meanwhile = standIns.length > 0 ? `${standIns.map((f) => f.member).join(', ')} run${standIns.length === 1 ? 's' : ''} on ${[...new Set(standIns.map((f) => f.runningOn))].join(' / ')} until ${label} is logged in on ${machine}; ${standIns.length === 1 ? 'it switches' : 'they switch'} back automatically. ` : '';
       reconnect.push({
-        label: `${runtime} login`,
+        label: `${label} login on ${machine}`,
         kind: 'runtime',
-        detail: 'Tell Crewly Orc in Slack "log in to ' + runtime.replace(/-cli$/, '').replace(/-code$/, '') + '"; it sends you a login link for your phone.',
+        detail: meanwhile + 'Tell Crewly Orc in Slack "log in to ' + runtime.replace(/-cli$/, '').replace(/-code$/, '') + '"; it sends you a login link for your phone.',
       });
     }
     for (const connector of manifest.requiredConnectors ?? []) {
@@ -532,6 +572,9 @@ export class TeamMoveImporter {
     }
 
     const warnings: string[] = [...repoOutcome.warnings];
+    if (started.requested && !started.ok) {
+      warnings.unshift(`The team did not start on ${machine}${started.error ? `: ${started.error}` : ''}${started.attempts && started.attempts > 1 ? ` (tried ${started.attempts} times over a few minutes)` : ''}. Its data is here; start it from the Teams page once the items above are fixed.`);
+    }
     for (const p of manifest.projects) {
       if (p.skipped.length > 0) warnings.push(`${p.name}: ${p.skipped.length} project file(s) were left out (size caps or secret scan).`);
       const left = p.work?.skipped ?? [];

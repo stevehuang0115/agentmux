@@ -64,6 +64,7 @@ class FakeCloud {
         return { moveId: MOVE_ID };
       },
       list: async () => (self.view ? [self.viewFor(instanceId)] : []),
+      listRecent: async () => (self.view ? [self.viewFor(instanceId)] : []),
       get: async () => self.viewFor(instanceId),
       postTargetKey: async (_id: string, body: { publicKey: string; preflight: TeamMovePreflight }) => {
         self.view!.targetPublicKey = body.publicKey;

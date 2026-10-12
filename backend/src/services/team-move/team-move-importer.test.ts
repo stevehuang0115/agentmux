@@ -168,8 +168,46 @@ describe('TeamMoveImporter', () => {
     expect(report.started.error).toMatch(/paused/);
 
     await fs.rm(path.join(home, 'teams'), { recursive: true, force: true });
-    const failing = await run(await pack(), deps({ startTeam: async () => ({ ok: false, error: 'no tmux' }) }));
+    const failing = await run(await pack(), deps({ startTeam: async () => ({ ok: false, error: 'no tmux' }), sleep: async () => undefined, startRetryDelaysMs: [] }));
     expect(failing.started).toEqual({ requested: true, ok: false, error: 'no tmux' });
+    expect(failing.warnings[0]).toMatch(/The team did not start on this machine: no tmux/);
+  });
+
+  it('retries a failed start with backoff and reports the attempts when it finally works', async () => {
+    const waits: number[] = [];
+    const startTeam = jest.fn().mockResolvedValueOnce({ ok: false, error: 'Failed to initialize agent' }).mockRejectedValueOnce(new Error('boom')).mockResolvedValue({ ok: true });
+    const report = await run(await pack(), deps({ startTeam, sleep: async (ms) => void waits.push(ms), startRetryDelaysMs: [10, 20, 40] }));
+    expect(startTeam).toHaveBeenCalledTimes(3);
+    expect(waits).toEqual([10, 20]);
+    expect(report.started).toEqual({ requested: true, ok: true, attempts: 3 });
+    expect(report.warnings.join(' ')).not.toMatch(/did not start/);
+  });
+
+  it('gives up after the last delay and says how often it tried', async () => {
+    const startTeam = jest.fn().mockResolvedValue({ ok: false, error: 'No team member could start' });
+    const report = await run(await pack(), deps({ startTeam, sleep: async () => undefined, startRetryDelaysMs: [1, 1] }));
+    expect(startTeam).toHaveBeenCalledTimes(3);
+    expect(report.started).toMatchObject({ requested: true, ok: false, attempts: 3, error: 'No team member could start' });
+    expect(report.warnings[0]).toMatch(/tried 3 times/);
+  });
+
+  it('names the stand-in runtime and the machine in the reconnect checklist', async () => {
+    const report = await run(
+      await pack((m) => {
+        m.requiredRuntimes = ['antigravity-cli', 'claude-code'];
+      }),
+      deps({
+        startTeam: async () => ({ ok: true }),
+        getStandIns: async () => [{ member: 'Ruth', configured: 'Antigravity', runningOn: 'Claude Code' }],
+        machineName: () => 'iriss-air',
+        runtimeLogins: async () => ({ 'antigravity-cli': false, 'claude-code': true }),
+      }),
+    );
+    expect(report.started.fallbacks).toEqual([{ member: 'Ruth', configured: 'Antigravity', runningOn: 'Claude Code' }]);
+    const item = report.reconnect.find((r) => r.kind === 'runtime')!;
+    expect(item.label).toBe('Antigravity login on iriss-air');
+    expect(item.detail).toContain('Ruth runs on Claude Code until Antigravity is logged in on iriss-air; it switches back automatically.');
+    expect(report.reconnect.filter((r) => r.kind === 'runtime')).toHaveLength(1);
   });
 
   it('fails when there is not enough disk', async () => {

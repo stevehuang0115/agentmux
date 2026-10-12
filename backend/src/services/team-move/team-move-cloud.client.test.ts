@@ -52,6 +52,32 @@ describe('TeamMoveCloudClient', () => {
     await expect(make([json(201, { success: true, data: {} })]).create({ teamId: 't', sourceInstanceId: 's', targetInstanceId: 'd' })).rejects.toThrow(/move id/);
   });
 
+  it('never follows a redirect: a 301 on the create POST is an error, not a list read as a move id', async () => {
+    const c = make([new Response(null, { status: 301, headers: { Location: 'https://cloud.test/api/cloud/team-moves/' } })]);
+    const error = await c.create({ teamId: 't', sourceInstanceId: 's', targetInstanceId: 'd' }).catch((e) => e);
+    expect(error).toBeInstanceOf(TeamMoveCloudError);
+    expect(error).toMatchObject({ status: 301, code: 'unexpected_redirect' });
+    expect(error.message).toContain('redirected');
+    expect(calls).toHaveLength(1); // not retried
+    expect((calls[0]!.init as RequestInit).redirect).toBe('manual');
+  });
+
+  it('treats success:false in a 2xx answer as an error with Cloud code and message', async () => {
+    const c = make([json(200, { success: false, code: 'move_in_progress', error: 'A move of this team is running' })]);
+    await expect(c.create({ teamId: 't', sourceInstanceId: 's', targetInstanceId: 'd' })).rejects.toMatchObject({ code: 'move_in_progress', message: 'A move of this team is running' });
+  });
+
+  it('carries the code and message of a non-2xx answer', async () => {
+    const c = make([json(409, { success: false, code: 'bad_state', error: 'Move is completed' })]);
+    await expect(c.get('m')).rejects.toMatchObject({ status: 409, code: 'bad_state', message: 'Move is completed' });
+  });
+
+  it('asks for the recent moves with scope=recent', async () => {
+    const c = make([json(200, { success: true, data: [{ moveId: 'old', status: 'completed' }] })]);
+    expect(await c.listRecent()).toEqual([{ moveId: 'old', status: 'completed' }]);
+    expect(calls[0]!.url).toBe('https://cloud.test/api/cloud/team-moves?instanceId=inst-1&scope=recent');
+  });
+
   it('sends the key, init, chunks, completion, status and rollback to the contract paths', async () => {
     const c = make([json(200, { success: true, data: { uploadId: 'u', received: [0] } })]);
     await c.postTargetKey('m1', { publicKey: 'k', preflight: { crewlyVersion: '1', freeDiskBytes: 1, tools: {}, runtimes: {} } });

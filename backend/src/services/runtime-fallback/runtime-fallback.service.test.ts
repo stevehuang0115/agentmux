@@ -807,3 +807,61 @@ describe('RuntimeFallbackService — a signed-in Claude account joins the chain'
 		expect(h.relaunched.sort()).toEqual(['dev-1', 'dev-2', 'nova-1']);
 	});
 });
+
+describe('RuntimeFallbackService — runtime not installed / signed in on this machine', () => {
+	const availability = (anti: Partial<RuntimeAvailability>): RuntimeAvailability[] => [
+		{ runtime: 'claude-code', label: 'Claude Code', selectable: true },
+		{ runtime: 'crewly-agent', label: 'DeepSeek', selectable: false, reason: 'No DeepSeek API key' },
+		{ runtime: 'antigravity-cli', label: 'Antigravity', selectable: false, reason: 'Not installed', loginProblem: true, ...anti },
+		{ runtime: 'codex-cli', label: 'Codex', selectable: true },
+	];
+	const launch = (h: Harness) => h.service.resolveLaunch({ sessionName: 'ruth-1', configured: 'antigravity-cli', memberId: 'm9', teamId: 't9', isOrchestrator: false });
+
+	it('starts the agent on its fallback chain and remembers the configured runtime', async () => {
+		const h = make({ availability: availability({}) });
+		await expect(launch(h)).resolves.toMatchObject({ runtime: 'claude-code', overridden: true });
+		expect(h.service.overrideFor('ruth-1')).toBe('claude-code');
+		expect(h.store.load().exhausted['antigravity-cli']).toMatchObject({ kind: 'login', ruleId: 'not_installed' });
+		expect(h.service.takeKickoffNote('ruth-1')).toMatch(/not installed or signed in on this machine/);
+	});
+
+	it('does nothing for a runtime whose state is unknown or that is merely blocked for another reason', async () => {
+		const h = make({ availability: availability({ loginProblem: undefined, reason: "Sign-in couldn't be checked" }) });
+		await expect(launch(h)).resolves.toEqual({ runtime: 'antigravity-cli', overridden: false });
+		expect(h.store.load().exhausted['antigravity-cli']).toBeUndefined();
+	});
+
+	it('tells the owner once, in words that fit a missing login', async () => {
+		const h = make({ availability: availability({ reason: 'Not signed in' }) });
+		await launch(h);
+		h.clock.now += 60_000;
+		await h.service.flushNotices();
+		await settle();
+		expect(h.dms).toHaveLength(1);
+		expect(h.dms[0]).toMatch(/Antigravity is not signed in on iriss-air/);
+		expect(h.dms[0]).toMatch(/switch back by themselves/);
+	});
+
+	it('switches the agent back by itself once the runtime is installed and signed in', async () => {
+		const list = availability({});
+		const h = make({ availability: list });
+		await launch(h);
+		h.live.add('ruth-1');
+		(h.deps as { getAgent: RuntimeFallbackDeps['getAgent'] }).getAgent = async (s) =>
+			s === 'ruth-1' ? { sessionName: 'ruth-1', name: 'Ruth', primary: 'antigravity-cli', memberId: 'm9', teamId: 't9', isOrchestrator: false } : null;
+
+		// Still missing: nothing changes.
+		h.clock.now += 3 * 60_000;
+		await h.service.tick();
+		expect(h.service.overrideFor('ruth-1')).toBe('claude-code');
+
+		// Logged in (the availability cache is bypassed by the recheck).
+		Object.assign(list[2]!, { selectable: true, reason: undefined, loginProblem: undefined });
+		h.clock.now += 3 * 60_000;
+		await h.service.tick();
+		await settle();
+		expect(h.store.load().exhausted['antigravity-cli']).toBeUndefined();
+		expect(h.service.overrideFor('ruth-1')).toBeNull();
+		expect(h.relaunched).toContain('ruth-1');
+	});
+});

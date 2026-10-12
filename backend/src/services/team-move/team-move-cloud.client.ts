@@ -104,6 +104,9 @@ export class TeamMoveCloudClient {
           },
           body: init.json !== undefined ? JSON.stringify(init.json) : init.body,
           signal: AbortSignal.timeout(C.REQUEST_TIMEOUT_MS),
+          // Never follow a redirect: fetch turns a redirected POST into a GET, which
+          // answers with some other endpoint's 200 (a list instead of a move id).
+          redirect: 'manual',
         });
       } catch (error) {
         lastError = new TeamMoveCloudError(`Cloud unreachable: ${error instanceof Error ? error.message : String(error)}`, 0);
@@ -124,6 +127,10 @@ export class TeamMoveCloudClient {
   }
 
   private async errorFrom(response: Response): Promise<TeamMoveCloudError> {
+    if (response.status >= 300 && response.status < 400) {
+      const where = response.headers.get('location');
+      return new TeamMoveCloudError(`Cloud redirected the request (HTTP ${response.status}${where ? ` to ${where.slice(0, 200)}` : ''}); refusing to follow it`, response.status, 'unexpected_redirect');
+    }
     let message = `Cloud request failed (HTTP ${response.status})`;
     if (response.status === 503) message = 'Crewly Cloud has no storage for team moves yet (storage_unavailable); try again later';
     let code: string | undefined;
@@ -140,6 +147,9 @@ export class TeamMoveCloudClient {
   /** Cloud wraps answers in `{success, data}`; accept both shapes. */
   private async data<T>(response: Response): Promise<T> {
     const body = (await response.json().catch(() => ({}))) as Json;
+    if (body['success'] === false) {
+      throw new TeamMoveCloudError(typeof body['error'] === 'string' ? body['error'] : `Cloud reported a failure (HTTP ${response.status})`, response.status, typeof body['code'] === 'string' ? body['code'] : undefined);
+    }
     return (body['data'] !== undefined ? body['data'] : body) as T;
   }
 
@@ -147,6 +157,18 @@ export class TeamMoveCloudClient {
   async list(): Promise<TeamMoveView[]> {
     const instanceId = encodeURIComponent(await this.options.getInstanceId());
     const data = await this.data<unknown>(await this.request('GET', `?instanceId=${instanceId}`));
+    const list = Array.isArray(data) ? data : (data as Json | null)?.['moves'];
+    return Array.isArray(list) ? (list as TeamMoveView[]) : [];
+  }
+
+  /**
+   * This machine's moves of the last 7 days in any state, newest first (what the
+   * owner sees as "recent moves"). A Cloud that does not know `scope=recent`
+   * answers with the pending moves only.
+   */
+  async listRecent(): Promise<TeamMoveView[]> {
+    const instanceId = encodeURIComponent(await this.options.getInstanceId());
+    const data = await this.data<unknown>(await this.request('GET', `?instanceId=${instanceId}&scope=recent`));
     const list = Array.isArray(data) ? data : (data as Json | null)?.['moves'];
     return Array.isArray(list) ? (list as TeamMoveView[]) : [];
   }
@@ -160,7 +182,7 @@ export class TeamMoveCloudClient {
   async create(body: { teamId: string; sourceInstanceId: string; targetInstanceId: string }): Promise<{ moveId: string }> {
     const data = await this.data<Json>(await this.request('POST', '', { json: body, retries: 1, headers: { 'X-Crewly-Acting-For': 'owner', 'X-Crewly-Acting-For-Role': 'owner' } }));
     const moveId = typeof data['moveId'] === 'string' ? data['moveId'] : null;
-    if (!moveId) throw new TeamMoveCloudError('Cloud did not return a move id', 502);
+    if (!moveId) throw new TeamMoveCloudError('Cloud did not return a move id (unexpected answer to the create request)', 502, 'unexpected_response');
     return { moveId };
   }
 
