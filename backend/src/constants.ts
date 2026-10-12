@@ -7035,6 +7035,12 @@ export const OPEN_ITEMS_CONSTANTS = {
 	OWNER_NOTE_AFTER_NUDGE_MS: 2 * 60 * 60 * 1000,
 	/** An item still active this long after it was made is expired (ms) */
 	EXPIRE_AFTER_MS: 7 * 24 * 60 * 60 * 1000,
+	/**
+	 * A commitment older than this is "stale": before it is resurfaced (nudge, ready wake, restart
+	 * reminder) Crewly checks whether the owner already answered or the ticket is done, and the agent
+	 * is told to verify it is still needed before contacting the owner (ms)
+	 */
+	STALE_VERIFY_AFTER_MS: 24 * 60 * 60 * 1000,
 	/** Requests looked at by the sweep and the backfill: updated within (ms) */
 	LOOKBACK_MS: 7 * 24 * 60 * 60 * 1000,
 	/** The backfill only looks at promises and questions made within this long before it runs (ms) */
@@ -7067,7 +7073,8 @@ export const OPEN_ITEMS_CONSTANTS = {
 	CANCELLED_BY_METADATA_KEY: 'cancelledBy',
 	/** The one line every agent prompt carries */
 	PROMPT_LINE:
-		'If you promise the owner something or ask them a question, say it plainly; Crewly tracks it. Use `ask-owner` for real decisions.',
+		'If you promise the owner something or ask them a question, say it plainly; Crewly tracks it. Use `ask-owner` for real decisions. ' +
+		'Never re-ask the owner for something old without first checking whether it already happened (the thread since, the ticket status, the Sent folder / existing drafts for email work).',
 	/**
 	 * Max characters of the agent's own words quoted on a question card (the
 	 * paragraph(s) before the question). Every auto-extracted question card
