@@ -633,7 +633,7 @@ export class WorkItemDispatchSubscriber {
       this.dispatched.delete(key);
       const status = (err as { response?: { status?: number } })?.response?.status;
       const errorText = err instanceof Error ? err.message : String(err);
-      // Info, not debug: this is the one line that says why a brief did not
+      // Warn, not debug: this is the one line that says why a brief did not
       // land (404 session gone, 409 input box not ours, 5xx, no response).
       this.logger.warn('Dispatch HTTP write failed — the brief did not reach the agent', {
         workItemId: workItem.id,
