@@ -276,6 +276,9 @@ export function dispatchReachedAgent(outcome: DispatchOutcome): boolean {
  */
 export const SLA_TRACKER_ID_PATTERN = /^request:.+:respond_to_user$/;
 
+/** A dispatch notice queued this long for an idle agent is not coming; redelivery replaces it (CREW-526). */
+const STALE_QUEUED_NOTICE_MS = 3 * 60_000;
+
 /** Per-WI delay between backfill pushes — keeps the burst polite. */
 const BACKFILL_THROTTLE_MS = 200;
 
@@ -724,6 +727,30 @@ export class WorkItemDispatchSubscriber {
   }
 
   /**
+   * Remove this WorkItem's dispatch notice from the agent's queue when it has
+   * waited longer than {@link STALE_QUEUED_NOTICE_MS} (CREW-526).
+   *
+   * @param workItemId - WorkItem id
+   * @param target - Session
+   * @returns True when a stale notice was removed
+   */
+  private dropStaleQueuedNotice(workItemId: string, target: string): boolean {
+    try {
+      const queue = SubAgentMessageQueue.getInstance();
+      const stale = queue
+        .peek(target)
+        .filter((m) => (dispatchNoticeWorkItemIds(m.data) ?? []).includes(workItemId))
+        .filter((m) => Date.now() - m.queuedAt >= STALE_QUEUED_NOTICE_MS);
+      if (stale.length === 0) return false;
+      for (const m of stale) queue.remove(target, m.data);
+      this.logger.warn('Stale dispatch notice dropped from the agent queue; redelivering the brief', { workItemId, target, count: stale.length });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Whether a dispatch notice announcing this WorkItem still waits on the
    * agent's message queue (it may have been dropped: aged out, capacity).
    *
@@ -789,11 +816,16 @@ export class WorkItemDispatchSubscriber {
     // Its notice still waits on the agent's queue: it goes out when the agent
     // is active; a second one would brief it twice.
     if (this.pendingQueued.has(key) && this.noticeStillQueued(workItem.id, workItem.target)) {
-      this.logger.info('Redispatch skipped — the notice is still waiting on the agent queue', {
-        workItemId: workItem.id,
-        target: workItem.target,
-      });
-      return { status: 'waiting', reason: "an earlier notice still waits on the agent's queue" };
+      // CREW-526: a notice that waited past the limit is not coming — the
+      // agent is idle and live (that is why a redelivery was asked for). Drop
+      // it and push the brief again instead of answering `waiting` forever.
+      if (!this.dropStaleQueuedNotice(workItem.id, workItem.target)) {
+        this.logger.warn('Redispatch skipped — a fresh notice is still waiting on the agent queue', {
+          workItemId: workItem.id,
+          target: workItem.target,
+        });
+        return { status: 'waiting', reason: "an earlier notice still waits on the agent's queue" };
+      }
     }
     this.pendingQueued.delete(key);
     this.confirmed.delete(key);

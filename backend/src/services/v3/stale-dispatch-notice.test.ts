@@ -276,6 +276,41 @@ describe('queued dispatch notices and held briefs (crewly#1015 follow-up)', () =
 		expect((await d.redispatchOutcome(wi)).status).toBe('queued');
 	});
 
+	it('CREW-526: a notice that waited past the limit is dropped and the brief is pushed again (idle live agent)', async () => {
+		const wi = makeWorkItem(WI, 'queued');
+		const queue = SubAgentMessageQueue.getInstance(storePath);
+		wire(queue, new Map([[wi.id, wi]]));
+		await queuedNotice(queue, wi);
+		const d = WorkItemDispatchSubscriber.getInstance();
+		// Fresh notice: still waiting, nothing written.
+		expect((await d.redispatchOutcome(wi)).status).toBe('waiting');
+		expect(mockedAxios.post).toHaveBeenCalledTimes(1);
+
+		// 10 minutes later the agent is idle and live; the notice is not coming.
+		const realNow = Date.now();
+		const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(realNow + 10 * 60_000);
+		try {
+			mockedAxios.post.mockResolvedValue({ status: 200, data: { success: true } });
+			expect((await d.redispatchOutcome(wi)).status).toBe('delivered');
+			expect(mockedAxios.post).toHaveBeenCalledTimes(2);
+			expect(queue.getQueueSize(TARGET)).toBe(0);
+		} finally {
+			nowSpy.mockRestore();
+		}
+	});
+
+	it('CREW-526: a genuinely offline agent still returns false, with a reason', async () => {
+		const wi = makeWorkItem(WI, 'queued');
+		const queue = SubAgentMessageQueue.getInstance(storePath);
+		wire(queue, new Map([[wi.id, wi]]));
+		mockedAxios.post.mockRejectedValue({ response: { status: 404 }, message: 'session not found' });
+		const d = WorkItemDispatchSubscriber.getInstance();
+		const out = await d.redispatchOutcome(wi);
+		expect(out.status).toBe('failed');
+		expect(out.reason).toBeTruthy();
+		expect(await d.redispatch(wi)).toBe(false);
+	});
+
 	it.each([
 		['the held brief first', true],
 		['the notice first', false],
