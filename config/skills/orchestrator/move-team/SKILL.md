@@ -26,11 +26,11 @@ execution:
 
 # Move Team
 
-The owner's Mac runs out of CPU or memory; another machine of the same account has room. "Move team CE to the Air" moves the whole team: members, prompts, memory and handover notes, tickets, wiki, schedules, open decisions, channels, and the agents' Slack identity. Code is cloned on the target from its git remote. Credentials and logins do not move; the owner gets a short list to reconnect. Crewly Cloud only carries an encrypted package.
+The owner's Mac runs out of CPU or memory; another machine of the same account has room. "Move team CE to the Air" moves the whole team: members, prompts, memory and handover notes, tickets, wiki, schedules, open decisions, channels, and the agents' Slack identity. Code of git projects is cloned on the target from its git remote; projects that are not git repositories travel with their files (without node_modules and build output). Credentials and logins do not move; the owner gets a short list to reconnect. Crewly Cloud only carries an encrypted package.
 
 ## Steps (the owner is on their phone: never ask for a terminal step)
 
-1. List the machines: `bash {{ORCHESTRATOR_SKILLS_PATH}}/move-team/execute.sh '{"action":"machines"}'`
+1. List the machines: `bash {{ORCHESTRATOR_SKILLS_PATH}}/move-team/execute.sh '{"action":"machines"}'`. Offer only machines with `canReceive: true`. For the others, tell the owner what `hints` says ("update Crewly on <machine>"); do not offer them as targets.
 2. If the owner did not name the machine, or the name is ambiguous, ask which one (show the names).
 3. Check what would block it: `... '{"action":"check","team":"CE"}'`. If a repository has unpushed or uncommitted work, tell the owner in one sentence what to push (the lines it returns) and stop. Never move with `allowDirty` unless the owner says to move without that work.
 4. Ask the owner for approval in your own words, in the owner's thread: team, from which machine to which machine, and that the team stops here and starts there. Wait for a yes. A move without a yes in chat is refused by the backend.

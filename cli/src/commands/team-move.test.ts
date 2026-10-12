@@ -52,9 +52,11 @@ describe('crewly team move', () => {
     expect(await teamMovesCommand({}, print, moves as never)).toBe(0);
     expect(lines.join('\n')).toMatch(/m1 +completed +CE: Mac -> Air/);
     lines = [];
-    const machines = jest.fn().mockResolvedValue(reply(200, { success: true, data: { machines: [{ instanceId: 'a', name: 'Air', online: true, isLocal: false }] } }));
+    const machines = jest.fn().mockResolvedValue(reply(200, { success: true, data: { machines: [{ instanceId: 'a', name: 'Air', online: true, isLocal: false, canReceive: true }, { instanceId: 'o', name: 'Old', online: true, isLocal: false, canReceive: false, crewlyVersion: '1.20.1' }] } }));
     expect(await teamMachinesCommand(print, machines as never)).toBe(0);
-    expect(lines[0]).toMatch(/Air/);
+    expect(lines[0]).toMatch(/Air.*ready/);
+    expect(lines.join('\n')).not.toMatch(/Old .*ready/);
+    expect(lines[1]).toMatch(/Update Crewly on Old/);
     const rb = jest.fn().mockResolvedValue(reply(200, { success: true, data: { moveId: 'm1' } }));
     expect(await teamMoveRollbackCommand('m1', print, rb as never)).toBe(0);
     expect(rb.mock.calls[0]![0]).toMatch(/\/m1\/rollback$/);

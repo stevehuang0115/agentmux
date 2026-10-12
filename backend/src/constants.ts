@@ -8278,6 +8278,19 @@ export const TEAM_MOVE_CONSTANTS = {
 	PROJECT_FILE_MAX_BYTES: 10 * 1024 * 1024,
 	/** Total cap for project-local `.crewly` files in a package (all projects). */
 	PROJECT_FILES_MAX_BYTES: 150 * 1024 * 1024,
+	/** Total cap for the working files of projects that are not git repositories (all such projects). */
+	WORK_FILES_MAX_BYTES: 500 * 1024 * 1024,
+	/** Per-file cap for those working files. */
+	WORK_FILE_MAX_BYTES: 100 * 1024 * 1024,
+	/** Env vars (megabytes) overriding the two caps above. */
+	WORK_FILES_MAX_MB_ENV: 'CREWLY_TEAM_MOVE_WORK_MAX_MB',
+	WORK_FILE_MAX_MB_ENV: 'CREWLY_TEAM_MOVE_WORK_FILE_MAX_MB',
+	/** Directory names never packaged from a non-git project (dependencies and build output). */
+	WORK_EXCLUDED_DIRS: ['node_modules', '.next', 'dist', 'build', '.cache', '.crewly', '.git'],
+	/** A machine counts as live when its Cloud heartbeat is newer than this. */
+	MACHINE_LIVE_WINDOW_MS: 5 * 60 * 1000,
+	/** Cloud instance ids/names that are not machines (virtual instances). */
+	NON_MACHINE_INSTANCE_PATTERN: '^crewly-cloud',
 	/** Newest handover notes kept per agent. */
 	HANDOVERS_PER_AGENT: 10,
 	/** Largest text file that is path-rewritten and secret-scanned in memory. */

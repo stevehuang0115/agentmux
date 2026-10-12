@@ -89,7 +89,7 @@ export async function inspectRepo(project: { id: string; name: string; path: str
   const exists = await fs.stat(project.path).then((s) => s.isDirectory(), () => false);
   if (!exists) return { ...base, note: 'project folder does not exist on this machine' };
   const top = await gitOrNull(project.path, ['rev-parse', '--show-toplevel']);
-  if (!top) return { ...base, note: 'not a git repository — files are not moved, only Crewly data' };
+  if (!top) return { ...base, note: 'not a git repository — its files travel in the package' };
 
   const [remoteUrl, branch, headSha, status] = await Promise.all([
     gitOrNull(project.path, ['config', '--get', 'remote.origin.url']),

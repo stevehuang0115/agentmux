@@ -142,6 +142,12 @@ export interface PackageProject {
   files: number;
   bytes: number;
   skipped: SkippedFile[];
+  /**
+   * Working files of a project that is not a git repository (the code itself
+   * travels in the package; git projects are cloned instead). Stored under
+   * `projects/<id>/files/`.
+   */
+  work?: { files: number; bytes: number; skipped: SkippedFile[] };
   /** Other teams that also use this project (their data stays on the source). */
   sharedWithTeams: string[];
 }
