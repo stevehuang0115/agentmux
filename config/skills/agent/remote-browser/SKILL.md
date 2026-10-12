@@ -68,7 +68,7 @@ bash execute.sh -a click -s "#submit"
 |---|---|---|
 | `navigate` | `--url` | |
 | `screenshot` | | |
-| `full-page-screenshot` | | scrolls and stitches the whole page |
+| `full-page-screenshot` | | whole page as one downscaled JPEG; works on background tabs (needs extension 0.4.24+) |
 | `read-text` | | `--selector` (defaults to whole page) |
 | `scroll` | | `--params` e.g. `'{"direction":"down","amount":3}'` |
 | `scroll-in-element` | | `--params` with a selector + direction |

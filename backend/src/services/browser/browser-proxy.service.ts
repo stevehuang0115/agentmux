@@ -58,6 +58,8 @@ interface PendingProxyCommand {
   timer: ReturnType<typeof setTimeout>;
   /** Browser instance the command was addressed to */
   instanceId?: string;
+  /** Tool the command runs, for error messages */
+  tool?: string;
 }
 
 /** Connection state of the proxy to the cloud relay. */
@@ -595,7 +597,7 @@ export class BrowserProxyService {
         reject(new Error(`Browser command '${tool}' timed out after ${timeoutMs}ms`));
       }, timeoutMs);
 
-      this.pendingCommands.set(id, { resolve, reject, timer, instanceId: targetInstance.instanceId });
+      this.pendingCommands.set(id, { resolve, reject, timer, instanceId: targetInstance.instanceId, tool });
 
       this.sendRaw({
         type: 'relay_to',
@@ -609,6 +611,31 @@ export class BrowserProxyService {
         target: targetInstance.instanceName,
       });
     });
+  }
+
+  /**
+   * Fail commands still waiting on an instance that just disconnected, instead
+   * of leaving the caller to wait out the full timeout. The relay closes the
+   * extension's socket (1009) when a result frame exceeds its 1 MiB limit, so a
+   * screenshot that never answers is nearly always this; say so.
+   *
+   * @param instanceId - The instance that disconnected
+   */
+  private failPendingForInstance(instanceId: string): void {
+    for (const [id, pending] of this.pendingCommands) {
+      if (pending.instanceId !== instanceId) continue;
+      clearTimeout(pending.timer);
+      this.pendingCommands.delete(id);
+      const tool = pending.tool ?? 'command';
+      const imageTool = /screenshot/i.test(tool);
+      pending.reject(
+        new Error(
+          imageTool
+            ? `Browser extension disconnected while capturing '${tool}': the result was probably too large for the relay's 1 MiB frame limit. Update the Crewly Chrome extension to 0.4.24 or newer and retry.`
+            : `Browser extension disconnected while running '${tool}'. Retry once it reconnects.`,
+        ),
+      );
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -946,6 +973,7 @@ export class BrowserProxyService {
       case 'disconnected': {
         const existed = this.instances.delete(instanceId);
         this.logger.info('Browser instance disconnected', { instanceId, instanceName });
+        this.failPendingForInstance(instanceId);
         if (existed) {
           this.events.emit('instance_disconnected', { instanceId, instanceName });
         }
