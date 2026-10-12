@@ -2,7 +2,7 @@ jest.mock('../core/logger.service.js', () => ({
   LoggerService: { getInstance: () => ({ createComponentLogger: () => ({ info: jest.fn(), debug: jest.fn(), warn: jest.fn(), error: jest.fn() }) }) },
 }));
 
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
@@ -461,5 +461,87 @@ describe('owner-facing only (default)', () => {
     await s.noteBlocking('atlas', { kind: 'card_posted', decisionId: 'D-1', question: 'open the attachment?', browser: true });
     expect(posted).toHaveLength(1);
     expect(posted[0]).toContain('waiting for your OK');
+  });
+});
+
+describe('a kept promise stays kept (Follow-through duplicates, 2026-10-12)', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(os.tmpdir(), 'sentinel-kept-'));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('a later agent post settles the promise: nothing left to park, owed or timed', () => {
+    const h = make();
+    promised(h);
+    expect(h.sentinel.parkablePromise(ATLAS)).not.toBeNull();
+    h.clock.t += 5 * MIN;
+    h.sentinel.noteAgentPost({ ...THREAD, agent: ATLAS, text: 'Done: the cover is in the thread.', at: h.clock.t });
+    expect(h.sentinel.parkablePromise(ATLAS)).toBeNull();
+    expect(h.sentinel.promiseText(ATLAS)).toBeNull();
+    expect(h.sentinel.owesOwner(ATLAS)).toBe(false);
+  });
+
+  it('reloading the file after a kept promise (a restart) leaves nothing to park', () => {
+    const storePath = path.join(dir, 'owner-thread-sentinel.json');
+    const h = make({ storePath });
+    promised(h);
+    h.clock.t += 5 * MIN;
+    h.sentinel.noteAgentPost({ ...THREAD, agent: ATLAS, text: 'Done: the cover is in the thread.', at: h.clock.t });
+    const after = make({ storePath });
+    expect(after.sentinel.parkablePromise(ATLAS)).toBeNull();
+    expect(after.sentinel.owesRecently(ATLAS)).toBe(false);
+  });
+
+  it('a file whose entry has a post newer than its promise reads as kept, not open', () => {
+    const storePath = path.join(dir, 'owner-thread-sentinel.json');
+    const promiseAt = Date.parse('2026-10-08T15:50:00Z');
+    writeFileSync(
+      storePath,
+      JSON.stringify({
+        entries: [
+          {
+            key: threadKey(THREAD),
+            slackChannelId: CH,
+            threadTs: TS,
+            agent: ATLAS,
+            cards: [],
+            recentStates: {},
+            updatedAt: promiseAt + 2 * MIN,
+            agentPostAt: promiseAt + 2 * MIN,
+            agentPreview: 'On it, checking the logs',
+            promise: { at: promiseAt },
+          },
+        ],
+      }),
+    );
+    const h = make({ storePath });
+    expect(h.sentinel.parkablePromise(ATLAS)).toBeNull();
+    expect(h.sentinel.owesOwner(ATLAS)).toBe(false);
+    expect(h.sentinel.owedAgeMs(ATLAS)).toBeNull();
+  });
+
+  it('an unkept promise is offered once, keyed by thread + promise; after it is marked parked, also across a restart, never again', () => {
+    const storePath = path.join(dir, 'owner-thread-sentinel.json');
+    const h = make({ storePath });
+    promised(h);
+    const first = h.sentinel.parkablePromise(ATLAS)!;
+    expect(first.key).toMatch(new RegExp(`^${CH}:${TS}@\\d+$`));
+    expect(h.sentinel.parkablePromise(ATLAS)!.key).toBe(first.key);
+    first.markParked('wi-1');
+    expect(h.sentinel.parkablePromise(ATLAS)).toBeNull();
+    const after = make({ storePath });
+    expect(after.sentinel.parkablePromise(ATLAS)).toBeNull();
+  });
+
+  it('a new promise in the same thread is a new key', () => {
+    const h = make();
+    promised(h);
+    const first = h.sentinel.parkablePromise(ATLAS)!;
+    first.markParked('wi-1');
+    h.clock.t += 10 * MIN;
+    h.sentinel.noteAgentPost({ ...THREAD, agent: ATLAS, text: "I'll redo it now, ~10 min", at: h.clock.t });
+    const second = h.sentinel.parkablePromise(ATLAS)!;
+    expect(second.key).not.toBe(first.key);
   });
 });

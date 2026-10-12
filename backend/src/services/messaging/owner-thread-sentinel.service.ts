@@ -73,7 +73,7 @@ export interface OwnerThreadEntry {
   /** Clipped text of that post */
   agentPreview?: string;
   /** The agent's latest post was a promise */
-  promise?: { at: number; minutes?: number; deadlineAt?: number; firedAt?: number };
+  promise?: { at: number; minutes?: number; deadlineAt?: number; firedAt?: number; parkedWorkItemId?: string };
   /** The agent has owner work from this thread */
   workOrigin?: boolean;
   /** Open cards the agent waits on (decision ids) */
@@ -455,7 +455,8 @@ export class OwnerThreadSentinelService {
     for (const e of this.entries.values()) {
       if (e.agent !== agent) continue;
       if (e.ownerAt && (!e.agentPostAt || e.ownerAt > e.agentPostAt) && now - e.ownerAt <= C.RECENT_PROMISE_MS) return true;
-      if (e.promise && now - e.promise.at <= C.RECENT_PROMISE_MS) return true;
+      const p = openPromise(e);
+      if (p && now - p.at <= C.RECENT_PROMISE_MS) return true;
     }
     return false;
   }
@@ -474,7 +475,8 @@ export class OwnerThreadSentinelService {
     for (const e of this.entries.values()) {
       if (e.agent !== agent) continue;
       if (e.ownerAt && (!e.agentPostAt || e.ownerAt > e.agentPostAt) && now - e.ownerAt <= C.CARD_THREAD_MAX_AGE_MS) return true;
-      if (e.promise && now - e.promise.at <= C.ACTIVE_WINDOW_MS) return true;
+      const p = openPromise(e);
+      if (p && now - p.at <= C.ACTIVE_WINDOW_MS) return true;
     }
     return false;
   }
@@ -493,7 +495,8 @@ export class OwnerThreadSentinelService {
       if (e.agent !== agent) continue;
       const ages: number[] = [];
       if (e.ownerAt && (!e.agentPostAt || e.ownerAt > e.agentPostAt)) ages.push(now - e.ownerAt);
-      if (e.promise) ages.push(now - e.promise.at);
+      const p = openPromise(e);
+      if (p) ages.push(now - p.at);
       for (const a of ages) if (best === null || a < best) best = a;
     }
     return best;
@@ -507,8 +510,29 @@ export class OwnerThreadSentinelService {
    * @returns Text, or null when it has no open promise
    */
   promiseText(agent: string): string | null {
+    return this.parkablePromise(agent)?.text ?? null;
+  }
+
+  /**
+   * The agent's open promise that has not been turned into a WorkItem yet,
+   * with a key that names thread + promise (`<thread key>@<promise.at>`), so a
+   * second stop or a restart cannot make a second WorkItem for the same one.
+   *
+   * @param agent - The agent
+   * @returns Text, key and a `markParked` callback, or null when there is none
+   */
+  parkablePromise(agent: string): { text: string; key: string; markParked: (workItemId: string) => void } | null {
     for (const e of this.entries.values()) {
-      if (e.agent === agent && e.promise && e.agentPreview) return e.agentPreview;
+      const p = openPromise(e);
+      if (e.agent !== agent || !p || !e.agentPreview || p.parkedWorkItemId) continue;
+      return {
+        text: e.agentPreview,
+        key: `${e.key}@${p.at}`,
+        markParked: (workItemId) => {
+          p.parkedWorkItemId = workItemId;
+          this.persist();
+        },
+      };
     }
     return null;
   }
@@ -732,11 +756,27 @@ export class OwnerThreadSentinelService {
     const now = this.now();
     for (const e of readEntries(this.deps.storePath)) {
       // Anything active when Crewly went down gets one restart line.
-      e.restartPending = owes(e, now) && (!!e.promise || (!!e.ownerAt && (!e.agentPostAt || e.ownerAt > e.agentPostAt)));
+      e.restartPending = owes(e, now) && (!!openPromise(e) || (!!e.ownerAt && (!e.agentPostAt || e.ownerAt > e.agentPostAt)));
       this.entries.set(e.key, e);
     }
     if (this.entries.size > 0) this.logger.info('Restored watched owner threads from before the restart', { count: this.entries.size });
   }
+}
+
+/**
+ * The thread's promise while it is still open: a promise is kept as soon as
+ * the agent posted anything in the thread after it (`agentPostAt > promise.at`).
+ * Every "does the agent owe this?" check goes through here, so a kept promise
+ * is never read as open again after a restart reloads the file.
+ *
+ * @param e - The entry
+ * @returns The promise, or undefined when there is none or it was kept
+ */
+function openPromise(e: OwnerThreadEntry): NonNullable<OwnerThreadEntry['promise']> | undefined {
+  const p = e.promise;
+  if (!p) return undefined;
+  if (e.agentPostAt !== undefined && e.agentPostAt > p.at) return undefined;
+  return p;
 }
 
 /**
@@ -750,7 +790,8 @@ export class OwnerThreadSentinelService {
 function owes(e: OwnerThreadEntry, now: number): boolean {
   if (e.cards.length > 0) return true;
   if (e.ownerAt && (!e.agentPostAt || e.ownerAt > e.agentPostAt) && now - e.ownerAt <= C.ACTIVE_WINDOW_MS) return true;
-  if (e.promise && now - e.promise.at <= C.ACTIVE_WINDOW_MS) return true;
+  const p = openPromise(e);
+  if (p && now - p.at <= C.ACTIVE_WINDOW_MS) return true;
   return false;
 }
 

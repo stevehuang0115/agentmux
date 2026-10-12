@@ -230,17 +230,26 @@ export function releaseWorkDeps(): ReleaseWorkDeps {
 			return wi.id;
 		},
 		parkPromise: async (session) => {
-			const text = getOwnerThreadSentinel()?.promiseText(session);
-			if (!text) return null;
+			const promise = getOwnerThreadSentinel()?.parkablePromise(session);
+			if (!promise) return null;
+			// One WorkItem per thread + promise, whatever its status now (open, done or
+			// cancelled): a promise that was already parked or answered must not come
+			// back as a new item after every stop or restart.
+			const existing = (await pool.getAllItems()).find((wi) => (wi.metadata as Record<string, unknown> | undefined)?.['promiseKey'] === promise.key);
+			if (existing) {
+				promise.markParked(existing.id);
+				return TERMINAL_WORK_ITEM_STATUSES.has(existing.status) ? null : existing.id;
+			}
 			const wi = createWorkItem({
 				type: 'delegate',
 				owner: 'system',
 				target: session,
-				title: `Follow through: ${text.slice(0, 70)}`,
-				description: `You promised the owner: "${text}". Crewly stopped you (memory) before you delivered. Deliver it; reply in the owner's thread with the result or a real blocker.`,
-				metadata: { harnessCreated: 'owner-promise' },
+				title: `Follow through: ${promise.text.slice(0, 70)}`,
+				description: `You promised the owner: "${promise.text}". Crewly stopped you (memory) before you delivered. Deliver it; reply in the owner's thread with the result or a real blocker.`,
+				metadata: { harnessCreated: 'owner-promise', promiseKey: promise.key },
 			});
 			await pool.addToPool(wi, { creatorSession: session });
+			promise.markParked(wi.id);
 			return wi.id;
 		},
 	};
