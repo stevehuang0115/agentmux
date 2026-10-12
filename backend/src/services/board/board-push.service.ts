@@ -24,7 +24,8 @@ import { BOARD_CONSTANTS, CANVAS_CONSTANTS } from '../../constants.js';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
 import type { BoardActivityTracker } from './board-activity.tracker.js';
 import type { BoardSnapshotBuilder } from './board-snapshot.builder.js';
-import type { BoardDelta, BoardSnapshot } from './board.types.js';
+import { getAgentInteractions, type AgentInteractionRecorder } from './board-interactions.js';
+import { linkKey, type BoardDelta, type BoardLink, type BoardSnapshot } from './board.types.js';
 
 const C = BOARD_CONSTANTS;
 const CV = CANVAS_CONSTANTS;
@@ -47,6 +48,8 @@ export interface BoardPushDeps {
 	setTimeout?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
 	clearTimeout?: (handle: ReturnType<typeof setTimeout>) => void;
 	logger?: ComponentLogger;
+	/** Agent-to-agent messages (default: the process-wide recorder) */
+	interactions?: AgentInteractionRecorder;
 }
 
 /** What one push did. */
@@ -72,6 +75,8 @@ export function isBoardPushDisabled(env: NodeJS.ProcessEnv = process.env): boole
  */
 export function fitSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
 	const size = (): number => Buffer.byteLength(JSON.stringify(snapshot));
+	// Links go first: a map of lines is the least important part of the body
+	while (snapshot.links && snapshot.links.length > 0 && size() > C.MAX_BODY_BYTES) snapshot.links.length = Math.floor(snapshot.links.length / 2);
 	const lists: Array<unknown[]> = [snapshot.outcomes.doneToday, snapshot.outcomes.stuck, snapshot.outcomes.waitingOnOwner];
 	let guard = 0;
 	while (size() > C.MAX_BODY_BYTES && guard < 500) {
@@ -104,6 +109,10 @@ export class BoardPushService {
 	private readonly dirty = new Set<string>();
 	/** Rows Cloud has, as JSON, by session */
 	private readonly lastSent = new Map<string, string>();
+	/** Links Cloud has, as JSON, by identity */
+	private readonly lastLinks = new Map<string, string>();
+	/** A message was recorded since the last delta: the links may differ */
+	private linksDirty = false;
 	private lastToken: string | null = null;
 	private fullOk = false;
 	private fullAfterMs: number = C.FULL_INTERVAL_MS;
@@ -157,9 +166,14 @@ export class BoardPushService {
 		// A step changed: the agent's row did not necessarily, but a delta is due
 		const offRows = this.deps.tracker.onChange((session) => this.markDirty(session));
 		const offSteps = this.deps.tracker.steps.onChange((session) => this.markDirty(session));
+		const offMessages = (this.deps.interactions ?? getAgentInteractions()).onRecord((from) => {
+			this.linksDirty = true;
+			this.markDirty(from);
+		});
 		this.unsubscribe = () => {
 			offRows();
 			offSteps();
+			offMessages();
 		};
 		this.scheduleFull(0);
 	}
@@ -243,6 +257,9 @@ export class BoardPushService {
 		this.fullOk = true;
 		this.lastSent.clear();
 		for (const team of snapshot.teams) for (const a of team.agents) this.lastSent.set(a.session, JSON.stringify(a));
+		this.lastLinks.clear();
+		for (const l of snapshot.links ?? []) this.lastLinks.set(linkKey(l), JSON.stringify(l));
+		this.linksDirty = false;
 		this.dirty.clear();
 		// Timeline events ride in deltas
 		const pending = new Set([...this.deps.tracker.sessionsWithUnsent(), ...this.deps.tracker.steps.sessionsWithUnsent()]);
@@ -273,7 +290,18 @@ export class BoardPushService {
 		const changed = rows.filter((r) => this.lastSent.get(r.session) !== JSON.stringify(stripTeam(r)));
 		const timeline = this.deps.tracker.peekUnsent(sessions);
 		let steps = this.deps.tracker.steps.peekUnsent(sessions);
-		if (changed.length === 0 && timeline.length === 0 && steps.length === 0) return 'nothing';
+		// Links are recomputed only after a message (the rest comes with the full build)
+		let links: BoardLink[] = [];
+		let removedLinks: string[] = [];
+		const linksWereDirty = this.linksDirty;
+		if (linksWereDirty) {
+			this.linksDirty = false;
+			const now = this.deps.builder.links();
+			links = now.filter((l) => this.lastLinks.get(linkKey(l)) !== JSON.stringify(l));
+			const keys = new Set(now.map(linkKey));
+			removedLinks = [...this.lastLinks.keys()].filter((k) => !keys.has(k));
+		}
+		if (changed.length === 0 && timeline.length === 0 && steps.length === 0 && links.length === 0 && removedLinks.length === 0) return 'nothing';
 		const instanceId = (await this.deps.builder.identity()).instanceId;
 		const body: BoardDelta = {
 			v: 1,
@@ -282,6 +310,8 @@ export class BoardPushService {
 			agents: changed,
 			...(timeline.length > 0 ? { timeline } : {}),
 			...(steps.length > 0 ? { steps } : {}),
+			...(links.length > 0 ? { links } : {}),
+			...(removedLinks.length > 0 ? { removedLinks } : {}),
 		};
 		// The body limit is on the uncompressed JSON: the newest steps go first when it does not fit
 		for (let guard = 0; guard < 20 && body.steps && Buffer.byteLength(JSON.stringify(body)) > C.MAX_BODY_BYTES; guard += 1) {
@@ -292,6 +322,8 @@ export class BoardPushService {
 		const outcome = await this.post(target, C.DELTA_PATH, body, instanceId);
 		if (outcome === 'sent') {
 			for (const r of changed) this.lastSent.set(r.session, JSON.stringify(stripTeam(r)));
+			for (const l of links) this.lastLinks.set(linkKey(l), JSON.stringify(l));
+			for (const k of removedLinks) this.lastLinks.delete(k);
 			this.deps.tracker.ackUnsent(timeline);
 			this.deps.tracker.steps.ackUnsent(steps);
 			// Steps the per-delta limit held back go in the next one
@@ -299,6 +331,7 @@ export class BoardPushService {
 			for (const session of left) this.markDirty(session);
 		} else if (outcome === 'failed') {
 			// keep them dirty for the next try (the full push also repairs everything)
+			if (linksWereDirty) this.linksDirty = true;
 			for (const s of sessions) this.dirty.add(s);
 		}
 		return outcome;
