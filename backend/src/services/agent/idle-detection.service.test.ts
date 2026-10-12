@@ -516,6 +516,36 @@ describe('IdleDetectionService', () => {
 			expect(order).toEqual(['release', 'terminate']);
 		});
 
+		it('under memory pressure it still keeps an agent that made a promise minutes ago', async () => {
+			idleDev();
+			const { ResourceModeService } = jest.requireActual('./resource-mode.service.js') as typeof import('./resource-mode.service.js');
+			const mode = jest.spyOn(ResourceModeService.getInstance(), 'getMode').mockReturnValue('pressure');
+			const mockTerminate = jest.fn(async () => ({ success: true }));
+			const service = IdleDetectionService.getInstance();
+			service.setAgentRegistrationService({ terminateAgentSession: mockTerminate } as any);
+			service.setPendingWorkCheck(async () => 'fresh_promise');
+			await service.performCheck();
+			mode.mockRestore();
+			expect(mockTerminate).not.toHaveBeenCalled();
+		});
+
+		it('after stopping an agent that owed work it runs the re-dispatch hook once', async () => {
+			idleDev();
+			const { ResourceModeService } = jest.requireActual('./resource-mode.service.js') as typeof import('./resource-mode.service.js');
+			const mode = jest.spyOn(ResourceModeService.getInstance(), 'getMode').mockReturnValue('pressure');
+			const service = IdleDetectionService.getInstance();
+			service.setAgentRegistrationService({ terminateAgentSession: jest.fn(async () => ({ success: true })) } as any);
+			service.setPendingWorkCheck(async () => 'promise');
+			service.setWorkReleaser(async () => undefined);
+			const hook = jest.fn();
+			service.setOwedStopHook(hook);
+			await service.performCheck();
+			mode.mockRestore();
+			service.setOwedStopHook(null);
+			expect(hook).toHaveBeenCalledTimes(1);
+			expect(hook).toHaveBeenCalledWith('ce-nova');
+		});
+
 		it('the emergency stop also puts the work back in the queue first', async () => {
 			mockGetTeams.mockResolvedValue([{
 				id: 'team1',

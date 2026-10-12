@@ -12,6 +12,12 @@ describe('detectStatedIntent', () => {
 		'下一步是拆分镜',
 		'做好发你',
 		'马上开始做第二个视频',
+		'对，v3 还没做。我现在开始做（新配乐 + 中英双语字幕），做好发在这个帖子里。如果你有音乐偏好回复我，否则我用鼓点欢快的。',
+		'对，v3 还没做。我现在开始做，做好发在这个帖子里。你有音乐偏好吗？没有的话我用鼓点欢快的。',
+		'我去做，做好发你',
+		'做好后发在这个帖子里',
+		"Starting now. If you have a music preference tell me, otherwise I'll go with upbeat drums.",
+		"I'll do it and will post it in this thread when it's done.",
 	])('flags %s', (text) => {
 		expect(detectStatedIntent(text)).not.toBeNull();
 	});
@@ -28,6 +34,15 @@ describe('detectStatedIntent', () => {
 		'',
 	])('does not flag %s', (text) => {
 		expect(detectStatedIntent(text)).toBeNull();
+	});
+
+	it('a question next to a commitment is not waiting (Pia, 2026-10-12)', () => {
+		expect(detectStatedIntent('对，v3 还没做。我现在开始做（新配乐 + 中英双语字幕），做好发在这个帖子里。如果你有音乐偏好回复我，否则我用鼓点欢快的。')?.sentence).toBe('我现在开始做（新配乐 + 中英双语字幕），做好发在这个帖子里。');
+		// the question alone is still just a question
+		expect(detectStatedIntent('你有音乐偏好吗？')).toBeNull();
+		expect(detectStatedIntent('Which style do you want, and should I start now?')).toBeNull();
+		// waiting without a stated default is still waiting
+		expect(detectStatedIntent("I'm starting now once you confirm the style.")).toBeNull();
 	});
 
 	it('returns the sentence that states it, clipped', () => {

@@ -29,12 +29,19 @@ const EN_NOW = [
   // "I'll start/build … now|right away|next|immediately"
   /\b(?:i'?ll|i will|let me)\s+(?:now\s+)?(?:start|begin|build|make|create|write|do|draft|record|render|rebuild|fix|get (?:started|going)|work on|break down)\b[^.!?\n]*\b(?:now|right away|immediately|next|first|straight away)\b/i,
   /\b(?:starting|beginning)\s+(?:now|right now|on (?:it|that|this))\b/i,
+  // "I'll do it", "on it", "will post it here when done", "will send it over once ready"
+  /\b(?:i'?ll|i will|let me)\s+(?:go\s+)?(?:do|make|build|handle|take care of)\s+(?:it|that|this)\b/i,
+  /\bon it\b[.!]?\s*$/i,
+  /\b(?:i'?ll|i will|will)\s+(?:post|send|share|drop|deliver|upload|reply with)\b[^.!?\n]*\b(?:here|in this thread|in the thread|when (?:it'?s |i'?m )?(?:done|ready|finished)|once (?:it'?s |i'?m )?(?:done|ready|finished))\b/i,
   /\bnow\s+(?:building|writing|making|creating|drafting|recording|rendering|breaking|starting|working)\b/i,
 ];
-const ZH_NOW = /(我现在(?:就)?(?:开始|去|来|做|写|改|弄|拆|搭|录|剪|做)|我这就|现在就(?:开始|去|做|来)|马上(?:开始|去|做|来)|接下来(?:我)?(?:会|要|就)?[^，。\n]{0,12}|下一步(?:是|就是|我)|(?:做好|做完|弄好|写好|剪好|搞好)(?:后|了)?(?:就)?(?:发|给|交)你|开始(?:做|拆|写|搭|剪|录))/;
+const ZH_NOW = /(我现在(?:就)?(?:开始|去|来|做|写|改|弄|拆|搭|录|剪|做)|我这就|这就(?:开始|去|做|来)|我(?:先)?(?:去|来)(?:做|弄|写|剪|搞|处理)|现在就(?:开始|去|做|来)|马上(?:开始|去|做|来|弄|处理)|(?:做好|做完|弄好|写好|剪好|搞好)(?:后|了)?(?:就|会)?(?:发|贴|回复|同步|给)|接下来(?:我)?(?:会|要|就)?[^，。\n]{0,12}|下一步(?:是|就是|我)|(?:做好|做完|弄好|写好|剪好|搞好)(?:后|了)?(?:就)?(?:发|给|交)你|开始(?:做|拆|写|搭|剪|录))/;
 
 /** The agent is waiting on somebody else: not "doing it now". */
 const WAITING = /\b(?:wait(?:ing)? (?:for|on)|once you|after you|when you (?:confirm|reply|answer|tell)|until you|if you (?:confirm|want|prefer|like|say)|let me know (?:if|which|whether))\b|(?:等你|等您|你确认|你回复|你告诉我|待你|您确认)/i;
+
+/** A fallback the agent states itself: a question next to it is not a reason to wait. */
+const STATED_DEFAULT = /\b(?:otherwise|if not|if (?:you|there)(?:'re| are)? no(?:t)?|by default|else i'?ll)\b|(?:否则|不然|没有的话|没回复的话|默认(?:我)?)/i;
 
 /** A report of finished work, however it starts. */
 const DONE_REPORT = /^\s*(?:done\b|finished\b|all done|已(?:经)?(?:完成|发|做好|搞定)|完成了|做好了|搞定了)/i;
@@ -43,8 +50,8 @@ const DONE_REPORT = /^\s*(?:done\b|finished\b|all done|已(?:经)?(?:完成|发|
  * Whether an agent post says it is starting work now.
  *
  * Returns null for finished-work reports, for text that waits on someone
- * else, and for a post that ends in a question (the agent is asking, not
- * starting).
+ * else (unless it states a default it will go with), and for text whose only
+ * commitments are questions (the agent is asking, not starting).
  *
  * @param text - The agent's post to the owner
  * @returns The stated intent, or null
@@ -60,10 +67,14 @@ export function detectStatedIntent(text: string): StatedIntent | null {
 	const t = (text ?? '').trim();
 	if (t.length < 4) return null;
 	if (DONE_REPORT.test(t)) return null;
-	if (/[?？]\s*$/.test(t)) return null;
-	const sentences = t.split(/(?<=[.!。！？\n])\s*/).map((s) => s.trim()).filter(Boolean);
+	const sentences = t.split(/(?<=[.!。！？?\n])\s*/).map((s) => s.trim()).filter(Boolean);
+	// A question next to a commitment is not "waiting": "starting now; if you
+	// have a preference tell me, otherwise I'll do X" commits. It is judged
+	// per sentence, so a reply that is only a question still returns null.
+	const hasDefault = STATED_DEFAULT.test(t);
 	for (const s of sentences) {
-		if (WAITING.test(s)) continue;
+		if (/[?？]\s*$/.test(s)) continue;
+		if (WAITING.test(s) && !hasDefault) continue;
 		if (EN_NOW.some((re) => re.test(s)) || ZH_NOW.test(s)) {
 			// A sentence that is itself a past-tense report ("I've started …") never matches the patterns above.
 			return { sentence: s.length > 200 ? `${s.slice(0, 199)}…` : s };

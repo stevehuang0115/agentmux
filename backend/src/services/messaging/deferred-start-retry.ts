@@ -30,6 +30,8 @@ export interface DeferredStartRetryDeps {
 	hasPending: (sessionName: string) => boolean;
 	/** Pause between rounds (tests inject an instant one). */
 	sleep?: (ms: number) => Promise<void>;
+	/** Pause before the first round (default: the usual round pause) */
+	firstPauseMs?: number;
 }
 
 const logger = LoggerService.getInstance().createComponentLogger('DeferredStartRetry');
@@ -55,7 +57,7 @@ export async function scheduleDeferredStartRetry(sessionName: string, deps: Defe
 	const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => { const t = setTimeout(resolve, ms); t.unref?.(); }));
 	try {
 		for (let round = 1; round <= DEFERRED_START_RETRY_CONSTANTS.MAX_ROUNDS; round++) {
-			await sleep(DEFERRED_START_RETRY_CONSTANTS.ROUND_PAUSE_MS);
+			await sleep(round === 1 && deps.firstPauseMs !== undefined ? deps.firstPauseMs : DEFERRED_START_RETRY_CONSTANTS.ROUND_PAUSE_MS);
 			if (!deps.hasPending(sessionName)) return;
 			let res: { success: boolean; deferred?: boolean };
 			try {
