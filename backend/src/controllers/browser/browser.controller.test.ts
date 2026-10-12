@@ -148,6 +148,7 @@ describe('Browser Controller', () => {
 				code: 'BROWSER_COMMAND_TIMEOUT',
 			});
 			expect(classifyDispatchFailure('screenshot', ['proxy-relay: Max payload size exceeded'])).toMatchObject({ status: 413, code: 'BROWSER_PAYLOAD_TOO_LARGE' });
+			expect(classifyDispatchFailure('screenshot', ["proxy-relay: Browser extension disconnected while capturing 'screenshot': the result was probably too large for the relay's 1 MiB frame limit."])).toMatchObject({ status: 413, code: 'BROWSER_PAYLOAD_TOO_LARGE' });
 			expect(classifyDispatchFailure('screenshot', ['direct-ws: socket closed'])).toMatchObject({ status: 503, code: 'NO_BROWSER_CLIENT' });
 		});
 
