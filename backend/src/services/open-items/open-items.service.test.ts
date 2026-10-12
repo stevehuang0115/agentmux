@@ -11,7 +11,9 @@ import type { Request } from '../../types/v2/request.types.js';
 import type { RequestOpenItem } from '../../types/v2/open-item.types.js';
 import type { OwnerDecision } from '../../types/decision.types.js';
 import type { ComponentLogger } from '../core/logger.service.js';
-import { OpenItemsService, isConcreteInterimPromise, markRestartReminded, owedCommitments, plausiblyFulfils, type OpenItemsDeps, type OpenItemsChatMessage, type QuestionCardInput, type FollowUpInput } from './open-items.service.js';
+import { OpenItemsService, isConcreteInterimPromise, markRestartReminded, owedCommitments, plausiblyFulfils, supersededReason, type OpenItemsDeps, type OpenItemsChatMessage, type QuestionCardInput, type FollowUpInput } from './open-items.service.js';
+import { planCommitmentNotes } from '../restart/interrupted-turns.js';
+import { buildFollowUpWorkItem } from './open-items.wiring.js';
 import { AgentPromptReferenceService } from '../orc/agent-prompt-reference.service.js';
 import { backfillOpenItems, formatBackfillReport, isHarnessFlowQuestion, reportsSettled } from './open-items-backfill.js';
 import { DecisionService, type DecisionSlackApi } from '../decisions/decision.service.js';
@@ -468,7 +470,7 @@ describe('Open items after a restart (PR #1013 review)', () => {
     const r = await withPromise(h, {});
     const now = h.clock.now;
     expect(owedCommitments([r], now)).toEqual([
-      { sessionName: EVE, ticket: 'TKT-185', text: r.openItems![0].text, requestId: r.id, itemId: 'c-1', due: r.openItems![0].due },
+      { sessionName: EVE, ticket: 'TKT-185', text: r.openItems![0].text, requestId: r.id, itemId: 'c-1', due: r.openItems![0].due, createdAt: r.openItems![0].createdAt },
     ]);
     const item = r.openItems![0];
     const variant = (over: Partial<RequestOpenItem>): Request => ({ ...r, openItems: [{ ...item, ...over }] });
@@ -1141,7 +1143,7 @@ describe('promises closed undelivered are told to the owner (crewly#1015 §10)',
     }
   });
 
-  it('a promise that expires without the owner ever being told is told once', async () => {
+  it('a promise that expires (7 days, no progress) closes as stale and is NOT posted to the owner; the weekly summary lists it', async () => {
     const h = harness({ createFollowUp: async () => FU, postOwnerNote: async (_r, text) => (h.ownerNotes.push(text), true) });
     const t = await promised(h);
     // Keep it from going overdue: due far away (the extractor's default due is soon).
@@ -1149,9 +1151,120 @@ describe('promises closed undelivered are told to the owner (crewly#1015 §10)',
     await h.requests.update(t.id, { openItems: r.openItems!.map((i) => ({ ...i, due: new Date(h.clock.now.getTime() + 30 * 24 * HOUR).toISOString() })) });
     h.clock.now = new Date(h.clock.now.getTime() + 8 * 24 * HOUR);
     await h.service.sweep();
-    expect(h.ownerNotes).toHaveLength(1);
-    expect(h.ownerNotes[0]).toContain('was closed without being delivered: nothing happened on it for 7 days');
+    expect(h.ownerNotes).toEqual([]);
     expect((await h.requests.getById(t.id))!.openItems![0].status).toBe('expired');
+    const weekly = await h.service.staleExpiredCommitments(h.clock.now.getTime() - HOUR);
+    expect(weekly).toEqual([expect.objectContaining({ ticket: 'TKT-185', agent: ATLAS, text: '大概 20 分钟后发你结果。' })]);
+    expect(await h.service.staleExpiredCommitments(h.clock.now.getTime() + HOUR)).toEqual([]);
+  });
+});
+
+describe('stale commitments are re-checked before they are resurfaced (TKT-334, 2026-10-12)', () => {
+  const DAY = 24 * HOUR;
+  /** A five-day-old overdue-by-due promise, never nudged. */
+  async function oldPromise(h: Harness, over: Partial<RequestOpenItem> = {}): Promise<Request> {
+    const t = await ticket(h);
+    const made = new Date(h.clock.now.getTime() - 5 * DAY);
+    const item: RequestOpenItem = {
+      id: 'c-old',
+      type: 'commitment',
+      text: 'Save the draft in info@ once Zoho is connected.',
+      agent: ATLAS,
+      sourceMessageId: 'old-msg',
+      createdAt: made.toISOString(),
+      status: 'open',
+      due: new Date(made.getTime() + DAY).toISOString(),
+      dueSource: 'default',
+      workItemId: 'fu-old',
+      ...over,
+    };
+    return h.requests.update(t.id, { openItems: [item] });
+  }
+
+  it('the owner posted in the thread after the promise: closed silently as superseded, nobody is woken or told', async () => {
+    const h = harness();
+    const t = await oldPromise(h);
+    await h.requests.update(t.id, { discussion: [{ at: new Date(h.clock.now.getTime() - 2 * DAY).toISOString(), author: 'UOWNER', text: 'I sent it myself', ref: 'x' }] });
+    await h.service.sweep();
+    expect(h.woken).toEqual([]);
+    expect(h.ownerNotes).toEqual([]);
+    const item = (await h.requests.getById(t.id))!.openItems![0];
+    expect(item.status).toBe('superseded');
+    expect(item.closedReason).toContain('the owner posted in the thread');
+    expect(h.closed).toEqual([{ id: 'fu-old', outcome: 'cancelled' }]);
+  });
+
+  it('a post by the promising agent itself is not the owner answering', async () => {
+    const h = harness();
+    const t = await oldPromise(h);
+    await h.requests.update(t.id, { discussion: [{ at: new Date(h.clock.now.getTime() - DAY).toISOString(), author: ATLAS, text: 'working', ref: 'x' }] });
+    await h.service.sweep();
+    expect((await h.requests.getById(t.id))!.openItems![0].status).toBe('overdue');
+  });
+
+  it('the ticket is done or cancelled: an old commitment is superseded (young ones are never judged)', async () => {
+    const h = harness();
+    const t = await oldPromise(h);
+    const r = (await h.requests.getById(t.id))!;
+    const item = r.openItems![0];
+    expect(supersededReason({ ...r, status: 'done' }, item, h.clock.now)).toBe('superseded: the ticket is done');
+    expect(supersededReason({ ...r, status: 'cancelled' }, item, h.clock.now)).toBe('superseded: the ticket is cancelled');
+    expect(supersededReason(r, item, h.clock.now)).toBeNull();
+    const young = { ...item, createdAt: new Date(h.clock.now.getTime() - HOUR).toISOString() };
+    expect(supersededReason({ ...r, status: 'done' }, young, h.clock.now)).toBeNull();
+  });
+
+  it('old but still valid: the nudge tells the agent to verify before contacting the owner', async () => {
+    const h = harness();
+    const t = await oldPromise(h);
+    await h.service.sweep();
+    expect(h.woken).toHaveLength(1);
+    expect(h.woken[0].text).toContain('This is from 2026-09-26. Before contacting the owner, verify it is still needed');
+    expect(h.woken[0].text).toContain('Sent folder and existing drafts (you have read access)');
+    expect(h.woken[0].text).toContain('close it without messaging the owner');
+    expect((await h.requests.getById(t.id))!.openItems![0].status).toBe('overdue');
+  });
+
+  it('a fresh promise gets the plain nudge, no verify notice, and a young item is never judged superseded', async () => {
+    const h = harness();
+    const t = await oldPromise(h, { createdAt: new Date(h.clock.now.getTime() - 3 * HOUR).toISOString(), due: new Date(h.clock.now.getTime() - HOUR).toISOString() });
+    await h.requests.update(t.id, { discussion: [{ at: new Date(h.clock.now.getTime() - HOUR).toISOString(), author: 'UOWNER', text: 'ok', ref: 'x' }] });
+    await h.service.sweep();
+    expect(h.woken).toHaveLength(1);
+    expect(h.woken[0].text).not.toContain('verify it is still needed');
+  });
+
+  it('the child work finishing after days wakes the agent with the verify-first notice', async () => {
+    const h = harness();
+    const t = await oldPromise(h, { childWorkItemIds: ['28b09370-7751-4963-8ba8-4836a2ccc7d0'], due: new Date(h.clock.now.getTime() + DAY).toISOString() });
+    const wi = kaiWork(h, t.id, 'verified');
+    wi.completedAt = h.clock.now.toISOString();
+    await h.service.onWorkItemSettled(wi.id);
+    expect(h.woken).toHaveLength(1);
+    expect(h.woken[0].text).toContain('Before contacting the owner, verify it is still needed');
+  });
+
+  it('a restart does not replay a superseded old promise, and a valid old one carries the notice', async () => {
+    const h = harness();
+    const t = await oldPromise(h);
+    const r = (await h.requests.getById(t.id))!;
+    const owed = owedCommitments([r], h.clock.now);
+    expect(owed).toHaveLength(1);
+    expect(owed[0].createdAt).toBe(r.openItems![0].createdAt);
+    const notes = planCommitmentNotes(owed, [], () => true);
+    expect(notes[0].text).toContain('verify it is still needed');
+    const answered = { ...r, discussion: [{ at: new Date(h.clock.now.getTime() - DAY).toISOString(), author: 'UOWNER', text: 'done', ref: 'x' }] };
+    expect(owedCommitments([answered], h.clock.now)).toEqual([]);
+  });
+
+  it('the follow-up WorkItem of an old commitment carries the notice in its description', () => {
+    const made = new Date(2026, 9, 7, 12, 0, 0);
+    const item: RequestOpenItem = { id: 'c', type: 'commitment', text: 'Save the draft.', agent: ATLAS, sourceMessageId: 'm', createdAt: made.toISOString(), status: 'open' };
+    const request = { id: 'r', ticketNumber: 334 } as unknown as Request;
+    const wi = buildFollowUpWorkItem({ request, item, place: null }, new Date(2026, 9, 12, 12, 0, 0));
+    expect(wi.description).toContain('Before contacting the owner, verify it is still needed');
+    const fresh = buildFollowUpWorkItem({ request, item: { ...item, createdAt: new Date(2026, 9, 12, 11, 0, 0).toISOString() }, place: null }, new Date(2026, 9, 12, 12, 0, 0));
+    expect(fresh.description).not.toContain('verify it is still needed');
   });
 });
 

@@ -47,6 +47,7 @@ import { AgentPromptReferenceService, type ReplyReference } from '../orc/agent-p
 import { withQueueMeta } from '../messaging/queue-priority.js';
 import { parseSlackThreadKey } from '../slack/slack-thread-key.js';
 import { slackArchiveLink } from '../decisions/ticket-thread-store.js';
+import { isStaleCommitment, staleCommitmentNotice, supersededReason } from './stale-commitment.js';
 import { gateVerdict, siblingQuestion, type GateVerdict } from './open-item-gate.js';
 
 // ---------------------------------------------------------------------------
@@ -491,6 +492,8 @@ function ticketLabel(request: Request): string {
   return typeof request.ticketNumber === 'number' ? formatTicketNumber(request.ticketNumber) : request.id.slice(0, 8);
 }
 
+export { isStaleCommitment, staleCommitmentNotice, supersededReason };
+
 /** An owner promise still owed, as the restart path needs it. */
 export interface OwedCommitment {
   /** Agent that promised */
@@ -505,6 +508,8 @@ export interface OwedCommitment {
   itemId: string;
   /** When it was due (ISO) */
   due?: string;
+  /** When it was promised (ISO) */
+  createdAt?: string;
 }
 
 /**
@@ -525,6 +530,8 @@ export function owedCommitments(requests: readonly Request[], now: Date = new Da
     for (const i of r.openItems ?? []) {
       if (i.type !== 'commitment' || (i.status !== 'open' && i.status !== 'ready')) continue;
       if (!i.agent || i.nudgedAt || i.restartRemindedAt) continue;
+      // Already answered / done since: not owed (stale ones are re-checked, never replayed blindly).
+      if (supersededReason(r, i, now)) continue;
       const due = i.due ? Date.parse(i.due) : NaN;
       if (!Number.isFinite(due) || due > now.getTime()) continue;
       out.push({
@@ -534,6 +541,7 @@ export function owedCommitments(requests: readonly Request[], now: Date = new Da
         requestId: r.id,
         itemId: i.id,
         ...(i.due ? { due: i.due } : {}),
+        createdAt: i.createdAt,
       });
     }
   }
@@ -1237,7 +1245,8 @@ export class OpenItemsService {
     const ref = followUpReference(request, item);
     const text =
       `[FOLLOW-UP ${ticketLabel(request)}] The work you promised the owner is ready (${what}) — deliver it now. ` +
-      `You said: "${short(item.text, 200)}". Run: ${followUpCommand(ref)} — Crewly posts it in the ticket's thread; that closes the follow-up.`;
+      `You said: "${short(item.text, 200)}". Run: ${followUpCommand(ref)} — Crewly posts it in the ticket's thread; that closes the follow-up.` +
+      staleCommitmentNotice(item, now);
     const ok = await this.remindAgent(request, item.agent, text);
     if (ok) AgentPromptReferenceService.getInstance().note(item.agent, ref, `[FOLLOW-UP ${ticketLabel(request)}]`);
     this.logger.info('Promised work is ready — agent woken to deliver', { tkt: ticketLabel(request), item: item.id, agent: item.agent, delivered: ok });
@@ -1516,8 +1525,10 @@ export class OpenItemsService {
    * in one note per request:
    * - the follow-up WorkItem was cancelled by ANOTHER agent (an agent's
    *   cleanup, a bulk script) — the cancel API records who
-   *   (`metadata.cancelledBy`);
-   * - nothing happened for 7 days and the owner was never told it was late.
+   *   (`metadata.cancelledBy`).
+   *
+   * A promise that merely expired (7 days, no progress) is NOT told here: it
+   * closes as stale and appears only in the weekly summary.
    *
    * The promising agent cancelling its own follow-up, owner skips,
    * superseded promises and cancelled tickets were closed on purpose and
@@ -1552,8 +1563,9 @@ export class OpenItemsService {
       const was = previous[i];
       if (!was || was.id !== item.id || item.type !== 'commitment') return false;
       if (!ACTIVE_OPEN_ITEM_STATUSES.has(was.status)) return false;
-      const expiredUntold = item.status === 'expired' && !was.ownerNotifiedAt;
-      return expiredUntold || cancelledByOther(item) !== null;
+      // An expired (stale) promise is not a fresh owner ask: it is listed in the weekly summary
+      // ({@link staleExpiredCommitments}), never posted into the thread.
+      return cancelledByOther(item) !== null;
     });
     if (dropped.length === 0) return items;
     const lines: string[] = [];
@@ -1562,10 +1574,7 @@ export class OpenItemsService {
       const by = cancelledByOther(item);
       const byName = by ? ((await this.deps.displayName?.(by).catch(() => undefined)) ?? by) : '';
       const reason = item.closedReason?.includes(': ') ? short(item.closedReason.slice(item.closedReason.indexOf(': ') + 2), 100) : '';
-      const why =
-        item.status === 'expired'
-          ? 'nothing happened on it for 7 days'
-          : `${byName} cancelled its follow-up${reason ? ` ("${reason}")` : ''}`;
+      const why = `${byName} cancelled its follow-up${reason ? ` ("${reason}")` : ''}`;
       lines.push(`${name}'s promise "${short(item.text, 160)}" was closed without being delivered: ${why}. If you still want it, ask ${name} again.`);
     }
     const ok = await this.deps.postOwnerNote(request, lines.join('\n')).catch(() => false);
@@ -1638,6 +1647,16 @@ export class OpenItemsService {
       };
     }
 
+    // An old commitment the owner already moved past (replied in the thread, or the ticket is
+    // done): close it silently — nothing is sent to the agent or the owner (TKT-334, 2026-10-12).
+    const moved = supersededReason(request, item, now);
+    if (moved) {
+      counts.closed += 1;
+      if (item.workItemId) await this.closeFollowUp(item.workItemId, 'cancelled', moved);
+      this.logger.info('Stale commitment superseded — closed without a nudge', { tkt: ticketLabel(request), item: item.id, reason: moved });
+      return { ...item, status: 'superseded', closedAt: nowIso, closedReason: moved };
+    }
+
     // Commitment: link child work started after the promise.
     let current = item;
     const children = childWorkFor(request, item, pool);
@@ -1657,7 +1676,8 @@ export class OpenItemsService {
       const ref = followUpReference(request, current);
       const text =
         `[FOLLOW-UP ${ticketLabel(request)}] You promised the owner: "${short(current.text, 200)}" — due ${formatWhen(new Date(due), now)}, and it hasn't been delivered. ` +
-        `Deliver it now, or tell the owner plainly when it will come and why. Run: ${followUpCommand(ref)} — Crewly posts it in the ticket's thread.`;
+        `Deliver it now, or tell the owner plainly when it will come and why. Run: ${followUpCommand(ref)} — Crewly posts it in the ticket's thread.` +
+        staleCommitmentNotice(current, now);
       const ok = await this.remindAgent(request, current.agent, text);
       if (ok) AgentPromptReferenceService.getInstance().note(current.agent, ref, `[FOLLOW-UP ${ticketLabel(request)}]`);
       counts.nudged += 1;
@@ -1672,6 +1692,25 @@ export class OpenItemsService {
       return ok ? { ...current, status: 'overdue', ownerNotifiedAt: nowIso } : current;
     }
     return current;
+  }
+
+  /**
+   * Commitments that expired as stale (7 days, no progress) since a time, for
+   * the weekly / Drive summary. They are never posted as a fresh owner ask.
+   *
+   * @param sinceMs - Epoch ms; only items closed at or after it
+   * @returns One row per expired commitment
+   */
+  async staleExpiredCommitments(sinceMs: number): Promise<Array<{ ticket: string; agent: string; text: string; promisedAt: string; closedAt: string }>> {
+    const all = await this.deps.requests.listAll();
+    const out: Array<{ ticket: string; agent: string; text: string; promisedAt: string; closedAt: string }> = [];
+    for (const r of all) {
+      for (const i of r.openItems ?? []) {
+        if (i.type !== 'commitment' || i.status !== 'expired' || !i.closedAt || Date.parse(i.closedAt) < sinceMs) continue;
+        out.push({ ticket: ticketLabel(r), agent: i.agent, text: i.text, promisedAt: i.createdAt, closedAt: i.closedAt });
+      }
+    }
+    return out;
   }
 
   /**

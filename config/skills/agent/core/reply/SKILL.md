@@ -64,6 +64,8 @@ When your prompt names a ticket, a message, a work item or a decision, pass
 that reference — the harness finds the conversation and thread:
 
 ```bash
+# Old follow-up (a date in the prompt, days back)? Verify first: read the thread since, the ticket status, and for
+# email work the Sent folder / drafts. Already done -> close it, do NOT message the owner.
 # [FOLLOW-UP TKT-187] … Run: reply --ticket TKT-187 "<your message>"
 bash config/skills/agent/core/reply/execute.sh --ticket TKT-187 "Preview is here: https://…"
 

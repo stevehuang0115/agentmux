@@ -28,6 +28,7 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from 'fs';
 import * as path from 'path';
 import { SAFE_RESTART, MESSAGE_SOURCES, type MessageSource } from '../../constants.js';
+import { isStaleCommitment, staleCommitmentNotice } from '../open-items/stale-commitment.js';
 import type { InFlightTurn } from './in-flight-turn-tracker.service.js';
 
 /** One interrupted message, as stored on disk. */
@@ -103,6 +104,8 @@ export interface OpenCommitmentRef {
 	ticket?: string;
 	/** The promise, as the agent wrote it */
 	text: string;
+	/** When it was promised (ISO); an old one gets the verify-first notice */
+	createdAt?: string;
 }
 
 /** A note to send to one restored agent. */
@@ -358,7 +361,14 @@ export function planCommitmentNotes(
 		const promises = list.map((c) => `- ${c.ticket ? `${c.ticket}: ` : ''}"${c.text.replace(/\s+/g, ' ').trim()}"`);
 		notes.push({
 			sessionName,
-			text: [buildResumeNote(tickets.length > 0 ? tickets.join(', ') : undefined), SAFE_RESTART.RESUME_PROMISE_HEADER, ...promises].join('\n'),
+			text: [
+				buildResumeNote(tickets.length > 0 ? tickets.join(', ') : undefined),
+				SAFE_RESTART.RESUME_PROMISE_HEADER,
+				...promises,
+				...(list.some((c) => c.createdAt && isStaleCommitment({ createdAt: c.createdAt }, new Date()))
+					? [staleCommitmentNotice({ createdAt: list.map((c) => c.createdAt ?? '').filter(Boolean).sort()[0] }, new Date()).trim()]
+					: []),
+			].join('\n'),
 		});
 	}
 	return notes;
