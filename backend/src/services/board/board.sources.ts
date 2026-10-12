@@ -87,6 +87,8 @@ export interface ProductionBoardSourcesDeps {
 export function createProductionBoardSources(deps: ProductionBoardSourcesDeps): BoardSources {
 	const teams = async (): Promise<BoardTeamInfo[]> => {
 		const stored = await deps.storage.getTeams();
+		const projectList = await deps.storage.getProjects().catch(() => []);
+		const projectOf = new Map(projectList.map((p) => [p.id, p.name]));
 		const out: BoardTeamInfo[] = [
 			{
 				teamId: 'orchestrator',
@@ -108,6 +110,7 @@ export function createProductionBoardSources(deps: ProductionBoardSourcesDeps): 
 			const members = (team.members ?? [])
 				.filter((m) => m?.id && String(m.role) !== 'orchestrator')
 				.map((m) => ({
+					id: m.id,
 					session: resolveMemberSessionName(team.name, m),
 					name: m.name,
 					role: String(m.role),
@@ -116,7 +119,19 @@ export function createProductionBoardSources(deps: ProductionBoardSourcesDeps): 
 					agentStatus: m.agentStatus,
 					workingStatus: m.workingStatus,
 				}));
-			out.push({ teamId: team.id, name: team.name, ...(team.paused ? { paused: true } : {}), members });
+			// Leaders: the team's configured ones, else its team-leader roles
+			const leaderIds = team.leaderIds?.length ? team.leaderIds : team.leaderId ? [team.leaderId] : [];
+			const leaders = members.filter((m) => leaderIds.includes(m.id) || (leaderIds.length === 0 && /^team[-_ ]?lead(er)?$/i.test(m.role))).map((m) => m.session);
+			const projects = (team.projectIds ?? []).filter((id) => projectOf.has(id)).map((id) => ({ id, name: projectOf.get(id) as string }));
+			out.push({
+				teamId: team.id,
+				name: team.name,
+				...(team.paused ? { paused: true } : {}),
+				...(team.createdAt ? { createdAt: team.createdAt } : {}),
+				...(leaders.length > 0 ? { leaders } : {}),
+				...(projects.length > 0 ? { projects } : {}),
+				members,
+			});
 		}
 		return out;
 	};
@@ -134,6 +149,9 @@ export function createProductionBoardSources(deps: ProductionBoardSourcesDeps): 
 				title: w.title,
 				type: w.type,
 				status: w.status,
+				...(w.owner ? { owner: w.owner } : {}),
+				...(typeof w.metadata?.delegatedBy === 'string' ? { delegatedBy: w.metadata.delegatedBy } : {}),
+				...(typeof w.metadata?.projectId === 'string' ? { projectId: w.metadata.projectId } : {}),
 				...(w.target ? { target: w.target } : {}),
 				...(w.requestId ? { requestId: w.requestId } : {}),
 				...(w.projectTaskId ? { projectTaskId: w.projectTaskId } : {}),
@@ -234,6 +252,7 @@ export function createProductionBoardSources(deps: ProductionBoardSourcesDeps): 
 				terminalExists: (id) => getSessionBackendSync()?.sessionExists(id) === true,
 			}),
 		workItems,
+		projects: async () => (await deps.storage.getProjects()).map((p) => ({ id: p.id, name: p.name })),
 		tickets: async () => [...(await harnessTickets()), ...(await projectTickets().catch(() => []))],
 		decisions: async () => {
 			const list = (await DecisionService.getInstance()?.list('open')) ?? [];

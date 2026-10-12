@@ -8386,6 +8386,20 @@ export const BOARD_CONSTANTS = {
 	LEDGER_TASK_MAX_AGE_MS: 2 * 60 * 60 * 1000,
 	/** Project-ticket scan is cached this long (ms) */
 	PROJECT_TICKET_CACHE_MS: 5 * 60_000,
+	/** Canvas links (CANVAS-V2-CONTRACT.md): at most this many in a snapshot */
+	LINKS_MAX: 300,
+	/** A link's label is at most this many characters */
+	LINK_LABEL_MAX: 60,
+	/** Delegations count while open or finished this recently (ms) */
+	LINK_DELEGATION_WINDOW_MS: 24 * 60 * 60 * 1000,
+	/** Agent-to-agent messages count this long (ms) */
+	LINK_MESSAGING_WINDOW_MS: 2 * 60 * 60 * 1000,
+	/** A messaging link is "active" if the last message is this recent (ms) */
+	LINK_MESSAGING_ACTIVE_MS: 10 * 60_000,
+	/** Messages remembered per sender/receiver pair */
+	LINK_MESSAGING_MAX_PER_PAIR: 100,
+	/** Most agents linked by one shared ticket (pairs grow quadratically) */
+	LINK_SAME_TASK_MAX_GROUP: 6,
 } as const;
 
 /**

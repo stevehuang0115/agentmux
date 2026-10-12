@@ -181,6 +181,8 @@ import { createMessagingRouter } from './controllers/messaging/messaging.routes.
 import { SystemResourceAlertService } from './services/monitoring/system-resource-alert.service.js';
 import { TokenUsageService } from './services/monitoring/token-usage.service.js';
 import { agentHeartbeatMiddleware } from './middleware/agent-heartbeat.middleware.js';
+import { recordTerminalWrites } from './services/board/board-interaction-hooks.js';
+import { resolveMemberSessionName } from './utils/member-session-name.utils.js';
 import { agentOriginMiddleware, liveSessionPids } from './middleware/agent-origin.middleware.js';
 import { createCallerIdentityMiddleware } from './middleware/caller-identity.middleware.js';
 import { bodyParserExcept } from './middleware/body-parser-except.js';
@@ -1903,6 +1905,9 @@ void (async () => {
 
 		// Agent heartbeat middleware - any API call with X-Agent-Session header updates heartbeat
 		this.app.use('/api', agentHeartbeatMiddleware);
+
+		// Canvas: an agent writing to another agent's terminal is a message (sender and receiver only)
+		this.app.use('/api', recordTerminalWrites());
 
 		// The dashboard's owner session + CSRF token (GET /api/auth/session).
 		this.app.use('/api', createOwnerSessionRouter(peerProcesses));
@@ -6094,6 +6099,32 @@ void (async () => {
 			setBoardService(service);
 			service.start();
 			this.ownerBoard = service;
+			// Canvas messaging links: agent chat messages that @mention another agent
+			try {
+				const { recordChatMentions } = await import('./services/board/board-interaction-hooks.js');
+				let ids: { at: number; map: Map<string, string> } = { at: 0, map: new Map() };
+				const refresh = (): void => {
+					void this.storageService.getTeams().then((teams) => {
+						const map = new Map<string, string>();
+						for (const team of teams) for (const m of team.members ?? []) {
+							if (!m?.id) continue;
+							const session = resolveMemberSessionName(team.name, m);
+							map.set(m.id, session);
+							map.set(session, session);
+						}
+						map.set(ORCHESTRATOR_SESSION_NAME, ORCHESTRATOR_SESSION_NAME);
+						ids = { at: Date.now(), map };
+					}).catch(() => undefined);
+				};
+				refresh();
+				getChatV2Service().on('chat_message', (dto: import('./services/chat-v2/types.js').ChatMessageDTO) => {
+					if (dto.senderType !== 'agent' || !dto.mentions?.length) return;
+					if (Date.now() - ids.at > 30_000) refresh();
+					recordChatMentions(dto, (id) => ids.map.get(id));
+				});
+			} catch {
+				/* messaging links are optional */
+			}
 			await this.startCanvasTail(service);
 		} catch (error) {
 			this.logger.warn('Owner board not started (non-fatal)', { error: error instanceof Error ? error.message : String(error) });

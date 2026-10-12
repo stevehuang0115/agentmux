@@ -15,14 +15,18 @@
  * @module services/board/board-snapshot.builder
  */
 
-import { BOARD_CONSTANTS } from '../../constants.js';
+import { BOARD_CONSTANTS, ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
 import { scrubText } from './board-redact.js';
+import { getAgentInteractions, type AgentInteractionRecorder } from './board-interactions.js';
+import { capLinks, messagingLinks, structuralLinks } from './board-links.js';
 import { resultOf, summarizeResults } from './board-outcome-phrases.js';
 import type { BoardActivityTracker } from './board-activity.tracker.js';
 import type {
 	BoardAgent,
 	BoardAgentState,
 	BoardDoneItem,
+	BoardLink,
+	BoardProjectRef,
 	BoardSnapshot,
 	BoardSpend,
 	BoardStuckItem,
@@ -36,6 +40,8 @@ const C = BOARD_CONSTANTS;
 /** One agent as the team config knows it. */
 export interface BoardMember {
 	session: string;
+	/** Team-member id (what chat mentions name) */
+	id?: string;
 	name: string;
 	role: string;
 	runtime: string;
@@ -49,6 +55,12 @@ export interface BoardTeamInfo {
 	teamId: string;
 	name: string;
 	paused?: boolean;
+	/** ISO */
+	createdAt?: string;
+	/** Sessions of the team's leaders */
+	leaders?: string[];
+	/** Projects the team is assigned to */
+	projects?: BoardProjectRef[];
 	members: BoardMember[];
 }
 
@@ -58,6 +70,11 @@ export interface BoardWorkItem {
 	title: string;
 	type: string;
 	status: string;
+	/** `team_lead` / `orchestrator` / `agent` / `system` */
+	owner?: string;
+	/** Session that handed the item over, when recorded */
+	delegatedBy?: string;
+	projectId?: string;
 	target?: string;
 	requestId?: string;
 	/** Project ticket this item works on */
@@ -130,6 +147,8 @@ export interface BoardSources {
 	usage(now: number): Promise<BoardUsage>;
 	/** What each agent is on now: its running WorkItem or the ticket of its turn */
 	activeWork(): Promise<Map<string, { id?: string; title: string; since: string }>>;
+	/** Every project this machine knows (names for `projectId`s); omitted = only the teams' projects */
+	projects?(): Promise<BoardProjectRef[]>;
 	/** What the owner can do with an agent from the canvas (crewly#1247 v2); omitted = no capabilities in the rows */
 	capabilities?(session: string, info: { runtime: string; stopped: boolean; now: number }): AgentCapabilities;
 }
@@ -141,6 +160,13 @@ interface Cache {
 	tasks: Map<string, { id?: string; title: string; since: string }>;
 	/** Open decisions by asking session */
 	waits: Map<string, BoardDecision>;
+	/** Links that come from the last build (reporting, delegation, shared tickets) */
+	structural: BoardLink[];
+	projectNames: Map<string, string>;
+	/** Project each agent is on now */
+	currentProject: Map<string, string>;
+	/** Latest WorkItem activity per agent (ms), the fallback for `lastActiveAt` */
+	workSeen: Map<string, number>;
 }
 
 /** Local midnight of `now`. */
@@ -165,7 +191,9 @@ function age(ms: number): string {
  * Builds board snapshots and per-agent rows.
  */
 export class BoardSnapshotBuilder {
-	private cache: Cache = { roster: new Map(), usage: null, tasks: new Map(), waits: new Map() };
+	private cache: Cache = { roster: new Map(), usage: null, tasks: new Map(), waits: new Map(), structural: [], projectNames: new Map(), currentProject: new Map(), workSeen: new Map() };
+	/** Last time each agent was seen working (ms) */
+	private readonly lastBusy = new Map<string, number>();
 
 	/**
 	 * @param sources - Everything the board reads
@@ -176,6 +204,7 @@ export class BoardSnapshotBuilder {
 		private readonly sources: BoardSources,
 		private readonly tracker: BoardActivityTracker,
 		private readonly clock: () => number = Date.now,
+		private readonly interactions: AgentInteractionRecorder = getAgentInteractions(),
 	) {}
 
 	/** Whether a full build has filled the cache. */
@@ -209,7 +238,7 @@ export class BoardSnapshotBuilder {
 	async build(): Promise<BoardSnapshot> {
 		const now = this.clock();
 		const dayStart = startOfLocalDay(now);
-		const [identity, version, teams, workItems, tickets, decisions, holds, usage, active] = await Promise.all([
+		const [identity, version, teams, workItems, tickets, decisions, holds, usage, active, allProjects] = await Promise.all([
 			this.sources.identity(),
 			this.safe(() => this.sources.version(), 'unknown'),
 			this.safe(() => this.sources.teams(), [] as BoardTeamInfo[]),
@@ -219,6 +248,7 @@ export class BoardSnapshotBuilder {
 			this.safe(() => this.sources.holds(), [] as BoardWaitingItem[]),
 			this.safe(() => this.sources.usage(now), null as BoardUsage | null),
 			this.safe(() => this.sources.activeWork(), new Map<string, { id?: string; title: string; since: string }>()),
+			this.safe(async () => (await this.sources.projects?.()) ?? [], [] as BoardProjectRef[]),
 		]);
 
 		const roster = new Map<string, { team: BoardTeamInfo; member: BoardMember }>();
@@ -227,7 +257,22 @@ export class BoardSnapshotBuilder {
 		for (const d of decisions) if (d.asker && !waits.has(d.asker)) waits.set(d.asker, d);
 		const tasks = new Map<string, { id?: string; title: string; since: string }>(usage?.taskOf ?? []);
 		for (const [session, task] of active) tasks.set(session, task);
-		this.cache = { roster, usage, tasks, waits };
+		const projectNames = new Map<string, string>();
+		for (const p of [...allProjects, ...teams.flatMap((t) => t.projects ?? [])]) projectNames.set(p.id, p.name);
+		const currentProject = this.currentProjects(workItems, tasks);
+		const workSeen = new Map<string, number>();
+		for (const w of workItems) {
+			if (!w.target) continue;
+			const at = Math.max(msOf(w.completedAt) || 0, msOf(w.startedAt) || 0, msOf(w.statusChangedAt) || 0);
+			if (at > (workSeen.get(w.target) ?? 0)) workSeen.set(w.target, at);
+		}
+		const stopped = new Set<string>();
+		for (const t of teams) for (const m of t.members) if (m.agentStatus === 'inactive' || m.agentStatus === 'suspended') stopped.add(m.session);
+		const structural = this.safeSync(
+			() => structuralLinks({ now, orchestrator: ORCHESTRATOR_SESSION_NAME, teams, workItems, tickets, tasks, stopped }),
+			[] as BoardLink[],
+		);
+		this.cache = { roster, usage, tasks, waits, structural, projectNames, currentProject, workSeen };
 
 		const teamName = (id: string | undefined, agent?: string): string | undefined => {
 			const byId = id ? teams.find((t) => t.teamId === id)?.name : undefined;
@@ -251,9 +296,48 @@ export class BoardSnapshotBuilder {
 				teamId: t.teamId,
 				name: scrubText(t.name, 60) || t.teamId,
 				...(t.paused ? { paused: true } : {}),
-				agents: t.members.map((m) => this.row(m, now)),
+				...(t.projects && t.projects.length > 0 ? { projects: t.projects.map((p) => this.projectRef(p)) } : {}),
+				agents: t.members.map((m) => this.row(m, now, t)),
 			})),
+			links: this.links(now),
 		};
+	}
+
+	/**
+	 * The current links: those of the last build plus the messages recorded
+	 * since (in memory, no reads).
+	 *
+	 * @param now - Clock
+	 * @returns Links, capped
+	 */
+	links(now: number = this.clock()): BoardLink[] {
+		const roster = this.cache.roster;
+		const isKnown = (s: string): boolean => roster.has(s) || s === ORCHESTRATOR_SESSION_NAME || s.includes('@');
+		const messaging = messagingLinks(this.interactions.pairsNow(now), now, isKnown);
+		return capLinks([...this.cache.structural, ...messaging], C.LINKS_MAX);
+	}
+
+	private projectRef(p: BoardProjectRef): BoardProjectRef {
+		return { id: p.id, name: scrubText(p.name, 60) || p.id };
+	}
+
+	/** The project each agent is on: its newest running WorkItem, else the WorkItem it claimed. */
+	private currentProjects(workItems: BoardWorkItem[], tasks: Map<string, { id?: string; title: string; since: string }>): Map<string, string> {
+		const out = new Map<string, string>();
+		const newest = new Map<string, number>();
+		for (const w of workItems) {
+			if (w.status !== 'running' || !w.target || !w.projectId) continue;
+			const at = msOf(w.startedAt) || msOf(w.createdAt) || 0;
+			if (at >= (newest.get(w.target) ?? -1)) {
+				newest.set(w.target, at);
+				out.set(w.target, w.projectId);
+			}
+		}
+		for (const [session, task] of tasks) {
+			const w = task.id ? workItems.find((x) => x.id === task.id) : undefined;
+			if (w?.projectId) out.set(session, w.projectId);
+		}
+		return out;
 	}
 
 	/**
@@ -269,7 +353,7 @@ export class BoardSnapshotBuilder {
 		for (const session of new Set(sessions)) {
 			const entry = this.cache.roster.get(session);
 			if (!entry) continue;
-			out.push({ ...this.row(entry.member, now), teamId: entry.team.teamId });
+			out.push({ ...this.row(entry.member, now, entry.team), teamId: entry.team.teamId });
 		}
 		return out;
 	}
@@ -278,7 +362,7 @@ export class BoardSnapshotBuilder {
 	// Agent rows
 	// -------------------------------------------------------------------------
 
-	private row(m: BoardMember, now: number): BoardAgent {
+	private row(m: BoardMember, now: number, team?: BoardTeamInfo): BoardAgent {
 		const turn = this.safeSync(() => this.sources.turnState(m.session, now), 'unknown' as const);
 		const working = turn === 'working' || (turn === 'unknown' && m.workingStatus === 'in_progress' && m.agentStatus !== 'inactive');
 		const decision = this.cache.waits.get(m.session);
@@ -309,6 +393,18 @@ export class BoardSnapshotBuilder {
 		const task = this.cache.tasks.get(m.session);
 		const usage = this.cache.usage?.perAgent.get(m.session);
 		const capabilities = this.safeSync(() => this.sources.capabilities?.(m.session, { runtime: m.runtime, stopped, now }) ?? null, null);
+		if (working && !stopped) this.lastBusy.set(m.session, now);
+		const lastActive = Math.max(
+			this.lastBusy.get(m.session) ?? 0,
+			msOf(live.lastAction?.at) || 0,
+			this.cache.workSeen.get(m.session) ?? 0,
+		);
+		const projectId = this.cache.currentProject.get(m.session);
+		const projects: BoardProjectRef[] | undefined = projectId
+			? [this.projectRef({ id: projectId, name: this.cache.projectNames.get(projectId) ?? projectId })]
+			: team?.projects && team.projects.length > 0
+				? team.projects.map((p) => this.projectRef(p))
+				: undefined;
 		const row: BoardAgent = {
 			session: m.session,
 			name: scrubText(m.name, 60) || m.session,
@@ -321,6 +417,9 @@ export class BoardSnapshotBuilder {
 			...(live.lastAction ? { lastAction: live.lastAction } : {}),
 			...(usage ? { todayUsd: round4(usage.todayUsd), todayTokens: Math.round(usage.todayTokens) } : {}),
 			...(capabilities ? { capabilities } : {}),
+			...(projects ? { projects, ...(projectId ? { projectKnown: true } : {}) } : {}),
+			// Minute granularity: a working agent must not make its row differ on every delta
+			...(lastActive > 0 ? { lastActiveAt: iso(Math.floor(lastActive / 60_000) * 60_000) } : {}),
 		};
 		return row;
 	}
