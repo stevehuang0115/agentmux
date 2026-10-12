@@ -15,6 +15,7 @@ import type { TeamMemberRole } from '../../types/index.js';
 import { getTeamLeadIds } from '../../utils/team.utils.js';
 import { ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
 import { AppWakeService } from './app-wake.service.js';
+import { FileRequestWatchService } from './file-request-watch.service.js';
 import { AppThumbnailService } from './app-thumbnail.service.js';
 import { withQueueMeta } from '../messaging/queue-priority.js';
 import { AppRosterService, isRosterAgent } from './app-roster.service.js';
@@ -356,6 +357,7 @@ export async function attachAppCommentsSlackInterceptor(): Promise<() => void> {
   return getSlackOrchestratorBridge().addInboundInterceptor('an app comment thread reply', (m) => svc.interceptInbound(m));
 }
 let wake: AppWakeService | null = null;
+let fileRequestWatch: FileRequestWatchService | null = null;
 
 /** Default teams source: the storage service, loaded lazily. */
 const defaultTeams: AppsTeamsSource = async () => {
@@ -641,6 +643,16 @@ export function startAppWake(input: StartAppWakeInput): AppWakeService {
     roomFallback: roomFallbackFrom(input.getTeams),
   });
   wake.start();
+  // Files the owner uploads for an agent's request-file link (same delivery callbacks).
+  fileRequestWatch = new FileRequestWatchService({
+    client,
+    sendToAgent: input.sendToAgent,
+    sendToOrchestrator: input.sendToOrchestrator,
+    isLocalAgent: async (session) => isRosterAgent(await input.getTeams(), session),
+    asOwnerMessage: (session, text, ref, deliver) => withQueueMeta(session, text, { owner: true, ref }, deliver),
+    receiveCommand: (id) => `bash ${input.skillsPath}/core/receive-file/execute.sh --id ${id}`,
+  });
+  fileRequestWatch.start();
   return wake;
 }
 
@@ -648,5 +660,7 @@ export function startAppWake(input: StartAppWakeInput): AppWakeService {
 export function stopAppWake(): void {
   wake?.stop();
   wake = null;
+  fileRequestWatch?.stop();
+  fileRequestWatch = null;
   agentNotifier = null;
 }

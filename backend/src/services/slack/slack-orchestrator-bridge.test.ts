@@ -29,6 +29,9 @@ import { SLACK_FILE_FETCH_CONSTANTS } from '../../constants.js';
 
 // The direct-delivery fallback delivers in process (#1024).
 const mockDeliverForcedMessage = jest.fn().mockResolvedValue({ status: 'delivered', inProcess: false });
+jest.mock('../worktree/low-disk-guard.js', () => ({
+  readFreeBytes: jest.fn().mockResolvedValue(null),
+}));
 jest.mock('../messaging/forced-delivery.js', () => ({
   deliverForcedMessage: (...args: unknown[]) => mockDeliverForcedMessage(...args),
 }));
@@ -871,15 +874,11 @@ describe('SlackOrchestratorBridge', () => {
 
       // Should have no downloaded images
       expect(message.images).toBeUndefined();
-      // Should have sent a warning back to Slack
-      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-      expect(sendMessageSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channelId: 'C1',
-          threadTs: '1.000',
-          text: expect.stringContaining('could not be processed'),
-        })
-      );
+      // Told to the agent only: nothing is posted into the owner's thread
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      expect(message.fileFailures).toEqual([
+        expect.objectContaining({ name: 'huge.png', reason: expect.stringContaining('File too large:') }),
+      ]);
     });
 
     it('should not send warning for non-size/type failures', async () => {
@@ -931,7 +930,7 @@ describe('SlackOrchestratorBridge', () => {
       expect(message.attachments).toBeUndefined();
     });
 
-    it('should reject files exceeding max file size', async () => {
+    it('rejects files over the limit without posting into the thread, and tells the agent', async () => {
       const bridge = new SlackOrchestratorBridge();
       const slackService = (bridge as any).slackService;
       jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
@@ -946,19 +945,79 @@ describe('SlackOrchestratorBridge', () => {
         channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
         hasFiles: true,
       };
-      // 25MB exceeds the 20MB limit
-      const nonImageFiles = [{ id: 'F001', name: 'huge.zip', mimetype: 'application/zip', filetype: 'zip',
-        size: 25 * 1024 * 1024, url_private: 'x', url_private_download: 'x', permalink: 'x' }];
+      // Over the 1 GB default limit
+      const huge = 2 * 1024 * 1024 * 1024;
+      const nonImageFiles = [{ id: 'F001', name: 'huge.mov', mimetype: 'video/quicktime', filetype: 'mov',
+        size: huge, url_private: 'x', url_private_download: 'x', permalink: 'x' }];
 
       await downloadMessageFiles(message, nonImageFiles);
 
       expect(message.attachments).toBeUndefined();
-      // Should send a rejection warning
-      expect(sendMessageSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          text: expect.stringContaining('could not be downloaded'),
-        })
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      expect(message.fileFailures).toEqual([
+        expect.objectContaining({ name: 'huge.mov', reason: expect.stringContaining('File too large:') }),
+      ]);
+      message.files = nonImageFiles as any;
+      const text: string = (bridge as any).enrichTextWithFiles(message);
+      expect(text).toContain('huge.mov could not be downloaded');
+      expect(text).toContain('request-file');
+      // Named once, not again in the generic "could not be read" note
+      expect(text).not.toContain('could not be read');
+    });
+
+    it('accepts a 23 MB video (the old 20 MB limit no longer applies)', async () => {
+      const home = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), 'crewly-dl-test-'));
+      const homeSpy = jest.spyOn(nodeOs, "homedir").mockReturnValue(home);
+      const bridge = new SlackOrchestratorBridge();
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+      jest.spyOn(slackService, 'getFileInfo').mockResolvedValue({ url_private: 'x', url_private_download: 'x' });
+      const sendMessageSpy = jest.spyOn(slackService, 'sendMessage').mockResolvedValue('ok');
+      const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue(
+        new Response(new Uint8Array([1, 2, 3]), { status: 200 }),
       );
+      const downloadMessageFiles = (bridge as any).downloadMessageFiles.bind(bridge);
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: '', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        hasFiles: true,
+      };
+      const files = [{ id: 'F_MOV', name: 'IMG_5057.MOV', mimetype: 'video/quicktime', filetype: 'mov',
+        size: 23273672, url_private: 'https://x/a', url_private_download: 'https://x/a', permalink: 'x' }];
+      await downloadMessageFiles(message, files);
+      expect(message.fileFailures).toBeUndefined();
+      expect(message.attachments?.[0].name).toBe('IMG_5057.MOV');
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      fetchSpy.mockRestore();
+      homeSpy.mockRestore();
+      await nodeFs.rm(home, { recursive: true, force: true });
+    });
+
+    it('refuses a download that would leave the disk below the low-disk threshold', async () => {
+      const { readFreeBytes } = jest.requireMock('../worktree/low-disk-guard.js') as { readFreeBytes: jest.Mock };
+      readFreeBytes.mockResolvedValueOnce(15.5 * 1024 ** 3);
+      const home = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), 'crewly-dl-test-'));
+      const homeSpy = jest.spyOn(nodeOs, "homedir").mockReturnValue(home);
+      const bridge = new SlackOrchestratorBridge();
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+      jest.spyOn(slackService, 'getFileInfo').mockResolvedValue({ url_private: 'x', url_private_download: 'x' });
+      const sendMessageSpy = jest.spyOn(slackService, 'sendMessage').mockResolvedValue('ok');
+      const fetchSpy = jest.spyOn(global, 'fetch');
+      const downloadMessageFiles = (bridge as any).downloadMessageFiles.bind(bridge);
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: '', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        hasFiles: true,
+      };
+      await downloadMessageFiles(message, [{ id: 'F2', name: 'big.mov', mimetype: 'video/quicktime', filetype: 'mov',
+        size: 900 * 1024 ** 2, url_private: 'x', url_private_download: 'x', permalink: 'x' }]);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(message.fileFailures?.[0].reason).toContain('Not enough disk space:');
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      fetchSpy.mockRestore();
+      homeSpy.mockRestore();
+      await nodeFs.rm(home, { recursive: true, force: true });
     });
 
     it('should abort all downloads when files:read scope is missing', async () => {

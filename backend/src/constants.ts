@@ -4187,8 +4187,15 @@ export const SYSTEM_RESOURCE_ALERT_CONSTANTS = {
  * Shared Slack API limits used by both image and file upload services.
  */
 export const SLACK_API_LIMITS = {
-	/** Maximum allowed file size (20 MB — Slack limit) */
-	MAX_FILE_SIZE: 20 * 1024 * 1024,
+	/**
+	 * Maximum file size for Slack transfers in either direction (default 1 GB,
+	 * which is what Slack itself allows). Files are streamed to/from disk, never
+	 * buffered. Override with CREWLY_SLACK_MAX_FILE_BYTES.
+	 */
+	MAX_FILE_SIZE: ((): number => {
+		const fromEnv = Number(process.env.CREWLY_SLACK_MAX_FILE_BYTES);
+		return Number.isFinite(fromEnv) && fromEnv > 0 ? Math.floor(fromEnv) : 1024 * 1024 * 1024;
+	})(),
 	/** Maximum number of retry attempts for Slack API 429 responses */
 	UPLOAD_MAX_RETRIES: 3,
 	/** Default backoff delay (ms) when no Retry-After header is present */
@@ -4203,8 +4210,8 @@ export const SLACK_API_LIMITS = {
 export const SLACK_IMAGE_CONSTANTS = {
 	/** Temp directory for downloaded images (relative to ~/.crewly/) */
 	TEMP_DIR: 'tmp/slack-images',
-	/** Maximum allowed file size for image downloads (20 MB) */
-	MAX_FILE_SIZE: SLACK_API_LIMITS.MAX_FILE_SIZE,
+	/** Maximum allowed file size for image downloads (20 MB — images go to an LLM as vision input) */
+	MAX_FILE_SIZE: 20 * 1024 * 1024,
 	/** Supported image MIME types for download (SVG excluded — not accepted by LLM vision APIs) */
 	SUPPORTED_MIMES: ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const,
 	/**
@@ -4248,7 +4255,7 @@ export const SLACK_IMAGE_CONSTANTS = {
 export const SLACK_FILE_UPLOAD_CONSTANTS = {
 	/** Temp directory for generated PDFs (relative to ~/.crewly/) */
 	TEMP_DIR: 'tmp/slack-pdfs',
-	/** Maximum allowed file size for uploads (20 MB — Slack limit) */
+	/** Maximum allowed file size for uploads (streamed; see SLACK_API_LIMITS.MAX_FILE_SIZE) */
 	MAX_FILE_SIZE: SLACK_API_LIMITS.MAX_FILE_SIZE,
 	/** File extensions accepted for upload */
 	SUPPORTED_EXTENSIONS: [
@@ -4370,7 +4377,7 @@ export const SLACK_FILE_FETCH_CONSTANTS = {
 export const SLACK_FILE_DOWNLOAD_CONSTANTS = {
 	/** Temp directory for downloaded files (relative to ~/.crewly/) */
 	TEMP_DIR: 'tmp/slack-files',
-	/** Maximum allowed file size for downloads (20 MB — Slack limit) */
+	/** Maximum allowed file size for downloads (streamed to disk; see SLACK_API_LIMITS.MAX_FILE_SIZE) */
 	MAX_FILE_SIZE: SLACK_API_LIMITS.MAX_FILE_SIZE,
 	/** Maximum concurrent file downloads per message */
 	MAX_CONCURRENT_DOWNLOADS: 3,
@@ -4937,6 +4944,11 @@ export const CREWLY_APPS_CONSTANTS = {
 	REQUEST_TIMEOUT_MS: 120_000,
 	/** Default entry file of a bundle */
 	DEFAULT_ENTRY: 'index.html',
+	/** Owner file uploads (request-file): how often the inbox is read, and the error backoff ceiling */
+	FILE_REQUEST_POLL_MS: 15_000,
+	FILE_REQUEST_MAX_BACKOFF_MS: 5 * 60_000,
+	/** One inbox request may take at most this long */
+	FILE_REQUEST_TIMEOUT_MS: 20_000,
 	/** Change poller cadence and per-app error backoff ceiling */
 	POLL_INTERVAL_MS: 30_000,
 	POLL_MAX_BACKOFF_MS: 5 * 60_000,

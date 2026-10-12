@@ -39,6 +39,8 @@
  * - POST   /handoffs                              — `{ fileName, sizeBytes, contentType?, note?, to? }`: reserve a large-file handoff; answers a presigned upload URL
  * - POST   /handoffs/:handoffId/complete          — upload finished (Cloud checks the size)
  * - GET    /handoffs/:handoffId                   — metadata + presigned download URL once ready (`GET /handoffs` lists)
+ * - POST   /upload-requests                      — `{ purpose, agentName?, maxFiles? }`: ask the owner for a (large) file; answers the upload link
+ * - GET    /upload-requests/:requestId            — status, limits and files (`DELETE` cancels the link)
  * - POST   /handoffs/:handoffId/ack               — received: Cloud deletes the file (`DELETE /handoffs/:handoffId` withdraws)
  * - GET    /templates                              — `?q&tag&category&limit`: search Marketplace app templates
  * - GET    /templates/mine                         — this account's own templates
@@ -105,6 +107,9 @@ import {
   listHandoffs,
   ackHandoff,
   cancelHandoff,
+  createUploadRequest,
+  getUploadRequest,
+  cancelUploadRequest,
 } from './apps.controller.js';
 
 const C = CREWLY_APPS_CONSTANTS;
@@ -212,6 +217,10 @@ export function createAppsRouter(): Router {
   router.post('/handoffs/:handoffId/complete', completeHandoff);
   router.post('/handoffs/:handoffId/ack', ackHandoff);
   router.delete('/handoffs/:handoffId', cancelHandoff);
+  // Owner upload link (request-file): registered before the /:appId routes too.
+  router.post('/upload-requests', createUploadRequest);
+  router.get('/upload-requests/:requestId', getUploadRequest);
+  router.delete('/upload-requests/:requestId', cancelUploadRequest);
   router.post('/thumbnails/refresh-all', refreshAllThumbnails);
   router.post('/:appId/thumbnail/refresh', refreshThumbnail);
   router.post('/:appId/transfer', transferApp);
