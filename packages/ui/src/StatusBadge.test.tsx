@@ -15,6 +15,6 @@ describe('StatusBadge', () => {
   it('applies correct styling classes', () => {
     render(<StatusBadge status="stopped" />);
     const badge = screen.getByText('Stopped');
-    expect(badge).toHaveClass('bg-red-500/10', 'text-red-400');
+    expect(badge).toHaveClass('bg-danger-soft', 'text-danger');
   });
 });

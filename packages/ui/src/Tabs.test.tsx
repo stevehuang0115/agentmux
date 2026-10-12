@@ -65,13 +65,13 @@ describe('Tabs', () => {
       const tab1 = screen.getByText('Tab 1');
       const tab2 = screen.getByText('Tab 2');
 
-      expect(tab1).toHaveClass('text-primary');
-      expect(tab2).toHaveClass('text-text-secondary-dark');
+      expect(tab1).toHaveClass('text-primary-text');
+      expect(tab2).toHaveClass('text-text-2');
 
       fireEvent.click(tab2);
 
-      expect(tab1).toHaveClass('text-text-secondary-dark');
-      expect(tab2).toHaveClass('text-primary');
+      expect(tab1).toHaveClass('text-text-2');
+      expect(tab2).toHaveClass('text-primary-text');
     });
   });
 

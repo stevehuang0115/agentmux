@@ -19,8 +19,8 @@ describe('Input', () => {
     it('should render with default classes', () => {
       const { container } = render(<Input />);
       const input = container.querySelector('input');
-      expect(input).toHaveClass('bg-background-dark');
-      expect(input).toHaveClass('border-border-dark');
+      expect(input).toHaveClass('bg-surface');
+      expect(input).toHaveClass('border-border');
       expect(input).toHaveClass('rounded-2xl');
     });
   });
@@ -66,7 +66,7 @@ describe('Input', () => {
     it('should apply error styling to input', () => {
       const { container } = render(<Input error="Error" />);
       const input = container.querySelector('input');
-      expect(input).toHaveClass('border-red-500');
+      expect(input).toHaveClass('border-danger');
     });
 
     it('should set aria-invalid when error is present', () => {
@@ -175,7 +175,7 @@ describe('Input', () => {
       const { container } = render(<Input className="custom-class" />);
       const input = container.querySelector('input');
       expect(input).toHaveClass('custom-class');
-      expect(input).toHaveClass('bg-background-dark');
+      expect(input).toHaveClass('bg-surface');
     });
   });
 });

@@ -22,12 +22,12 @@ export interface BadgeProps extends Omit<React.HTMLAttributes<HTMLSpanElement>, 
 }
 
 const variantClasses: Record<BadgeVariant, string> = {
-  default: 'bg-background-dark border border-border-dark text-text-secondary-dark',
-  primary: 'bg-primary/10 text-primary border border-primary/20',
-  success: 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20',
-  warning: 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20',
-  error: 'bg-red-500/10 text-red-400 border border-red-500/20',
-  info: 'bg-blue-500/10 text-blue-400 border border-blue-500/20',
+  default: 'bg-surface-2 border border-border-soft text-text-2',
+  primary: 'bg-primary-soft text-primary-text border border-primary/25',
+  success: 'bg-success-soft text-success border border-success/25',
+  warning: 'bg-attention-soft text-attention border border-attention/25',
+  error: 'bg-danger-soft text-danger border border-danger/25',
+  info: 'bg-primary-soft text-primary-text border border-primary/25',
 };
 
 const sizeClasses: Record<BadgeSize, string> = {

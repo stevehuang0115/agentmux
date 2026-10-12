@@ -134,3 +134,25 @@ export type { FilterButtonProps, FilterGroup, FilterOption, FilterValue } from '
 
 export { SystemStatusBar, sortStatusItems } from './SystemStatusBar';
 export type { SystemStatusBarProps, SystemStatusItem, SystemStatusTone } from './SystemStatusBar';
+
+export {
+  THEME_STORAGE_KEY,
+  THEME_INIT_SCRIPT,
+  THEME_COLORS,
+  isThemeMode,
+  readThemeMode,
+  writeThemeMode,
+  systemPrefersDark,
+  resolveTheme,
+  applyTheme,
+  clearTheme,
+  watchSystemTheme,
+  useTheme,
+} from './theme';
+export type { ThemeMode, ResolvedTheme, UseTheme } from './theme';
+
+export { StepKindChip, STEP_KINDS } from './StepKindChip';
+export type { StepKind, StepKindChipProps } from './StepKindChip';
+
+export { ThemeSelect } from './ThemeSelect';
+export type { ThemeSelectProps } from './ThemeSelect';

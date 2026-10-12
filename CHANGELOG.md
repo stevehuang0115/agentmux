@@ -6,6 +6,14 @@ User-visible changes. Newest first.
 
 ### Added
 
+- **A new look: light and dark themes (design language v2, "Glass").** The dashboard now has a light
+  theme (the default look: a soft sunset sky of blue, violet, rose and peach behind frosted white
+  glass) and a dark theme (the same sky at night: deep indigo, easy on the eyes, never pure black).
+  It follows your device by default; **Settings > General > Appearance** lets you pick System, Light
+  or Dark, and remembers it in this browser. Cards, the sidebar, the phone tab bar, menus, dialogs
+  and toasts are glass; step kinds (read, edit, run, find, browse, delegate, think) get their own
+  colour and icon. Nothing moved or was removed: every page and action is where it was. See
+  `specs/2026-10-12-design-language-v2-glass.md`.
 - **Owner board, machine side (crewly#1247).** Crewly now builds a board of what your teams are doing and what got done, and sends it to Crewly Cloud every minute and within about 2 seconds of any change (nothing is sent when you are not signed in to Cloud; `CREWLY_BOARD_PUSH=0` turns it off). It holds: done today by result ("2 posts published"), what waits on you, what is stuck and on whom, spend, and one row per agent with its state, task and what it is doing right now (coding in a repo, browsing a site, running a command, writing, messaging, waiting on you). Only paths relative to the project, host and path of pages, command names (`git push`, never arguments) and channel names are sent; tokens, emails, phone numbers and query strings are removed. The same snapshot is at `GET /api/board`. The Claude Code status hook now also passes the tool's file path, command and URL (PreToolUse only, to the local backend, never stored raw).
 - **Scheduled commands can message agents.** A command the backend starts from `scheduled-commands.json` now gets an in-memory credential (`CREWLY_SCHEDULER_CREDENTIAL`, plus `CREWLY_SCHEDULER_NAME`) that `send-message` sends on its own. It lets the command deliver a note to an agent and nothing else: the note arrives as `[scheduler:<name>] …`, never as the owner or an agent, and every owner-only route still answers 401. This is what lets the crewly-web release line reach Sam and Ella again (it had failed with `owner_auth_required` since the runner took the job over). See `docs/guides/scheduled-commands.md`.
 - **Scheduled commands.** The backend can run a host command on an interval from `~/.crewly/scheduled-commands.json` (no file = off). Runs are detached, so a Crewly restart does not cut one off, and a run never starts while the previous one is alive. Entries can only be added by editing the file, never through the API. See `docs/guides/scheduled-commands.md`.

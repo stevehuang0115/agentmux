@@ -30,8 +30,8 @@ describe('@crewly/ui API additions', () => {
 
   it('has working/warning dots and custom test ids', () => {
     render(<><StatusDot status="working" data-testid="w" /><StatusDot status="warning" data-testid="o" /></>);
-    expect(screen.getByTestId('w')).toHaveClass('bg-blue-400');
-    expect(screen.getByTestId('o')).toHaveClass('bg-orange-400');
+    expect(screen.getByTestId('w')).toHaveClass('bg-primary');
+    expect(screen.getByTestId('o')).toHaveClass('bg-attention');
   });
 
   it('passes rest props through StatusBadge, Alert and EmptyState', () => {
@@ -40,7 +40,7 @@ describe('@crewly/ui API additions', () => {
       <Alert data-testid="al" size="sm" icon={Info}>hi</Alert>
       <EmptyState data-testid="es" title="Nothing" />
     </>);
-    expect(screen.getByTestId('sb')).toHaveClass('text-text-secondary-dark');
+    expect(screen.getByTestId('sb')).toHaveClass('text-text-2');
     expect(screen.getByTestId('al')).toHaveClass('px-3');
     expect(screen.getByTestId('es')).toHaveTextContent('Nothing');
   });
@@ -52,7 +52,7 @@ describe('@crewly/ui API additions', () => {
 
   it('has link and xs buttons', () => {
     render(<><Button variant="link">Clear</Button><Button size="xs">Tiny</Button></>);
-    expect(screen.getByRole('button', { name: 'Clear' })).toHaveClass('text-primary');
+    expect(screen.getByRole('button', { name: 'Clear' })).toHaveClass('text-primary-text');
     expect(screen.getByRole('button', { name: 'Tiny' })).toHaveClass('h-7');
   });
 

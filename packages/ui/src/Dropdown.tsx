@@ -186,7 +186,7 @@ export const Dropdown: React.FC<DropdownProps> = ({
           'transition-colors cursor-pointer',
           'focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50',
           error
-            ? 'border-red-500 focus:border-red-500 focus:ring-red-500/50'
+            ? 'border-danger focus:border-danger focus:ring-danger/50'
             : 'border-border-dark hover:border-primary/30',
           (disabled || loading) && 'opacity-50 cursor-not-allowed',
           !selectedOption && 'text-text-secondary-dark',
@@ -197,7 +197,7 @@ export const Dropdown: React.FC<DropdownProps> = ({
         <ChevronDown className={[
           'w-4 h-4 flex-shrink-0 transition-transform',
           open && 'rotate-180',
-          error ? 'text-red-500' : 'text-text-secondary-dark',
+          error ? 'text-danger' : 'text-text-secondary-dark',
         ].filter(Boolean).join(' ')} />
       </button>
 
@@ -207,7 +207,7 @@ export const Dropdown: React.FC<DropdownProps> = ({
           ref={menuRef}
           role="listbox"
           aria-activedescendant={focusedIndex >= 0 ? `dropdown-opt-${focusedIndex}` : undefined}
-          className="absolute z-50 mt-1 w-full min-w-[160px] bg-surface-dark border border-border-dark rounded-2xl shadow-xl overflow-hidden"
+          className="absolute z-50 mt-1 w-full min-w-[160px] cw-glass-strong rounded-2xl shadow-xl overflow-hidden"
           style={popoverMinWidth ? { minWidth: popoverMinWidth } : undefined}
         >
           <div className="max-h-[240px] overflow-y-auto py-1">

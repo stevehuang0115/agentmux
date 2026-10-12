@@ -62,9 +62,9 @@ export const Drawer: React.FC<DrawerProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex" role="dialog" aria-modal="true" data-testid={testId}>
-      <div className="absolute inset-0 bg-background-dark/80 backdrop-blur-sm" onClick={onClose} data-testid="drawer-backdrop" />
+      <div className="absolute inset-0 bg-bg/70 backdrop-blur-sm" onClick={onClose} data-testid="drawer-backdrop" />
       <div
-        className={`relative flex h-full w-full ${SIZE_CLASSES[size]} flex-col bg-surface-dark border-border-dark shadow-xl ${
+        className={`relative flex h-full w-full ${SIZE_CLASSES[size]} flex-col cw-glass-strong shadow-xl ${
           side === 'right' ? 'ml-auto border-l' : 'mr-auto border-r'
         } ${className}`}
       >

@@ -21,6 +21,7 @@ import React from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { PageHeader, UnderlineTabs } from '@crewly/ui';
 import { GeneralTab } from '../components/Settings/GeneralTab';
+import { AppearanceSection } from '../components/Settings/AppearanceSection';
 import { RolesTab } from '../components/Settings/RolesTab';
 import { ApiKeysTab } from '../components/Settings/ApiKeysTab';
 import { CredentialsTab } from '../components/Settings/CredentialsTab';
@@ -59,7 +60,12 @@ export const SETTINGS_TAB_LABELS: Record<SettingsTabId, string> = {
 function renderTabContent(tab: SettingsTabId): React.ReactNode {
   switch (tab) {
     case 'general':
-      return <GeneralTab />;
+      return (
+        <div className="max-w-3xl space-y-8">
+          <AppearanceSection />
+          <GeneralTab />
+        </div>
+      );
     case 'runtimes':
       return <RuntimesTab />;
     case 'roles':

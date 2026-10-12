@@ -31,31 +31,31 @@ describe('Alert', () => {
     it('should apply info variant by default', () => {
       render(<Alert>Info message</Alert>);
       const alert = screen.getByRole('alert');
-      expect(alert).toHaveClass('text-blue-400');
+      expect(alert).toHaveClass('text-primary-text');
     });
 
     it('should apply info variant classes', () => {
       render(<Alert variant="info">Info message</Alert>);
       const alert = screen.getByRole('alert');
-      expect(alert).toHaveClass('text-blue-400');
+      expect(alert).toHaveClass('text-primary-text');
     });
 
     it('should apply success variant classes', () => {
       render(<Alert variant="success">Success message</Alert>);
       const alert = screen.getByRole('alert');
-      expect(alert).toHaveClass('text-emerald-400');
+      expect(alert).toHaveClass('text-success');
     });
 
     it('should apply warning variant classes', () => {
       render(<Alert variant="warning">Warning message</Alert>);
       const alert = screen.getByRole('alert');
-      expect(alert).toHaveClass('text-yellow-400');
+      expect(alert).toHaveClass('text-attention');
     });
 
     it('should apply error variant classes', () => {
       render(<Alert variant="error">Error message</Alert>);
       const alert = screen.getByRole('alert');
-      expect(alert).toHaveClass('text-red-400');
+      expect(alert).toHaveClass('text-danger');
     });
   });
 

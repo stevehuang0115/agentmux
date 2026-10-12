@@ -7,11 +7,19 @@ import '@fontsource/nunito/700.css';
 import '@fontsource/nunito/800.css';
 import App from './App.tsx';
 import './index.css';
+import { applyTheme, readThemeMode, watchSystemTheme } from '@crewly/ui';
 import { bootstrapApiToken } from './services/api-token.service';
 import { bootstrapOwnerSession } from './services/owner-session.service';
 
 // Consume a one-time `?token=` (from `crewly token --url`), re-sync the cookie
 // and install the request interceptors BEFORE any component issues a request.
+// Theme first (the inline script in index.html already did the first paint):
+// keep it following the system while the viewer's choice is "System".
+applyTheme(readThemeMode());
+watchSystemTheme(() => {
+  if (readThemeMode() === 'system') applyTheme('system');
+});
+
 bootstrapApiToken();
 // The owner session (#999): every API write carries the CSRF token; the
 // session cookie itself was set by the backend when it served this page.
