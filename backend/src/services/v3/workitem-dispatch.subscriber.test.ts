@@ -8,6 +8,7 @@
  */
 
 import axios from 'axios';
+import { SubAgentMessageQueue } from '../messaging/sub-agent-message-queue.service.js';
 import { WorkItemDispatchSubscriber, isSpendCappedReply, isScheduledWorkItem } from './workitem-dispatch.subscriber.js';
 import { setSlackAutoWorkingService, type SlackAutoWorkingService } from '../slack/slack-auto-working.service.js';
 import { setSpendCapGate, type SpendStop } from '../spend/spend-cap.gate.js';
@@ -349,6 +350,69 @@ describe('WorkItemDispatchSubscriber', () => {
       expect(isSpendCappedReply({ queued: true })).toBe(false);
       expect(isSpendCappedReply(undefined)).toBe(false);
       expect(isSpendCappedReply('spendCapped')).toBe(false);
+    });
+  });
+
+  describe('redispatch: why nothing was written (CREW-526)', () => {
+    const queueWith = (queuedAt: number, id: string) => {
+      const queue = SubAgentMessageQueue.getInstance();
+      const data = `[CREWLY-DISPATCH] WorkItem ${id} queued for you`;
+      jest.spyOn(queue, 'peek').mockReturnValue([{ data, queuedAt, sessionName: 'sora' }]);
+      const remove = jest.spyOn(queue, 'remove').mockReturnValue(true);
+      return { remove, data };
+    };
+    afterEach(() => jest.restoreAllMocks());
+
+    it('records input_not_ours when the write is refused with 409', async () => {
+      const svc = WorkItemDispatchSubscriber.getInstance();
+      const wi = makeWorkItem({ id: 'wi-409', target: 'sora' });
+      mockedAxios.post.mockRejectedValueOnce({ response: { status: 409, data: { code: 'input_not_ours' } }, message: 'conflict' });
+
+      expect(await svc.redispatch(wi)).toBe(false);
+      expect(svc.lastFailureReason('wi-409')).toBe('input_not_ours');
+    });
+
+    it('records the reason for a capped target and a missing target', async () => {
+      const svc = WorkItemDispatchSubscriber.getInstance();
+      expect(await svc.redispatch(makeWorkItem({ id: 'wi-nt', target: undefined }))).toBe(false);
+      expect(svc.lastFailureReason('wi-nt')).toBe('no_target');
+    });
+
+    it('clears the reason once a later dispatch succeeds', async () => {
+      const svc = WorkItemDispatchSubscriber.getInstance();
+      const wi = makeWorkItem({ id: 'wi-retry', target: 'sora' });
+      mockedAxios.post.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+      expect(await svc.redispatch(wi)).toBe(false);
+      expect(svc.lastFailureReason('wi-retry')).toBe('write_failed_no_response');
+      expect(await svc.redispatch(wi)).toBe(true);
+      expect(svc.lastFailureReason('wi-retry')).toBeUndefined();
+    });
+
+    it('refuses while a fresh notice waits on the queue, and says so', async () => {
+      const svc = WorkItemDispatchSubscriber.getInstance();
+      const wi = makeWorkItem({ id: 'wi-q', target: 'sora' });
+      mockedAxios.post.mockResolvedValueOnce({ status: 202, data: { success: true, queued: true } });
+      expect(await svc.redispatch(wi)).toBe(true); // queued notice
+      const { remove } = queueWith(Date.now() - 30_000, 'wi-q');
+      mockedAxios.post.mockClear();
+
+      expect(await svc.redispatch(wi)).toBe(false);
+      expect(svc.lastFailureReason('wi-q')).toBe('notice_queued');
+      expect(remove).not.toHaveBeenCalled();
+      expect(mockedAxios.post).not.toHaveBeenCalled();
+    });
+
+    it('drops a stale queued notice and pushes the brief again', async () => {
+      const svc = WorkItemDispatchSubscriber.getInstance();
+      const wi = makeWorkItem({ id: 'wi-stale', target: 'sora' });
+      mockedAxios.post.mockResolvedValueOnce({ status: 202, data: { success: true, queued: true } });
+      expect(await svc.redispatch(wi)).toBe(true);
+      const { remove, data } = queueWith(Date.now() - 10 * 60_000, 'wi-stale');
+      mockedAxios.post.mockClear();
+
+      expect(await svc.redispatch(wi)).toBe(true);
+      expect(remove).toHaveBeenCalledWith('sora', data);
+      expect(mockedAxios.post).toHaveBeenCalledTimes(1);
     });
   });
 

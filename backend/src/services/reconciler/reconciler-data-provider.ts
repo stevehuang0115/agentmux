@@ -1418,9 +1418,12 @@ export class LiveReconcilerDataProvider implements ReconcilerDataProvider {
             target: wi.target,
             batched: batch.length,
             hasTarget: Boolean(wi.target),
+            reason: subscriber.lastFailureReason?.(wi.id),
           });
         }
-        return delivered ? { outcome: 'ok' } : { outcome: 'failed', reason: 'redelivery not delivered' };
+        if (delivered) return { outcome: 'ok' };
+        const why = subscriber.lastFailureReason?.(wi.id);
+        return { outcome: 'failed', reason: why ? `redelivery not delivered: ${why}` : 'redelivery not delivered' };
       } catch (error) {
         this.logger.error('Redeliver wake action failed', {
           agent: agentSessionName,

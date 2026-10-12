@@ -312,6 +312,8 @@ export interface TicketAutopilotDeps {
    * reported (stop reason), never acted on.
    */
   redeliverWork?: (workItem: WorkItem) => Promise<boolean>;
+  /** Why the last redelivery of a WorkItem wrote nothing (CREW-526). */
+  redeliverFailureReason?: (workItemId: string) => string | undefined;
   /** Let an idle member take the best ready ticket now (AutoClaim). Absent = left to AutoClaim's own poll. */
   claimReadyFor?: (session: string) => Promise<boolean>;
   now?: () => Date;
@@ -2167,18 +2169,19 @@ export class TicketAutopilotService {
           const prev = ps.stalls?.[s.ticketId];
           const used = prev && prev.lastAt >= (Date.parse(ticket?.updatedAt ?? '') || 0) ? prev.count : 0;
           const delivered = await this.deps.redeliverWork(wi).catch(() => false);
+          const why = delivered ? undefined : this.deps.redeliverFailureReason?.(wi.id);
           (ps.stalls ??= {})[s.ticketId] = { count: used + 1, lastAt: nowMs };
           dirty = true;
           traceAutopilotAction(project, 'stalled_redeliver', {
-            summary: `${s.ticketId}: ${s.session} idle with no progress for ${minutes} min — brief re-delivered${delivered ? '' : ' (not written)'}`,
+            summary: `${s.ticketId}: ${s.session} idle with no progress for ${minutes} min — brief re-delivered${delivered ? '' : ` (not written${why ? `: ${why}` : ''})`}`,
             outcome: delivered ? 'ok' : 'failed',
             ticketId: s.ticketId,
             workItemId: s.workItemId,
             session: s.session,
-            data: { stalledMs: s.stalledMs, attempt: used + 1, delivered },
+            data: { stalledMs: s.stalledMs, attempt: used + 1, delivered, ...(why ? { reason: why } : {}) },
             now,
           });
-          this.logger.info('Stalled work: brief re-delivered to the idle assignee', { projectId: project.id, ticketId: s.ticketId, session: s.session, minutes, delivered });
+          this.logger.info('Stalled work: brief re-delivered to the idle assignee', { projectId: project.id, ticketId: s.ticketId, session: s.session, minutes, delivered, reason: why });
         } else if (s.action === 'release' && this.deps.workflow.releaseStalledTicket) {
           const reason = `stalled: ${s.session} idle with no progress for ${minutes} min after ${C.STALL_MAX_REDELIVERIES} re-delivered briefs`;
           const released = await this.deps.workflow.releaseStalledTicket(project.path, s.ticketId, reason).catch(() => false);

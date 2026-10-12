@@ -249,6 +249,9 @@ export const SLA_TRACKER_ID_PATTERN = /^request:.+:respond_to_user$/;
 /** Per-WI delay between backfill pushes — keeps the burst polite. */
 const BACKFILL_THROTTLE_MS = 200;
 
+/** A dispatch notice queued this long for an idle agent is not coming; redelivery replaces it (CREW-526). */
+const STALE_QUEUED_NOTICE_MS = 3 * 60_000;
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -489,16 +492,17 @@ export class WorkItemDispatchSubscriber {
    * @returns Whether the dispatch was actually performed
    */
   async dispatchTo(workItem: WorkItem): Promise<boolean> {
-    if (!workItem.target) return false;
-    if (SLA_TRACKER_ID_PATTERN.test(workItem.id)) return false;
+    if (!workItem.target) return this.notDelivered(workItem, 'no_target');
+    if (SLA_TRACKER_ID_PATTERN.test(workItem.id)) return this.notDelivered(workItem, 'sla_tracker_id');
     const key = this.dispatchKey(workItem.id, workItem.target);
-    if (this.dispatched.has(key)) return false;
+    if (this.dispatched.has(key)) return this.notDelivered(workItem, 'already_dispatched');
+    this.failureReasons.delete(workItem.id);
 
     // A paused team gets no dispatch: the item stays queued (not marked
     // dispatched) until the team is resumed (specs/2026-10-04-team-pause.md).
     if (isSessionPaused(workItem.target)) {
       this.logger.info('Dispatch skipped — target\'s team is paused', { workItemId: workItem.id, target: workItem.target });
-      return false;
+      return this.notDelivered(workItem, 'team_paused');
     }
 
     // Daily token cap: an agent over its cap takes no new turn. Do not write
@@ -511,7 +515,7 @@ export class WorkItemDispatchSubscriber {
         target: workItem.target,
         capTokens: capStop.capTokens,
       });
-      return false;
+      return this.notDelivered(workItem, 'token_cap');
     }
 
     // Team budget gate: do not wake an agent whose team is over budget. The
@@ -527,14 +531,14 @@ export class WorkItemDispatchSubscriber {
           teamId: budget.teamId,
           detail: budget.detail,
         });
-        return false;
+        return this.notDelivered(workItem, 'team_budget');
       }
     }
 
     // Reserve the key before the (slow) prepare + write, so a direct
     // hand-over of the same task arriving meanwhile does not deliver it a
     // second time. Released below if the write fails.
-    if (this.dispatched.has(key)) return false;
+    if (this.dispatched.has(key)) return this.notDelivered(workItem, 'already_dispatched');
     this.dispatched.add(key);
     this.cancelGraceTimer(key);
 
@@ -561,7 +565,7 @@ export class WorkItemDispatchSubscriber {
           workItemId: workItem.id,
           target: workItem.target,
         });
-        return false;
+        return this.notDelivered(workItem, 'token_cap');
       }
       if ((res?.data as { queued?: unknown } | undefined)?.queued === true) {
         // The agent is not active (stopped, starting): the notice waits on
@@ -588,14 +592,42 @@ export class WorkItemDispatchSubscriber {
       // key on failure so a later retry path can succeed.
       this.dispatched.delete(key);
       const status = (err as { response?: { status?: number } })?.response?.status;
-      this.logger.debug('Dispatch HTTP write failed (non-fatal)', {
+      const code = (err as { response?: { data?: { code?: string } } })?.response?.data?.code;
+      // Warn, not debug (CREW-526): a refused write is why an idle agent
+      // never hears its brief. 409 `input_not_ours` = the agent's input box
+      // holds text Crewly did not write, so Crewly will not type over it.
+      this.logger.warn('Dispatch HTTP write failed', {
         workItemId: workItem.id,
         target: workItem.target,
         status: status ?? 'no-response',
+        code,
         error: err instanceof Error ? err.message : String(err),
       });
-      return false;
+      return this.notDelivered(workItem, code ?? `write_failed_${status ?? 'no_response'}`);
     }
+  }
+
+  /**
+   * Record why a dispatch wrote nothing and return false, so the redelivery
+   * paths can say why instead of a bare "not delivered" (CREW-526).
+   *
+   * @param workItem - The WorkItem that was not delivered
+   * @param reason - Short machine-readable reason
+   * @returns Always false
+   */
+  private notDelivered(workItem: WorkItem, reason: string): false {
+    this.failureReasons.set(workItem.id, reason);
+    return false;
+  }
+
+  /**
+   * Why the last dispatch / redispatch of a WorkItem wrote nothing.
+   *
+   * @param workItemId - WorkItem id
+   * @returns The reason, or undefined when none was recorded
+   */
+  lastFailureReason(workItemId: string): string | undefined {
+    return this.failureReasons.get(workItemId);
   }
 
   /**
@@ -676,6 +708,30 @@ export class WorkItemDispatchSubscriber {
   }
 
   /**
+   * Remove this WorkItem's dispatch notice from the agent's queue when it has
+   * waited longer than {@link STALE_QUEUED_NOTICE_MS} (CREW-526).
+   *
+   * @param workItemId - WorkItem id
+   * @param target - Session
+   * @returns True when a stale notice was removed
+   */
+  private dropStaleQueuedNotice(workItemId: string, target: string): boolean {
+    try {
+      const queue = SubAgentMessageQueue.getInstance();
+      const stale = queue
+        .peek(target)
+        .filter((m) => (dispatchNoticeWorkItemIds(m.data) ?? []).includes(workItemId))
+        .filter((m) => Date.now() - m.queuedAt >= STALE_QUEUED_NOTICE_MS);
+      if (stale.length === 0) return false;
+      for (const m of stale) queue.remove(target, m.data);
+      this.logger.warn('Stale dispatch notice dropped from the agent queue; redelivering the brief', { workItemId, target, count: stale.length });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Whether a dispatch notice announcing this WorkItem still waits on the
    * agent's message queue (it may have been dropped: aged out, capacity).
    *
@@ -698,6 +754,9 @@ export class WorkItemDispatchSubscriber {
     for (const t of this.graceTimers.values()) clearTimeout(t);
     this.graceTimers.clear();
   }
+
+  /** Last reason a dispatch wrote nothing, by WorkItem id (CREW-526). */
+  private readonly failureReasons = new Map<string, string>();
 
   private cancelGraceTimer(key: string): void {
     const t = this.graceTimers.get(key);
@@ -722,30 +781,36 @@ export class WorkItemDispatchSubscriber {
   async redispatch(workItem: WorkItem): Promise<boolean> {
     if (!workItem.target) {
       this.logger.warn('Redispatch returned false — the WorkItem has no target', { workItemId: workItem.id, status: workItem.status });
-      return false;
+      return this.notDelivered(workItem, 'no_target');
     }
     const key = this.dispatchKey(workItem.id, workItem.target);
     // Its notice still waits on the agent's queue: it goes out when the agent
     // is active; a second one would brief it twice.
     if (this.pendingQueued.has(key) && this.noticeStillQueued(workItem.id, workItem.target)) {
-      this.logger.info('Redispatch skipped — the notice is still waiting on the agent queue', {
-        workItemId: workItem.id,
-        target: workItem.target,
-      });
-      return false;
+      // CREW-526: a notice that has waited past the limit is not coming — the
+      // agent is idle and live (that is why a redelivery was asked for). Drop
+      // it and push the brief again instead of refusing every retry.
+      if (!this.dropStaleQueuedNotice(workItem.id, workItem.target)) {
+        this.logger.warn('Redispatch returned false — the notice is still waiting on the agent queue', {
+          workItemId: workItem.id,
+          target: workItem.target,
+        });
+        return this.notDelivered(workItem, 'notice_queued');
+      }
     }
     this.pendingQueued.delete(key);
     this.confirmed.delete(key);
     this.dispatched.delete(key);
     const ok = await this.dispatchTo(workItem);
     if (!ok) {
-      this.logger.warn('Redispatch returned false — dispatchTo did not deliver the brief', { workItemId: workItem.id, target: workItem.target, status: workItem.status });
+      this.logger.warn('Redispatch returned false — dispatchTo did not deliver the brief', { workItemId: workItem.id, target: workItem.target, status: workItem.status, reason: this.failureReasons.get(workItem.id) });
     }
     traceHarness('harness.redelivery', {
       workItem,
       session: workItem.target,
       summary: `Brief of work item re-pushed to ${workItem.target}: ${workItem.title}`,
       outcome: ok ? 'ok' : 'failed',
+      ...(ok ? {} : { data: { reason: this.failureReasons.get(workItem.id) ?? 'unknown' } }),
     });
     return ok;
   }

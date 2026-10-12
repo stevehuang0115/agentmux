@@ -88,6 +88,8 @@ export function createDefaultTicketHygiene(): TicketHygieneService {
 export function createDefaultTicketAutopilot(
   notifyOwner: (notice: OwnerNotice) => Promise<boolean> = async () => false,
 ): TicketAutopilotService {
+  /** Why the last redelivery of each WorkItem wrote nothing (CREW-526). */
+  const redeliverReasons = new Map<string, string | undefined>();
   return new TicketAutopilotService({
     tickets: ProjectTicketService.getInstance(),
     pool: TaskPoolService.getInstance(),
@@ -120,8 +122,12 @@ export function createDefaultTicketAutopilot(
     // members take ready tickets on the tick (not only on an idle event).
     redeliverWork: async (workItem) => {
       const { WorkItemDispatchSubscriber } = await import('../../services/v3/workitem-dispatch.subscriber.js');
-      return WorkItemDispatchSubscriber.getInstance().redispatch(workItem);
+      const subscriber = WorkItemDispatchSubscriber.getInstance();
+      const delivered = await subscriber.redispatch(workItem);
+      redeliverReasons.set(workItem.id, delivered ? undefined : subscriber.lastFailureReason(workItem.id));
+      return delivered;
     },
+    redeliverFailureReason: (workItemId) => redeliverReasons.get(workItemId),
     claimReadyFor: async (session) => {
       const { AgentAutoClaimService } = await import('../../services/v3/agent-auto-claim.service.js');
       return !!(await AgentAutoClaimService.getInstance().tryAutoClaimForAgent(session));
