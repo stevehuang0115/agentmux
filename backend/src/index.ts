@@ -215,7 +215,10 @@ import { getRuntimeFallbackService } from './services/runtime-fallback/runtime-f
 import { getSlackAgentIdentityService } from './services/slack/slack-agent-identity.service.js';
 import { getChatV2Service } from './services/chat-v2/chat-v2.singleton.js';
 import { isOwnerStopped } from './services/agent/owner-stopped.registry.js';
-import { createFollowThrough, settleFollowThrough, idlePendingWorkCheck, releaseWorkForStop, owedWorkReminder } from './services/agent/follow-through.wiring.js';
+import { pausedTeamOfSession } from './services/team/team-pause.registry.js';
+import { getFollowThrough } from './services/agent/follow-through.service.js';
+import { BackgroundWorkWatchdog } from './services/monitoring/background-work-watchdog.js';
+import { createFollowThrough, settleFollowThrough, idlePendingWorkCheck, releaseWorkForStop, restoreStoppedOwingWork, owedWorkReminder, OWED_REMINDER_MARKER } from './services/agent/follow-through.wiring.js';
 import { isSessionPaused } from './services/team/team-pause.registry.js';
 import { findPackageRoot } from './utils/package-root.js';
 import { getLocalApiBaseUrl, setLocalApiPort } from './utils/local-api-url.utils.js';
@@ -448,6 +451,7 @@ export class CrewlyServer {
 	/** Owner promises past due and never nudged at boot; their agents are restored and reminded once */
 	private openCommitmentsAtBoot: OwedCommitment[] = [];
 	private healthMonitoringInterval: NodeJS.Timeout | null = null;
+	private backgroundWatchdog: BackgroundWorkWatchdog | null = null;
 
 	constructor(config?: Partial<StartupConfig>) {
 		// Resolve ~ to actual home directory
@@ -1511,7 +1515,13 @@ void (async () => {
 
 		// Wire agent:idle events to thread status queue for delegation completion
 		this.eventBusService.on('eventPublished', (event: { type: string; sessionName?: string }) => {
+			if (event.type === 'agent:busy' && event.sessionName) getSlackTypingPlaceholderService()?.releaseHold(event.sessionName);
+			if ((event.type === 'agent:idle' || event.type === 'agent:busy') && event.sessionName) {
+				ResourceModeService.getInstance().noteWorkingStatus(event.sessionName, event.type === 'agent:idle');
+			}
 			if (event.type === 'agent:inactive' && event.sessionName) {
+				// A runtime that exited while the agent owed work: same hook as the other stop paths.
+				void this.restoreStoppedOwing(event.sessionName, 'runtime exited');
 				this.wakeIfMessagesQueued(event.sessionName);
 			}
 			// A turn started: the harness's "working on it" watch may be waiting
@@ -1602,6 +1612,7 @@ void (async () => {
 		// 2026-05-16: queued WIs for inactive Atlas could not get woken
 		// because the floor was held by idle product/marketing agents).
 		liveDataProvider.setAgentRegistrationService(this.apiController.agentRegistrationService);
+		liveDataProvider.setAgentStoppedHook((name, why) => { void this.restoreStoppedOwing(name, why); });
 
 		// Initialize Reconciler Service (V2 — system truth recomputation)
 		{
@@ -2248,6 +2259,14 @@ void (async () => {
 				crewlyHome: this.config.crewlyHome,
 				sendToAgent: (session, text) => this.apiController.agentRegistrationService.sendMessageToAgent(session, text),
 			});
+			// Background subagents / forks that stopped writing are not busy work:
+			// the agent is told and no longer counted busy (2026-10-12, Pia).
+			this.backgroundWatchdog?.stop();
+			this.backgroundWatchdog = new BackgroundWorkWatchdog({
+				turnState: AgentTurnStateService.getInstance(),
+				sendToAgent: (session, text) => this.apiController.agentRegistrationService.sendMessageToAgent(session, text),
+			});
+			this.backgroundWatchdog.start();
 			// An agent that owes work — a WorkItem (queued, accepted or running),
 			// an assigned ticket, a promise to the owner, an unfulfilled "doing X
 			// now" — is never idle-stopped. Under memory pressure it still can
@@ -2258,19 +2277,7 @@ void (async () => {
 			// a slot frees, with a reminder of what it promised (the work itself is
 			// already queued for it by the releaser).
 			idleDetection.setOwedStopHook((sessionName) => {
-				void (async () => {
-					const reminder = owedWorkReminder(await TaskPoolService.getInstance().getAllItems(), sessionName);
-					if (!reminder) return;
-					SubAgentMessageQueue.getInstance().enqueue(sessionName, reminder);
-					this.logger.info('Stopped agent owes work — it will be restarted when a slot frees', { sessionName });
-					const { scheduleDeferredStartRetry } = await import('./services/messaging/deferred-start-retry.js');
-					const { activateAgentBySession } = await import('./controllers/team/team.controller.js');
-					await scheduleDeferredStartRetry(sessionName, {
-						activate: (name) => activateAgentBySession(this.apiController, name),
-						hasPending: (name) => SubAgentMessageQueue.getInstance().hasPending(name),
-						firstPauseMs: 60_000,
-					});
-				})().catch(() => undefined);
+				void this.restoreStoppedOwing(sessionName, 'idle stop under memory pressure');
 			});
 			idleDetection.start();
 
@@ -2315,12 +2322,20 @@ void (async () => {
 				// An agent mid-conversation with the owner is the last one stopped
 				// for a slot, and its owner thread hears when it is
 				// (specs/2026-10-08-owner-thread-sentinel.md).
-				owesOwnerThread: (name) => getOwnerThreadSentinel()?.owesRecently(name) === true,
-				onStoppedForSlot: (name) => reportOwnerThreadBlocking(name, { kind: 'stopped', why: 'slot' }),
+				owesOwnerThread: (name) => getOwnerThreadSentinel()?.owesOwner(name) === true || getFollowThrough()?.holdsIntent(name) === true,
+				onStoppedForSlot: (name) => {
+					reportOwnerThreadBlocking(name, { kind: 'stopped', why: 'slot' });
+					// Same hook as every other stop path: what it owes goes back to the queue and it is brought back.
+					void this.restoreStoppedOwing(name, 'stopped to free a running-agent slot');
+				},
 				onStartDeferred: (name) => reportOwnerThreadBlocking(name, { kind: 'start_deferred' }),
 				stopAgent: async (name, role) => {
 					// Its work survives the stop: back in the queue, redelivered on the next start.
 					await releaseWorkForStop(name, 'stopped to free a running-agent slot');
+					// An agent that still owes the answer keeps its "will pick this up" placeholder:
+					// the turn-end settle the stop triggers must not call the thread answered.
+					const owed = TaskPoolService.getInstance().getAllItems().then((items) => owedWorkReminder(items, name) !== null);
+					if (await owed.catch(() => false)) await getSlackTypingPlaceholderService()?.holdForRestart(name);
 					await agentRegistration.terminateAgentSession(name, role);
 					await StorageService.getInstance().updateAgentStatus(name, CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE as any, 'idle_exit');
 				},
@@ -6761,6 +6776,34 @@ void (async () => {
 	}
 
 	/**
+	 * The one hook every stop path runs: what the stopped agent owes goes back
+	 * in the queue and the agent is brought back with a reminder.
+	 *
+	 * @param sessionName - The agent that stopped
+	 * @param why - Reason text
+	 * @returns True when the agent is being brought back
+	 */
+	private restoreStoppedOwing(sessionName: string, why: string): Promise<boolean> {
+		if (sessionName === ORCHESTRATOR_SESSION_NAME) return Promise.resolve(false);
+		return restoreStoppedOwingWork(sessionName, why, {
+			listWorkItems: () => TaskPoolService.getInstance().getAllItems(),
+			isHeldBack: (name) => isOwnerStopped(name) || !!pausedTeamOfSession(name),
+			hasReminder: (name) => SubAgentMessageQueue.getInstance().peek(name).some((m) => m.data.startsWith(OWED_REMINDER_MARKER)),
+			enqueue: (name, text) => SubAgentMessageQueue.getInstance().enqueue(name, text),
+			holdPlaceholders: (name) => getSlackTypingPlaceholderService()?.holdForRestart(name) ?? Promise.resolve(0),
+			restart: async (name) => {
+				const { scheduleDeferredStartRetry } = await import('./services/messaging/deferred-start-retry.js');
+				const { activateAgentBySession } = await import('./controllers/team/team.controller.js');
+				void scheduleDeferredStartRetry(name, {
+					activate: (n) => activateAgentBySession(this.apiController, n),
+					hasPending: (n) => SubAgentMessageQueue.getInstance().hasPending(n),
+					firstPauseMs: 60_000,
+				});
+			},
+		});
+	}
+
+	/**
 	 * An agent went down with messages still queued for it: start it again so
 	 * they are delivered (registration drains the queue). Without this the
 	 * messages waited for the next message someone happened to send — four
@@ -7266,6 +7309,7 @@ void (async () => {
 
 		try {
 			// Clear health monitoring interval first
+			this.backgroundWatchdog?.stop();
 			if (this.healthMonitoringInterval) {
 				clearInterval(this.healthMonitoringInterval);
 				this.healthMonitoringInterval = null;

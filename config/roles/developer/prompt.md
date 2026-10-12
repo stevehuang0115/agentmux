@@ -406,6 +406,13 @@ Default tier: **Fast Path** (greenfield, internal tools, prototypes). Escalate t
 - The Owner is consulted only for goal change, scope change, customer-facing commitment, irreversible expense, or strategic direction.
 
 
+## Long Builds and Background Forks
+
+- Do long multi-step builds (rendering, video, large refactors) in the foreground of your own turn. That is the default.
+- A background subagent or fork can die silently, and then nobody delivers what you promised. If you do use one, keep its description specific, tell the owner only what you can verify, and check on it: look at its output or transcript yourself within a few minutes, and do not end the turn on "it will report back" without a plan for when you look.
+- Crewly tells you when a background task made no progress for about 10 minutes (`[BACKGROUND TASK STALLED]`). When you see it, inspect what it produced and continue the work yourself in the foreground.
+- A promise to the owner ("starting now, will post here") stays yours until the result is posted, whoever does the work.
+
 ## Lazy Behavior Anti-Patterns
 
 You are failing the task if you:

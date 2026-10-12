@@ -211,4 +211,64 @@ describe('AgentTurnStateService', () => {
 			expect(turns.runtimeStartedAt(S)).toBe(T0 + 9000);
 		});
 	});
+
+	describe('stalled background work (Pia, 2026-10-12)', () => {
+		const NOW = Date.now();
+		const ID = 'ab2294bc5576af107';
+		let subDir: string;
+
+		/** Launch a background fork at NOW-30min, end the turn, write its transcript with the given mtime. */
+		const launch = (lastWriteAgoMs: number | null): void => {
+			turns.setTranscriptLocator(() => file);
+			turns.recordHook(S, 'UserPromptSubmit', {}, NOW - 31 * 60_000);
+			turns.recordHook(S, 'SubagentStart', { agentId: ID }, NOW - 30 * 60_000);
+			turns.recordHook(S, 'Stop', {}, NOW - 29 * 60_000);
+			write([toolCall(NOW - 30 * 60_000), endTurn(NOW - 29.5 * 60_000), turnDuration(NOW - 29 * 60_000, 1)]);
+			subDir = path.join(dir, 'db6cd3e6', 'subagents');
+			fs.mkdirSync(subDir, { recursive: true });
+			fs.writeFileSync(path.join(subDir, `agent-${ID}.meta.json`), JSON.stringify({ description: 'Build video v1', agentType: 'fork' }));
+			if (lastWriteAgoMs !== null) {
+				const f = path.join(subDir, `agent-${ID}.jsonl`);
+				fs.writeFileSync(f, '{}\n');
+				const t = new Date(NOW - lastWriteAgoMs);
+				fs.utimesSync(f, t, t);
+			}
+		};
+
+		it('a fork whose transcript stopped growing for 10+ minutes is stalled: not background, not busy', () => {
+			launch(25 * 60_000);
+			expect(turns.stalledBackground(S, NOW)).toMatchObject({ agentIds: [ID], description: 'Build video v1' });
+			expect(turns.getVerdict(S, NOW)).toEqual({ state: 'idle', longRunning: false, since: null, source: 'hooks' });
+			expect(turns.hasBackgroundWork(S, NOW)).toBe(false);
+		});
+
+		it('reports when it last made progress', () => {
+			launch(25 * 60_000);
+			expect(turns.stalledBackground(S, NOW)?.lastProgressAt).toBeCloseTo(NOW - 25 * 60_000, -3);
+		});
+
+		it('a fork that is still writing is not stalled and stays background', () => {
+			launch(2 * 60_000);
+			expect(turns.stalledBackground(S, NOW)).toBeNull();
+			expect(turns.getVerdict(S, NOW).state).toBe('background');
+		});
+
+		it('without a transcript file for the fork, the launch time stands', () => {
+			launch(null);
+			expect(turns.stalledBackground(S, NOW)?.lastProgressAt).toBe(NOW - 30 * 60_000);
+		});
+
+		it('is never stalled while the agent\'s own turn is active, and the probe is cached', () => {
+			launch(25 * 60_000);
+			turns.recordHook(S, 'UserPromptSubmit', {}, NOW - 1000);
+			expect(turns.stalledBackground(S, NOW)).toBeNull();
+		});
+
+		it('dropBackground stops counting the work', () => {
+			launch(25 * 60_000);
+			turns.dropBackground(S);
+			expect(turns.stalledBackground(S, NOW + 60_000)).toBeNull();
+			expect(turns.hookVerdict(S, NOW)).toMatchObject({ state: 'idle' });
+		});
+	});
 });

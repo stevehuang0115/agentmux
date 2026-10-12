@@ -10,7 +10,7 @@
 import os from 'os';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
 import { getMemoryStats } from '../core/system-health.util.js';
-import { AGENT_SUSPEND_CONSTANTS } from '../../constants.js';
+import { AGENT_SUSPEND_CONSTANTS, SYSTEM_RESOURCE_ALERT_CONSTANTS } from '../../constants.js';
 import { isDriveWarm } from '../drive/drive-keep-warm.js';
 
 export const RESOURCE_MODE_CONSTANTS = {
@@ -81,10 +81,11 @@ export interface ResourceModeDeps {
 	hasOwnerMessage: (sessionName: string) => boolean;
 	limits: () => Promise<{ maxRunning: number; idleTimeoutMinutes: number }>;
 	/**
-	 * The agent owes an owner thread right now (an unanswered owner message or
-	 * a promise there in the last 30 min). Such an agent is stopped to free a
-	 * slot only when no other candidate exists (2026-10-08: Atlas and Ella
-	 * were stopped mid-conversation).
+	 * The agent owes the owner: an unanswered owner message, a promise in an
+	 * owner thread, or a stated "starting now". Such an agent is never stopped
+	 * to free a slot unless memory is critical; the waiter waits for another
+	 * victim (2026-10-08: Atlas and Ella were stopped mid-conversation;
+	 * 2026-10-12: Pia was stopped with a video owed).
 	 */
 	owesOwnerThread?: (sessionName: string) => boolean;
 	/**
@@ -121,6 +122,10 @@ export class ResourceModeService {
 	/** When each agent's start first began waiting for a slot (survives the 2-minute deferral, cleared on admission) */
 	private waitingSince = new Map<string, { since: number; touched: number }>();
 	private lastRunning = 0;
+	/** When each agent was last seen turning idle (events), or the first pump that saw it idle after seeing it busy */
+	private idleSince = new Map<string, number>();
+	/** Agents seen busy by a pump (their idle time starts at that sighting at the earliest) */
+	private lastSeenBusy = new Map<string, number>();
 	private lastCap: number = RESOURCE_MODE_CONSTANTS.DEFAULT_MAX_RUNNING_AGENTS;
 
 	/** Readings, overridable in tests. */
@@ -139,6 +144,44 @@ export class ResourceModeService {
 	static resetInstance(): void {
 		ResourceModeService.instance?.stop();
 		ResourceModeService.instance = null;
+	}
+
+	/**
+	 * An agent's working status changed. Idle time for eviction is counted
+	 * from the busy to idle transition, not from its last output: an agent
+	 * that was busy for an hour with a silent background task is not "idle for
+	 * 60 minutes" the moment it finishes (Pia, 2026-10-12).
+	 *
+	 * @param sessionName - Agent
+	 * @param idle - True on busy to idle, false on idle to busy
+	 * @param at - Epoch ms of the transition
+	 */
+	noteWorkingStatus(sessionName: string, idle: boolean, at: number = Date.now()): void {
+		if (idle) this.idleSince.set(sessionName, at);
+		else this.idleSince.delete(sessionName);
+		if (!idle) this.lastSeenBusy.delete(sessionName);
+	}
+
+	/** Idle time of a running agent counted from when it became idle. */
+	private withHonestIdle(running: RunningAgent[], now: number): RunningAgent[] {
+		return running.map((r) => {
+			if (r.busy) {
+				this.lastSeenBusy.set(r.sessionName, now);
+				this.idleSince.delete(r.sessionName);
+				return r;
+			}
+			const since = this.idleSince.get(r.sessionName) ?? this.lastSeenBusy.get(r.sessionName);
+			return since === undefined ? r : { ...r, idleMs: Math.min(r.idleMs, Math.max(0, now - since)) };
+		});
+	}
+
+	/** Whether memory is critical: the only case where an agent that owes the owner may be stopped for a slot. */
+	private memoryCritical(): boolean {
+		try {
+			return this.memoryStats().usedPercent >= SYSTEM_RESOURCE_ALERT_CONSTANTS.THRESHOLDS.MEMORY_CRITICAL;
+		} catch {
+			return false;
+		}
 	}
 
 	setDeps(deps: ResourceModeDeps | null): void {
@@ -293,7 +336,7 @@ export class ResourceModeService {
 			for (const [n, at] of this.admitted) if (now - at > RESOURCE_MODE_CONSTANTS.ADMIT_TTL_MS) this.admitted.delete(n);
 			const { maxRunning, idleTimeoutMinutes } = await this.deps.limits();
 			this.lastCap = maxRunning;
-			const running = await this.deps.listRunning();
+			const running = this.withHonestIdle(await this.deps.listRunning(), now);
 			const names = new Set(running.map((r) => r.sessionName));
 			for (const n of names) this.admitted.delete(n);
 			let count = running.length + this.admitted.size;
@@ -356,8 +399,8 @@ export class ResourceModeService {
 	 * busy, waiting for a start itself, always-on, holding an owner message,
 	 * Drive-warm, idle for less than the pressure idle timeout, or protected
 	 * by {@link ResourceModeDeps.protectedReason} (pending work, an open
-	 * ticket, an open delegation). An agent that owes an owner thread is
-	 * picked only when no other candidate exists.
+	 * ticket, an open delegation). An agent that owes the owner is never picked
+	 * unless memory is critical.
 	 *
 	 * @param running - Running agents
 	 * @param idleTimeoutMinutes - Pressure idle timeout; a younger idle is never stopped
@@ -398,10 +441,19 @@ export class ResourceModeService {
 			}
 			candidates.push(r);
 		}
+		const critical = this.memoryCritical();
 		const owes = (r: RunningAgent): boolean => {
 			try { return this.deps!.owesOwnerThread?.(r.sessionName) === true; } catch { return false; }
 		};
-		const choose = (list: RunningAgent[]): RunningAgent | undefined => list.find((r) => !owes(r)) ?? list[0];
+		// An agent that owes the owner is never a victim (not even when the rules
+		// relax): the waiter waits for another one. Only critical memory overrides.
+		const owing = new Set(ordered.filter(owes));
+		for (const r of owing) if (!critical) skipped.push(`${r.sessionName}: it owes the owner an answer or a promised result`);
+		const eligible = (list: RunningAgent[]): RunningAgent[] => (critical ? list : list.filter((r) => !owing.has(r)));
+		const choose = (list: RunningAgent[]): RunningAgent | undefined => {
+			const ok = eligible(list);
+			return ok.find((r) => !owing.has(r)) ?? ok[0];
+		};
 		const victim = choose(candidates);
 		if (victim || !relax) return { victim, skipped };
 		// Relaxed: agents kept only by the idle timeout first, then the rest; longest idle within each.
