@@ -213,7 +213,7 @@ describe('Factory Page', () => {
 
       const backButton = screen.getByRole('button', { name: /back to dashboard/i });
       // Library Button (secondary variant) owns the hover treatment now.
-      expect(backButton).toHaveClass('bg-surface-dark', 'hover:bg-background-dark');
+      expect(backButton).toHaveClass('bg-surface-2', 'hover:bg-surface-hover');
     });
 
     it('should have backdrop blur effect on back button', () => {

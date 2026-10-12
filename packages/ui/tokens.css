@@ -1,6 +1,6 @@
 /*
- * Crewly theme tokens: the one place colours, radii and fonts are defined.
- * Spec: specs/2026-10-02-ui-redesign.md §Tokens.
+ * Crewly theme tokens: the one place colours, radii, glass and fonts are defined.
+ * Spec: specs/2026-10-02-ui-redesign.md §Tokens; design language v2 "Glass".
  *
  * Every colour is stored twice:
  *   --c-<name>   RGB channels ("42 115 234"). Tailwind reads these so opacity
@@ -11,12 +11,26 @@
  * the --<name> forms follow automatically because they are declared on the
  * same element as the theme attribute (<html>).
  *
+ * Themes (set <html data-theme="light|dark">; see theme.ts):
+ *   light   the default: the "sunset sky" (blue -> violet -> rose -> peach)
+ *           behind white frosted glass, dark ink.
+ *   dark    the same sky at night: deep indigo / twilight, low glare, never
+ *           pure black. Same glass language.
+ *   (none)  hosts that never opt in (the marketing site) keep the original
+ *           flat dark palette below; nothing changes for them.
+ *
+ * Glass: every surface has a SOLID fallback colour (--glass-*-fb, what iOS 12
+ * and any browser without backdrop-filter paints) and a translucent colour
+ * (--glass-*) that glass.css only applies inside @supports, together with the
+ * blur. Contrast is therefore checked against the fallback AND the wall.
+ *
  * Hosts: the OSS frontend imports this file from src/index.css; the Cloud
  * portal gets it through theme.css; dist/styles.css inlines it.
  */
+@import "./glass.css";
 
-:root,
-[data-theme='dark'] {
+/* ---------- no theme attribute: the original dark palette (unchanged) ---------- */
+:root {
   color-scheme: dark;
 
   /* Surfaces */
@@ -40,6 +54,7 @@
   --c-success: 52 195 143;     /* #34c38f healthy / done */
   --c-danger: 240 106 106;     /* #f06a6a failed / destructive */
   --c-muted-dot: 91 103 121;   /* #5b6779 idle / offline dot */
+  --c-ink: 255 255 255;        /* hairlines / hover tints drawn over any surface */
 
   /* Soft fills: the accent at 14% */
   --soft-alpha: 0.14;
@@ -53,6 +68,7 @@
   --crewly-radius-sm: 8px;
   --crewly-radius: 16px;
   --crewly-radius-lg: 24px;
+  --crewly-radius-xl: 22px;
   --crewly-font: 'Nunito', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --crewly-font-display: 'Nunito', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --crewly-font-mono: 'JetBrains Mono', SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -60,12 +76,149 @@
 }
 
 /*
- * Light theme: intentionally empty for now (Crewly is dark-only today).
- * To add it, set <html data-theme="light"> and redefine here every --c-*
- * channel above (and color-scheme: light). Nothing else needs to change:
- * components only use the tokens below, never raw colours.
+ * Glass tokens that are not colour channels. The unthemed default borrows the
+ * night values so a component that opts into glass still renders sensibly.
  */
+:root,
+[data-theme='dark'] {
+  --wall-color: #0e1430;
+  --wall: radial-gradient(900px 520px at 15% 8%, rgba(70, 96, 190, 0.45), rgba(70, 96, 190, 0) 62%),
+    radial-gradient(760px 460px at 85% 24%, rgba(120, 92, 200, 0.32), rgba(120, 92, 200, 0) 62%),
+    radial-gradient(1100px 560px at 50% 108%, rgba(226, 120, 96, 0.3), rgba(226, 120, 96, 0) 66%),
+    linear-gradient(180deg, #0e1430 0%, #1a2150 46%, #2c2757 82%, #3f2c4f 100%);
+
+  /* surface level 1: cards, rows, sidebar, header */
+  --glass-fb: #1c2350;
+  --glass: rgba(34, 42, 92, 0.55);
+  /* level 2: regions / grouping areas, calmer than a card */
+  --glass-2-fb: #161c45;
+  --glass-2: rgba(22, 28, 72, 0.42);
+  /* strong: windows, menus, toasts, the dock; stays readable over busy content */
+  --glass-strong-fb: #252e66;
+  --glass-strong: rgba(36, 45, 98, 0.78);
+  /* attention: decisions waiting on the owner */
+  --glass-warn-fb: #3a2f18;
+  --glass-warn: rgba(66, 50, 22, 0.6);
+  --edge-fb: #38427e;
+  --edge: rgba(255, 255, 255, 0.14);
+  --glass-blur: blur(22px) saturate(1.5);
+  --glass-blur-strong: blur(28px) saturate(1.5);
+
+  --crewly-shadow-1: 0 1px 2px rgba(2, 4, 20, 0.5);
+  --crewly-shadow-2: 0 12px 32px rgba(2, 4, 20, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  --crewly-shadow-3: 0 28px 64px rgba(2, 4, 20, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  --focus-ring: #a6b8ff;
+  --dot-grid: rgba(166, 184, 255, 0.2);
+
+  /* Step kinds (agent work): one colour + icon per kind, in both themes. */
+  --kind-read-bg: #243574;  --kind-read: #8dbbff;
+  --kind-edit-bg: #352c70;  --kind-edit: #c2abff;
+  --kind-run-bg: #134035;   --kind-run: #5ee6aa;
+  --kind-find-bg: #10404e;  --kind-find: #6bdcf5;
+  --kind-browse-bg: #4a2244; --kind-browse: #f59ac0;
+  --kind-delegate-bg: #443515; --kind-delegate: #f7c06a;
+  --kind-think-bg: #2c3978; --kind-think: #c3d0ff;
+
+  /* Team region accents (the 2px bar on a region's top edge) */
+  --region-1: #a6b8ff; --region-2: #6bdcf5; --region-3: #5ee6aa;
+
+  /* Avatar tints (initials sit on them in --avatar-ink) */
+  --avatar-ink: #0b1235;
+  --avatar-1: #a6b8ff; --avatar-2: #f59ac0; --avatar-3: #66dcc6; --avatar-4: #f7c06a;
+  --avatar-5: #bda6ff; --avatar-6: #7ed6ff;
+}
+
+/* ---------- dark: the sky at night ---------- */
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --c-bg: 14 18 40;            /* #0e1228 deep indigo, not black */
+  --c-surface: 28 35 80;       /* #1c2350 */
+  --c-surface-2: 37 46 102;    /* #252e66 */
+  --c-surface-hover: 43 54 116; /* #2b3674 */
+  --c-border: 58 68 124;       /* #3a447c */
+  --c-border-soft: 44 53 100;  /* #2c3564 */
+
+  --c-text: 238 241 255;       /* #eef1ff */
+  --c-text-2: 187 196 232;     /* #bbc4e8 */
+  --c-text-3: 152 162 205;     /* #98a2cd */
+
+  --c-primary: 108 150 255;    /* #6c96ff fill; dark ink on top */
+  --c-primary-text: 166 188 255; /* #a6bcff */
+  --c-on-primary: 10 16 46;    /* #0a102e */
+  --c-attention: 247 192 106;  /* #f7c06a */
+  --c-success: 94 230 170;     /* #5ee6aa */
+  --c-danger: 255 138 150;     /* #ff8a96 */
+  --c-muted-dot: 112 121 165;  /* #7079a5 */
+  --c-ink: 255 255 255;
+
+  --soft-alpha: 0.18;
+  --crewly-shadow: var(--crewly-shadow-1);
+}
+
+/* ---------- light: the sunset sky, airy ---------- */
 [data-theme='light'] {
+  color-scheme: light;
+
+  --c-bg: 238 241 250;         /* #eef1fa */
+  --c-surface: 255 255 255;
+  --c-surface-2: 244 246 253;  /* #f4f6fd */
+  --c-surface-hover: 237 241 252; /* #edf1fc */
+  --c-border: 203 211 235;     /* #cbd3eb */
+  --c-border-soft: 222 227 244; /* #dee3f4 */
+
+  --c-text: 20 27 58;          /* #141b3a ink */
+  --c-text-2: 58 66 108;       /* #3a426c */
+  --c-text-3: 84 93 134;       /* #545d86 */
+
+  --c-primary: 37 99 220;      /* #2563dc fill, white text 5.5:1 */
+  --c-primary-text: 30 79 190; /* #1e4fbe */
+  --c-on-primary: 255 255 255;
+  --c-attention: 156 88 4;     /* #9c5804 as text on white 5.9:1 */
+  --c-success: 11 118 78;      /* #0b764e */
+  --c-danger: 190 36 54;       /* #be2436 */
+  --c-muted-dot: 128 137 170;  /* #8089aa */
+  --c-ink: 20 27 58;           /* dark ink: hairlines on light glass */
+
+  --soft-alpha: 0.13;
+
+  --wall-color: #b6bfe6;
+  --wall: radial-gradient(900px 520px at 15% 8%, rgba(188, 214, 252, 0.85), rgba(188, 214, 252, 0) 62%),
+    radial-gradient(760px 460px at 85% 24%, rgba(205, 184, 238, 0.7), rgba(205, 184, 238, 0) 62%),
+    radial-gradient(1100px 560px at 50% 108%, rgba(255, 196, 150, 0.85), rgba(255, 196, 150, 0) 66%),
+    linear-gradient(180deg, #9dbbf0 0%, #b6aae8 46%, #f2b3c4 82%, #ffd0ae 100%);
+
+  --glass-fb: #f1f4fd;
+  --glass: rgba(255, 255, 255, 0.62);
+  --glass-2-fb: #e6ebfa;
+  --glass-2: rgba(255, 255, 255, 0.36);
+  --glass-strong-fb: #f9faff;
+  --glass-strong: rgba(255, 255, 255, 0.84);
+  --glass-warn-fb: #fff0d4;
+  --glass-warn: rgba(255, 241, 214, 0.8);
+  --edge-fb: #ffffff;
+  --edge: rgba(255, 255, 255, 0.9);
+
+  --crewly-shadow-1: 0 1px 2px rgba(50, 70, 150, 0.12);
+  --crewly-shadow-2: 0 10px 30px rgba(60, 70, 150, 0.16), 0 0 0 1px rgba(80, 90, 190, 0.06), inset 0 1px 0 #fff;
+  --crewly-shadow-3: 0 24px 56px rgba(60, 70, 150, 0.22), 0 0 0 1px rgba(80, 90, 190, 0.08), inset 0 1px 0 #fff;
+  --crewly-shadow: var(--crewly-shadow-1);
+  --focus-ring: #2563dc;
+  --dot-grid: rgba(60, 70, 150, 0.16);
+
+  --kind-read-bg: #e1ebff;  --kind-read: #1f5fc4;
+  --kind-edit-bg: #ece6ff;  --kind-edit: #6542d0;
+  --kind-run-bg: #d9f3e7;   --kind-run: #0b7a4b;
+  --kind-find-bg: #d8f0f7;  --kind-find: #0a6f8f;
+  --kind-browse-bg: #fce3ee; --kind-browse: #b02a66;
+  --kind-delegate-bg: #ffebc7; --kind-delegate: #8f5300;
+  --kind-think-bg: #e0e7ff; --kind-think: #2b44b3;
+
+  --region-1: #4a63dc; --region-2: #0e8db0; --region-3: #12a06a;
+
+  --avatar-ink: #ffffff;
+  --avatar-1: #3a57d6; --avatar-2: #c2306e; --avatar-3: #0e7f6e; --avatar-4: #9a5b00;
+  --avatar-5: #6b47d6; --avatar-6: #0a7fa0;
 }
 
 /* Usable colours, derived from the channels. Do not redefine per theme. */
@@ -92,4 +245,5 @@
   --danger: rgb(var(--c-danger));
   --danger-soft: rgb(var(--c-danger) / var(--soft-alpha));
   --muted-dot: rgb(var(--c-muted-dot));
+  --ink: rgb(var(--c-ink));
 }

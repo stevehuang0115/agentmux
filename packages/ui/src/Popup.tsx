@@ -63,7 +63,7 @@ export const Popup: React.FC<PopupProps> = ({
 
   return (
     <div
-      className="fixed inset-0 bg-background-dark/80 backdrop-blur-sm flex items-center justify-center p-4 z-50"
+      className="fixed inset-0 bg-bg/70 backdrop-blur-sm flex items-center justify-center p-4 z-50"
       onClick={handleBackdropClick}
       role="dialog"
       aria-modal="true"
@@ -71,7 +71,7 @@ export const Popup: React.FC<PopupProps> = ({
     >
       <div
         ref={modalRef}
-        className={`relative bg-surface-dark border border-border-dark rounded-3xl shadow-lg w-full max-h-[90vh] overflow-y-auto ${sizeClasses[size]} ${loading ? 'pointer-events-none' : ''} ${className}`}
+        className={`relative cw-glass-strong rounded-3xl shadow-lg w-full max-h-[90vh] overflow-y-auto ${sizeClasses[size]} ${loading ? 'pointer-events-none' : ''} ${className}`}
         onClick={e => e.stopPropagation()}
       >
         {/* Modal Header */}
@@ -171,7 +171,7 @@ export const FormPopup: React.FC<FormPopupProps> = ({
         variant={submitVariant}
         loading={loading}
         disabled={submitDisabled || loading}
-        className="bg-primary hover:bg-primary/90 text-white font-medium px-6 py-2.5 rounded-2xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="bg-primary hover:bg-primary/90 text-on-primary font-medium px-6 py-2.5 rounded-2xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         onClick={(e) => {
           // For submit buttons, let the form handle the submission
           if (!loading && !submitDisabled) {

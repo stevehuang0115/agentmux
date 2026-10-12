@@ -28,6 +28,6 @@ describe('Menu', () => {
     render(<Menu trigger={<button onClick={own}>A</button>} items={[{ label: 'Delete', onSelect: () => {}, danger: true }]} />);
     fireEvent.click(screen.getByRole('button', { name: 'A' }));
     expect(own).toHaveBeenCalled();
-    expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveClass('text-red-400');
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveClass('text-danger');
   });
 });

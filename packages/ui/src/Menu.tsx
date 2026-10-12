@@ -80,7 +80,7 @@ export const Menu: React.FC<MenuProps> = ({ trigger, items, align = 'end', defau
       {open && (
         <div
           role="menu"
-          className={`absolute top-full mt-1 z-50 min-w-[10rem] rounded-2xl border border-border-dark bg-surface-dark p-1 shadow-lg ${align === 'end' ? 'right-0' : 'left-0'}`}
+          className={`absolute top-full mt-1 z-50 min-w-[10rem] rounded-2xl cw-glass-strong p-1 shadow-lg ${align === 'end' ? 'right-0' : 'left-0'}`}
         >
           {items.map((item, i) => {
             const Icon = item.icon;
@@ -96,7 +96,7 @@ export const Menu: React.FC<MenuProps> = ({ trigger, items, align = 'end', defau
                     item.onSelect();
                   }}
                   className={`flex w-full items-center gap-2 rounded-[0.75rem] px-3 py-2 text-left text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                    item.danger ? 'text-red-400 hover:bg-red-500/10' : 'text-text-primary-dark hover:bg-background-dark'
+                    item.danger ? 'text-danger hover:bg-danger-soft' : 'text-text-primary-dark hover:bg-background-dark'
                   }`}
                 >
                   {Icon && <Icon className="w-4 h-4 shrink-0" />}

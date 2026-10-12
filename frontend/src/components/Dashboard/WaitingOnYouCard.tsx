@@ -257,7 +257,7 @@ export const WaitingOnYouCard: React.FC<WaitingOnYouCardProps> = ({ directory = 
   if (decisions.length === 0) {
     if (!showEmpty || !loaded) return null;
     return (
-      <section aria-labelledby="waiting-on-you-title" data-testid="waiting-on-you">
+      <section aria-labelledby="waiting-on-you-title" data-testid="waiting-on-you" className="cw-glass rounded-2xl px-4 py-4 md:px-0">
         <h2 id="waiting-on-you-title" className="text-lg font-extrabold text-text md:px-4">Waiting on you</h2>
         <p className="mt-1 text-[13px] text-text-2 md:px-4">Nothing needs you right now.</p>
       </section>
@@ -265,7 +265,7 @@ export const WaitingOnYouCard: React.FC<WaitingOnYouCardProps> = ({ directory = 
   }
 
   return (
-    <section aria-labelledby="waiting-on-you-title" data-testid="waiting-on-you">
+    <section aria-labelledby="waiting-on-you-title" data-testid="waiting-on-you" className="cw-glass rounded-2xl px-4 py-4 md:px-0">
       <h2 id="waiting-on-you-title" className="text-lg font-extrabold text-text md:px-4">Waiting on you</h2>
       {old.length > 0 && (
         <button

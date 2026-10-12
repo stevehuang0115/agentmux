@@ -60,17 +60,17 @@ export interface StatusDotProps {
  *  - red    (rose-400):    error
  */
 const STATUS_COLOR_MAP: Record<DotStatus, string> = {
-  active: 'bg-emerald-400',
-  online: 'bg-emerald-400',
-  paired: 'bg-emerald-400',
-  waiting: 'bg-yellow-400',
-  connecting: 'bg-yellow-400',
-  inactive: 'bg-text-secondary-dark/50',
-  disconnected: 'bg-text-secondary-dark/50',
-  offline: 'bg-text-secondary-dark/50',
-  error: 'bg-rose-400',
-  working: 'bg-blue-400',
-  warning: 'bg-orange-400',
+  active: 'bg-success',
+  online: 'bg-success',
+  paired: 'bg-success',
+  waiting: 'bg-attention',
+  connecting: 'bg-attention',
+  inactive: 'bg-muted-dot',
+  disconnected: 'bg-muted-dot',
+  offline: 'bg-muted-dot',
+  error: 'bg-danger',
+  working: 'bg-primary',
+  warning: 'bg-attention',
 };
 
 /** Size → Tailwind dimension class */
@@ -111,7 +111,7 @@ export const StatusDot: React.FC<StatusDotProps> = ({
   'data-testid': testId = 'status-dot',
 }) => {
   const shouldPulse = pulse ?? DEFAULT_PULSE_STATUSES.has(status);
-  const color = STATUS_COLOR_MAP[status] ?? 'bg-text-secondary-dark/50';
+  const color = STATUS_COLOR_MAP[status] ?? 'bg-muted-dot';
 
   const combinedClassName = [
     'inline-block rounded-full',

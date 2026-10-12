@@ -16,7 +16,7 @@ describe('Toggle', () => {
   it('colors the track by variant and size', () => {
     const { container } = render(<Toggle size="lg" variant="success" defaultChecked />);
     const slider = container.querySelector('.toggle-slider')!;
-    expect(slider.className).toContain('peer-checked:bg-emerald-500');
+    expect(slider.className).toContain('peer-checked:bg-success');
     expect(slider.className).toContain('w-12');
   });
 

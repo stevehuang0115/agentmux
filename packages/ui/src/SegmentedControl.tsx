@@ -56,7 +56,7 @@ export function SegmentedControl<T extends string>({
     <div
       role="radiogroup"
       aria-label={rest['aria-label']}
-      className={`${fullWidth ? 'flex w-full' : 'inline-flex'} items-center gap-1 rounded-2xl border border-border-dark bg-background-dark p-1 ${className}`}
+      className={`${fullWidth ? 'flex w-full' : 'inline-flex'} items-center gap-1 rounded-2xl border border-border-soft bg-surface-2/70 p-1 ${className}`}
     >
       {options.map((opt) => {
         const active = opt.value === value;
@@ -74,7 +74,7 @@ export function SegmentedControl<T extends string>({
             data-testid={opt['data-testid']}
             className={`${fullWidth ? 'flex-1' : ''} inline-flex items-center justify-center gap-1.5 rounded-[0.75rem] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
               size === 'sm' ? 'px-2.5 py-1 text-xs' : 'px-3 py-1.5 text-sm'
-            } ${active ? 'bg-surface-dark text-text-primary-dark shadow-sm' : 'text-text-secondary-dark hover:text-text-primary-dark'}`}
+            } ${active ? 'bg-surface text-text shadow-sm' : 'text-text-2 hover:text-text'}`}
           >
             {Icon && <Icon className={size === 'sm' ? 'w-3.5 h-3.5' : 'w-4 h-4'} />}
             {!(opt.iconOnly && Icon) && opt.label}

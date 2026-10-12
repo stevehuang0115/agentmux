@@ -25,9 +25,9 @@ export interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
 }
 
 const variantClasses: Record<CardVariant, string> = {
-  default: 'bg-surface-dark border border-border-dark',
+  default: 'cw-glass',
   outlined: 'border border-border-dark bg-transparent',
-  elevated: 'bg-surface-dark border border-border-dark shadow-md',
+  elevated: 'cw-glass-strong',
 };
 
 const paddingClasses: Record<CardPadding, string> = {
@@ -68,7 +68,7 @@ export const Card = React.forwardRef<HTMLDivElement, CardProps>(
     ref
   ) => {
     const interactiveClass = interactive
-      ? 'cursor-pointer hover:border-primary/50 transition-colors'
+      ? 'cursor-pointer hover:border-primary/50 hover:bg-surface-hover/40 transition-colors'
       : '';
 
     const combinedClassName = cn('rounded-2xl', variantClasses[variant], paddingClasses[padding], interactiveClass, className);
