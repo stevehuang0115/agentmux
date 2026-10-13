@@ -30,6 +30,7 @@ beforeEach(() => {
   service = {
     publish: jest.fn().mockResolvedValue({ appId: ID, name: 'G', url: `https://apps.crewlyai.com/${ID}`, version: 1, created: true, notified: false }),
     rollback: jest.fn().mockResolvedValue({ appId: ID, currentVersion: 1 }),
+    deleteApp: jest.fn().mockResolvedValue({ appId: ID, deleted: true }),
     transfer: jest.fn().mockResolvedValue({ appId: ID, name: 'G', publisher: 'milo-1', previous: 'dev-ella', changed: true, notified: ['milo-1'] }),
     getOwner: jest.fn().mockResolvedValue({ appId: ID, owner: { kind: 'channel', name: '#daily-brief' } }),
     setOwner: jest.fn().mockResolvedValue({ appId: ID, owner: { kind: 'channel', name: '#daily-brief' }, previous: null }),
@@ -233,6 +234,20 @@ describe('Crewly Apps controller: file upload', () => {
   it('refuses an anonymous caller', async () => {
     const res = await request(app).post(`/api/apps/${ID}/files`).set('X-Test-Anonymous', '1').set('Content-Type', 'image/png').send(png);
     expect(res.status).toBe(401);
+  });
+});
+
+describe('Crewly Apps controller: delete (crewly#1081)', () => {
+  it('passes the verified agent as the caller', async () => {
+    const res = await request(app).delete(`/api/apps/${ID}`).set(agentAuthHeaders('dev-ella')).expect(200);
+    expect(res.body).toEqual({ success: true, data: { appId: ID, deleted: true } });
+    expect(service.deleteApp).toHaveBeenCalledWith(ID, { agentSession: 'dev-ella' });
+  });
+
+  it('maps a refusal (public app) to its status', async () => {
+    service.deleteApp.mockRejectedValueOnce(new AppsCloudError(403, 'forbidden', 'public'));
+    const res = await request(app).delete(`/api/apps/${ID}`).set(agentAuthHeaders('dev-ella')).expect(403);
+    expect(res.body.error).toBe('forbidden');
   });
 });
 

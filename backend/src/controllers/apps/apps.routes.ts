@@ -6,7 +6,8 @@
  * - GET    /                                       — apps of the caller (owner: all)
  * - POST   /thumbnails/refresh-all               — owner only: capture every app's portal thumbnail (202, background)
  * - POST   /:appId/thumbnail/refresh              — capture this app's portal thumbnail now
- * - POST   /:appId/transfer                        — `{ toSession }`: hand the app to another agent / team
+ * - DELETE /:appId                                — delete (unpublish) the app: owner, or an agent of the publishing team for a private app
+ * - POST   /:appId/transfer                        — `{ toSession }`: hand the app to another agent / team (owner or orchestrator only)
  * - POST   /:appId/rollback                        — `{ version }`
  * - GET    /:appId/versions                        — versions, newest first
  * - GET    /:appId/data/:collection                — `?limit&after`
@@ -66,6 +67,7 @@ import {
   listApps,
   rollbackApp,
   transferApp,
+  deleteApp,
   getAppOwner,
   setAppOwner,
   addAgentCollaborator,
@@ -228,6 +230,7 @@ export function createAppsRouter(): Router {
   router.post('/thumbnails/refresh-all', refreshAllThumbnails);
   router.post('/:appId/thumbnail/refresh', refreshThumbnail);
   router.post('/:appId/transfer', transferApp);
+  router.delete('/:appId', deleteApp);
   router.get('/:appId/owner', getAppOwner);
   router.put('/:appId/owner', setAppOwner);
   router.post('/:appId/collaborators/agents', addAgentCollaborator);

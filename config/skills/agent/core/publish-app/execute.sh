@@ -28,7 +28,8 @@ Usage:
   bash execute.sh --app <appId> --dir ./my-app          # republish to a known app explicitly
   bash execute.sh --app <appId> --rollback <version>    # make an earlier version current
   bash execute.sh --app <appId> --versions              # list versions
-  bash execute.sh --app <appId> --transfer-to <session> # hand the app to another agent / team
+  bash execute.sh --app <appId> --transfer-to <session> # hand the app to another agent / team (orchestrator or owner only)
+  bash execute.sh --app <appId> --delete                # delete (unpublish) an app your team published (private apps)
   bash execute.sh --app <appId> --owner 'channel:#daily-brief'   # who gets the owner's comments (also with a publish)
   bash execute.sh --list                                # apps published from this machine
   bash execute.sh --app <appId> --share [--ttl-days 7]  # fresh one-tap link card to the owner (no publish)
@@ -81,12 +82,14 @@ Options:
   --unlist-template   Take a template off the Marketplace (apps made from it are not affected)
   --rollback   Version number to make current (needs --app)
   --versions   List versions (needs --app)
+  --delete     Delete (unpublish) the app: its URL stops working and its versions, files and data are removed. Needs --app.
+               Only for a PRIVATE app your team published; a public app is the owner's to delete (use --private first or ask the owner).
   --transfer-to  Hand the app to another agent (its session name; it must be on a team on this machine).
   --owner      Who owns the app's comments: channel:#<name>, team:<name>, agent:<name> or default (the publishing agent).
                With a publish it is set after the publish; alone it needs --app. Only the app's owner agents may change it.
-                 Allowed for the app's publisher, the lead of its team, the orchestrator or the owner.
+                 Allowed for the orchestrator or the owner only; the transfer is recorded (who, when, from, to).
                  The new publisher publishes with --app <appId> --dir <its directory>; the old team loses access.
-  --list       List apps published from this machine
+  --list       List apps published from this machine, with the owning team
   --help | -h  Show this help
 EOF_USAGE
 }
@@ -104,7 +107,7 @@ call() {
   printf '%s\n' "$out" | tail -n 1
 }
 
-DIR=""; FILE=""; NAME=""; APP=""; ENTRY=""; NOTE=""; NOTIFY=false; ROLLBACK=""; TRANSFER_TO=""; VERSIONS=false; LIST=false
+DIR=""; FILE=""; NAME=""; APP=""; ENTRY=""; NOTE=""; NOTIFY=false; ROLLBACK=""; TRANSFER_TO=""; DELETE_APP=false; VERSIONS=false; LIST=false
 SHARE=false; TTL_DAYS=""; LINKS=false; REVOKE_LINK=""; REVOKE_LINKS=false; OWNER_SPEC=""
 CAPABILITY=""; CAPABILITY_NOTE=""; CANCEL_CAPABILITY=false
 PUBLIC=false; PUBLIC_READ=""; PUBLIC_SUBMIT=""; PUBLIC_NOTE=""; CANCEL_PUBLIC=false; PRIVATE=false; REFRESH_THUMB=false
@@ -138,6 +141,7 @@ while [[ $# -gt 0 ]]; do
     --transfer-to) [ $# -ge 2 ] || error_exit "--transfer-to requires a session name"; TRANSFER_TO="$2"; shift 2 ;;
     --owner)    [ $# -ge 2 ] || error_exit "--owner requires channel:#<name>, team:<name>, agent:<name> or default"; OWNER_SPEC="$2"; shift 2 ;;
     --list)     LIST=true; shift ;;
+    --delete)   DELETE_APP=true; shift ;;
     --as-template)   AS_TEMPLATE=true; shift ;;
     --description)   [ $# -ge 2 ] || error_exit "--description requires a value"; TPL_DESCRIPTION="$2"; shift 2 ;;
     --category)      [ $# -ge 2 ] || error_exit "--category requires a value"; TPL_CATEGORY="$2"; shift 2 ;;
@@ -200,7 +204,7 @@ fi
 
 if $LIST; then
   RESPONSE=$(call GET "/apps") || { printf '%s\n' "$RESPONSE"; exit 1; }
-  printf '%s' "$RESPONSE" | jq -c '{success: true, apps: [.data[]? | select(.deleted != true) | {appId, name, url, agent: .agentSession, currentVersion, source}]}'
+  printf '%s' "$RESPONSE" | jq -c '{success: true, apps: [.data[]? | select(.deleted != true) | {appId, name, url, agent: .agentSession, team, currentVersion, source}]}'
   exit 0
 fi
 
@@ -297,6 +301,14 @@ if [ -n "$OWNER_SPEC" ] && [ -z "$DIR" ] && [ -z "$FILE" ]; then
   [ -n "$APP" ] || error_exit "--app is required with --owner (or publish with --dir / --html)"
   RESPONSE=$(call PUT "/apps/${APP}/owner" "$(jq -cn --arg o "$OWNER_SPEC" '{owner: $o}')") || { printf '%s\n' "$RESPONSE"; exit 1; }
   printf '%s' "$RESPONSE" | jq -c '{success: true, appId: .data.appId, owner: '"$OWNER_JQ"'}'
+  exit 0
+fi
+
+if $DELETE_APP; then
+  [ -n "$APP" ] || error_exit "--app is required with --delete"
+  if [ -n "$DIR" ] || [ -n "$FILE" ] || [ -n "$TRANSFER_TO" ] || [ -n "$ROLLBACK" ]; then error_exit "--delete cannot be combined with a publish, --transfer-to or --rollback"; fi
+  RESPONSE=$(call DELETE "/apps/${APP}") || { printf '%s\n' "$RESPONSE"; exit 1; }
+  printf '%s' "$RESPONSE" | jq -c '{success: true, appId: .data.appId, deleted: .data.deleted}'
   exit 0
 fi
 

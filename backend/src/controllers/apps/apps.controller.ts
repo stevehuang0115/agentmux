@@ -141,6 +141,13 @@ export const cancelCapabilityRequest = handle((req, caller) => getAppsParts().se
 /** POST /api/apps/:appId/make-private */
 export const makePrivate = handle((req, caller) => getAppsParts().service.makePrivate(req.params.appId, caller));
 
+/** DELETE /api/apps/:appId — delete (unpublish) an app: the owner, or an agent whose team published it and it is private */
+export const deleteApp = handle(async (req, caller) => {
+  const result = await getAppsParts().service.deleteApp(req.params.appId, caller);
+  logger.info('App deleted', { appId: result.appId, by: caller.agentSession ?? 'owner' });
+  return result;
+});
+
 /** POST /api/apps/:appId/transfer `{ toSession }` — hand the app to another agent / team */
 export const transferApp = handle(async (req, caller) => {
   const result = await getAppsParts().service.transfer(req.params.appId, body(req).toSession, caller);
