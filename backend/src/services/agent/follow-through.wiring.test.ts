@@ -154,6 +154,23 @@ describe('releaseWorkDeps().parkPromise: one WorkItem per thread + promise', () 
 		expect(added).toHaveLength(0);
 	});
 
+	it('burst: concurrent stop paths and repeated ticks for one promise make exactly one item', async () => {
+		promise("I'll redo the cover now, ~10 min");
+		const deps = releaseWorkDeps();
+		const ids = await Promise.all([deps.parkPromise!('atlas'), deps.parkPromise!('atlas'), deps.parkPromise!('atlas')]);
+		for (let i = 0; i < 10; i++) await deps.parkPromise!('atlas');
+		expect(added).toHaveLength(1);
+		expect(ids.filter((id) => id === added[0].id)).toHaveLength(3);
+	});
+
+	it('an item made before promiseKey existed (same target + title) is not duplicated', async () => {
+		const text = "I'll redo the cover now, ~10 min";
+		promise(text);
+		items.push(wi({ id: 'legacy', target: 'atlas', status: 'done', title: `Follow through: ${text.slice(0, 70)}`, metadata: { harnessCreated: 'owner-promise' } }));
+		expect(await releaseWorkDeps().parkPromise!('atlas')).toBeNull();
+		expect(added).toHaveLength(0);
+	});
+
 	it('a promise the agent followed up on makes no item', async () => {
 		promise("I'll redo the cover now, ~10 min");
 		sentinel.noteAgentPost({ slackChannelId: 'C1', threadTs: '1.1', agent: 'atlas', text: 'Done: it is in the thread.', at: NOW - 1000 });
