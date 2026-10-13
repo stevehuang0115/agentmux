@@ -109,8 +109,9 @@ describe('releaseWorkDeps().parkPromise: one WorkItem per thread + promise', () 
 		items = [];
 		added = [];
 		const pool = {
-			getAllItems: async () => items,
+			getAllItems: async () => [...items],
 			addToPool: async (item: WorkItem) => {
+				await new Promise((r) => setTimeout(r, 5));
 				added.push(item);
 				items.push(item);
 				return item;
