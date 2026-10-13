@@ -465,3 +465,47 @@ export const getUploadRequest = handle((req, caller) => handoffCall('GET', `/upl
 
 /** DELETE /api/apps/upload-requests/:requestId — cancel the link */
 export const cancelUploadRequest = handle((req, caller) => handoffCall('DELETE', `/upload-requests/${uploadRequestIdOf(req)}`, caller));
+
+// ---------------------------------------------------------------------------
+// Shares (crewly-services apps/SPEC.md section 20): the reverse of request-file. An
+// agent puts a LARGE file it made on a private link for the owner. Like handoffs,
+// the bytes never pass through this backend: the skill PUTs to the presigned URL
+// Cloud returns. Agents get metadata only; the signed view/download URLs go to
+// the owner's portal page.
+// ---------------------------------------------------------------------------
+
+/** A share id from the URL, or a 404 that names nothing. */
+function shareIdOf(req: Request): string {
+  const id = req.params.shareId;
+  if (!/^sf_[A-Za-z0-9_-]{22}$/.test(id)) throw new AppsCloudError(404, 'not_found', 'No such file.');
+  return id;
+}
+
+/** POST /api/apps/shares `{ fileName, sizeBytes, contentType?, note? }` — reserve a share; answers the owner's link and a presigned upload URL */
+export const createShare = handle(async (req, caller) => {
+  const b = body(req);
+  const result = await handoffCall<{ shareId?: string; sizeBytes?: number }>(
+    'POST',
+    '/shares',
+    caller,
+    { fileName: b.fileName, sizeBytes: b.sizeBytes, contentType: b.contentType, note: b.note },
+  );
+  logger.info('File share created', { shareId: result.shareId, sizeBytes: result.sizeBytes, agent: caller.agentSession ?? 'owner' });
+  return result;
+}, 201);
+
+/** POST /api/apps/shares/:shareId/complete — the upload finished; Cloud checks the size and starts the 7 days */
+export const completeShare = handle((req, caller) => handoffCall('POST', `/shares/${shareIdOf(req)}/complete`, caller));
+
+/** GET /api/apps/shares/:shareId — metadata (signed URLs only for the owner) */
+export const getShare = handle((req, caller) => handoffCall('GET', `/shares/${shareIdOf(req)}`, caller));
+
+/** GET /api/apps/shares — the account's live shares, with their links */
+export const listShares = handle((_req, caller) => handoffCall('GET', '/shares', caller));
+
+/** DELETE /api/apps/shares/:shareId — withdraw; Cloud deletes the file */
+export const cancelShare = handle(async (req, caller) => {
+  const result = await handoffCall('DELETE', `/shares/${shareIdOf(req)}`, caller);
+  logger.info('File share cancelled', { shareId: req.params.shareId, agent: caller.agentSession ?? 'owner' });
+  return result;
+});

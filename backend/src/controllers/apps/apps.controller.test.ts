@@ -680,3 +680,39 @@ describe('Crewly Apps controller: owner upload requests', () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 });
+
+describe('Crewly Apps controller: shares (agent file for the owner)', () => {
+  const SID = 'sf_AbCdEfGhIjKlMnOpQrStUv';
+  let client: { request: jest.Mock };
+  beforeEach(() => {
+    client = { request: jest.fn().mockResolvedValue({ shareId: SID, url: `https://crewlyai.com/portal/files/${SID}` }) };
+    setAppsParts({ client: client as unknown as AppsCloudClient, registry: {} as unknown as AppsRegistryService, service: service as unknown as AppsService });
+  });
+
+  it('create forwards only the known fields to Cloud as the verified agent and answers 201', async () => {
+    const res = await request(app).post('/api/apps/shares').set(agentAuthHeaders('dev-ella')).send({ fileName: 'final.mp4', sizeBytes: 5, note: 'n', to: 'x', evil: 'y' });
+    expect(res.status).toBe(201);
+    expect(client.request).toHaveBeenCalledWith('POST', '/shares', { body: { fileName: 'final.mp4', sizeBytes: 5, contentType: undefined, note: 'n' }, agent: 'dev-ella' });
+  });
+
+  it('get / complete / list / delete route to the Cloud share paths', async () => {
+    await request(app).get(`/api/apps/shares/${SID}`).set(agentAuthHeaders('dev-ella')).expect(200);
+    expect(client.request).toHaveBeenLastCalledWith('GET', `/shares/${SID}`, { agent: 'dev-ella' });
+    await request(app).post(`/api/apps/shares/${SID}/complete`).set(agentAuthHeaders('dev-ella')).expect(200);
+    expect(client.request).toHaveBeenLastCalledWith('POST', `/shares/${SID}/complete`, { agent: 'dev-ella' });
+    await request(app).get('/api/apps/shares').set(agentAuthHeaders('dev-ella')).expect(200);
+    expect(client.request).toHaveBeenLastCalledWith('GET', '/shares', { agent: 'dev-ella' });
+    await request(app).delete(`/api/apps/shares/${SID}`).set(agentAuthHeaders('dev-ella')).expect(200);
+    expect(client.request).toHaveBeenLastCalledWith('DELETE', `/shares/${SID}`, { agent: 'dev-ella' });
+  });
+
+  it('a malformed id is 404 and never reaches Cloud; Cloud refusals pass through', async () => {
+    client.request.mockClear();
+    await request(app).get('/api/apps/shares/..%2F..%2Fapps').set(agentAuthHeaders('dev-ella')).expect(404);
+    expect(client.request).not.toHaveBeenCalled();
+    client.request.mockRejectedValue(new AppsCloudError(413, 'too_large', 'A shared file can be at most 4096 MB.'));
+    const res = await request(app).post('/api/apps/shares').set(agentAuthHeaders('dev-ella')).send({ fileName: 'a', sizeBytes: 1 });
+    expect(res.status).toBe(413);
+    expect(res.body).toMatchObject({ success: false, error: 'too_large' });
+  });
+});

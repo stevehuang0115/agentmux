@@ -44,6 +44,9 @@
  * - GET    /handoffs/:handoffId                   — metadata + presigned download URL once ready (`GET /handoffs` lists)
  * - POST   /upload-requests                      — `{ purpose, agentName?, maxFiles? }`: ask the owner for a (large) file; answers the upload link
  * - GET    /upload-requests/:requestId            — status, limits and files (`DELETE` cancels the link)
+ * - POST   /shares                               — `{ fileName, sizeBytes, contentType?, note? }`: put a large file you made on a private link for the owner; answers the link and a presigned upload URL
+ * - POST   /shares/:shareId/complete              — upload finished (Cloud checks the size)
+ * - GET    /shares/:shareId                       — metadata (`GET /shares` lists; `DELETE /shares/:shareId` withdraws)
  * - POST   /handoffs/:handoffId/ack               — received: Cloud deletes the file (`DELETE /handoffs/:handoffId` withdraws)
  * - GET    /templates                              — `?q&tag&category&limit`: search Marketplace app templates
  * - GET    /templates/mine                         — this account's own templates
@@ -116,6 +119,11 @@ import {
   createUploadRequest,
   getUploadRequest,
   cancelUploadRequest,
+  createShare,
+  completeShare,
+  getShare,
+  listShares,
+  cancelShare,
 } from './apps.controller.js';
 
 const C = CREWLY_APPS_CONSTANTS;
@@ -227,6 +235,12 @@ export function createAppsRouter(): Router {
   router.post('/upload-requests', createUploadRequest);
   router.get('/upload-requests/:requestId', getUploadRequest);
   router.delete('/upload-requests/:requestId', cancelUploadRequest);
+  // Shares (share-file): a large file for the owner, registered before the /:appId routes too.
+  router.post('/shares', createShare);
+  router.get('/shares', listShares);
+  router.get('/shares/:shareId', getShare);
+  router.post('/shares/:shareId/complete', completeShare);
+  router.delete('/shares/:shareId', cancelShare);
   router.post('/thumbnails/refresh-all', refreshAllThumbnails);
   router.post('/:appId/thumbnail/refresh', refreshThumbnail);
   router.post('/:appId/transfer', transferApp);
