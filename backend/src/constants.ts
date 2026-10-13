@@ -5927,6 +5927,8 @@ export const TICKET_CONSTANTS = {
 		 * still takes follow-ups into that ticket instead of opening a new one.
 		 */
 		RECENT_TICKET_MS: 3 * 24 * 60 * 60 * 1000,
+		/** A chase matches only tickets with activity in this window */
+		CHASE_MATCH_WINDOW_MS: 14 * 24 * 60 * 60 * 1000,
 		/**
 		 * In a DM (every message is top level) a reply this soon after the
 		 * conversation's latest ticket activity is a follow-up to that ticket.

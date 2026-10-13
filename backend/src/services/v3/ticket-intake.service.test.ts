@@ -8,6 +8,7 @@ import * as path from 'path';
 import {
   TicketIntakeService,
   suppressTrivialOrShort,
+  chaseTopic,
   suppressFileOnly,
   weightedTextLength,
   isDismissText,
@@ -1126,5 +1127,47 @@ describe('recordSkipped', () => {
     expect(log.events).toEqual([
       expect.objectContaining({ ref: 'slackch-C1-300.1', action: 'ignored', reason: 'room_owned_elsewhere' }),
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Owner chases ("之前说的X现在什么情况了？")
+// ---------------------------------------------------------------------------
+
+describe('chaseTopic', () => {
+  it('finds the topic of a chase and none in a bare ping', () => {
+    expect(chaseTopic('之前说那个AZ星球的视频 现在什么情况了？')).toEqual({ latin: ['az'], cjk: expect.arrayContaining(['星球', '视频']) });
+    expect(chaseTopic('之前说的那个AZ星球的视频剪辑是不是又给忘了？')?.latin).toEqual(['az']);
+    for (const bare of ['进度呢', '在吗', 'status?', '现在什么情况了？', 'any update', 'what is the status of the deploy?', '之前说的那个现在什么情况了？']) expect(chaseTopic(bare)).toBeNull();
+  });
+});
+
+describe('intake — chases', () => {
+  it('appends to a recent open ticket that matches the topic and nudges its assignee', async () => {
+    const nudge = jest.fn(async () => undefined);
+    svc.setChaseNudge(nudge);
+    const ticket = await svc.intake(msg({ ts: '400.1', text: '请做一个AZ星球的视频剪辑，素材已上传', targetAgent: 'pia' }));
+    const outcome = await svc.intakeWithOutcome(msg({ ts: '400.2', text: '之前说那个AZ星球的视频 现在什么情况了？' }));
+    expect(outcome.action).toBe('appended');
+    expect(outcome.action === 'appended' && outcome.ticket.id).toBe(ticket!.id);
+    expect(store.items.size).toBe(1);
+    expect(nudge).toHaveBeenCalledWith('pia', expect.stringContaining('TKT-'));
+  });
+
+  it('opens a lightweight question ticket when nothing matches, assigned to the responder', async () => {
+    const outcome = await svc.intakeWithOutcome(msg({ ts: '410.1', text: '之前说的那个AZ星球的视频剪辑是不是又给忘了？', targetAgent: 'ella' }));
+    expect(outcome.action).toBe('created');
+    const t = outcome.action === 'created' ? outcome.ticket : null;
+    expect(t).toMatchObject({ kind: 'question', assignee: 'ella', requiresConfirmation: false });
+    expect(t?.tags).toContain('chase');
+  });
+
+  it('does not match a finished ticket, and a bare ping stays ignored', async () => {
+    const done = await svc.intake(msg({ ts: '420.1', text: '请做一个AZ星球的视频剪辑' }));
+    await store.update(done!.id, { status: 'done', completedAt: new Date().toISOString() } as UpdateRequestInput);
+    const chase = await svc.intakeWithOutcome(msg({ ts: '420.2', text: '之前说的AZ星球的视频现在什么情况了？' }));
+    expect(chase.action).toBe('created');
+    const bare = await svc.intakeWithOutcome(msg({ ts: '420.3', text: '进度呢？' }));
+    expect(bare.action).toBe('ignored');
   });
 });
