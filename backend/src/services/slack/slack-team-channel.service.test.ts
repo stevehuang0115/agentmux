@@ -1931,6 +1931,64 @@ describe('the room is whoever\'s bot is in it', () => {
     isLocal = () => false;
   });
 
+  // 2026-10-13, #pro-crewly-marketing: Ella (Mac) @'d the Air's orchestrator in
+  // an ad-hoc room whose only local member was Rex. The orc is not a room
+  // member, so nothing was addressed here and the message was dropped.
+  describe('this machine\'s orchestrator @\'d in a room', () => {
+    const ORC_CLOUD = 'crewly-orc@2577fec0-inst';
+    async function setup() {
+      isLocal = (s) => s === 'crewly-alpha-leo';
+      service = makeService();
+      await service.ensureTeamChannel(team());
+      identities!.install('crewly-alpha-leo', 'ULEO', 'xoxb-leo');
+      identities!.provision('crewly-orc', 'Orc');
+      identities!.install('crewly-orc', 'UORC', 'xoxb-orc');
+    }
+
+    it('hands an agent-authored message from another machine to the orchestrator', async () => {
+      await setup();
+      const result = await service.routeInbound(
+        inbound({
+          channelId: 'C-mkt', text: '<@UORC> approved a new team on your machine', ts: '604.1',
+          receivedVia: 'crewly-alpha-leo', mentionedAgentSessions: [localAgentSession(ORC_CLOUD)],
+          authorAgentSession: 'marketing-ella-e6a6b8ea', authorDisplayName: 'Ella',
+        }),
+      );
+      expect(result).toBeNull();
+      expect(dispatcher!.dispatchMessage).not.toHaveBeenCalled();
+      isLocal = () => false;
+    });
+
+    it('hands an owner @ of the orchestrator bot id in the text to the orchestrator', async () => {
+      await setup();
+      const result = await service.routeInbound(
+        inbound({ channelId: 'C-mkt', text: '<@UORC> status?', ts: '604.2', userId: 'UOWNER', receivedVia: 'crewly-alpha-leo' }),
+      );
+      expect(result).toBeNull();
+      expect(dispatcher!.dispatchMessage).not.toHaveBeenCalled();
+      isLocal = () => false;
+    });
+
+    it('hands a repeated copy back only once', async () => {
+      await setup();
+      const msg = inbound({ channelId: 'C-mkt', text: '<@UORC> hi', ts: '604.3', userId: 'UOWNER', receivedVia: 'crewly-alpha-leo' });
+      expect(await service.routeInbound(msg)).toBeNull();
+      expect((await service.routeInbound(msg))?.duplicate).toBe(true);
+      isLocal = () => false;
+    });
+
+    it('leaves a message that @\'s only a regular member unchanged', async () => {
+      await setup();
+      const result = await service.routeInbound(
+        inbound({ channelId: 'C-mkt', text: '<@ULEO> hello', ts: '604.4', userId: 'UOWNER', receivedVia: 'crewly-alpha-leo', mentionedAgentSessions: ['crewly-alpha-leo'] }),
+      );
+      expect(result).not.toBeNull();
+      expect(result!.mentions).toEqual(['crewly-alpha-leo']);
+      expect(dispatcher!.dispatchMessage).toHaveBeenCalled();
+      isLocal = () => false;
+    });
+  });
+
   it('never turns a DM into a room', async () => {
     isLocal = () => true;
     service = makeService();
