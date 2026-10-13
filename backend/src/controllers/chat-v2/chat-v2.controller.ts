@@ -17,6 +17,7 @@
  * @module controllers/chat-v2/chat-v2.controller
  */
 
+import type { AttachResult } from '../../services/file-handoff/file-handoff.service.js';
 import type { Request, Response } from 'express';
 import type { AuthenticatedRequest } from '../../middleware/require-auth.middleware.js';
 import type { ChatV2Service } from '../../services/chat-v2/chat-v2.service.js';
@@ -166,6 +167,36 @@ async function rerouteMismatchedAgentThread(req: Request, res: Response): Promis
     },
   });
   return true;
+}
+
+/**
+ * Upload the files of an agent's message and rewrite `req.body.content` with
+ * the marker lines. Never throws and never blocks the post: a failure is
+ * reported back to the agent in the response.
+ *
+ * @param req - The send request (body is updated in place)
+ * @returns The upload report, or null when no file was involved
+ */
+async function attachAgentFiles(req: Request): Promise<AttachResult | null> {
+  try {
+    const agentSession = principalFromRequest(req).agentSession ?? undefined;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (!agentSession || typeof body.content !== 'string') return null;
+    const [{ attachOutboundFiles }, wiring] = await Promise.all([
+      import('../../services/file-handoff/file-handoff.outbound.js'),
+      import('../../services/file-handoff/file-handoff.wiring.js'),
+    ]);
+    const result = await attachOutboundFiles(
+      { content: body.content, files: body.files, projectPath: body.projectPath, interim: body.interim === true },
+      agentSession,
+      String(req.params.id),
+      { service: wiring.getFileHandoffService(), projectDirFor: wiring.projectDirForAgent, crossMachine: wiring.roomHasRemoteColleague },
+    );
+    if (result) body.content = result.content;
+    return result;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -560,6 +591,9 @@ export function createChatV2Controller(
       // A colleague already answered the owner's latest message in this
       // thread: hold this one (specs/2026-10-03-one-responder-per-message.md §2).
       if (await holdAlreadyAnsweredReply(req, res)) return;
+      // Files an agent attached (`--file`) or mentioned by path travel as Cloud
+      // handoffs; their marker lines are appended to the text before it is stored.
+      const fileHandoff = await attachAgentFiles(req);
       // Persist + 201 — on error, runHandler serializes it and we bail
       // without running any post-ack side-effects. On success, the
       // closure populates `persisted` + `channelForDispatch`.
@@ -590,7 +624,7 @@ export function createChatV2Controller(
           threadId: body.threadId,
           interim: body.interim === true,
         });
-        res.status(201).json({ success: true, data: message });
+        res.status(201).json({ success: true, data: message, ...(fileHandoff ? { fileHandoff: { attached: fileHandoff.attached, failed: fileHandoff.failed } } : {}) });
         persisted = message;
         // Look up channel for gateway + dispatcher wiring. `getChannel`
         // requires `principal.userId === channel.owner_user_id` — which

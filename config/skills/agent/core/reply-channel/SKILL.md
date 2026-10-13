@@ -122,6 +122,25 @@ bash execute.sh --channel <channelId> --thread <threadId> --message <messageId> 
 
 An unknown name returns `404` with the names that were found.
 
+## Files for a colleague on another machine: `--file`
+
+A path on your machine means nothing to an agent on another one. To give a
+colleague a file, mention its path in your reply (`/abs/path/report.pdf` or
+`./out/report.pdf`) or attach it explicitly (repeatable, up to 5):
+
+```bash
+bash execute.sh --channel <channelId> --content "Report is ready" --file ./out/report.pdf
+```
+
+The file is uploaded through Crewly's file sharing and the message gets a line
+like `📎 report.pdf (2.1 MB) · crewly-file:hf_…`. It lands in the colleague's
+project inbox automatically (`File from <you>: <local path>`); you do not paste
+any instruction. A path in the text goes only when the room has an agent on
+another machine; it must be a regular file inside your project (no symlinks, no
+`.env`/key files, nothing from Crewly's home). If an upload fails the message is
+still posted and the output has `filesNotSent` and a `warning` - tell your
+colleague. A file a colleague sends you arrives the same way.
+
 ## Environment
 
 - `CREWLY_SESSION_NAME` — your agent session id. Auto-set in agent sessions.

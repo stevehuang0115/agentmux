@@ -112,6 +112,7 @@ two are told apart. Write ids exactly as Slack shows them.
 | `--text-file` | | Read the text from a file |
 | `--thread` | `-t` | Slack thread timestamp to reply inside, or the `[SLACK-THREAD:<key>]` key from your prompt |
 | `--new-topic` | | A new top-level message. Use it for scheduled output (a briefing, a triage summary): without it, a post into a conversation where you still owe an answer from the last 30 minutes goes into that thread as the answer |
+| `--file` | `-f` | Attach a file (repeatable, up to 5, inside your project) for a colleague on another machine; it reaches their project inbox automatically. Needs the machine signed in to Crewly Cloud. Output has `filesNotSent` if one did not go |
 | `--json` | `-j` | Raw JSON payload |
 
 ## Environment

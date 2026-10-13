@@ -24,6 +24,7 @@ Options:
   --text-file        Read the message text from a file
   --thread    | -t   Slack thread timestamp to reply inside
   --new-topic        A new top-level post (scheduled output), never an answer to an open question
+  --file      | -f   Attach a file for a colleague on another machine (repeatable, up to 5)
   --json      | -j   Raw JSON payload
   --help      | -h   Show this help
 EOF_USAGE
@@ -34,6 +35,7 @@ TARGET=""
 TEXT=""
 THREAD_TS=""
 NEW_TOPIC=""
+FILES_JSON="[]"
 
 # Legacy JSON as the first positional argument
 if [[ $# -gt 0 && ${1:0:1} == '{' ]]; then
@@ -48,6 +50,10 @@ while [[ $# -gt 0 ]]; do
     --text-file) TEXT="$(cat "$2")"; shift 2 ;;
     --thread|-t) THREAD_TS="$2"; shift 2 ;;
     --new-topic) NEW_TOPIC="1"; shift ;;
+    --file|-f)
+      [ $# -ge 2 ] || { echo '{"success":false,"error":"--file requires a path"}' >&2; exit 2; }
+      FILES_JSON=$(FILES_JSON="$FILES_JSON" NEW_FILE="$2" python3 -c 'import json, os; a = json.loads(os.environ["FILES_JSON"]); a.append(os.environ["NEW_FILE"]); print(json.dumps(a))')
+      shift 2 ;;
     --json|-j) INPUT_JSON="$2"; shift 2 ;;
     --help|-h) print_usage; exit 0 ;;
     *) print_usage >&2; unknown_arg_exit "$1" ;;
@@ -101,9 +107,13 @@ fi
 # Convert literal \n to real newlines, matching the other comm skills
 _NL=$'\n'; TEXT="${TEXT//\\n/$_NL}"
 
-BODY=$(TARGET="$TARGET" TEXT="$TEXT" THREAD_TS="$THREAD_TS" NEW_TOPIC="$NEW_TOPIC" python3 -c '
+BODY=$(TARGET="$TARGET" TEXT="$TEXT" THREAD_TS="$THREAD_TS" NEW_TOPIC="$NEW_TOPIC" FILES_JSON="$FILES_JSON" PROJECT_PATH="${CREWLY_PROJECT_PATH:-$PWD}" python3 -c '
 import json, os
 p = {"target": os.environ["TARGET"], "text": os.environ["TEXT"]}
+files = json.loads(os.environ.get("FILES_JSON", "[]"))
+if files:
+    p["files"] = files
+    p["projectPath"] = os.environ.get("PROJECT_PATH", "")
 ts = os.environ.get("THREAD_TS", "")
 if ts:
     p["threadTs"] = ts
@@ -116,16 +126,22 @@ if RESPONSE=$(api_call POST "/slack/post" "$BODY" 2>&1); then
   echo "$RESPONSE" | python3 -c '
 import json, sys
 try:
-    d = json.load(sys.stdin).get("data") or {}
+    full = json.load(sys.stdin)
+    d = full.get("data") or {}
 except Exception:
     print("{\"success\":true}"); raise SystemExit(0)
-print(json.dumps({
+out = {
     "success": True,
     "channelId": d.get("channelId", ""),
     "messageTs": d.get("messageTs", ""),
     "kind": d.get("kind", ""),
     "postedAs": d.get("postedAs", ""),
-}))
+}
+fh = full.get("fileHandoff") or {}
+if fh.get("failed"):
+    out["filesNotSent"] = fh["failed"]
+    out["warning"] = "The message was posted, but some files did not go; tell your colleague or send them again with --file."
+print(json.dumps(out))
 '
   exit 0
 else

@@ -399,6 +399,10 @@ Use bash skills at \`${config.agentSkillsPath}/\` for all team communication. Re
 \`core/attach-file --channel <the id from your prompt> --path <file>\`. It lands in
 the same thread, under your own name.
 
+For a **colleague agent on another machine**, mention the file's path in your
+\`reply-channel\` message or add \`--file <path>\`: it arrives in their project inbox
+automatically. Never ask them to open a path on your machine.
+
 You do **not** need a Slack channel id, and you do not need to ask for one. Pass
 the chat channel id you already have — the one in \`[CHAT:<id>]\` — and the
 backend works out the rest, whether this conversation is a team channel or a

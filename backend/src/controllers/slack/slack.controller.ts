@@ -1629,7 +1629,26 @@ router.post('/post', async (req: Request, res: Response, next: NextFunction) => 
       });
       return;
     }
-    const { target, text, threadTs, newTopLevel } = req.body ?? {};
+    const { target, text: rawPostText, threadTs, newTopLevel } = req.body ?? {};
+    // Files named with `--file` travel as Cloud handoffs; their marker lines join the text.
+    let text: unknown = rawPostText;
+    let fileHandoff: { attached: unknown[]; failed: unknown[] } | null = null;
+    if (typeof rawPostText === 'string' && Array.isArray(req.body?.files) && req.body.files.length > 0) {
+      const [{ attachOutboundFiles }, wiring] = await Promise.all([
+        import('../../services/file-handoff/file-handoff.outbound.js'),
+        import('../../services/file-handoff/file-handoff.wiring.js'),
+      ]);
+      const attachment = await attachOutboundFiles(
+        { content: rawPostText, files: req.body.files, projectPath: req.body.projectPath },
+        agentSession,
+        '',
+        { service: wiring.getFileHandoffService(), projectDirFor: wiring.projectDirForAgent, crossMachine: async () => false },
+      ).catch(() => null);
+      if (attachment) {
+        text = attachment.content;
+        fileHandoff = { attached: attachment.attached, failed: attachment.failed };
+      }
+    }
     // Owner board: the agent is messaging a channel (an id shows as plain "Slack")
     getBoardActivity().recordMessage(agentSession, typeof target === 'string' && /^[#@]?[A-Za-z][\w.-]{0,38}$/.test(target) ? target.replace(/^@/, '') : 'Slack');
     try {
@@ -1641,7 +1660,7 @@ router.post('/post', async (req: Request, res: Response, next: NextFunction) => 
         // #808: scheduled output says so, and never lands in an owed thread.
         ...(newTopLevel === true ? { newTopLevel: true } : {}),
       });
-      res.json({ success: true, data: result });
+      res.json({ success: true, data: result, ...(fileHandoff ? { fileHandoff } : {}) });
       return;
     } catch (err) {
       if (!(err instanceof SlackAgentPostError) || err.code !== 'thread_mismatch') throw err;

@@ -33,6 +33,11 @@ signed in to Crewly Cloud. The file is streamed from disk (never loaded into
 memory), kept on a temporary server, and deleted as soon as the receiver
 acknowledges it, or after 24 hours.
 
+**For a colleague on another machine you usually do not need this skill:** mention
+the file's path in a `reply-channel` message, or add `--file <path>` to it. The
+file is sent and lands in their project inbox automatically. Use `send-file`
+directly for a hand-off outside a conversation.
+
 ```bash
 bash execute.sh --path ./out/daily-2026-10-09.mp4 --note "today's cut, 300 MB" --to Mia
 ```

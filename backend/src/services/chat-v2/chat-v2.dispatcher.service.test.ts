@@ -2103,6 +2103,34 @@ describe('owner messages carry queue priority (2026-10-05, D-270)', () => {
     expect(seen).toEqual([{ where: { chatChannelId: 'dm-1', chatThreadId: 'root-1' } }, null]);
   });
 
+  describe('prepareInbound (cross-machine files)', () => {
+    it('delivers the rewritten text, and the original row is what hooks see', async () => {
+      const { sink, calls } = makeSink({ success: true });
+      const prepareInbound = jest.fn(async (_c: ChatChannelDTO, m: ChatMessageDTO) => ({ ...m, content: 'File from Sam: /p/.crewly/inbox/x/r.pdf' }));
+      const onDispatched = jest.fn();
+      const dispatcher = new ChatV2DispatcherService({ agentSink: sink, prepareInbound, onDispatched });
+      const original = makeMessage({ content: '📎 r.pdf (1 KB) · crewly-file:hf_AAAAAAAAAAAAAAAAAAAAAA' });
+      await dispatcher.dispatchMessage(makeChannel(), original);
+      expect(prepareInbound).toHaveBeenCalledTimes(1);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.message).toContain('File from Sam: /p/.crewly/inbox/x/r.pdf');
+      expect(calls[0]!.message).not.toContain('crewly-file:');
+      expect(onDispatched.mock.calls[0]![1]).toBe(original);
+    });
+
+    it('delivers the original text when preparing throws', async () => {
+      const { sink, calls } = makeSink({ success: true });
+      const dispatcher = new ChatV2DispatcherService({
+        agentSink: sink,
+        prepareInbound: async () => {
+          throw new Error('boom');
+        },
+      });
+      await dispatcher.dispatchMessage(makeChannel(), makeMessage({ content: 'plain hello' }));
+      expect(calls[0]!.message).toContain('plain hello');
+    });
+  });
+
   it('ownerQueueMeta: a portal message is keyed by its chat id; a huddle names its thread', () => {
     expect(ownerQueueMeta({ id: 'room' }, { id: 'm-1', metadata: { source: 'web' } }, 'root-1')).toEqual({
       owner: true,

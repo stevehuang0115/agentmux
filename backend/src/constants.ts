@@ -8621,3 +8621,44 @@ export const RECURRING_CHANGE_HANDOFF_CONSTANTS = {
 	/** Option labels / answers that decline a change (nothing to hand off) */
 	DECLINE_PATTERN: /^\s*(?:(?:no|nope|not now|skip|wait|keep|cancel|don'?t)\b|不|别|先不|算了|保持)/iu,
 } as const;
+
+/**
+ * Automatic cross-machine file hand-off: files an agent mentions or attaches
+ * travel through Cloud's file-handoff relay (apps SPEC section 18) and land
+ * in the receiving agent's project inbox.
+ */
+export const FILE_HANDOFF_CONSTANTS = {
+	/** Largest file Cloud accepts for one handoff (2 GB) */
+	MAX_FILE_BYTES: 2 * 1024 * 1024 * 1024,
+	/** Files attached to one message, explicit and automatic together */
+	MAX_FILES_PER_MESSAGE: 5,
+	/** Marker token a message carries; the id follows the colon */
+	MARKER_PREFIX: 'crewly-file:',
+	/** Glyph that starts a marker line in front of a human reader */
+	MARKER_GLYPH: '📎',
+	/** Handoff id shape (22 url-safe characters after `hf_`) */
+	ID_PATTERN: 'hf_[A-Za-z0-9_-]{22}',
+	/** Per-file upload ceiling */
+	UPLOAD_TIMEOUT_MS: 10 * 60 * 1000,
+	/** Per-file download ceiling before the message is delivered without it */
+	DOWNLOAD_TIMEOUT_MS: 45 * 1000,
+	/** All downloads of one incoming message together */
+	DOWNLOAD_TOTAL_TIMEOUT_MS: 90 * 1000,
+	/** Text files up to this size are scanned for secrets before they leave the machine */
+	SECRET_SCAN_MAX_BYTES: 1024 * 1024,
+	/** Inbox folder under the project data directory */
+	INBOX_DIR: 'inbox',
+	/** Fallback content type when none is known */
+	DEFAULT_CONTENT_TYPE: 'application/octet-stream',
+	/** File names (lower-cased) that never leave the machine */
+	SECRET_NAME_PATTERNS: [
+		/^\.env(\..*)?$/,
+		/\.(pem|key|p12|pfx|keystore|jks|kdbx|ppk)$/,
+		/^id_[a-z0-9_]+$/,
+		/^\.(npmrc|netrc|pypirc|git-credentials|pgpass)$/,
+		/^credentials(\..*)?$/,
+		/^(secrets?|service-account.*)\.(json|ya?ml|toml)$/,
+	] as readonly RegExp[],
+	/** Directory names (lower-cased) a path must not pass through */
+	SECRET_DIR_NAMES: ['.ssh', '.aws', '.gnupg', '.git', 'node_modules'] as readonly string[],
+} as const;
