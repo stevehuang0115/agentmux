@@ -102,7 +102,7 @@ const SIZE_UNITS = ['B', 'KB', 'MB', 'GB'] as const;
 /** Characters that end a path written in prose */
 const PATH_TRAILING_PUNCT = /[.,;:!?)\]}>'"`]+$/;
 /** Absolute or `./relative` paths in free text */
-const PATH_IN_TEXT_RE = /(?:^|[\s"'`(<\[])((?:\/|\.\/)[^\s"'`)>\]]+)/g;
+const PATH_IN_TEXT_RE = /(?:^|[\s"'`(<[])((?:\/|\.\/)[^\s"'`)>\]]+)/g;
 
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
