@@ -409,6 +409,30 @@ export function requireCollectionList(v: unknown, what: string): string[] {
   return names as string[];
 }
 
+/** Capability names an agent may ask for (Cloud's `APP_CAPABILITIES`); Cloud validates again. */
+export const REQUESTABLE_CAPABILITIES = ['microphone', 'media_capture'] as const;
+
+/** What an agent tells the owner after asking for a capability. */
+const CAPABILITY_REQUEST_MESSAGE = 'Requested: the owner allows it in Crewly Cloud (Apps -> the app -> Permissions). Until then the app keeps the default sandbox and the browser refuses the device.';
+
+/**
+ * Validate an agent's capability request.
+ *
+ * @param input - `{ capabilities, note? }` (capabilities: array or comma-separated string)
+ * @returns The body to send to Cloud
+ */
+export function validateCapabilityRequest(input: unknown): { capabilities: string[]; note?: string } {
+  const b = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
+  const raw = typeof b.capabilities === 'string' ? b.capabilities.split(',') : b.capabilities;
+  if (!Array.isArray(raw) || raw.length === 0) throw validation('Name at least one capability (microphone or media_capture).');
+  const caps = [...new Set(raw.map((c) => (typeof c === 'string' ? c.trim() : '')))];
+  const bad = caps.find((c) => !(REQUESTABLE_CAPABILITIES as readonly string[]).includes(c));
+  if (bad !== undefined) throw validation(`Unknown capability ${JSON.stringify(bad.slice(0, 40))}. Use: ${REQUESTABLE_CAPABILITIES.join(', ')}.`);
+  const note = typeof b.note === 'string' ? b.note.trim() : '';
+  if (note.length > 500) throw validation('note must be at most 500 characters.');
+  return { capabilities: caps, ...(note ? { note } : {}) };
+}
+
 /**
  * Check a public request body.
  *
@@ -817,6 +841,38 @@ export class AppsService {
     await this.assertPublisher(id, caller);
     const r = await this.deps.client.request<{ visibility?: AppVisibility }>('DELETE', `/apps/${id}/visibility-request`, { agent: caller.agentSession });
     return { appId: id, cancelled: true, visibility: r?.visibility ?? 'private' };
+  }
+
+  /**
+   * Ask the owner for extra browser permissions for an app (`microphone`, `media_capture`).
+   * Only records the request: Cloud grants a capability solely from the owner's own portal
+   * sign-in, so nothing here can turn one on. The owner sees a banner in the app.
+   *
+   * @param appId - App id
+   * @param input - `{ capabilities: string[] | comma string, note? }`
+   * @param caller - Agent (its own apps) or owner
+   * @returns Cloud's recorded request
+   */
+  async requestCapabilities(appId: unknown, input: unknown, caller: AppsCaller): Promise<{ appId: string; requested: true; capabilities: unknown; capabilityRequest: unknown; message: string }> {
+    const id = requireAppId(appId);
+    const body = validateCapabilityRequest(input);
+    await this.assertPublisher(id, caller);
+    const r = await this.deps.client.request<{ capabilities?: unknown; capabilityRequest?: unknown }>('POST', `/apps/${id}/capability-request`, { body, agent: caller.agentSession });
+    return { appId: id, requested: true, capabilities: r?.capabilities ?? [], capabilityRequest: r?.capabilityRequest ?? null, message: CAPABILITY_REQUEST_MESSAGE };
+  }
+
+  /**
+   * Withdraw a pending capability request.
+   *
+   * @param appId - App id
+   * @param caller - Agent (its own apps) or owner
+   * @returns `{ appId, cancelled: true }`
+   */
+  async cancelCapabilityRequest(appId: unknown, caller: AppsCaller): Promise<{ appId: string; cancelled: true }> {
+    const id = requireAppId(appId);
+    await this.assertPublisher(id, caller);
+    await this.deps.client.request('DELETE', `/apps/${id}/capability-request`, { agent: caller.agentSession });
+    return { appId: id, cancelled: true };
   }
 
   /**

@@ -50,6 +50,8 @@ beforeEach(() => {
     requestPublic: jest.fn().mockResolvedValue({ appId: ID, visibility: 'private', publicRequest: null, message: 'Requested: the owner approves it by opening the app.', notified: true }),
     cancelPublicRequest: jest.fn().mockResolvedValue({ appId: ID, cancelled: true, visibility: 'private' }),
     makePrivate: jest.fn().mockResolvedValue({ appId: ID, visibility: 'private' }),
+    requestCapabilities: jest.fn().mockResolvedValue({ appId: ID, requested: true }),
+    cancelCapabilityRequest: jest.fn().mockResolvedValue({ appId: ID, cancelled: true }),
     listComments: jest.fn().mockResolvedValue({ comments: [] }),
     getComment: jest.fn().mockResolvedValue({ id: 'c1' }),
     replyComment: jest.fn().mockResolvedValue({ id: 'c1', replies: [{}] }),
@@ -509,6 +511,10 @@ describe('Crewly Apps controller', () => {
     expect(service.requestPublic).toHaveBeenCalledWith(ID, { publicRead: ['items'], publicSubmit: ['votes'], note: 'n' }, who);
     await request(app).delete(`/api/apps/${ID}/visibility-request`).set(h);
     expect(service.cancelPublicRequest).toHaveBeenCalledWith(ID, who);
+    await request(app).post(`/api/apps/${ID}/capability-request`).set(h).send({ capabilities: ['microphone'], note: 'noise meter', extra: 1 });
+    expect(service.requestCapabilities).toHaveBeenCalledWith(ID, { capabilities: ['microphone'], note: 'noise meter' }, who);
+    await request(app).delete(`/api/apps/${ID}/capability-request`).set(h);
+    expect(service.cancelCapabilityRequest).toHaveBeenCalledWith(ID, who);
     await request(app).post(`/api/apps/${ID}/make-private`).set(h);
     expect(service.makePrivate).toHaveBeenCalledWith(ID, who);
     await request(app).post(`/api/apps/${ID}/share`).send({});

@@ -127,6 +127,17 @@ export const requestPublic = handle(async (req, caller) => {
 /** DELETE /api/apps/:appId/visibility-request */
 export const cancelPublicRequest = handle((req, caller) => getAppsParts().service.cancelPublicRequest(req.params.appId, caller));
 
+/** POST /api/apps/:appId/capability-request `{ capabilities, note? }` — ask the owner for microphone / camera access */
+export const requestCapabilities = handle(async (req, caller) => {
+  const b = body(req);
+  const result = await getAppsParts().service.requestCapabilities(req.params.appId, { capabilities: b.capabilities, note: b.note }, caller);
+  logger.info('App capabilities requested', { appId: result.appId, agent: caller.agentSession ?? 'owner' });
+  return result;
+});
+
+/** DELETE /api/apps/:appId/capability-request */
+export const cancelCapabilityRequest = handle((req, caller) => getAppsParts().service.cancelCapabilityRequest(req.params.appId, caller));
+
 /** POST /api/apps/:appId/make-private */
 export const makePrivate = handle((req, caller) => getAppsParts().service.makePrivate(req.params.appId, caller));
 

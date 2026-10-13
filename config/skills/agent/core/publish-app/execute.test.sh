@@ -57,6 +57,10 @@ class H(BaseHTTPRequestHandler):
                 'message': 'x', 'notified': True, 'card': 'signed', 'cardPlace': 'owner-dm', 'linkId': 'lnk_3'}})
         if self.path == '/api/apps/28au74d9cj/visibility-request' and method == 'DELETE':
             return send(200, {'success': True, 'data': {'appId': '28au74d9cj', 'cancelled': True, 'visibility': 'private'}})
+        if self.path == '/api/apps/28au74d9cj/capability-request' and method == 'POST':
+            return send(200, {'success': True, 'data': {'appId': '28au74d9cj', 'requested': True, 'message': 'Requested: x', 'capabilities': [], 'capabilityRequest': dict(data)}})
+        if self.path == '/api/apps/28au74d9cj/capability-request' and method == 'DELETE':
+            return send(200, {'success': True, 'data': {'appId': '28au74d9cj', 'cancelled': True}})
         if self.path == '/api/apps/28au74d9cj/thumbnail/refresh':
             return send(200, {'success': True, 'data': {'appId': '28au74d9cj', 'captured': True, 'bytes': 1234}})
         if self.path == '/api/apps/bcdfghjkmn/thumbnail/refresh':
@@ -222,6 +226,11 @@ check "publish + public with a refused name: message" "$(printf '%s' "$OUT" | jq
 OUT=$(run --app 28au74d9cj --cancel-public)
 check "cancel-public" "$OUT" '{"success":true,"appId":"28au74d9cj","cancelled":true,"visibility":"private"}'
 check "cancel-public: request" "$(jq -c '{method, path}' "$STUB_LOG")" '{"method":"DELETE","path":"/api/apps/28au74d9cj/visibility-request"}'
+OUT=$(run --app 28au74d9cj --capability microphone --capability-note "noise meter")
+check "capability: output" "$OUT" '{"success":true,"appId":"28au74d9cj","requested":true,"message":"Requested: x","capabilityRequest":{"capabilities":"microphone","note":"noise meter"}}'
+check "capability: request" "$(jq -c '{method, path, body}' "$STUB_LOG")" '{"method":"POST","path":"/api/apps/28au74d9cj/capability-request","body":{"capabilities":"microphone","note":"noise meter"}}'
+OUT=$(run --app 28au74d9cj --cancel-capability)
+check "cancel-capability" "$OUT" '{"success":true,"appId":"28au74d9cj","cancelled":true}'
 OUT=$(run --app 28au74d9cj --private)
 check "private" "$OUT" '{"success":true,"appId":"28au74d9cj","visibility":"private"}'
 check "private: request" "$(jq -c '{method, path}' "$STUB_LOG")" '{"method":"POST","path":"/api/apps/28au74d9cj/make-private"}'

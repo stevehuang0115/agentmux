@@ -29,6 +29,8 @@
  * - DELETE /:appId/links                           — revoke all
  * - POST   /:appId/visibility-request              — ask the owner to make it public
  * - DELETE /:appId/visibility-request              — withdraw the request
+ * - POST   /:appId/capability-request             — `{ capabilities: ['microphone'|'media_capture'], note? }`: ask the owner for device access
+ * - DELETE /:appId/capability-request             — withdraw it
  * - POST   /:appId/make-private                    — private again (instant)
  * - POST   /:appId/files                           — upload a file (raw body, `X-File-Name`); answers its URL
  * - GET    /:appId/comments                        — `?status=open|resolved|all` (crewly#1056)
@@ -86,6 +88,8 @@ import {
   requestPublic,
   cancelPublicRequest,
   makePrivate,
+  requestCapabilities,
+  cancelCapabilityRequest,
   listComments,
   getComment,
   replyComment,
@@ -246,6 +250,8 @@ export function createAppsRouter(): Router {
   router.delete('/:appId/links', revokeLinks);
   router.post('/:appId/visibility-request', requestPublic);
   router.delete('/:appId/visibility-request', cancelPublicRequest);
+  router.post('/:appId/capability-request', requestCapabilities);
+  router.delete('/:appId/capability-request', cancelCapabilityRequest);
   router.post('/:appId/make-private', makePrivate);
   router.get('/:appId/comments', listComments);
   router.get('/:appId/comments/:commentId', getComment);
