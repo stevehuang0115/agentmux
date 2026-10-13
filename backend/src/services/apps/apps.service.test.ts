@@ -445,6 +445,21 @@ describe('P3: public requests', () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it('capability request: validates names, sends them to Cloud, owner approves; cancel; ownership enforced', async () => {
+    await registry.upsert(ID, { name: 'Poll', agentSession: 'dev-ella' });
+    const who = { agentSession: 'dev-ella' };
+    request.mockResolvedValueOnce({ capabilities: [], capabilityRequest: { capabilities: ['microphone'] } });
+    const out = await service.requestCapabilities(ID, { capabilities: 'microphone, microphone', note: ' noise meter ' }, who);
+    expect(request).toHaveBeenLastCalledWith('POST', `/apps/${ID}/capability-request`, { body: { capabilities: ['microphone'], note: 'noise meter' }, agent: 'dev-ella' });
+    expect(out).toMatchObject({ appId: ID, requested: true, message: expect.stringMatching(/^Requested: the owner allows it/) });
+    await expect(service.requestCapabilities(ID, { capabilities: ['laser'] }, who)).rejects.toMatchObject({ status: 400 });
+    await expect(service.requestCapabilities(ID, {}, who)).rejects.toMatchObject({ status: 400 });
+    await expect(service.requestCapabilities(ID, { capabilities: ['microphone'], note: 'x'.repeat(501) }, who)).rejects.toThrow(/note/);
+    await expect(service.cancelCapabilityRequest(ID, who)).resolves.toEqual({ appId: ID, cancelled: true });
+    expect(request).toHaveBeenLastCalledWith('DELETE', `/apps/${ID}/capability-request`, { agent: 'dev-ella' });
+    await expect(service.requestCapabilities(ID, { capabilities: ['microphone'] }, { agentSession: 'dev-bob' })).rejects.toMatchObject({ status: 403 });
+  });
+
   it('cancel and make-private; ownership enforced', async () => {
     await registry.upsert(ID, { name: 'Poll', agentSession: 'dev-ella' });
     const who = { agentSession: 'dev-ella' };
