@@ -105,4 +105,15 @@ describe('runCommand', () => {
 		expect(result.code).toBeNull();
 		expect(result.error).toMatch(/timed out/);
 	});
+
+	(process.platform === 'win32' ? it.skip : it)('kills the native child of a wrapper on timeout', async () => {
+		// Like the codex wrapper: a Node parent that spawns the real worker and waits.
+		const pidFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'run-tree-')), 'pid');
+		const wrapper = `const c = require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' }); require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(c.pid)); setTimeout(() => {}, 30000);`;
+		const result = await runCommand(node, ['-e', wrapper], { timeoutMs: 1000 });
+		expect(result.error).toMatch(/timed out/);
+		const childPid = Number(fs.readFileSync(pidFile, 'utf-8'));
+		await new Promise((r) => setTimeout(r, 100));
+		expect(() => process.kill(childPid, 0)).toThrow();
+	});
 });
