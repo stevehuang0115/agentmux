@@ -205,6 +205,9 @@ export function idlePendingWorkCheck(): (session: string) => Promise<string | nu
 	return (session) => holdReasonFor(session, idleWorkGuardDeps());
 }
 
+/** Promise keys being parked right now, so concurrent stop paths share one run. */
+const parkingPromises = new Map<string, Promise<string | null>>();
+
 /** Seams of the work release on the real services. */
 export function releaseWorkDeps(): ReleaseWorkDeps {
 	const pool = TaskPoolService.getInstance();
@@ -229,19 +232,44 @@ export function releaseWorkDeps(): ReleaseWorkDeps {
 			await pool.addToPool(wi, { creatorSession: session });
 			return wi.id;
 		},
-		parkPromise: async (session) => {
-			const text = getOwnerThreadSentinel()?.promiseText(session);
-			if (!text) return null;
-			const wi = createWorkItem({
-				type: 'delegate',
-				owner: 'system',
-				target: session,
-				title: `Follow through: ${text.slice(0, 70)}`,
-				description: `You promised the owner: "${text}". Crewly stopped you (memory) before you delivered. Deliver it; reply in the owner's thread with the result or a real blocker.`,
-				metadata: { harnessCreated: 'owner-promise' },
-			});
-			await pool.addToPool(wi, { creatorSession: session });
-			return wi.id;
+		parkPromise: (session) => {
+			const promise = getOwnerThreadSentinel()?.parkablePromise(session);
+			if (!promise) return Promise.resolve(null);
+			// Several stop paths can reach here in the same second (idle stop, slot
+			// eviction, runtime exit). The existing-item check below is a read followed
+			// by a write, so concurrent calls all saw "no item" and made one each (the
+			// bursts of 3). Calls for the same promise share one in-flight run.
+			const running = parkingPromises.get(promise.key);
+			if (running) return running;
+			const run = (async (): Promise<string | null> => {
+				// One WorkItem per thread + promise, whatever its status now (open, done or
+				// cancelled): a promise that was already parked or answered must not come
+				// back as a new item after every stop or restart. Items made before
+				// promiseKey existed are matched by target + harness origin + title.
+				const title = `Follow through: ${promise.text.slice(0, 70)}`;
+				const existing = (await pool.getAllItems()).find((wi) => {
+					const meta = wi.metadata as Record<string, unknown> | undefined;
+					return meta?.['promiseKey'] === promise.key
+						|| (meta?.['promiseKey'] === undefined && meta?.['harnessCreated'] === 'owner-promise' && wi.target === session && wi.title === title);
+				});
+				if (existing) {
+					promise.markParked(existing.id);
+					return TERMINAL_WORK_ITEM_STATUSES.has(existing.status) ? null : existing.id;
+				}
+				const wi = createWorkItem({
+					type: 'delegate',
+					owner: 'system',
+					target: session,
+					title,
+					description: `You promised the owner: "${promise.text}". Crewly stopped you (memory) before you delivered. Deliver it; reply in the owner's thread with the result or a real blocker.`,
+					metadata: { harnessCreated: 'owner-promise', promiseKey: promise.key },
+				});
+				await pool.addToPool(wi, { creatorSession: session });
+				promise.markParked(wi.id);
+				return wi.id;
+			})().finally(() => parkingPromises.delete(promise.key));
+			parkingPromises.set(promise.key, run);
+			return run;
 		},
 	};
 }
