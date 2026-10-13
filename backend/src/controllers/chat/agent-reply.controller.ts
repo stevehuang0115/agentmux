@@ -10,6 +10,7 @@
  * @module controllers/chat/agent-reply.controller
  */
 
+import { getOwnerCompletionReport } from '../../services/orc/owner-completion-report.service.js';
 import type { Request, Response, NextFunction } from 'express';
 import { ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
 import { readAgentSessionHeader } from '../../utils/agent-caller.utils.js';
@@ -195,6 +196,9 @@ export function createAgentReplyHandler(deps: AgentReplyDeps = defaultDeps) {
         if (!interim && delivery.slackChannelId && delivery.threadTs) {
           AgentPostLog.getInstance().note(session, { slackChannelId: delivery.slackChannelId, threadTs: delivery.threadTs });
         }
+        // A report named by work item tells the owner for that item's chain,
+        // wherever it landed: stop the report-due reminder (CREW-503).
+        if (!interim && reference?.workItemId) getOwnerCompletionReport()?.noteWorkItemReply(reference.workItemId);
         // A chat-only answer never reaches the sentinel; the follow-through
         // guard still needs to see what the agent told the owner.
         if (!delivery.slackChannelId) reportAgentPostForFollowThrough({ agent: session, text: content, interim });
