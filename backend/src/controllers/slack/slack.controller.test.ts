@@ -33,6 +33,8 @@ jest.mock('../../services/chat-v2/chat-v2.singleton.js', () => ({
   getChatV2Service: jest.fn(() => ({
     ensureChannelForLegacyConversation: mockChatV2EnsureChannel,
     recordTurn: mockChatV2RecordTurn,
+    getChannelForBridge: jest.fn((id: string) => (id === 'room-brief' ? { id } : null)),
+    findSlackThreadRoot: jest.fn(() => null),
   })),
 }));
 
@@ -1885,6 +1887,33 @@ describe('Slack Controller', () => {
         threadId: 'C0BRIEF:1790856242.596149',
         destination: { slackChannelId: 'C0BRIEF', threadTs: '1790856242.596149' },
       }));
+    });
+
+    it('records the attach in chat history as an agent message that is not re-posted to Slack', async () => {
+      mockChatV2RecordTurn.mockClear();
+      mockChatV2RecordTurn.mockReturnValue({ message: { id: 'm1' }, deduped: false });
+      const attachFileForAgent = jest.fn(async () => ({ ok: true, slackChannelId: 'C0BRIEF', threadTs: '1.2', fileId: 'F123', asAgentBot: true }));
+      mockTeamChannels.current = { attachFileForAgent };
+      mockResolveSlackPlace.mockResolvedValue({ slackChannelId: 'C0BRIEF', threadTs: '1.2', conversationId: 'room-brief' });
+
+      const res = await request(app).post('/api/slack/attach').set('X-Agent-Session', 'atlas').send({ channelId: 'room-brief', filePath: tmpFile, comment: 'here you go' });
+
+      expect(res.status).toBe(200);
+      expect(mockChatV2RecordTurn).toHaveBeenCalledWith(expect.objectContaining({
+        channelId: 'room-brief',
+        senderType: 'agent',
+        senderId: 'atlas',
+        content: 'here you go',
+        metadata: expect.objectContaining({ slackAlreadyPosted: true, slackThreadTs: '1.2', files: [expect.objectContaining({ path: tmpFile, slackFileId: 'F123' })] }),
+      }));
+    });
+
+    it('a chat-history failure does not fail the attach', async () => {
+      mockChatV2RecordTurn.mockImplementationOnce(() => { throw new Error('db down'); });
+      mockTeamChannels.current = { attachFileForAgent: jest.fn(async () => ({ ok: true, slackChannelId: 'C0BRIEF', asAgentBot: true })) };
+      mockResolveSlackPlace.mockResolvedValue({ slackChannelId: 'C0BRIEF', conversationId: 'room-brief' });
+      const res = await request(app).post('/api/slack/attach').set('X-Agent-Session', 'atlas').send({ channelId: 'room-brief', filePath: tmpFile });
+      expect(res.status).toBe(200);
     });
 
     it('a thread the agent named is a hint the resolver validates', async () => {

@@ -102,7 +102,7 @@ check "measure: not due" "$(run_err measure --id EXP-1 | grep -c 'not due')" "1"
 
 # --- unknown action / option ---
 check "unknown action" "$(run_err frobnicate | grep -c 'Unknown action')" "1"
-check "unknown option" "$(run_err list --nope | grep -c 'Unknown option')" "1"
+check "unknown option" "$(run_err list --nope | grep -c 'Unknown argument')" "1"
 
 echo "experiment-card: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

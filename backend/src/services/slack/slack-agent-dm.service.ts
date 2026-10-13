@@ -599,6 +599,8 @@ export class SlackAgentDmService {
     try {
       if (dto.senderType !== 'agent') return false;
       if (dto.metadata?.source === 'slack') return false;
+      // attach-file: the upload already is the Slack post; this row is history only.
+      if (dto.metadata?.slackAlreadyPosted === true) return false;
       // A Drive mode reply was spoken on the phone; its recap is posted by Drive mode.
       if (isDriveModeRow(dto)) return false;
       await this.load();

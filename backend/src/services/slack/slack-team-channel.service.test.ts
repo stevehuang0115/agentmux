@@ -1412,6 +1412,7 @@ describe('mirrorOutbound', () => {
     // A colleague agent on another machine: already posted in Slack by that machine.
     expect(await service.mirrorOutbound(agentMessage({ senderType: 'user', metadata: { remoteAgentSession: 'rednote-team-rex-4fdd66d7' } }))).toBe(false);
     expect(await service.mirrorOutbound(agentMessage({ metadata: { source: 'slack' } }))).toBe(false);
+    expect(await service.mirrorOutbound(agentMessage({ metadata: { slackAlreadyPosted: true } }))).toBe(false);
     expect(await service.mirrorOutbound(agentMessage({ channelId: 'huddle-zzz' }))).toBe(false);
     // Drive mode replies are spoken on the phone, never mirrored to Slack.
     expect(await service.mirrorOutbound(agentMessage({ metadata: { source: 'reply-tool', via: 'drive-mode' } }))).toBe(false);

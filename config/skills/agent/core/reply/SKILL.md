@@ -91,6 +91,11 @@ bash config/skills/agent/core/reply/execute.sh --new-thread "Wiki link audit" "F
 Keep the `CREWLY_SESSION_NAME=<you>` prefix when your prompt shows one — it
 tells the system that you are the one replying.
 
+**Text with double quotes or several lines:** pipe it on stdin
+(`cat <<'EOF' | bash .../reply/execute.sh` ... `EOF`) instead of a quoted
+argument -- a stray `"` splits the text and nothing is sent. Check for
+`"success":true` in the output; do not cut it off with `| tail -1`.
+
 ## Options
 
 | Flag | What it does |

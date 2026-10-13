@@ -84,7 +84,7 @@ while [[ $# -gt 0 ]]; do
     --ack) ACK="1"; shift ;;
     --help|-h) print_usage; exit 0 ;;
     --) shift; if [[ $# -gt 0 && -z "$TEXT" ]]; then TEXT="$*"; fi; break ;;
-    -*) echo "{\"success\":false,\"error\":\"Unknown option: $1\"}" >&2; print_usage >&2; exit 2 ;;
+    -*) print_usage >&2; unknown_arg_exit "$1" ;;
     *) if [ -z "$TEXT" ]; then TEXT="$1"; else TEXT="$TEXT $1"; fi; shift ;;
   esac
 done

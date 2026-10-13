@@ -88,7 +88,7 @@ check "missing subject errors" "$(run_err --to a@b.c --text x)" "Missing require
 check "missing text errors" "$(run_err --to a@b.c --subject Hi)" "Missing required parameter: text (--text or --text-file)"
 check "missing text file errors" "$(run_err --to a@b.c --subject Hi --text-file /nonexistent/x.txt)" "text file not found: /nonexistent/x.txt"
 check "validation: no request made" "$(cat "$STUB_LOG")" ""
-check "unknown option errors" "$(run_err --bogus 1)" "Unknown option: --bogus"
+check "unknown option errors" "$(run_err --bogus 1)" "Unknown argument: --bogus"
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

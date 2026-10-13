@@ -37,7 +37,7 @@ while [[ $# -gt 0 ]]; do
     --category) [ $# -ge 2 ] || error_exit "--category requires a value"; CATEGORY="$2"; shift 2 ;;
     --limit)    [ $# -ge 2 ] || error_exit "--limit requires a value"; LIMIT="$2"; shift 2 ;;
     --help|-h)  print_usage; exit 0 ;;
-    *) if [ -z "$QUERY" ] && [ "${1:0:1}" != "-" ]; then QUERY="$1"; shift; else error_exit "Unknown option: $1"; fi ;;
+    *) if [ -z "$QUERY" ] && [ "${1:0:1}" != "-" ]; then QUERY="$1"; shift; else unknown_arg_exit "$1"; fi ;;
   esac
 done
 if [ -n "$INPUT_JSON" ]; then

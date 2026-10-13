@@ -41,7 +41,7 @@ while [ $# -gt 0 ]; do
     --ticket)     TICKET="${2:-}"; shift 2 ;;
     --to)         TO="${2:-}"; shift 2 ;;
     -h|--help)    usage; exit 0 ;;
-    *) echo "{\"error\":\"Unknown argument: $1\"}" >&2; exit 1 ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 

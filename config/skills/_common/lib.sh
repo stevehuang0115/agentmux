@@ -379,6 +379,26 @@ error_exit() {
 }
 
 # -----------------------------------------------------------------------------
+# unknown_arg_exit arg
+# Reports an unrecognised CLI argument as ONE machine-readable JSON line on
+# stderr (always the LAST line, so `| tail -1` still shows it) and exits 2.
+# An unknown flag gets the bare message. A bare word (not starting with "-") is almost always text that was split
+# because an unescaped double quote ended a --content/--message/--comment
+# string, so the hint says nothing was sent and how to avoid it.
+# Call this INSTEAD of printing usage afterwards; print usage first if wanted.
+# -----------------------------------------------------------------------------
+unknown_arg_exit() {
+  local arg="${1:-}" msg
+  if [[ "$arg" == -* ]]; then
+    msg="Unknown argument: ${arg}"
+  else
+    msg="Unknown argument: ${arg} — nothing was sent. If your text contains double quotes, they ended the string (this word is the rest of it); use --content-file <path>, a heredoc via stdin, or single quotes."
+  fi
+  jq -cn --arg e "$msg" '{"success":false,"error":$e}' >&2
+  exit 2
+}
+
+# -----------------------------------------------------------------------------
 # require_param name value
 # Exits with error if value is empty.
 # -----------------------------------------------------------------------------

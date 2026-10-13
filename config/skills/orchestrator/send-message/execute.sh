@@ -22,7 +22,7 @@ if [ "${1:-}" != "" ] && [ "${1#--}" != "${1}" ]; then
       --session|--sessionName|--to) flag_value "$@"; FLAG_SESSION="$2"; shift 2 ;;
       --message) flag_value "$@"; FLAG_MESSAGE="$2"; shift 2 ;;
       --force) FLAG_FORCE="true"; shift ;;
-      *) error_exit "Unknown option: $1" ;;
+      *) unknown_arg_exit "$1" ;;
     esac
   done
   INPUT=$(jq -n --arg s "$FLAG_SESSION" --arg m "$FLAG_MESSAGE" --arg f "$FLAG_FORCE" \

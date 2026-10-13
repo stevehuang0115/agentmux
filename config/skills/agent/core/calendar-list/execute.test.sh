@@ -65,7 +65,7 @@ OUT=$(CREWLY_API_URL="http://127.0.0.1:${PORT}" bash "$EXEC" --calendar no-grant
 check "409: exit code" "$RC" "1"
 check "409: reason + hint" "$OUT" '{"success":false,"reason":"not_connected","hint":"https://cloud/start?token=j","message":"no grant"}'
 
-check "unknown option errors" "$(run_err --bogus 1)" "Unknown option: --bogus"
+check "unknown option errors" "$(run_err --bogus 1)" "Unknown argument: --bogus"
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]
