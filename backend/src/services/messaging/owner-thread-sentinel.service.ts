@@ -743,13 +743,18 @@ export class OwnerThreadSentinelService {
   /** The watched entry a post belongs to (a DM's top-level post: that DM's newest entry). */
   private find(ref: SlackThreadRef & { agent: string }): OwnerThreadEntry | undefined {
     const exact = this.entries.get(threadKey(ref));
-    if (exact) return exact;
     if (!ref.threadTs && isDm(ref.slackChannelId)) {
-      return [...this.entries.values()]
+      // A DM's top level is the conversation: an answer posted there settles
+      // the thread the owner is waiting in, even when the DM top level has an
+      // entry of its own. Otherwise that thread stays owed and a restart wakes
+      // the agent to answer it again (Air Ella, 2026-10-13).
+      const now = this.now();
+      const inDm = [...this.entries.values()]
         .filter((e) => e.slackChannelId === ref.slackChannelId)
-        .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+        .sort((a, b) => b.updatedAt - a.updatedAt);
+      return inDm.find((e) => e.agent === ref.agent && owes(e, now)) ?? exact ?? inDm[0];
     }
-    return undefined;
+    return exact;
   }
 
   private persist(): void {

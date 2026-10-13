@@ -243,6 +243,21 @@ describe('triggers', () => {
     h.sentinel.noteAgentPost({ slackChannelId: 'D123', agent: ATLAS, text: 'Working on it, ~10 min' });
     expect(h.sentinel.list()[0].promise?.minutes).toBe(10);
   });
+
+  it('a DM top-level answer settles the owed DM thread even when the top level has its own entry', async () => {
+    const h = make();
+    // Earlier top-level exchange, already answered.
+    h.sentinel.noteOwnerMessage({ slackChannelId: 'D123', agent: ATLAS, at: h.clock.t });
+    h.sentinel.noteAgentPost({ slackChannelId: 'D123', agent: ATLAS, text: 'Done.', at: h.clock.t + MIN });
+    // The owner asks in a thread; the agent promises there, then answers at the top level.
+    h.clock.t += 60 * MIN;
+    h.sentinel.noteOwnerMessage({ slackChannelId: 'D123', threadTs: '2.2', agent: ATLAS, at: h.clock.t });
+    h.sentinel.noteAgentPost({ slackChannelId: 'D123', threadTs: '2.2', agent: ATLAS, text: 'Looking at the screenshots, ~5 min', at: h.clock.t + 10_000 });
+    h.clock.t += MIN;
+    h.sentinel.noteAgentPost({ slackChannelId: 'D123', agent: ATLAS, text: 'Conclusion: keep the current plan.', at: h.clock.t });
+    h.clock.t += 3 * 60 * MIN;
+    expect(h.sentinel.owingAgents()).toEqual([]);
+  });
 });
 
 describe('dedupe', () => {
