@@ -1951,6 +1951,27 @@ describe('SlackService', () => {
       }))).toBeNull();
     });
 
+    it('delivers an app-less agent\'s post (a master-app bot_message) that Cloud attributed to an agent', async () => {
+      // 2026-10-13: Dana (no Slack app) @'d Atlas; Slack delivers her post as
+      // subtype bot_message from the master bot, and the bot filters dropped it.
+      const service = new SlackService();
+      await service.initialize(cloudConfig);
+      service.isLocalAgent = (s) => s.startsWith('team-');
+      const post = (over: Record<string, unknown>, ts: string) => service.handleCloudEnvelope({
+        eventId: `e-${ts}`, slackTeamId: 'T1', apiAppId: 'A1', source: 'master' as const, receivedAt: '',
+        event: { type: 'message', subtype: 'bot_message', bot_id: 'BMASTER', ts, text: '@Atlas please review', channel: 'C42', channel_type: 'channel' },
+        ...over,
+      });
+      // Same machine: Dana @'d a local colleague.
+      expect(post({ authorAgentSession: 'team-dana', authorDisplayName: 'Dana', mentionedAgentSessions: ['team-atlas'] }, '20.1'))
+        .toMatchObject({ authorAgentSession: 'team-dana' });
+      // Another machine's agent.
+      expect(post({ authorAgentSession: 'air-lead', authorDisplayName: 'Lead', mentionedAgentSessions: ['team-atlas'] }, '20.2'))
+        .toMatchObject({ authorAgentSession: 'air-lead' });
+      // Not attributed by Cloud: still our own bot's post, dropped.
+      expect(post({}, '20.3')).toBeNull();
+    });
+
     it('routes whichever copy of a channel message arrives first (agent app or master) and drops the rest', async () => {
       const service = new SlackService();
       await service.initialize(cloudConfig);
