@@ -183,6 +183,22 @@ describe('TeamMoveImporter', () => {
     expect(report.warnings.join(' ')).not.toMatch(/did not start/);
   });
 
+  it('counts a start that timed out as started when the members came up anyway (no second start)', async () => {
+    const startTeam = jest.fn().mockResolvedValue({ ok: false, error: 'The operation was aborted due to timeout' });
+    const isTeamRunning = jest.fn().mockResolvedValue(true);
+    const report = await run(await pack(), deps({ startTeam, isTeamRunning, sleep: async () => undefined, startRetryDelaysMs: [1, 1] }));
+    expect(startTeam).toHaveBeenCalledTimes(1);
+    expect(report.started).toEqual({ requested: true, ok: true });
+  });
+
+  it('checks before a retry whether the earlier start went on in the background', async () => {
+    const startTeam = jest.fn().mockResolvedValue({ ok: false, error: 'The operation was aborted due to timeout' });
+    const isTeamRunning = jest.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const report = await run(await pack(), deps({ startTeam, isTeamRunning, sleep: async () => undefined, startRetryDelaysMs: [1, 1] }));
+    expect(startTeam).toHaveBeenCalledTimes(1);
+    expect(report.started).toMatchObject({ requested: true, ok: true });
+  });
+
   it('gives up after the last delay and says how often it tried', async () => {
     const startTeam = jest.fn().mockResolvedValue({ ok: false, error: 'No team member could start' });
     const report = await run(await pack(), deps({ startTeam, sleep: async () => undefined, startRetryDelaysMs: [1, 1] }));

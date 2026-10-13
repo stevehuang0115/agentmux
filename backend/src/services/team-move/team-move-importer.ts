@@ -91,6 +91,12 @@ export interface ImportDeps {
   applyChat?: (records: ChatRecords) => ApplyChatResult;
   /** Start the team; returns ok/error. Omit to import without starting. */
   startTeam?: (teamId: string) => Promise<{ ok: boolean; error?: string }>;
+  /**
+   * Whether the team's members are up (started or starting). The start route
+   * waits for every agent to boot, so on a slow machine the call can time out
+   * while the start goes on; this tells a real failure from a slow success.
+   */
+  isTeamRunning?: (teamId: string) => Promise<boolean>;
   /** Members of the team that run on a stand-in runtime right now (the runtime fallback). */
   getStandIns?: (teamId: string) => Promise<RuntimeStandIn[]>;
   /** Display name of this machine ("iriss-air"), for the checklist. */
@@ -702,9 +708,18 @@ export class TeamMoveImporter {
     let attempts = 0;
     for (let i = 0; i <= delays.length; i++) {
       if (i > 0) await sleep(delays[i - 1]!);
+      // A start that timed out may have gone on in the background: don't start twice.
+      if (i > 0 && (await this.teamRunning(manifest.team.id))) {
+        result = { ok: true };
+        break;
+      }
       attempts++;
       result = await this.deps.startTeam(manifest.team.id).catch((error: unknown) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }));
       if (result.ok) break;
+      if (await this.teamRunning(manifest.team.id)) {
+        result = { ok: true };
+        break;
+      }
     }
     const fallbacks = this.deps.getStandIns ? await this.deps.getStandIns(manifest.team.id).catch((): RuntimeStandIn[] => []) : [];
     return {
@@ -714,6 +729,12 @@ export class TeamMoveImporter {
       ...(attempts > 1 ? { attempts } : {}),
       ...(fallbacks.length > 0 ? { fallbacks } : {}),
     };
+  }
+
+  /** {@link ImportDeps.isTeamRunning}, false when unknown. */
+  private async teamRunning(teamId: string): Promise<boolean> {
+    if (!this.deps.isTeamRunning) return false;
+    return this.deps.isTeamRunning(teamId).catch(() => false);
   }
 
   // -------------------------------------------------------------------------
