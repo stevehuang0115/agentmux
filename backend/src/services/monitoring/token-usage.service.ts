@@ -11,6 +11,7 @@ import { promises as fs } from 'fs';
 import * as path from 'path';
 import { calculateCost as calculateCacheAwareCost, resolveRate } from './model-pricing.js';
 import { traceUsage } from '../trace/trace-recorder.js';
+import { notifyUsage } from '../usage-ledger/ledger-hooks.js';
 import { atomicWriteFile, readJsonStore, CorruptJsonFileError, type JsonStoreRead } from '../../utils/file-io.utils.js';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
 
@@ -540,6 +541,8 @@ export class TokenUsageService {
     };
     const traceId = detail?.traceId ?? traceUsage(sessionName, event);
     if (traceId) event.traceId = traceId;
+    // Per-ticket accounting (usage ledger); never throws.
+    notifyUsage(sessionName, event);
 
     record.events.push(event);
     record.totalInput += input;

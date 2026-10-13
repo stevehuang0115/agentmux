@@ -11,7 +11,9 @@ import type { Request } from '../../types/v2/request.types.js';
 import type { RequestOpenItem } from '../../types/v2/open-item.types.js';
 import type { OwnerDecision } from '../../types/decision.types.js';
 import type { ComponentLogger } from '../core/logger.service.js';
-import { OpenItemsService, isConcreteInterimPromise, markRestartReminded, owedCommitments, plausiblyFulfils, type OpenItemsDeps, type OpenItemsChatMessage, type QuestionCardInput, type FollowUpInput } from './open-items.service.js';
+import { OpenItemsService, isConcreteInterimPromise, markRestartReminded, owedCommitments, plausiblyFulfils, supersededReason, type OpenItemsDeps, type OpenItemsChatMessage, type QuestionCardInput, type FollowUpInput } from './open-items.service.js';
+import { planCommitmentNotes } from '../restart/interrupted-turns.js';
+import { buildFollowUpWorkItem } from './open-items.wiring.js';
 import { AgentPromptReferenceService } from '../orc/agent-prompt-reference.service.js';
 import { backfillOpenItems, formatBackfillReport, isHarnessFlowQuestion, reportsSettled } from './open-items-backfill.js';
 import { DecisionService, type DecisionSlackApi } from '../decisions/decision.service.js';
@@ -316,6 +318,32 @@ describe('OpenItemsService — commitments', () => {
   });
 });
 
+describe('OpenItemsService — Drive mode (specs/2026-10-08-drive-mode.md §7)', () => {
+  const drive = (h: Harness, content: string, extra: Record<string, unknown> = {}): OpenItemsChatMessage => ({
+    ...msg(h, content),
+    metadata: { source: 'reply-tool', via: 'drive-mode', ...extra },
+  });
+
+  it('a spoken answer opens nothing; a recap with nothing pending delivers the open promises', async () => {
+    const h = harness();
+    const t = await ticket(h, 'done');
+    expect(await h.service.onAgentMessage(drive(h, '明天中午整理好发你。'))).toBeNull();
+    await h.service.onAgentMessage(msg(h, '大约 40 分钟后发你 PDF。'));
+    expect((await h.requests.getById(t.id))!.openItems![0].status).toBe('open');
+    h.clock.now = new Date(h.clock.now.getTime() + 5 * MIN);
+    await h.service.onAgentMessage(drive(h, 'Drive mode recap — you asked for the PDF; I sent it; next: nothing pending.', { driveRecap: true, driveNextStep: false }));
+    const r = (await h.requests.getById(t.id))!;
+    expect(r.openItems![0]).toMatchObject({ status: 'delivered', closedReason: expect.stringContaining('Drive mode recap') });
+  });
+
+  it('a recap that names a next step is read like any reply', async () => {
+    const h = harness();
+    const t = await ticket(h, 'done');
+    await h.service.onAgentMessage(drive(h, 'Drive mode recap — next: 明天中午整理好发你。', { driveRecap: true, driveNextStep: true }));
+    expect((await h.requests.getById(t.id))!.openItems?.map((i) => i.type)).toEqual(['commitment']);
+  });
+});
+
 describe('OpenItemsService — a promise in an interim note (2026-10-02, Eve, TKT-194)', () => {
   /** Eve's reply-channel --interim message, word for word. */
   const EVE = 'evership-eve-398f05df';
@@ -442,7 +470,7 @@ describe('Open items after a restart (PR #1013 review)', () => {
     const r = await withPromise(h, {});
     const now = h.clock.now;
     expect(owedCommitments([r], now)).toEqual([
-      { sessionName: EVE, ticket: 'TKT-185', text: r.openItems![0].text, requestId: r.id, itemId: 'c-1', due: r.openItems![0].due },
+      { sessionName: EVE, ticket: 'TKT-185', text: r.openItems![0].text, requestId: r.id, itemId: 'c-1', due: r.openItems![0].due, createdAt: r.openItems![0].createdAt },
     ]);
     const item = r.openItems![0];
     const variant = (over: Partial<RequestOpenItem>): Request => ({ ...r, openItems: [{ ...item, ...over }] });
@@ -1115,7 +1143,7 @@ describe('promises closed undelivered are told to the owner (crewly#1015 §10)',
     }
   });
 
-  it('a promise that expires without the owner ever being told is told once', async () => {
+  it('a promise that expires (7 days, no progress) closes as stale and is NOT posted to the owner; the weekly summary lists it', async () => {
     const h = harness({ createFollowUp: async () => FU, postOwnerNote: async (_r, text) => (h.ownerNotes.push(text), true) });
     const t = await promised(h);
     // Keep it from going overdue: due far away (the extractor's default due is soon).
@@ -1123,9 +1151,120 @@ describe('promises closed undelivered are told to the owner (crewly#1015 §10)',
     await h.requests.update(t.id, { openItems: r.openItems!.map((i) => ({ ...i, due: new Date(h.clock.now.getTime() + 30 * 24 * HOUR).toISOString() })) });
     h.clock.now = new Date(h.clock.now.getTime() + 8 * 24 * HOUR);
     await h.service.sweep();
-    expect(h.ownerNotes).toHaveLength(1);
-    expect(h.ownerNotes[0]).toContain('was closed without being delivered: nothing happened on it for 7 days');
+    expect(h.ownerNotes).toEqual([]);
     expect((await h.requests.getById(t.id))!.openItems![0].status).toBe('expired');
+    const weekly = await h.service.staleExpiredCommitments(h.clock.now.getTime() - HOUR);
+    expect(weekly).toEqual([expect.objectContaining({ ticket: 'TKT-185', agent: ATLAS, text: '大概 20 分钟后发你结果。' })]);
+    expect(await h.service.staleExpiredCommitments(h.clock.now.getTime() + HOUR)).toEqual([]);
+  });
+});
+
+describe('stale commitments are re-checked before they are resurfaced (TKT-334, 2026-10-12)', () => {
+  const DAY = 24 * HOUR;
+  /** A five-day-old overdue-by-due promise, never nudged. */
+  async function oldPromise(h: Harness, over: Partial<RequestOpenItem> = {}): Promise<Request> {
+    const t = await ticket(h);
+    const made = new Date(h.clock.now.getTime() - 5 * DAY);
+    const item: RequestOpenItem = {
+      id: 'c-old',
+      type: 'commitment',
+      text: 'Save the draft in info@ once Zoho is connected.',
+      agent: ATLAS,
+      sourceMessageId: 'old-msg',
+      createdAt: made.toISOString(),
+      status: 'open',
+      due: new Date(made.getTime() + DAY).toISOString(),
+      dueSource: 'default',
+      workItemId: 'fu-old',
+      ...over,
+    };
+    return h.requests.update(t.id, { openItems: [item] });
+  }
+
+  it('the owner posted in the thread after the promise: closed silently as superseded, nobody is woken or told', async () => {
+    const h = harness();
+    const t = await oldPromise(h);
+    await h.requests.update(t.id, { discussion: [{ at: new Date(h.clock.now.getTime() - 2 * DAY).toISOString(), author: 'UOWNER', text: 'I sent it myself', ref: 'x' }] });
+    await h.service.sweep();
+    expect(h.woken).toEqual([]);
+    expect(h.ownerNotes).toEqual([]);
+    const item = (await h.requests.getById(t.id))!.openItems![0];
+    expect(item.status).toBe('superseded');
+    expect(item.closedReason).toContain('the owner posted in the thread');
+    expect(h.closed).toEqual([{ id: 'fu-old', outcome: 'cancelled' }]);
+  });
+
+  it('a post by the promising agent itself is not the owner answering', async () => {
+    const h = harness();
+    const t = await oldPromise(h);
+    await h.requests.update(t.id, { discussion: [{ at: new Date(h.clock.now.getTime() - DAY).toISOString(), author: ATLAS, text: 'working', ref: 'x' }] });
+    await h.service.sweep();
+    expect((await h.requests.getById(t.id))!.openItems![0].status).toBe('overdue');
+  });
+
+  it('the ticket is done or cancelled: an old commitment is superseded (young ones are never judged)', async () => {
+    const h = harness();
+    const t = await oldPromise(h);
+    const r = (await h.requests.getById(t.id))!;
+    const item = r.openItems![0];
+    expect(supersededReason({ ...r, status: 'done' }, item, h.clock.now)).toBe('superseded: the ticket is done');
+    expect(supersededReason({ ...r, status: 'cancelled' }, item, h.clock.now)).toBe('superseded: the ticket is cancelled');
+    expect(supersededReason(r, item, h.clock.now)).toBeNull();
+    const young = { ...item, createdAt: new Date(h.clock.now.getTime() - HOUR).toISOString() };
+    expect(supersededReason({ ...r, status: 'done' }, young, h.clock.now)).toBeNull();
+  });
+
+  it('old but still valid: the nudge tells the agent to verify before contacting the owner', async () => {
+    const h = harness();
+    const t = await oldPromise(h);
+    await h.service.sweep();
+    expect(h.woken).toHaveLength(1);
+    expect(h.woken[0].text).toContain('This is from 2026-09-26. Before contacting the owner, verify it is still needed');
+    expect(h.woken[0].text).toContain('Sent folder and existing drafts (you have read access)');
+    expect(h.woken[0].text).toContain('close it without messaging the owner');
+    expect((await h.requests.getById(t.id))!.openItems![0].status).toBe('overdue');
+  });
+
+  it('a fresh promise gets the plain nudge, no verify notice, and a young item is never judged superseded', async () => {
+    const h = harness();
+    const t = await oldPromise(h, { createdAt: new Date(h.clock.now.getTime() - 3 * HOUR).toISOString(), due: new Date(h.clock.now.getTime() - HOUR).toISOString() });
+    await h.requests.update(t.id, { discussion: [{ at: new Date(h.clock.now.getTime() - HOUR).toISOString(), author: 'UOWNER', text: 'ok', ref: 'x' }] });
+    await h.service.sweep();
+    expect(h.woken).toHaveLength(1);
+    expect(h.woken[0].text).not.toContain('verify it is still needed');
+  });
+
+  it('the child work finishing after days wakes the agent with the verify-first notice', async () => {
+    const h = harness();
+    const t = await oldPromise(h, { childWorkItemIds: ['28b09370-7751-4963-8ba8-4836a2ccc7d0'], due: new Date(h.clock.now.getTime() + DAY).toISOString() });
+    const wi = kaiWork(h, t.id, 'verified');
+    wi.completedAt = h.clock.now.toISOString();
+    await h.service.onWorkItemSettled(wi.id);
+    expect(h.woken).toHaveLength(1);
+    expect(h.woken[0].text).toContain('Before contacting the owner, verify it is still needed');
+  });
+
+  it('a restart does not replay a superseded old promise, and a valid old one carries the notice', async () => {
+    const h = harness();
+    const t = await oldPromise(h);
+    const r = (await h.requests.getById(t.id))!;
+    const owed = owedCommitments([r], h.clock.now);
+    expect(owed).toHaveLength(1);
+    expect(owed[0].createdAt).toBe(r.openItems![0].createdAt);
+    const notes = planCommitmentNotes(owed, [], () => true);
+    expect(notes[0].text).toContain('verify it is still needed');
+    const answered = { ...r, discussion: [{ at: new Date(h.clock.now.getTime() - DAY).toISOString(), author: 'UOWNER', text: 'done', ref: 'x' }] };
+    expect(owedCommitments([answered], h.clock.now)).toEqual([]);
+  });
+
+  it('the follow-up WorkItem of an old commitment carries the notice in its description', () => {
+    const made = new Date(2026, 9, 7, 12, 0, 0);
+    const item: RequestOpenItem = { id: 'c', type: 'commitment', text: 'Save the draft.', agent: ATLAS, sourceMessageId: 'm', createdAt: made.toISOString(), status: 'open' };
+    const request = { id: 'r', ticketNumber: 334 } as unknown as Request;
+    const wi = buildFollowUpWorkItem({ request, item, place: null }, new Date(2026, 9, 12, 12, 0, 0));
+    expect(wi.description).toContain('Before contacting the owner, verify it is still needed');
+    const fresh = buildFollowUpWorkItem({ request, item: { ...item, createdAt: new Date(2026, 9, 12, 11, 0, 0).toISOString() }, place: null }, new Date(2026, 9, 12, 12, 0, 0));
+    expect(fresh.description).not.toContain('verify it is still needed');
   });
 });
 
@@ -1227,7 +1366,8 @@ describe('PR2: restated delivery, waiting on the owner, duplicate promises, TKT-
     expect(item.status).toBe('waiting_owner');
     expect(item.due).toBeUndefined();
     expect(h.followUps).toHaveLength(0);
-    h.clock.now = new Date(h.clock.now.getTime() + 3 * 24 * HOUR);
+    // Under the 24h after which a gate-less promise is surfaced to the owner (CREW-440, see the sweep tests below).
+    h.clock.now = new Date(h.clock.now.getTime() + 12 * HOUR);
     await h.service.sweep();
     expect(h.woken).toHaveLength(0);
     expect(h.ownerNotes).toHaveLength(0);
@@ -1308,5 +1448,219 @@ describe('adopt (backfill apply) leaves a trace', () => {
     const planned = await h.service.plan(t, msg(h, '明天中午发你 PDF。', ATLAS, 'p'), h.clock.now);
     await h.service.adopt(t.id, planned, { caller: 'think-tank-sage-2ffacc8f' });
     expect(logger.info).toHaveBeenCalledWith('Open items adopted (backfill apply)', expect.objectContaining({ count: 1, caller: 'think-tank-sage-2ffacc8f' }));
+  });
+});
+
+describe('CREW-440: a card tap settles the conditional promise stored beside the question (TKT-374 / D-541)', () => {
+  const OWEN_Q10 = '你看这样写行吗？你点头后我就替换线上的问答，再把链接发到群里给 Kathy。';
+  const OPTIONS = [
+    { key: 'a', label: 'Yes' },
+    { key: 'b', label: 'No' },
+    { key: 'c', label: 'Reply in thread' },
+  ];
+
+  /** The reply_question card the service posted, settled the way the owner tapped it. */
+  const settled = (requestId: string, itemId: string, status: string, chosenKey?: string): OwnerDecision =>
+    ({
+      id: 'D-1',
+      kind: 'reply_question',
+      question: 'q',
+      options: OPTIONS,
+      yesKey: 'a',
+      defaultKey: 'b',
+      status,
+      ...(chosenKey ? { chosenKey } : {}),
+      resolvedAt: new Date(2026, 9, 1, 21, 0, 0).toISOString(),
+      requestRef: { requestId, itemId },
+    }) as unknown as OwnerDecision;
+
+  /** Wait for the queued write of onDecisionSettled (without running the sweep, which would settle it too). */
+  const flush = (h: Harness): Promise<unknown> => (h.service as unknown as { serial: (f: () => Promise<unknown>) => Promise<unknown> }).serial(async () => undefined);
+
+  const askAndPromise = async (h: Harness, status: 'running' | 'done' = 'done'): Promise<{ t: Request; promise: RequestOpenItem; question: RequestOpenItem }> => {
+    const t = await ticket(h, status);
+    await h.service.onAgentMessage(msg(h, OWEN_Q10, ATLAS, 'e21ac6f0-aaaa'));
+    const items = (await h.requests.getById(t.id))!.openItems!;
+    return { t, promise: items.find((i) => i.type === 'commitment')!, question: items.find((i) => i.type === 'question')! };
+  };
+
+  it('1. one message → two items; the promise is gated on the question item, then on its card', async () => {
+    const h = harness();
+    const { promise, question } = await askAndPromise(h);
+    expect(promise).toMatchObject({ status: 'waiting_owner', gateItemId: question.id, gateDecisionId: 'D-1' });
+    expect(question).toMatchObject({ status: 'open', decisionId: 'D-1' });
+    expect(h.followUps).toHaveLength(0);
+  });
+
+  it('2. card Yes opens the promise: due set and the follow-up WorkItem created for the agent', async () => {
+    const h = harness();
+    const { t, question, promise } = await askAndPromise(h);
+    await h.service.onDecisionSettled(settled(t.id, question.id, 'resolved', 'a'), 'note');
+    await flush(h);
+    const after = (await h.requests.getById(t.id))!.openItems!.find((i) => i.id === promise.id)!;
+    expect(after.status).toBe('open');
+    expect(after.due).toBeDefined();
+    expect(h.followUps).toHaveLength(1);
+    expect(h.followUps[0].item.agent).toBe(ATLAS);
+  });
+
+  it('3. card Skip (the TKT-374 case) closes the promise, drops it once, creates no WorkItem, and the ticket is done', async () => {
+    const h = harness();
+    const { t, question, promise } = await askAndPromise(h);
+    await h.service.onDecisionSettled(settled(t.id, question.id, 'skipped'), 'note');
+    await flush(h);
+    const r = (await h.requests.getById(t.id))!;
+    expect(r.openItems!.find((i) => i.id === promise.id)).toMatchObject({ status: 'skipped' });
+    expect(h.woken.filter((w) => w.text.includes('drop it'))).toHaveLength(1);
+    expect(h.followUps).toHaveLength(0);
+    expect(r.status).toBe('done');
+    await h.service.sweep();
+    expect(h.woken.filter((w) => w.text.includes('drop it'))).toHaveLength(1); // once
+  });
+
+  it.each([
+    ['No', 'resolved', 'b'],
+    ['cancelled', 'cancelled', undefined],
+    ['expired', 'expired', undefined],
+  ])('4. card %s supersedes the promise and wakes nobody', async (_n, status, key) => {
+    const h = harness();
+    const { t, question, promise } = await askAndPromise(h);
+    await h.service.onDecisionSettled(settled(t.id, question.id, status, key), null);
+    await flush(h);
+    expect((await h.requests.getById(t.id))!.openItems!.find((i) => i.id === promise.id)).toMatchObject({ status: 'superseded' });
+    expect(h.followUps).toHaveLength(0);
+    expect(h.woken).toHaveLength(0);
+  });
+
+  it('"Reply in thread" keeps the promise waiting; the typed yes in the thread then opens it', async () => {
+    const h = harness();
+    const { t, question, promise } = await askAndPromise(h);
+    await h.service.onDecisionSettled(settled(t.id, question.id, 'resolved', 'c'), null);
+    await flush(h);
+    expect((await h.requests.getById(t.id))!.openItems!.find((i) => i.id === promise.id)!.status).toBe('waiting_owner');
+    await h.service.onAgentMessage({ id: 'o-yes', channelId: CHANNEL, threadId: ROOT, senderType: 'user', senderId: 'UOWNER', content: '可以', createdAt: h.clock.now.getTime() });
+    expect((await h.requests.getById(t.id))!.openItems!.find((i) => i.id === promise.id)!.status).toBe('open');
+    expect(h.followUps).toHaveLength(1);
+  });
+
+  it('5. a typed approval in the thread still opens the promise while the card is open', async () => {
+    const h = harness();
+    const { t, promise } = await askAndPromise(h);
+    await h.service.onAgentMessage({ id: 'o-yes', channelId: CHANNEL, threadId: ROOT, senderType: 'user', senderId: 'UOWNER', content: '好的', createdAt: h.clock.now.getTime() });
+    expect((await h.requests.getById(t.id))!.openItems!.find((i) => i.id === promise.id)!.status).toBe('open');
+  });
+
+  describe('6. the sweep', () => {
+    it('closes an ungated promise whose sibling question is closed (a promise stored before CREW-440)', async () => {
+      const h = harness();
+      const { t, promise, question } = await askAndPromise(h);
+      const legacy = { ...promise };
+      delete legacy.gateItemId;
+      delete legacy.gateDecisionId;
+      await h.requests.update(t.id, { openItems: [legacy, { ...question, status: 'skipped', closedAt: h.clock.now.toISOString() }] });
+      await h.service.sweep();
+      expect((await h.requests.getById(t.id))!.openItems!.find((i) => i.id === promise.id)!.status).toBe('skipped');
+      expect(h.woken.filter((w) => w.text.includes('drop it'))).toHaveLength(1);
+    });
+
+    it('with no resolvable gate for 24h, tells the owner once', async () => {
+      const h = harness();
+      const { t, promise } = await askAndPromise(h);
+      const orphan = { ...promise };
+      delete orphan.gateItemId;
+      delete orphan.gateDecisionId;
+      await h.requests.update(t.id, { openItems: [orphan] });
+      h.clock.now = new Date(h.clock.now.getTime() + 23 * HOUR);
+      await h.service.sweep();
+      expect(h.ownerNotes).toHaveLength(0);
+      h.clock.now = new Date(h.clock.now.getTime() + 2 * HOUR);
+      await h.service.sweep();
+      await h.service.sweep();
+      expect(h.ownerNotes).toHaveLength(1);
+      expect((await h.requests.getById(t.id))!.openItems![0].status).toBe('waiting_owner');
+    });
+  });
+
+  it('7. auto-accept by silence does not park the ticket on a promise nobody can open', async () => {
+    const h = harness();
+    const { t, promise, question } = await askAndPromise(h, 'running');
+    await h.requests.update(t.id, { status: 'waiting_confirmation', openItems: [promise, { ...question, status: 'skipped', closedAt: h.clock.now.toISOString() }] });
+    const r = await h.requests.update(t.id, { status: 'done', accepted: true, acceptedBy: 'silence', ignoreDeadChildren: true });
+    expect(r.status).toBe('done');
+    expect(r.openItems!.find((i) => i.id === promise.id)).toMatchObject({ status: 'superseded' });
+  });
+
+  it('7b. silence still parks on a promise whose question card is open', async () => {
+    const h = harness();
+    const { t } = await askAndPromise(h, 'running');
+    await h.requests.update(t.id, { status: 'waiting_confirmation' });
+    const r = await h.requests.update(t.id, { status: 'done', accepted: true, acceptedBy: 'silence', ignoreDeadChildren: true });
+    expect(r.status).toBe('awaiting_followup');
+  });
+
+  it('9. replay of tr-20261009-4788bd23: Skip at 19:28, the 04:31 auto-accept ends in done', async () => {
+    const h = harness();
+    const { t, question } = await askAndPromise(h, 'running');
+    await h.requests.update(t.id, { status: 'waiting_confirmation' });
+    h.clock.now = new Date(h.clock.now.getTime() + 3 * HOUR);
+    await h.service.onDecisionSettled(settled(t.id, question.id, 'skipped'), null);
+    await flush(h);
+    h.clock.now = new Date(h.clock.now.getTime() + 9 * HOUR);
+    const r = await h.requests.update(t.id, { status: 'done', accepted: true, acceptedBy: 'silence', ignoreDeadChildren: true });
+    expect(r.status).toBe('done');
+    expect(r.openItems!.some((i) => ['waiting_owner', 'open'].includes(i.status))).toBe(false);
+  });
+
+  describe('F. backfill of ungated waiting promises', () => {
+    it('dry-run counts what it examined and changes nothing; apply settles TKT-374 (Skip → closed, one drop note)', async () => {
+      const h = harness();
+      const { t, promise, question } = await askAndPromise(h);
+      const legacy = { ...promise };
+      delete legacy.gateItemId;
+      delete legacy.gateDecisionId;
+      await h.requests.update(t.id, { openItems: [legacy, { ...question, status: 'skipped', closedAt: h.clock.now.toISOString() }] });
+      const dry = await h.service.backfillWaitingPromises();
+      expect(dry).toMatchObject({ dryRun: true, examinedRequests: 1, examinedItems: 1 });
+      expect(dry.rows).toEqual([expect.objectContaining({ item: promise.id, action: 'skipped' })]);
+      expect((await h.requests.getById(t.id))!.openItems![0].status).toBe('waiting_owner');
+      expect(h.woken).toHaveLength(0);
+      const applied = await h.service.backfillWaitingPromises({ apply: true });
+      expect(applied.examinedItems).toBe(1);
+      const r = (await h.requests.getById(t.id))!;
+      expect(r.openItems![0].status).toBe('skipped');
+      expect(r.status).toBe('done');
+      expect(h.woken.filter((w) => w.text.includes('drop it'))).toHaveLength(1);
+      expect((await h.service.backfillWaitingPromises({ apply: true })).examinedItems).toBe(0);
+    });
+  });
+});
+
+describe('a promise names project tickets: work done outside the request fulfils it (crewly#1037)', () => {
+  function ownWork(h: Harness, projectTicket: string, status: WorkItem['status'] = 'running', completedOffsetMs?: number): WorkItem {
+    const wi = createWorkItem({ id: `wi-${projectTicket}`, type: 'delegate', owner: 'team_lead', target: KAI, title: `Write ${projectTicket}` });
+    wi.status = status;
+    wi.createdAt = new Date(h.clock.now.getTime() - 3 * HOUR).toISOString();
+    wi.metadata = { projectTicket: { projectPath: '/p', id: projectTicket } };
+    if (completedOffsetMs !== undefined) wi.completedAt = new Date(h.clock.now.getTime() + completedOffsetMs).toISOString();
+    h.pool.push(wi);
+    return wi;
+  }
+
+  it('links the work of CE-16 and CE-36 (no request link, created hours earlier) as the promise\'s children', async () => {
+    const h = harness();
+    const t = await ticket(h);
+    ownWork(h, 'CE-16');
+    ownWork(h, 'CE-36');
+    ownWork(h, 'CE-99');
+    await h.service.onAgentMessage(msg(h, '明天中午把 CE-16 和 CE-36 的文章链接发你。'));
+    expect((await h.requests.getById(t.id))!.openItems![0].childWorkItemIds?.sort()).toEqual(['wi-CE-16', 'wi-CE-36']);
+  });
+
+  it('work finished before the promise, or the request\'s own TKT label, is not linked', async () => {
+    const h = harness();
+    const t = await ticket(h);
+    ownWork(h, 'CE-16', 'done', -HOUR);
+    await h.service.onAgentMessage(msg(h, '明天中午把 CE-16 的链接发你，见 TKT-185。'));
+    expect((await h.requests.getById(t.id))!.openItems![0].childWorkItemIds).toBeUndefined();
   });
 });

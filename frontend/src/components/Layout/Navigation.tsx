@@ -52,7 +52,7 @@ const NavLinkItem: React.FC<{
 				'group relative flex items-center px-4 py-2 rounded-2xl text-sm transition-colors',
 				isCollapsed ? 'justify-center' : '',
 				isActive
-					? 'bg-primary-soft text-primary-text font-semibold'
+					? 'bg-primary-soft text-primary-text font-semibold before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[3px] before:rounded-full before:bg-primary before:content-[""]'
 					: 'text-text-2 hover:bg-surface-hover hover:text-text'
 			)}
 			title={!showLabel ? item.name : undefined}
@@ -92,12 +92,12 @@ export const Navigation: React.FC = () => {
 	const showLabels = !isCollapsed;
 
 	return (
-		<div className="flex flex-col h-screen max-h-screen bg-surface border-r border-border overflow-hidden w-full">
+		<div className="flex flex-col h-screen max-h-screen cw-bar border-r overflow-hidden w-full">
 			{/* Logo Section */}
-			<div className="flex items-center justify-between px-4 py-3 border-b border-border">
+			<div className="flex items-center justify-between px-4 py-3 border-b border-border-soft">
 				<div className="flex items-center">
 					<div className="p-1">
-						<img src="/logo/crewly-icon.svg" alt="Crewly" className="h-6 w-6 invert" />
+						<img src="/logo/crewly-icon.svg" alt="Crewly" className="h-6 w-6 cw-logo" />
 					</div>
 					{showLabels && (
 						<div className="ml-2.5 leading-none">
@@ -159,7 +159,7 @@ export const Navigation: React.FC = () => {
 			</nav>
 
 			{/* Bottom Section */}
-			<div className="p-2 border-t border-border space-y-1">
+			<div className="p-2 border-t border-border-soft space-y-1">
 				{/* Cloud Auth Status */}
 				<AuthStatusIndicator isCollapsed={isCollapsed} />
 

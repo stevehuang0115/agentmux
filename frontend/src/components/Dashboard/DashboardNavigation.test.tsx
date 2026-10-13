@@ -32,7 +32,7 @@ describe('DashboardNavigation', () => {
     );
     
     const teamsTab = screen.getByRole('tab', { name: 'teams' });
-    expect(teamsTab).toHaveClass('text-primary', 'border-primary');
+    expect(teamsTab).toHaveClass('text-primary-text', 'border-primary');
   });
 
   it('calls onTabChange when tab is clicked', () => {
@@ -56,6 +56,6 @@ describe('DashboardNavigation', () => {
     );
     
     const teamsTab = screen.getByRole('tab', { name: 'teams' });
-    expect(teamsTab).toHaveClass('border-transparent', 'text-text-secondary-dark');
+    expect(teamsTab).toHaveClass('border-transparent', 'text-text-2');
   });
 });

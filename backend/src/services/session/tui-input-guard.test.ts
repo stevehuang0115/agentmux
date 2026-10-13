@@ -574,3 +574,29 @@ describe('crewly#1028: one paste of ours shown as several markers (Claude Code 2
 		expect(boxIsOnlyMarkersAndPiecesOf('brief line 1', BRIEF)).toBe(false);
 	});
 });
+
+describe('crewly#1113: an empty Claude Code box with footer variants below it reads empty', () => {
+	async function render(lines: string[]): Promise<TuiInputView> {
+		const buffer = new PtyTerminalBuffer(100, 30);
+		buffer.write(lines.join('\r\n'));
+		await buffer.flush();
+		const view = buffer.getInputView();
+		buffer.dispose();
+		return view;
+	}
+	const RULE = '─'.repeat(90);
+	const idle = (footer: string[]): string[] => ['✻ Crunched for 34s · done 9:51 AM', RULE, '❯ ', RULE, ...footer];
+	const MODE = '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents';
+
+	it.each([
+		['plain footer', [MODE]],
+		['paste again to expand', [MODE, '  paste again to expand']],
+		['one shell', ['  ⏵⏵ bypass permissions on (shift+tab to cycle) · 1 shell · ↓ to manage']],
+		['two shells', ['  ⏵⏵ bypass permissions on (shift+tab to cycle) · 2 shells · ↓ to manage']],
+		['waiting for a background agent', ['  ✻ Waiting for 1 background agent to finish', MODE]],
+		['background agent list under the box', [MODE, '  ⏺ main', '  ◯ general-purpose  Research the repo', '  ◯ general-purpose  Run the tests', '  ◯ general-purpose  Draft the PR', '  ◯ general-purpose  Check the logs', '  ◯ general-purpose  Review the diff', '  ◯ general-purpose  Summarise']],
+	])('%s', async (_name, footer) => {
+		const view = await render(idle(footer));
+		expect(classifyTuiInput(view, OURS, 'before-write')).toMatchObject({ state: 'empty', layout: 'claude-code' });
+	});
+});

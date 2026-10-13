@@ -25,7 +25,7 @@ describe('Button Component', () => {
 
       const button = screen.getByRole('button');
       // Default variant is primary, default size is default
-      expect(button).toHaveClass('bg-primary', 'text-white');
+      expect(button).toHaveClass('bg-primary', 'text-on-primary');
       expect(button).toHaveClass('h-10', 'px-4', 'rounded-2xl');
     });
 
@@ -49,49 +49,49 @@ describe('Button Component', () => {
       render(<Button variant="primary">Primary Button</Button>);
 
       const button = screen.getByRole('button');
-      expect(button).toHaveClass('bg-primary', 'text-white');
+      expect(button).toHaveClass('bg-primary', 'text-on-primary');
     });
 
     it('should render secondary variant correctly', () => {
       render(<Button variant="secondary">Secondary Button</Button>);
 
       const button = screen.getByRole('button');
-      expect(button).toHaveClass('bg-surface-dark', 'border', 'border-border-dark');
+      expect(button).toHaveClass('bg-surface-2', 'border', 'border-border');
     });
 
     it('should render success variant correctly', () => {
       render(<Button variant="success">Success Button</Button>);
 
       const button = screen.getByRole('button');
-      expect(button).toHaveClass('bg-emerald-600', 'text-white');
+      expect(button).toHaveClass('bg-success-soft', 'text-success');
     });
 
     it('should render warning variant correctly', () => {
       render(<Button variant="warning">Warning Button</Button>);
 
       const button = screen.getByRole('button');
-      expect(button).toHaveClass('bg-yellow-500', 'text-black');
+      expect(button).toHaveClass('bg-attention-soft', 'text-attention');
     });
 
     it('should render danger variant correctly', () => {
       render(<Button variant="danger">Danger Button</Button>);
 
       const button = screen.getByRole('button');
-      expect(button).toHaveClass('bg-rose-600', 'text-white');
+      expect(button).toHaveClass('bg-danger-soft', 'text-danger');
     });
 
     it('should render ghost variant correctly', () => {
       render(<Button variant="ghost">Ghost Button</Button>);
 
       const button = screen.getByRole('button');
-      expect(button).toHaveClass('text-text-secondary-dark');
+      expect(button).toHaveClass('text-text-2');
     });
 
     it('should render outline variant correctly', () => {
       render(<Button variant="outline">Outline Button</Button>);
 
       const button = screen.getByRole('button');
-      expect(button).toHaveClass('border', 'border-border-dark', 'text-text-secondary-dark');
+      expect(button).toHaveClass('border', 'border-border', 'text-text-2');
     });
   });
 
@@ -330,7 +330,7 @@ describe('Button Component', () => {
       );
 
       const button = screen.getByRole('button');
-      expect(button).toHaveClass('bg-emerald-600', 'text-white');
+      expect(button).toHaveClass('bg-success-soft', 'text-success');
       expect(button).toHaveClass('w-full');
       expect(button).toHaveClass('custom-class');
       expect(button.querySelector('svg')).toBeInTheDocument();
@@ -373,14 +373,14 @@ describe('IconButton Component', () => {
       render(<IconButton icon={Plus} aria-label="Add item" />);
 
       const button = screen.getByRole('button');
-      expect(button).toHaveClass('text-text-secondary-dark');
+      expect(button).toHaveClass('text-text-2');
     });
 
     it('should apply custom variant', () => {
       render(<IconButton icon={Plus} variant="primary" aria-label="Add item" />);
 
       const button = screen.getByRole('button');
-      expect(button).toHaveClass('bg-primary', 'text-white');
+      expect(button).toHaveClass('bg-primary', 'text-on-primary');
     });
 
     it('should apply default icon size', () => {

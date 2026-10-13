@@ -12,7 +12,7 @@ describe('OverflowMenu', () => {
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
     fireEvent.click(trigger);
     expect(screen.getByRole('menu')).toBeInTheDocument();
-    expect(screen.getByText('Delete').className).toContain('text-red-300');
+    expect(screen.getByText('Delete').className).toContain('text-danger');
     fireEvent.click(screen.getByText('Edit'));
     expect(onEdit).toHaveBeenCalled();
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();

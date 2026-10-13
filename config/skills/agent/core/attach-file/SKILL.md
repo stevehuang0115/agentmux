@@ -60,6 +60,12 @@ they will want to edit it.
 
 Text still goes through `reply-channel` — send the words, attach the file.
 
+Put `--comment` in single quotes (or leave quotation marks out of it): a
+double quote inside `--comment "..."` splits the text into extra arguments and
+the file is not sent. Read the JSON result; do not cut it off with `| tail -1`.
+The file is also recorded in the chat history under your name, so teammates
+reading the thread see you delivered it.
+
 ## Output
 
 `{"success":true,"data":{"slackChannelId":"C…","threadTs":"1758…","fileId":"F…","asAgentBot":true}}`

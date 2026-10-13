@@ -360,6 +360,24 @@ CREWLY_SESSION_NAME=dev-1 CREWLY_SCHEDULER_CREDENTIAL=scheduler.sig bash "$TEMP_
 assert_eq "api_call: an agent session wins over a leaked scheduler credential" "0" "$(grep -c 'X-Crewly-Internal' "$ARGS_OUT" || true)"
 unset ARGS_OUT
 
+# ---- Test 31: unknown_arg_exit — the error is the LAST line, one JSON object, exit 2 ----
+UA_OUT=$(bash -c 'source "$1"; unknown_arg_exit app; ' _ "$SCRIPT_DIR/lib.sh" 2>&1 >/dev/null; echo "rc=$?")
+assert_contains "unknown_arg_exit: bare word → nothing sent + quoting hint" "nothing was sent" "$UA_OUT"
+assert_contains "unknown_arg_exit: hint names content-file" "content-file" "$UA_OUT"
+assert_contains "unknown_arg_exit: exit code 2" "rc=2" "$UA_OUT"
+assert_eq "unknown_arg_exit: success:false" "false" "$(printf '%s' "$UA_OUT" | head -1 | jq -r .success)"
+UA_FLAG=$(bash -c 'source "$1"; unknown_arg_exit --bogus' _ "$SCRIPT_DIR/lib.sh" 2>&1 >/dev/null || true)
+assert_eq "unknown_arg_exit: unknown flag → bare message, no quoting hint" "Unknown argument: --bogus" "$(printf '%s' "$UA_FLAG" | jq -r .error)"
+
+# ---- Test 32: reply-channel with a split --content (the 2026-10-12 incident) ----
+RC_OUT=$(CREWLY_SESSION_NAME=t bash "$SCRIPT_DIR/../agent/core/reply-channel/execute.sh" --channel C1 --content 是我理解错了:我问要不要先不用 app 画面 2>&1 | tail -1; echo "rc=${PIPESTATUS[0]}")
+assert_contains "reply-channel split content: LAST line is the JSON error" '"success":false' "$RC_OUT"
+assert_contains "reply-channel split content: says nothing was sent" "nothing was sent" "$RC_OUT"
+RC_RC=$(CREWLY_SESSION_NAME=t bash "$SCRIPT_DIR/../agent/core/reply-channel/execute.sh" --channel C1 --content a b c >/dev/null 2>&1; echo $?)
+assert_eq "reply-channel split content: exit code 2" "2" "$RC_RC"
+AF_RC=$(CREWLY_SESSION_NAME=t bash "$SCRIPT_DIR/../agent/core/attach-file/execute.sh" --channel C1 --path /x --comment a b c 2>&1 | tail -1 || true)
+assert_contains "attach-file split comment: LAST line is the JSON error" '"success":false' "$AF_RC"
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 

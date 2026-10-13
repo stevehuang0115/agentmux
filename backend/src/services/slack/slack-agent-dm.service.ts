@@ -29,6 +29,7 @@ import { getCrewlyHomePath } from '../core/crewly-home.utils.js';
 import { atomicWriteJson, safeReadJson } from '../../utils/file-io.utils.js';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
 import { REPLY_ROUTING_CONSTANTS, SLACK_AGENT_DM_CONSTANTS, SLACK_THREAD_KEY_CONSTANTS, SLACK_TYPING_CONSTANTS } from '../../constants.js';
+import { isDriveModeRow } from '../drive/drive-row.utils.js';
 import { isInterim } from './slack-typing-placeholder.service.js';
 import { isOwnerAuthored, deliveredSessions, type SlackAutoWorkingService } from './slack-auto-working.service.js';
 import { toSlackMrkdwn } from './slack-mrkdwn.js';
@@ -517,7 +518,7 @@ export class SlackAgentDmService {
     }
     autoWatch?.delivered(deliveredSessions(dispatch, agentSession));
     if (typing) {
-      if (dispatch?.dispatched) await typing.setPhase(typingKey, 'typing');
+      if (dispatch?.dispatched) await typing.setPhase(typingKey, dispatch.deferred ? 'queued' : 'typing');
       else await typing.fail(typingKey);
     }
 
@@ -598,6 +599,10 @@ export class SlackAgentDmService {
     try {
       if (dto.senderType !== 'agent') return false;
       if (dto.metadata?.source === 'slack') return false;
+      // attach-file: the upload already is the Slack post; this row is history only.
+      if (dto.metadata?.slackAlreadyPosted === true) return false;
+      // A Drive mode reply was spoken on the phone; its recap is posted by Drive mode.
+      if (isDriveModeRow(dto)) return false;
       await this.load();
       const link = this.store.links[dto.channelId];
       if (!link) return false;

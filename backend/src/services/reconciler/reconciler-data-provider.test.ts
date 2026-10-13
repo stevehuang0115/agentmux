@@ -1574,6 +1574,14 @@ describe('LiveReconcilerDataProvider', () => {
         expect(await wakeResult(provider, buildAction())).toMatchObject({ outcome: 'failed' });
       });
 
+      it('logs why when the redelivery write did not land (CREW-438)', async () => {
+        mockPool.findWorkItem.mockResolvedValue(queuedWi);
+        mockSubscriber.redispatch.mockResolvedValue(false);
+        const warnSpy = jest.spyOn((provider as any).logger, 'warn');
+        await wakeResult(provider, buildAction());
+        expect(warnSpy).toHaveBeenCalledWith('Redelivery of WorkItem brief returned false', expect.objectContaining({ workItemId: 'wi-sora-1', agent: 'sora', status: 'queued' }));
+      });
+
       // 2026-09-16 token-burn fix: a flat 5-minute cooldown re-woke the orc
       // every few minutes for as long as a WI stayed queued. Each further
       // reminder for the same WI now waits twice as long as the last one.
@@ -1947,6 +1955,31 @@ describe('LiveReconcilerDataProvider', () => {
 
         expect(mockTerminate).not.toHaveBeenCalled();
         expect(result).toBe(false);
+      });
+
+      it('memory-pressure eviction still applies to an agent kept warm for Drive mode (pressure wins)', async () => {
+        const { DriveKeepWarm, setDriveKeepWarm } = await import('../drive/drive-keep-warm.js');
+        const warm = new DriveKeepWarm();
+        warm.set('drv_abcdefghijkl', ['stale'], Date.now() + 60_000);
+        setDriveKeepWarm(warm);
+        try {
+          mockStorage.getTeams.mockResolvedValue([
+            {
+              id: 't1',
+              members: [
+                { id: 'mStale', sessionName: 'stale', agentStatus: 'active', workingStatus: 'idle', role: 'developer', updatedAt: '2026-05-16T17:00:00Z' },
+                { id: 'mFresh', sessionName: 'fresh', agentStatus: 'active', workingStatus: 'idle', role: 'developer', updatedAt: '2026-05-16T18:50:00Z' },
+                { id: 'mBusy', sessionName: 'busy', agentStatus: 'active', workingStatus: 'in_progress', role: 'developer', updatedAt: '' },
+              ],
+            },
+          ]);
+          mockPool.getAllItems.mockResolvedValue([]);
+          await wakeOk(provider, wakeFor('atlas'));
+          // Keep-warm does not override memory pressure: the longest-idle agent goes.
+          expect(mockTerminate).toHaveBeenCalledWith('stale', 'developer');
+        } finally {
+          setDriveKeepWarm(new DriveKeepWarm());
+        }
       });
 
       it('refuses to evict always-on roles (orchestrator/auditor) even when idle', async () => {

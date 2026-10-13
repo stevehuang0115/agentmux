@@ -50,7 +50,7 @@ export const AppLayout: React.FC = () => {
 
   return (
     <NavBadgesProvider>
-    <div className="flex h-screen overflow-hidden bg-bg">
+    <div className="cw-wall flex h-screen overflow-hidden">
       {/* Session Resume Popup (shown once on app restart if previous sessions exist) */}
       <SessionResumePopup />
 

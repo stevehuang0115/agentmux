@@ -14,7 +14,7 @@ while [[ $# -gt 0 ]]; do
       echo "  Lists the channels you are a member of; --all lists every channel."
       echo "  Post in one with: reply-channel --channel '#name' --content \"...\""
       exit 0 ;;
-    *) echo "Unknown argument: $1" >&2; exit 2 ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 

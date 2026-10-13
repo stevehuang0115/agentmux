@@ -21,6 +21,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { apiService } from '../services/api.service';
 import { CLOUD_TOKEN_KEY } from '../constants/cloud.constants';
+import { setVisibleInterval } from '../utils/visible-interval';
 
 /** Endpoints. */
 export const CLOUD_ACCOUNT_API = {
@@ -392,7 +393,7 @@ export function useBrowserInstances(pollMs: number = BROWSER_INSTANCES_POLL_MS):
 
   useEffect(() => {
     void fetchInstances();
-    const interval = setInterval(() => void fetchInstances(), pollMs);
+    const interval = setVisibleInterval(() => void fetchInstances(), pollMs);
     return () => clearInterval(interval);
   }, [fetchInstances, pollMs]);
 

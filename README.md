@@ -53,7 +53,7 @@ crewly init
 crewly start
 ```
 
-The `init` command walks you through provider selection, installs agent skills, and scaffolds a `.crewly/` directory. Then `crewly start` launches the backend server and opens the web dashboard. From there:
+The `init` command walks you through provider selection, installs agent skills, and scaffolds a `.crewly/` directory. Then `crewly start` launches the backend server and prints the web dashboard URL (add `--open` or set `CREWLY_OPEN_BROWSER=1` to open it). From there:
 
 1. Create a **team** with agents assigned to roles
 2. Assign the team to a **project** (any local code directory)
@@ -138,7 +138,7 @@ You can change the default runtime or customize launch commands in **Settings**.
 
 ```bash
 crewly init          # Interactive setup wizard (alias: onboard)
-crewly start         # Start backend + open dashboard
+crewly start         # Start backend (prints dashboard URL; --open to open it)
 crewly stop          # Stop all services and sessions
 crewly status        # Show running services
 crewly logs          # View aggregated logs

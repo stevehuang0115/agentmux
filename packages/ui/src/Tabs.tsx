@@ -116,7 +116,7 @@ export interface TabListProps {
  */
 export const TabList: React.FC<TabListProps> = ({ children, className = '', 'aria-label': ariaLabel }) => {
   const combinedClassName = [
-    'flex gap-1 border-b border-border-dark pb-0 mb-6',
+    'flex gap-1 border-b border-border-soft pb-0 mb-6',
     className,
   ]
     .filter(Boolean)
@@ -194,11 +194,11 @@ export const TabTrigger: React.FC<TabTriggerProps> = ({
     'text-sm font-medium',
     'border-b-2 -mb-px',
     'transition-colors',
-    'focus:outline-none focus:ring-2 focus:ring-primary/50 focus:ring-offset-2 focus:ring-offset-background-dark',
+    'rounded-t-[0.75rem] focus:outline-none focus:ring-2 focus:ring-primary/50',
     disabled && 'opacity-50 cursor-not-allowed',
     isActive
-      ? 'text-primary border-primary'
-      : 'text-text-secondary-dark border-transparent hover:text-text-primary-dark hover:bg-background-dark/50',
+      ? 'text-primary-text border-primary'
+      : 'text-text-2 border-transparent hover:text-text hover:bg-surface-2/60',
   ]
     .filter(Boolean)
     .join(' ');

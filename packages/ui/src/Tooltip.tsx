@@ -47,7 +47,7 @@ export const Tooltip: React.FC<TooltipProps> = ({ content, side = 'top', open = 
     {children}
     <span
       role="tooltip"
-      className={`pointer-events-none absolute z-50 whitespace-nowrap rounded-[0.5rem] border border-border-dark bg-surface-dark px-2 py-1 text-xs text-text-primary-dark shadow-lg transition-opacity ${SIDE_CLASSES[side]} ${open ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'}`}
+      className={`pointer-events-none absolute z-50 whitespace-nowrap rounded-[0.5rem] cw-glass-strong px-2 py-1 text-xs text-text shadow-lg transition-opacity ${SIDE_CLASSES[side]} ${open ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'}`}
     >
       {content}
     </span>

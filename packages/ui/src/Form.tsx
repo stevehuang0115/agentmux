@@ -49,7 +49,7 @@ export const FormLabel: React.FC<FormLabelProps> = ({
 }) => (
   <label className={`block text-sm font-medium text-text-primary-dark mb-2 ${className}`} {...props}>
     {children}
-    {required && <span className="text-red-500 ml-1">*</span>}
+    {required && <span className="text-danger ml-1">*</span>}
   </label>
 );
 
@@ -72,7 +72,7 @@ export interface FormErrorProps {
 }
 
 export const FormError: React.FC<FormErrorProps> = ({ children, className = '' }) => (
-  <div className={`form-error text-xs text-red-400 mt-1.5 ${className}`}>
+  <div className={`form-error text-xs text-danger mt-1.5 ${className}`}>
     {children}
   </div>
 );
@@ -92,7 +92,7 @@ export const FormInput = React.forwardRef<HTMLInputElement, FormInputProps>(({
 }, ref) => (
   <input
     ref={ref}
-    className={`w-full bg-background-dark border border-border-dark shadow-sm focus:ring-1 focus:ring-primary focus:border-primary ${size === 'sm' ? 'rounded-[0.75rem] py-1 px-2.5 text-xs' : 'rounded-2xl py-2 px-3 text-sm'} ${error ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''} ${className}`}
+    className={`w-full bg-background-dark border border-border-dark shadow-sm focus:ring-1 focus:ring-primary focus:border-primary ${size === 'sm' ? 'rounded-[0.75rem] py-1 px-2.5 text-xs' : 'rounded-2xl py-2 px-3 text-sm'} ${error ? 'border-danger focus:border-danger focus:ring-danger' : ''} ${className}`}
     {...props}
   />
 ));
@@ -110,7 +110,7 @@ export const FormTextarea = React.forwardRef<HTMLTextAreaElement, FormTextareaPr
 }, ref) => (
   <textarea
     ref={ref}
-    className={`w-full bg-background-dark border border-border-dark rounded-2xl shadow-sm focus:ring-1 focus:ring-primary focus:border-primary py-2 px-3 text-sm resize-vertical ${error ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''} ${className}`}
+    className={`w-full bg-background-dark border border-border-dark rounded-2xl shadow-sm focus:ring-1 focus:ring-primary focus:border-primary py-2 px-3 text-sm resize-vertical ${error ? 'border-danger focus:border-danger focus:ring-danger' : ''} ${className}`}
     {...props}
   />
 ));
@@ -130,7 +130,7 @@ export const FormSelect = React.forwardRef<HTMLSelectElement, FormSelectProps>((
   <div className="relative w-full">
     <select
       ref={ref}
-      className={`w-full appearance-none bg-background-dark border border-border-dark rounded-2xl shadow-sm focus:ring-1 focus:ring-primary focus:border-primary py-2 pl-3 pr-8 text-sm ${error ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''} ${className}`}
+      className={`w-full appearance-none bg-background-dark border border-border-dark rounded-2xl shadow-sm focus:ring-1 focus:ring-primary focus:border-primary py-2 pl-3 pr-8 text-sm ${error ? 'border-danger focus:border-danger focus:ring-danger' : ''} ${className}`}
       {...props}
     >
       {children}

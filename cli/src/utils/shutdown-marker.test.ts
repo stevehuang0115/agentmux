@@ -5,7 +5,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { clearShutdownMarker, hasShutdownMarker, shutdownMarkerPath, stopLegacySupervisor } from './shutdown-marker.js';
+import { writeShutdownMarker, clearShutdownMarker, hasShutdownMarker, shutdownMarkerPath, stopLegacySupervisor } from './shutdown-marker.js';
 
 describe('shutdown marker (cli)', () => {
 	let home: string;
@@ -25,6 +25,17 @@ describe('shutdown marker (cli)', () => {
 		clearShutdownMarker(home);
 		expect(hasShutdownMarker(home)).toBe(false);
 		clearShutdownMarker(home);
+	});
+
+	it('writes the marker (creating run/) and reports who asked', () => {
+		expect(writeShutdownMarker(home)).toBe(true);
+		expect(hasShutdownMarker(home)).toBe(true);
+		expect(JSON.parse(fs.readFileSync(shutdownMarkerPath(home), 'utf-8')).by).toBe('crewly stop');
+	});
+
+	it('does not throw when the marker cannot be written', () => {
+		fs.writeFileSync(path.join(home, 'run'), 'a file where the directory should be');
+		expect(writeShutdownMarker(home)).toBe(false);
 	});
 
 	describe('stopLegacySupervisor', () => {

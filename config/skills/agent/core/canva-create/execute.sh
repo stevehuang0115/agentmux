@@ -63,7 +63,7 @@ while [[ $# -gt 0 ]]; do
     --size)    [ $# -ge 2 ] || error_exit "--size requires a value";   SIZE="$2";   shift 2 ;;
     --asset)   [ $# -ge 2 ] || error_exit "--asset requires a value";  ASSET="$2";  shift 2 ;;
     --help|-h) print_usage; exit 0 ;;
-    *) error_exit "Unknown option: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 if [ -n "$INPUT_JSON" ]; then

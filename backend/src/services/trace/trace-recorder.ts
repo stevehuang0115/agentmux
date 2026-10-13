@@ -16,6 +16,7 @@ import type { OwnerDecision } from '../../types/decision.types.js';
 import { readProjectTicketLink } from '../../types/project-ticket.types.js';
 import { formatTicketNumber } from '../../types/v2/ticket.types.js';
 import { getTraceContext } from './trace-context.service.js';
+import { notifyRequest } from '../usage-ledger/ledger-hooks.js';
 import { appendTraceMarker, formatTraceMarker, skillLabel } from './trace-markers.js';
 import { TERMINAL_INPUT_MAX_LENGTH } from '../../utils/security.js';
 import { isTraceId, type TraceActor, type TraceEventType, type TraceOutcome, type TraceRefKind, type TraceRefs } from './trace.types.js';
@@ -299,6 +300,16 @@ export function assignRequestTrace(request: Request, opts: { traceId?: string; c
 		}
 		if (!traceId) return null;
 		request.traceId = traceId;
+		notifyRequest({
+			traceId,
+			requestId: request.id,
+			...(label ? { ticketId: label } : {}),
+			title: request.title,
+			description: request.description,
+			...(request.origin?.channel ? { channel: request.origin.channel } : {}),
+			...(request.origin?.threadRef ? { threadRef: request.origin.threadRef } : {}),
+			createdAt: request.createdAt,
+		});
 		store.linkRef('request', request.id, traceId);
 		if (label) store.linkRef('ticket', label, traceId);
 		ctx.record({
@@ -320,6 +331,18 @@ const REQUEST_STATUS_OUTCOME: Record<string, TraceOutcome> = {
 	waiting_confirmation: 'queued',
 	blocked: 'blocked',
 };
+
+/**
+ * Who an `awaiting_followup` ticket waits on: the owner when every active
+ * open item is a conditional promise waiting on them, else an agent.
+ *
+ * @param request - The Request
+ * @returns `owner` or `agent`
+ */
+export function followupWaitsOn(request: Pick<Request, 'openItems'>): 'owner' | 'agent' {
+	const active = (request.openItems ?? []).filter((i) => i.status === 'open' || i.status === 'waiting_owner' || i.status === 'ready' || i.status === 'overdue');
+	return active.length > 0 && active.every((i) => i.status === 'waiting_owner') ? 'owner' : 'agent';
+}
 
 /**
  * A Request (ticket) changed status: submitted for review, accepted, sent
@@ -348,6 +371,7 @@ export function traceRequestStatus(request: Request, previous: string): void {
 				to: request.status,
 				...(request.acceptedBy ? { acceptedBy: request.acceptedBy } : {}),
 				...(typeof request.rejectCount === 'number' ? { rejectCount: request.rejectCount } : {}),
+				...(request.status === 'awaiting_followup' ? { followupWaitsOn: followupWaitsOn(request) } : {}),
 			},
 		});
 	}, undefined);

@@ -784,6 +784,22 @@ describe('TerminalController', () => {
 				expect(wake).not.toHaveBeenCalled();
 			});
 
+			it('deliver with a workItemId: queues the brief and starts the worker instead of a 404 (#1135)', async () => {
+				mockBackend.sessionExists.mockReturnValue(false);
+				mockReq = {
+					params: { sessionName: 'crewly-marketing-dana-45506487' } as any,
+					headers: { 'x-agent-session': 'crewly-orc' },
+					body: { message: 'WorkItem wi-9 — do the thing', workItemId: 'wi-9' },
+				};
+
+				await terminalController.deliverMessage.call({ agentRegistrationService: { sendMessageToAgent: jest.fn(), getInProcessRuntime: jest.fn().mockReturnValue(null) } } as any, mockReq as Request, mockRes as Response);
+
+				expect(mockRes.status).toHaveBeenCalledWith(202);
+				expect(mockRes.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, queued: true, waking: true }));
+				expect(mockEnqueue).toHaveBeenCalledWith('crewly-marketing-dana-45506487', 'WorkItem wi-9 — do the thing');
+				expect(wake).toHaveBeenCalledWith('crewly-marketing-dana-45506487');
+			});
+
 			it('keeps the 404 for a system notifier (not an agent caller)', async () => {
 				mockReq = {
 					params: { sessionName: 'crewly-marketing-dana-45506487' } as any,
@@ -1264,6 +1280,18 @@ describe('TerminalController', () => {
 			await terminalController.sendTerminalKey(mockReq as Request, mockRes as Response);
 
 			expect(mockSession.write).toHaveBeenCalledWith('\x03');
+		});
+
+		it('should send Ctrl+U key (clears a stuck input box)', async () => {
+			mockReq = {
+				params: { sessionName: 'test-session' } as any,
+				body: { key: 'C-u' },
+			};
+
+			await terminalController.sendTerminalKey(mockReq as Request, mockRes as Response);
+
+			expect(mockSession.write).toHaveBeenCalledWith('\x15');
+			expect(mockRes.status).not.toHaveBeenCalledWith(400);
 		});
 
 		it('should send Escape key', async () => {

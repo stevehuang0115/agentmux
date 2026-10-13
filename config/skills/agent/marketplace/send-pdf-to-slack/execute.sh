@@ -52,7 +52,7 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     *)
-      error_exit "Unknown argument: $1"
+      unknown_arg_exit "$1"
       ;;
   esac
 done

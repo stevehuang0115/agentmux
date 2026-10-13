@@ -811,6 +811,28 @@ describe('listTeamsWithMappings / getTeam', () => {
   });
 });
 
+describe('adoptMapping (team move, crewly#1189)', () => {
+  const incoming = { teamId: 'team-moved', slackChannelId: 'CMOVED', slackChannelName: 'moved', chatChannelId: 'huddle-moved', createdAt: '2026-09-12T00:00:00.000Z', autoCreated: true };
+
+  it('takes over a mapping once, so the arriving team keeps its channel', async () => {
+    expect(await service.adoptMapping(incoming)).toBe(true);
+    expect(service.findByTeamId('team-moved')?.slackChannelId).toBe('CMOVED');
+    expect(await service.adoptMapping(incoming)).toBe(false);
+    expect(await service.adoptMapping({ ...incoming, teamId: 'other-team' })).toBe(false); // the Slack channel is taken
+    expect(await service.adoptMapping({ teamId: 'x' } as never)).toBe(false);
+    // Persisted for the next boot.
+    const raw = JSON.parse(await fs.readFile(path.join(tmpDir, 'slack-team-channels.json'), 'utf8')) as { mappings: Array<{ teamId: string }> };
+    expect(raw.mappings.map((m) => m.teamId)).toEqual(['team-moved']);
+  });
+
+  it('keeps the Slack channel when a team moves away, unlike a delete', async () => {
+    await service.ensureTeamChannel(team());
+    await service.handleStorageEvent({ kind: 'team-moved-away', teamId: 'team-alpha' });
+    expect(service.findByTeamId('team-alpha')).not.toBeNull();
+    expect(slack.archived).toEqual([]);
+  });
+});
+
 describe('unlinkTeam', () => {
   it('drops the mapping, archives the huddle, and archives Slack only when asked', async () => {
     await service.ensureTeamChannel(team());
@@ -1387,8 +1409,13 @@ describe('mirrorOutbound', () => {
 
   it('ignores user messages, Slack-origin messages, unmapped channels, and offline Slack', async () => {
     expect(await service.mirrorOutbound(agentMessage({ senderType: 'user' }))).toBe(false);
+    // A colleague agent on another machine: already posted in Slack by that machine.
+    expect(await service.mirrorOutbound(agentMessage({ senderType: 'user', metadata: { remoteAgentSession: 'rednote-team-rex-4fdd66d7' } }))).toBe(false);
     expect(await service.mirrorOutbound(agentMessage({ metadata: { source: 'slack' } }))).toBe(false);
+    expect(await service.mirrorOutbound(agentMessage({ metadata: { slackAlreadyPosted: true } }))).toBe(false);
     expect(await service.mirrorOutbound(agentMessage({ channelId: 'huddle-zzz' }))).toBe(false);
+    // Drive mode replies are spoken on the phone, never mirrored to Slack.
+    expect(await service.mirrorOutbound(agentMessage({ metadata: { source: 'reply-tool', via: 'drive-mode' } }))).toBe(false);
     slack.connected = false;
     expect(await service.mirrorOutbound(agentMessage())).toBe(false);
     expect(slack.sent).toEqual([]);
@@ -1672,6 +1699,30 @@ describe('one pair of eyes per agent that receives it', () => {
     expect(eyes[0].botToken).toBeUndefined();
   });
 
+  it('a deferred start keeps the placeholder tracked as queued; a real failure still fails it', async () => {
+    typing = { begin: jest.fn().mockResolvedValue(null), resolve: jest.fn(), setPhase: jest.fn().mockResolvedValue(undefined), fail: jest.fn().mockResolvedValue(undefined) };
+    planning([['crewly-alpha-sam', 'required'], ['crewly-alpha-leo', 'required']]);
+    dispatcher!.dispatchMessage.mockResolvedValue({
+      strategy: 'huddle-broadcast',
+      dispatched: true,
+      huddleOutcomes: [
+        { sessionName: 'crewly-alpha-sam', responseMode: 'required', dispatched: true, queued: true, deferred: true },
+        { sessionName: 'crewly-alpha-leo', responseMode: 'required', dispatched: false, error: 'boom' },
+      ],
+    });
+    service = makeService();
+    await service.ensureTeamChannel(team());
+    identities!.install('crewly-alpha-sam', 'USAM', 'xoxb-sam');
+    identities!.install('crewly-alpha-leo', 'ULEO', 'xoxb-leo');
+
+    await service.routeInbound(inbound({ text: 'hello', ts: '507.1' }));
+
+    expect(typing.setPhase).toHaveBeenCalledWith(expect.objectContaining({ agentSession: 'crewly-alpha-sam' }), 'queued');
+    expect(typing.fail).toHaveBeenCalledTimes(1);
+    expect(typing.fail).toHaveBeenCalledWith(expect.objectContaining({ agentSession: 'crewly-alpha-leo' }));
+    typing = null;
+  });
+
   it('shows a placeholder only for agents that owe a reply', async () => {
     // A placeholder is a promise of an answer; an agent only passed the
     // message to judge announces itself if it takes it on.
@@ -1725,10 +1776,10 @@ describe('one pair of eyes per agent that receives it', () => {
 
 describe('ticket loop intake (specs/ticket-loop.md §2)', () => {
   const TICKET = { id: '11111111-2222-3333-4444-555555555555', ticketNumber: 12 };
-  let intake: { intakeWithOutcome: jest.Mock };
+  let intake: { intakeWithOutcome: jest.Mock; recordSkipped: jest.Mock };
 
   beforeEach(async () => {
-    intake = { intakeWithOutcome: jest.fn(async () => ({ action: 'created', ticket: TICKET })) };
+    intake = { intakeWithOutcome: jest.fn(async () => ({ action: 'created', ticket: TICKET })), recordSkipped: jest.fn(async () => undefined) };
     setTicketIntakeService(intake as unknown as TicketIntakeService);
     await service.ensureTeamChannel(team());
   });
@@ -1763,21 +1814,36 @@ describe('ticket loop intake (specs/ticket-loop.md §2)', () => {
     expect(dispatcher!.dispatchMessage.mock.calls[0][1].metadata?.ticketMarker).toBeUndefined();
   });
 
-  it('in an ad-hoc room, only the machine whose agent must answer files the ticket', async () => {
+  it('in an ad-hoc room, only the machine that hears the message files the ticket; a skip is logged', async () => {
     identities = new FakeIdentities();
     isLocal = (s) => s === 'crewly-alpha-leo';
     service = makeService();
     await service.ensureTeamChannel(team());
     identities.install('crewly-alpha-leo', 'ULEO', 'xoxb-leo');
-    // Seen here only because Leo's app is in the room; nobody here must answer.
-    dispatcher = { ...dispatcher!, planHuddleTargets: jest.fn().mockResolvedValue(new Map([['crewly-alpha-leo', 'optional']])) };
-    await service.routeInbound(inbound({ channelId: 'C-room', text: 'please fix the export', userId: 'UOWNER', ts: '800.1', receivedVia: 'crewly-alpha-leo' }));
+    // Nobody here hears it (another machine owns the un-@'d message): not filed here, but logged.
+    dispatcher = { ...dispatcher!, planHuddleTargets: jest.fn().mockResolvedValue(new Map()) };
+    await service.routeInbound(inbound({ channelId: 'C-room', text: 'please fix the export', userId: 'UOWNER', ts: '800.1', receivedVia: 'crewly-alpha-leo', room: { members: [{ agentSession: 'crewly-alpha-leo', displayName: 'Leo', instanceId: 'mac', deviceName: 'mac', awake: true }] } }));
     expect(intake.intakeWithOutcome).not.toHaveBeenCalled();
+    expect(intake.recordSkipped).toHaveBeenCalledWith(expect.objectContaining({ origin: expect.objectContaining({ ref: 'slackch-C-room-800.1' }) }), 'room_owned_elsewhere');
     // Addressed to Leo: this machine owns it, and the receipt goes out as Leo's bot.
     dispatcher.planHuddleTargets = jest.fn().mockResolvedValue(new Map([['crewly-alpha-leo', 'required']]));
     await service.routeInbound(inbound({ channelId: 'C-room', text: 'please fix the export', userId: 'UOWNER', ts: '800.2', receivedVia: 'crewly-alpha-leo' }));
     expect(intake.intakeWithOutcome).toHaveBeenCalledTimes(1);
     expect(intake.intakeWithOutcome.mock.calls[0][0]).toMatchObject({ targetAgent: 'crewly-alpha-leo', receipt: { postAs: 'crewly-alpha-leo' } });
+    isLocal = () => false;
+  });
+
+  it('an un-@\'d owner ask whose only recipient is an optional responder still files a ticket (AZ star incident)', async () => {
+    identities = new FakeIdentities();
+    isLocal = (s) => s === 'crewly-alpha-leo';
+    service = makeService();
+    await service.ensureTeamChannel(team());
+    identities.install('crewly-alpha-leo', 'ULEO', 'xoxb-leo');
+    // The room's single responder is picked as `optional` when nobody was @'d.
+    dispatcher = { ...dispatcher!, planHuddleTargets: jest.fn().mockResolvedValue(new Map([['crewly-alpha-leo', 'optional']])) };
+    await service.routeInbound(inbound({ channelId: 'C-room', text: '之前说那个AZ星球的视频 现在什么情况了？', userId: 'UOWNER', ts: '810.1', receivedVia: 'crewly-alpha-leo', room: { members: [{ agentSession: 'crewly-alpha-leo', displayName: 'Leo', instanceId: 'mac', deviceName: 'mac', awake: true }] } }));
+    expect(intake.intakeWithOutcome).toHaveBeenCalledTimes(1);
+    expect(intake.recordSkipped).not.toHaveBeenCalled();
     isLocal = () => false;
   });
 
@@ -1933,7 +1999,7 @@ describe('who in the room is awake', () => {
     );
 
     expect(optionsOf().room).toEqual({ awakeHere: ['crewly-alpha-sam'], awakeElsewhere: true, wakeWhenAllAsleep: null });
-    expect(optionsOf().roomPresence).toBe('sam（醒着，本机） · leo（在睡，本机） · ella（醒着，iriss-air）');
+    expect(optionsOf().roomPresence).toBe('sam (awake, this machine) · leo (asleep, this machine) · ella (awake, iriss-air)');
   });
 
   it('judges local agents by what is running here, not by what Cloud last heard', async () => {
@@ -1948,7 +2014,7 @@ describe('who in the room is awake', () => {
 
     expect(optionsOf().room.awakeHere).toEqual([]);
     expect(optionsOf().room.wakeWhenAllAsleep).toMatchObject({ kind: 'team-leader' });
-    expect(optionsOf().roomPresence).toContain('sam（在睡，本机）');
+    expect(optionsOf().roomPresence).toContain('sam (asleep, this machine)');
   });
 
   it('wakes the router only when Cloud named this machine', async () => {

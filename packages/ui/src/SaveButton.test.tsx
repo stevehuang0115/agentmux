@@ -105,8 +105,8 @@ describe('SaveButton', () => {
     const variantTests: [SaveStatus, string][] = [
       ['idle', 'bg-primary'],
       ['saving', 'bg-primary'],
-      ['saved', 'bg-emerald-600'],
-      ['error', 'bg-rose-600'],
+      ['saved', 'bg-success-soft'],
+      ['error', 'bg-danger-soft'],
     ];
 
     it.each(variantTests)('status="%s" uses variant with class %s', (status, expectedClass) => {

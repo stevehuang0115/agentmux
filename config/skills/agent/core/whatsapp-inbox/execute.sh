@@ -43,7 +43,7 @@ while [[ $# -gt 0 ]]; do
     --limit|-n)       [ $# -ge 2 ] || error_exit "--limit requires a value"; LIMIT="$2"; shift 2 ;;
     --include-groups) INCLUDE_GROUPS=1; shift ;;
     --help|-h)        print_usage; exit 0 ;;
-    *) error_exit "Unknown option: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 

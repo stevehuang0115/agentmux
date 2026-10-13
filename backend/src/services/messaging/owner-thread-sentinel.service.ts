@@ -30,6 +30,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import * as path from 'path';
 import { ORCHESTRATOR_SESSION_NAME, OWNER_THREAD_SENTINEL_CONSTANTS as C } from '../../constants.js';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
+import { reportAgentPostForFollowThrough } from '../agent/follow-through.service.js';
 
 /** A Slack place: a thread, or a DM / channel top level. */
 export interface SlackThreadRef {
@@ -72,7 +73,7 @@ export interface OwnerThreadEntry {
   /** Clipped text of that post */
   agentPreview?: string;
   /** The agent's latest post was a promise */
-  promise?: { at: number; minutes?: number; deadlineAt?: number; firedAt?: number };
+  promise?: { at: number; minutes?: number; deadlineAt?: number; firedAt?: number; parkedWorkItemId?: string };
   /** The agent has owner work from this thread */
   workOrigin?: boolean;
   /** Open cards the agent waits on (decision ids) */
@@ -122,6 +123,12 @@ const EN_PROMISE: readonly RegExp[] = [
   /\bwaiting (?:for|on)\b/i,
 ];
 const ZH_PROMISE = /(正在|在做|在查|在看|在读|在写|马上|稍等|等(?:我|一下|下|会|你)|预计|一会|待会|稍后|这就|我来|我去|我先|做完|弄好|搞定后|完成后|回头)/;
+/**
+ * Delivery phrasings that promise a result later ("做好发到 #x", "好了发你",
+ * "完成后发给你", "上线后告诉你", "发到 #x"). Already-done reports ("已经做好，发在这里") are not.
+ */
+const ZH_DELIVERY_PROMISE = /(?:做好|弄好|写好|搞好|好了|完成|上线|出来|跑完|剪完)(?:了|后|之后)?[^。！？\n]{0,12}?(?:发|告诉|通知|给你|贴|交)|发到\s*[#＃]/u;
+const ZH_ALREADY_DONE = /已经|已(?:发|做好|完成|上线)|刚(?:刚|才)/u;
 const DURATION =
   /(?:~|～|约|大约|大概|about|around|approx\.?|roughly|in|within|需要|要)?\s*(\d+(?:\.\d+)?)\s*(?:[-–~～到至]\s*(\d+(?:\.\d+)?)\s*)?(minutes?|mins?|m\b|分钟|分|hours?|hrs?|h\b|小时)/i;
 const CN_DIGITS: Record<string, number> = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
@@ -184,7 +191,7 @@ export function detectPromise(text: string): DetectedPromise | null {
   if (!t) return null;
   const minutes = parsePromisedMinutes(t);
   const explicitEta = /(?:~|～|约|大约|预计|\beta\b)\s*\d/i.test(t) || /\b(?:in|within)\s+\d+\s*(?:min|minutes?|h|hours?)\b/i.test(t);
-  const said = explicitEta || EN_PROMISE.some((re) => re.test(t)) || ZH_PROMISE.test(t);
+  const said = explicitEta || EN_PROMISE.some((re) => re.test(t)) || ZH_PROMISE.test(t) || (ZH_DELIVERY_PROMISE.test(t) && !ZH_ALREADY_DONE.test(t));
   if (!said) return null;
   return minutes !== undefined && minutes <= C.MAX_PROMISE_MINUTES ? { minutes } : {};
 }
@@ -372,7 +379,12 @@ export class OwnerThreadSentinelService {
       const minutes = promise.minutes;
       entry.promise = {
         at,
-        ...(minutes !== undefined ? { minutes, deadlineAt: at + Math.max(C.MIN_DEADLINE_MS, minutes * C.DEADLINE_FACTOR * 60_000) } : {}),
+        ...(minutes !== undefined
+          ? { minutes, deadlineAt: at + Math.max(C.MIN_DEADLINE_MS, minutes * C.DEADLINE_FACTOR * 60_000) }
+          : // No time stated at all (a promise longer than the cap is deliberately untimed): silence is the clock (#1240).
+            parsePromisedMinutes(input.text) === undefined
+            ? { deadlineAt: at + C.NO_ETA_SILENCE_MS }
+            : {}),
       };
     } else {
       entry.promise = undefined;
@@ -454,9 +466,86 @@ export class OwnerThreadSentinelService {
     for (const e of this.entries.values()) {
       if (e.agent !== agent) continue;
       if (e.ownerAt && (!e.agentPostAt || e.ownerAt > e.agentPostAt) && now - e.ownerAt <= C.RECENT_PROMISE_MS) return true;
-      if (e.promise && now - e.promise.at <= C.RECENT_PROMISE_MS) return true;
+      const p = openPromise(e);
+      if (p && now - p.at <= C.RECENT_PROMISE_MS) return true;
     }
     return false;
+  }
+
+  /**
+   * Whether `agent` owes the owner an answer (unanswered for under
+   * CARD_THREAD_MAX_AGE_MS) or a promised result (within ACTIVE_WINDOW_MS) in a
+   * watched thread — hours, not the 30 minutes of {@link owesRecently}. An open card is not counted: then the owner owes
+   * the agent. Idle stops spare such an agent unless memory is in pressure.
+   *
+   * @param agent - The agent
+   * @returns True while it owes an owner thread
+   */
+  owesOwner(agent: string): boolean {
+    const now = this.now();
+    for (const e of this.entries.values()) {
+      if (e.agent !== agent) continue;
+      if (e.ownerAt && (!e.agentPostAt || e.ownerAt > e.agentPostAt) && now - e.ownerAt <= C.CARD_THREAD_MAX_AGE_MS) return true;
+      const p = openPromise(e);
+      if (p && now - p.at <= C.ACTIVE_WINDOW_MS) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Age in ms of the newest promise (or unanswered owner message) the agent
+   * owes in a watched thread, or null when it owes none.
+   *
+   * @param agent - The agent
+   * @returns Milliseconds, or null
+   */
+  owedAgeMs(agent: string): number | null {
+    const now = this.now();
+    let best: number | null = null;
+    for (const e of this.entries.values()) {
+      if (e.agent !== agent) continue;
+      const ages: number[] = [];
+      if (e.ownerAt && (!e.agentPostAt || e.ownerAt > e.agentPostAt)) ages.push(now - e.ownerAt);
+      const p = openPromise(e);
+      if (p) ages.push(now - p.at);
+      for (const a of ages) if (best === null || a < best) best = a;
+    }
+    return best;
+  }
+
+  /**
+   * What the agent last promised the owner (the preview of its post), for the
+   * reminder it gets when it is brought back after a stop.
+   *
+   * @param agent - The agent
+   * @returns Text, or null when it has no open promise
+   */
+  promiseText(agent: string): string | null {
+    return this.parkablePromise(agent)?.text ?? null;
+  }
+
+  /**
+   * The agent's open promise that has not been turned into a WorkItem yet,
+   * with a key that names thread + promise (`<thread key>@<promise.at>`), so a
+   * second stop or a restart cannot make a second WorkItem for the same one.
+   *
+   * @param agent - The agent
+   * @returns Text, key and a `markParked` callback, or null when there is none
+   */
+  parkablePromise(agent: string): { text: string; key: string; markParked: (workItemId: string) => void } | null {
+    for (const e of this.entries.values()) {
+      const p = openPromise(e);
+      if (e.agent !== agent || !p || !e.agentPreview || p.parkedWorkItemId) continue;
+      return {
+        text: e.agentPreview,
+        key: `${e.key}@${p.at}`,
+        markParked: (workItemId) => {
+          p.parkedWorkItemId = workItemId;
+          this.persist();
+        },
+      };
+    }
+    return null;
   }
 
   /**
@@ -536,17 +625,19 @@ export class OwnerThreadSentinelService {
     const name = this.nameOf(entry.agent);
     const ago = Math.max(1, Math.round((now - p.at) / 60_000));
     const activity = await this.deps.currentActivity?.(entry.agent).catch(() => null);
+    const said = p.minutes !== undefined ? `said ~${p.minutes} min` : 'said it would post the result';
+    const told = p.minutes !== undefined ? `"~${p.minutes} min"` : 'you would post the result';
     const line =
-      `⏱ ${name} said ~${p.minutes} min, ${ago} min ago, and hasn't posted since. ` +
+      `⏱ ${name} ${said}, ${ago} min ago, and hasn't posted since. ` +
       `Right now: ${activity ? clip(activity) : `no update from ${name}`}. I've asked ${name} for an update here.`;
     let acted = 0;
     if (await this.emit(entry, `deadline:${p.at}`, line, true)) acted++;
     const ref = entry.threadTs ? `${entry.slackChannelId}:${entry.threadTs}` : entry.slackChannelId;
     const nudge =
-      `[OWNER THREAD ${ref}] You told the owner "~${p.minutes} min" ${ago} min ago in this Slack thread and have not posted there since. ` +
+      `[OWNER THREAD ${ref}] You told the owner ${told} ${ago} min ago in this Slack thread and have not posted there since. ` +
       `Post a short update there now: reply --thread ${ref} "<what is done, what is left, when>". If you are blocked, say on what.`;
     if (await this.deps.nudgeAgent(entry.agent, nudge).catch(() => false)) acted++;
-    this.logger.info('Owner thread promise overdue — status posted, agent nudged', { key: entry.key, agent: entry.agent, minutes: p.minutes });
+    this.logger.info('Owner thread promise overdue — status posted, agent nudged', { key: entry.key, agent: entry.agent, minutes: p.minutes ?? null });
     return acted;
   }
 
@@ -678,11 +769,27 @@ export class OwnerThreadSentinelService {
     const now = this.now();
     for (const e of readEntries(this.deps.storePath)) {
       // Anything active when Crewly went down gets one restart line.
-      e.restartPending = owes(e, now) && (!!e.promise || (!!e.ownerAt && (!e.agentPostAt || e.ownerAt > e.agentPostAt)));
+      e.restartPending = owes(e, now) && (!!openPromise(e) || (!!e.ownerAt && (!e.agentPostAt || e.ownerAt > e.agentPostAt)));
       this.entries.set(e.key, e);
     }
     if (this.entries.size > 0) this.logger.info('Restored watched owner threads from before the restart', { count: this.entries.size });
   }
+}
+
+/**
+ * The thread's promise while it is still open: a promise is kept as soon as
+ * the agent posted anything in the thread after it (`agentPostAt > promise.at`).
+ * Every "does the agent owe this?" check goes through here, so a kept promise
+ * is never read as open again after a restart reloads the file.
+ *
+ * @param e - The entry
+ * @returns The promise, or undefined when there is none or it was kept
+ */
+function openPromise(e: OwnerThreadEntry): NonNullable<OwnerThreadEntry['promise']> | undefined {
+  const p = e.promise;
+  if (!p) return undefined;
+  if (e.agentPostAt !== undefined && e.agentPostAt > p.at) return undefined;
+  return p;
 }
 
 /**
@@ -696,7 +803,8 @@ export class OwnerThreadSentinelService {
 function owes(e: OwnerThreadEntry, now: number): boolean {
   if (e.cards.length > 0) return true;
   if (e.ownerAt && (!e.agentPostAt || e.ownerAt > e.agentPostAt) && now - e.ownerAt <= C.ACTIVE_WINDOW_MS) return true;
-  if (e.promise && now - e.promise.at <= C.ACTIVE_WINDOW_MS) return true;
+  const p = openPromise(e);
+  if (p && now - p.at <= C.ACTIVE_WINDOW_MS) return true;
   return false;
 }
 
@@ -767,6 +875,9 @@ export function reportOwnerThreadBlocking(agent: string, event: SentinelEvent): 
  * @param input - Who, where, what
  */
 export function reportOwnerThreadAgentPost(input: SlackThreadRef & { agent: string; text: string; interim?: boolean }): void {
+  // The follow-through guard sees every agent post, including those in threads
+  // the sentinel does not watch (a decision card's thread, 2026-10-10).
+  reportAgentPostForFollowThrough({ agent: input.agent, text: input.text, ...(input.interim ? { interim: true } : {}) });
   try {
     instance?.noteAgentPost(input);
   } catch {

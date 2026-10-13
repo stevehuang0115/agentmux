@@ -14,7 +14,7 @@
 
 import { GOOGLE_WORKSPACE_CONSTANTS } from '../../constants.js';
 import { GoogleWorkspaceError } from './google-workspace-token.service.js';
-import { buildGoogleUrl, googleRequest, type GoogleApiDeps } from './google-api.client.js';
+import { buildGoogleUrl, dropCachedToken, googleRequest, type GoogleApiDeps } from './google-api.client.js';
 import { requireId } from './drive.service.js';
 
 /** One reply under a comment. */
@@ -271,7 +271,7 @@ export class DocsCommentsService {
       if (await this.isScopeRefusal(err, docId)) {
         // The owner is about to widen the grant; the next call must not
         // reuse the narrow token cached for the next hour.
-        this.deps.tokens.clearCache(this.deps.account);
+        dropCachedToken(this.deps.tokens, this.deps.account);
         throw new GoogleWorkspaceError(
           403,
           GOOGLE_WORKSPACE_CONSTANTS.ERROR_CODES.REAUTH_REQUIRED,

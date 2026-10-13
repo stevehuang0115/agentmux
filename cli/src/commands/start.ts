@@ -19,6 +19,7 @@ import { checkForUpdate, printUpdateNotification } from '../utils/version-check.
 import { selfInstallArgs } from '../utils/self-install.js';
 import { killZombieProcesses } from '../utils/process-cleanup.js';
 import { createChildShutdownHandler, resolveShutdownBudgetMs } from '../utils/safe-shutdown.js';
+import { shouldOpenDashboard, dashboardHint } from '../utils/open-dashboard.js';
 import { shouldRespawnBackend } from '../utils/backend-respawn.js';
 import { clearShutdownMarker, hasShutdownMarker, stopLegacySupervisor } from '../utils/shutdown-marker.js';
 
@@ -64,6 +65,7 @@ function findPackageRoot(startDir: string): string {
 interface StartOptions {
 	port?: string;
 	browser?: boolean;
+	open?: boolean;
 	headless?: boolean;
 	autoUpgrade?: boolean;
 }
@@ -71,7 +73,13 @@ interface StartOptions {
 export async function startCommand(options: StartOptions) {
 	const webPort = parseInt(options.port || DEFAULT_WEB_PORT.toString());
 	const headless = options.headless === true;
-	const openBrowser = headless ? false : options.browser !== false;
+	const openBrowser = shouldOpenDashboard({
+		headless,
+		open: options.open,
+		browser: options.browser,
+		env: process.env,
+		interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+	});
 
 	if (headless) {
 		console.log(chalk.blue('🚀 Starting Crewly in headless mode (API-only)...'));
@@ -97,6 +105,8 @@ export async function startCommand(options: StartOptions) {
 			if (openBrowser) {
 				console.log(chalk.blue('🌐 Opening dashboard...'));
 				await open(`http://localhost:${webPort}`);
+			} else if (!headless) {
+				console.log(chalk.cyan(dashboardHint(webPort)));
 			}
 			return;
 		}
@@ -115,7 +125,7 @@ export async function startCommand(options: StartOptions) {
 		// 5. Setup orchestrator session (non-blocking)
 		setupOrchestratorSessionAsync(webPort);
 
-		// 6. Open browser to dashboard immediately
+		// 6. Open the dashboard only on explicit opt-in (otherwise a hint is printed below)
 		if (openBrowser) {
 			console.log(chalk.blue('🌐 Opening dashboard...'));
 			await open(`http://localhost:${webPort}`);
@@ -139,7 +149,7 @@ export async function startCommand(options: StartOptions) {
 			console.log(chalk.cyan(`📡 API: http://localhost:${webPort}/api`));
 			console.log(chalk.cyan(`🏥 Health: http://localhost:${webPort}/health`));
 		} else {
-			console.log(chalk.cyan(`📊 Dashboard: http://localhost:${webPort}`));
+			console.log(chalk.cyan(`📊 ${dashboardHint(webPort)}`));
 		}
 		console.log(chalk.cyan(`⚡ WebSocket: ws://localhost:${webPort}`));
 		console.log(chalk.gray(`🎯 Orchestrator: Setting up in background...`));

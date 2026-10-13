@@ -15,6 +15,7 @@ print_usage() {
 Usage:
   bash execute.sh --app <appId> --list <collection> [--limit 100] [--after <docId>]
   bash execute.sh --app <appId> --get <collection> <docId>
+  bash execute.sh --app <appId> --get-field <collection> <docId> --field </json/pointer> --out <file> [--decode]
   bash execute.sh --app <appId> --set <collection> <docId> --data '{"done":true}'
   bash execute.sh --app <appId> --update <collection> <docId> --data '{"done":true}' [--if-rev 4]
   bash execute.sh --app <appId> --add <collection> --data '{"name":"milk"}'
@@ -32,6 +33,10 @@ Options:
   --if-rev     Only update when the doc is still at this rev (409 conflict otherwise)
   --limit      Page size for --list (1-500, default 100)
   --after      Continue a --list after this doc id (the previous page's "next")
+  --get-field  Save the FULL value of one field to a file (reads cut strings over 65,536 characters and list them in "truncated"); prints only {file, bytes}
+  --field      JSON pointer into the doc's data, as listed in "truncated" (e.g. /photo, /items/0/image)
+  --out        File to write for --get-field: inside your project directory, not an existing symlink
+  --decode     With --get-field: base64-decode the value (a data:...;base64, prefix is dropped) so a photo is written as the real image
   --upload     Put a file (an image for a post) into the app and print its url; works for the owner's agents and for collaborators. Regular, non-symlink file inside your project directory, up to 10 MB (the app's own limit may be smaller)
   --name       File name to show for --upload (default: the file's name)
   --request-access  Ask the owner to let your team (default) or only you work in an app another team published; a card goes to the owner, nothing is granted until they tap Allow
@@ -51,10 +56,20 @@ fail_from() {
   exit 1
 }
 
+# Run one API call. stdout (the whole response body, however many lines it
+# spans) is kept apart from stderr (the missing-session warning, or the JSON
+# error object api_call prints on failure) so neither pollutes the other.
 call() {
-  local out
-  out=$(api_call "$@" 2>&1) || { fail_from "$(printf '%s\n' "$out" | tail -n 1)"; }
-  printf '%s\n' "$out" | tail -n 1
+  local out err errfile rc=0
+  errfile=$(mktemp "${TMPDIR:-/tmp}/app-data-err.XXXXXX") || errfile=/dev/null
+  out=$(api_call "$@" 2>"$errfile") || rc=$?
+  err=$(cat "$errfile" 2>/dev/null || true)
+  [ "$errfile" = /dev/null ] || rm -f "$errfile"
+  if [ "$rc" -ne 0 ]; then
+    # The error object is the last non-empty stderr line (warnings come first).
+    fail_from "$(printf '%s\n' "$err" | awk 'NF{l=$0} END{print l}')"
+  fi
+  printf '%s\n' "$out"
 }
 
 uri() { jq -rn --arg v "$1" '$v|@uri'; }
@@ -107,13 +122,35 @@ content_type_for() {
   esac
 }
 
-APP=""; OP=""; UPLOAD=""; NAME=""; COLL=""; DOC=""; DATA=""; IF_REV=""; LIMIT=""; AFTER=""; SCOPE=""; REASON=""; SET_OWNER=""; WHO=""
+# --out for --get-field: a new regular file inside the project directory
+# (CREWLY_PROJECT_PATH, else the working directory), never under Crewly's home,
+# never through a symlink. Prints the absolute target path.
+resolve_out_path() {
+  local given="$1" dir base project real_dir
+  dir="$(dirname "$given")"; base="$(basename "$given")"
+  [ -d "$dir" ] || error_exit "the directory of --out does not exist: $dir"
+  real_dir="$(cd "$dir" && pwd -P)"
+  project="$(cd "${CREWLY_PROJECT_PATH:-$PWD}" && pwd -P)" || error_exit "cannot resolve the project directory"
+  case "$real_dir/" in "$project"/*) ;; *) error_exit "--out must be inside your project directory ($project)" ;; esac
+  case "$real_dir/" in "${CREWLY_HOME:-$HOME/.crewly}"/*|"$HOME/.crewly"/*) error_exit "--out is inside Crewly's home directory" ;; esac
+  [ ! -L "$real_dir/$base" ] || error_exit "--out is a symbolic link; pass a real file path"
+  [ ! -d "$real_dir/$base" ] || error_exit "--out is a directory"
+  printf '%s/%s' "$real_dir" "$base"
+}
+
+APP=""; OP=""; UPLOAD=""; NAME=""; COLL=""; DOC=""; DATA=""; IF_REV=""; LIMIT=""; AFTER=""; SCOPE=""; REASON=""; SET_OWNER=""; WHO=""; FIELD=""; OUT_FILE=""; DECODE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --app)    [ $# -ge 2 ] || error_exit "--app requires a value"; APP="$2"; shift 2 ;;
     --list|--add)
       [ $# -ge 2 ] || error_exit "$1 requires a collection"
       OP="${1#--}"; COLL="$2"; shift 2 ;;
+    --get-field)
+      [ $# -ge 3 ] || error_exit "--get-field requires a collection and a doc id"
+      OP="get-field"; COLL="$2"; DOC="$3"; shift 3 ;;
+    --field)     [ $# -ge 2 ] || error_exit "--field requires a JSON pointer"; FIELD="$2"; shift 2 ;;
+    --out)       [ $# -ge 2 ] || error_exit "--out requires a file path";   OUT_FILE="$2"; shift 2 ;;
+    --decode)    DECODE=1; shift ;;
     --get|--set|--update|--delete)
       [ $# -ge 3 ] || error_exit "$1 requires a collection and a doc id"
       OP="${1#--}"; COLL="$2"; DOC="$3"; shift 3 ;;
@@ -132,7 +169,7 @@ while [[ $# -gt 0 ]]; do
     --scope)     [ $# -ge 2 ] || error_exit "--scope requires a value";     SCOPE="$2"; shift 2 ;;
     --reason)    [ $# -ge 2 ] || error_exit "--reason requires a value";    REASON="$2"; shift 2 ;;
     --help|-h)   print_usage; exit 0 ;;
-    *) error_exit "Unknown option: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 
@@ -191,11 +228,28 @@ case "$OP" in
     [ -n "$LIMIT" ] && Q="limit=$(uri "$LIMIT")"
     [ -n "$AFTER" ] && Q="${Q:+$Q&}after=$(uri "$AFTER")"
     RESPONSE=$(call GET "${BASE}${Q:+?$Q}") || { printf '%s\n' "$RESPONSE"; exit 1; }
-    printf '%s' "$RESPONSE" | jq -c '{success: true, docs: [.data.docs[]? | {id, data, rev, updatedAt, updatedBy: (.updatedBy.kind // null)} + (if .updatedBy.kind == "agent" then {by: .updatedBy.id} else {} end)], next: .data.next}'
+    printf '%s' "$RESPONSE" | jq -c '{success: true, docs: [.data.docs[]? | {id, data, rev, updatedAt, updatedBy: (.updatedBy.kind // null)} + (if .updatedBy.kind == "agent" then {by: .updatedBy.id} else {} end)], next: .data.next} + (if .data.truncated then {truncated: .data.truncated, truncatedHint: .data.truncatedHint} else {} end)'
+    ;;
+  get-field)
+    [ -n "$FIELD" ] || error_exit "--field is required for --get-field (a JSON pointer such as /photo)"
+    [ -n "$OUT_FILE" ] || error_exit "--out is required for --get-field"
+    TARGET="$(resolve_out_path "$OUT_FILE")" || exit 1
+    RESPONSE=$(CREWLY_SKILL_FULL_OUTPUT=1 call GET "${BASE}/$(uri "$DOC")/field?path=$(uri "$FIELD")") || { printf '%s\n' "$RESPONSE"; exit 1; }
+    printf '%s' "$RESPONSE" | jq -e '.data.type == "string"' >/dev/null 2>&1 || error_exit "that field is not a string; read it with --get"
+    TMP_OUT="$(mktemp "${TARGET}.XXXXXX")" || error_exit "cannot write next to $OUT_FILE"
+    printf '%s' "$RESPONSE" | jq -j '.data.value' > "$TMP_OUT"
+    if [ -n "$DECODE" ]; then
+      sed -E '1s#^data:[^,]*;base64,##' "$TMP_OUT" | tr -d '\n\r ' > "${TMP_OUT}.b64"
+      { base64 -d < "${TMP_OUT}.b64" > "${TMP_OUT}.bin" 2>/dev/null || base64 -D < "${TMP_OUT}.b64" > "${TMP_OUT}.bin" 2>/dev/null; } \
+        || { rm -f "$TMP_OUT" "${TMP_OUT}.b64" "${TMP_OUT}.bin"; error_exit "the value is not valid base64"; }
+      mv "${TMP_OUT}.bin" "$TMP_OUT"; rm -f "${TMP_OUT}.b64"
+    fi
+    mv "$TMP_OUT" "$TARGET"
+    jq -cn --arg f "$TARGET" --argjson b "$(wc -c < "$TARGET" | tr -d ' ')" --argjson c "$(printf '%s' "$RESPONSE" | jq '.data.chars')" '{success: true, file: $f, bytes: $b, chars: $c}'
     ;;
   get)
     RESPONSE=$(call GET "${BASE}/$(uri "$DOC")") || { printf '%s\n' "$RESPONSE"; exit 1; }
-    printf '%s' "$RESPONSE" | jq -c '{success: true, id: .data.id, data: .data.data, rev: .data.rev, updatedAt: .data.updatedAt}'
+    printf '%s' "$RESPONSE" | jq -c '{success: true, id: .data.id, data: .data.data, rev: .data.rev, updatedAt: .data.updatedAt} + (if .data.truncated then {truncated: .data.truncated, truncatedHint: .data.truncatedHint} else {} end)'
     ;;
   set)
     need_data

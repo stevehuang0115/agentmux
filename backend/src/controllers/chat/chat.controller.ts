@@ -24,6 +24,7 @@ import { getChatHighlightsService } from '../../services/chat/chat-highlights.se
 import { ORCHESTRATOR_SESSION_NAME, ORC_STATUS_FORWARDING, OWNER_EVIDENCE_METADATA, SLACK_TYPING_CONSTANTS, SLACK_THREAD_KEY_CONSTANTS } from '../../constants.js';
 import { extractSlackThreadKeys, formatSlackThreadKey, parseSlackThreadKey } from '../../services/slack/slack-thread-key.js';
 import { readAgentSessionHeader } from '../../utils/agent-caller.utils.js';
+import { getBoardActivity } from '../../services/board/board-activity.tracker.js';
 import { isOwnerCaller, sendOwnerAuthRequired } from '../../middleware/caller-identity.middleware.js';
 import { OrcReplyRouteService } from '../../services/orc/orc-reply-route.service.js';
 import { OrcStatusRouterService } from '../../services/orc/orc-status-router.service.js';
@@ -936,6 +937,9 @@ export async function agentResponse(
     }
 
     const chatService = getChatService();
+    // Owner board: the agent is answering in the chat
+    const boardSession = readAgentSessionHeader(req);
+    if (boardSession) getBoardActivity().recordMessage(boardSession, 'owner chat');
 
     // Resolve conversation: use provided ID or get/create the current one.
     //

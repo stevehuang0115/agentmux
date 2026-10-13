@@ -222,6 +222,12 @@ api_call() {
   local url="${CREWLY_API_URL}/api${endpoint}"
   _prune_skill_output
   local args=(-s -w '\n%{http_code}' -X "$method")
+  # Optional ceiling on the whole request (seconds). A caller that can tell
+  # "the server is slow" from "it failed" (poll-tasks' claim) sets it; curl
+  # then exits 28 instead of hanging until the skill runner kills the call.
+  if [ -n "${CREWLY_API_MAX_TIME:-}" ]; then
+    args+=(--max-time "$CREWLY_API_MAX_TIME")
+  fi
   # A raw file upload (app-data --upload): CREWLY_API_UPLOAD_FILE is sent as the
   # body, byte for byte, with CREWLY_API_UPLOAD_TYPE as its Content-Type and the
   # URI-encoded CREWLY_API_UPLOAD_NAME as X-File-Name. Everything else is JSON.
@@ -370,6 +376,26 @@ error_exit() {
   msg=$(jq -n --arg e "$1" '{"error": $e}')
   echo "$msg" >&2
   exit 1
+}
+
+# -----------------------------------------------------------------------------
+# unknown_arg_exit arg
+# Reports an unrecognised CLI argument as ONE machine-readable JSON line on
+# stderr (always the LAST line, so `| tail -1` still shows it) and exits 2.
+# An unknown flag gets the bare message. A bare word (not starting with "-") is almost always text that was split
+# because an unescaped double quote ended a --content/--message/--comment
+# string, so the hint says nothing was sent and how to avoid it.
+# Call this INSTEAD of printing usage afterwards; print usage first if wanted.
+# -----------------------------------------------------------------------------
+unknown_arg_exit() {
+  local arg="${1:-}" msg
+  if [[ "$arg" == -* ]]; then
+    msg="Unknown argument: ${arg}"
+  else
+    msg="Unknown argument: ${arg} — nothing was sent. If your text contains double quotes, they ended the string (this word is the rest of it); use --content-file <path>, a heredoc via stdin, or single quotes."
+  fi
+  jq -cn --arg e "$msg" '{"success":false,"error":$e}' >&2
+  exit 2
 }
 
 # -----------------------------------------------------------------------------

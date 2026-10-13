@@ -506,6 +506,34 @@ describe('MessageStore', () => {
     });
   });
 
+  describe('owner feed (Drive mode recall, live-card filter)', () => {
+    it('lists live channels since a time, oldest first, newest kept under the cap', () => {
+      const archived = channels.create({ agentSession: 'sess-b', ownerUserId: 'user-a', name: 'Old', nowMs: 100 }).id;
+      messages.insert({ channelId, senderType: 'agent', senderId: 'sess-a', content: 'too old', nowMs: 1000 });
+      messages.insert({ channelId, senderType: 'agent', senderId: 'sess-a', content: 'one', nowMs: 2000 });
+      messages.insert({ channelId, senderType: 'agent', senderId: 'sess-a', content: 'two', nowMs: 3000 });
+      messages.insert({ channelId: archived, senderType: 'agent', senderId: 'sess-b', content: 'archived', nowMs: 2500 });
+      db.prepare('UPDATE chat_channels SET archived_at = 1 WHERE id = ?').run(archived);
+      expect(messages.listOwnerFeedRows(1500, 10).map((r) => r.content)).toEqual(['one', 'two']);
+      expect(messages.listOwnerFeedRows(0, 1).map((r) => r.content)).toEqual(['two']);
+      expect(messages.listOwnerFeedRows(1500, 10)[0]).toMatchObject({ channel_type: 'dm', channel_name: 'Test' });
+    });
+
+    it('owner turn marks: per channel for a DM, per thread for a huddle', () => {
+      const huddle = channels.create({ agentSession: '', ownerUserId: 'user-a', name: '#team', type: 'huddle', nowMs: 100 }).id;
+      messages.insert({ channelId, senderType: 'user', senderId: 'user-a', content: 'hi', nowMs: 1000 });
+      messages.insert({ channelId, senderType: 'user', senderId: 'user-a', content: 'again', nowMs: 1500 });
+      const root = messages.insert({ channelId: huddle, senderType: 'user', senderId: 'user-a', content: 'root', nowMs: 2000 }).row.id;
+      messages.insert({ channelId: huddle, senderType: 'user', senderId: 'user-a', content: 'reply', threadId: root, nowMs: 2600 });
+      messages.insert({ channelId: huddle, senderType: 'agent', senderId: 'sess-a', content: 'agent', threadId: root, nowMs: 2700 });
+      const marks = messages.listOwnerTurnMarks().sort((a, b) => a.lastAt - b.lastAt);
+      expect(marks).toEqual([
+        { channelId, root: '', lastAt: 1500 },
+        { channelId: huddle, root, lastAt: 2600 },
+      ]);
+    });
+  });
+
   describe('Slack thread-root lookups (team channels)', () => {
     function insert(chan: string, content: string, metadata?: Record<string, unknown>, threadId?: string) {
       return messages.insert({ channelId: chan, senderType: 'user', senderId: 'U1', content, metadata, threadId }).row;
@@ -577,6 +605,69 @@ describe('MessageStore', () => {
       const human = insert(channelId, 'owner question', { slackThreadTs: '100.1' });
       messages.insert({ channelId, senderType: 'agent', senderId: 'sess-dana', content: 'nightly report', metadata: { slackThreadTs: '200.1' } });
       expect(messages.findLatestSlackRoot(channelId)?.id).toBe(human.id);
+    });
+  });
+  describe('searchForAgent', () => {
+    let room: string;
+    let otherRoom: string;
+    const DAY = 24 * 60 * 60 * 1000;
+
+    beforeEach(() => {
+      room = channels.create({ agentSession: '', ownerUserId: 'user-a', name: '#awesome-videos', type: 'huddle', nowMs: 100 }).id;
+      otherRoom = channels.create({ agentSession: '', ownerUserId: 'user-a', name: '#secret', type: 'huddle', nowMs: 100 }).id;
+      db.prepare('INSERT INTO chat_channel_members (channel_id, member_session, joined_at) VALUES (?, ?, ?)').run(room, 'pia', 1);
+      db.prepare('INSERT INTO chat_channel_members (channel_id, member_session, joined_at) VALUES (?, ?, ?)').run(otherRoom, 'bob', 1);
+    });
+
+    function say(channel: string, content: string, createdAt: number, extra: Record<string, unknown> = {}): string {
+      const { row } = messages.insert({ channelId: channel, senderType: 'user', senderId: 'owner', content, ...extra });
+      db.prepare('UPDATE chat_messages SET created_at = ? WHERE id = ?').run(createdAt, row.id);
+      return row.id;
+    }
+
+    it('finds keyword hits in rooms the agent is a member of, newest first, and nowhere else', () => {
+      const old = say(room, '三个视频的计划: 开场, 演示, 收尾', 1_000);
+      const recent = say(room, '视频制作 plan 先做开场', 2_000);
+      say(otherRoom, '视频制作 secret budget', 3_000);
+      const hits = messages.searchForAgent('pia', { terms: ['视频'], limit: 10 });
+      expect(hits.map((h) => h.id)).toEqual([recent, old]);
+      expect(hits[0].channel_name).toBe('#awesome-videos');
+    });
+
+    it('requires every keyword, and treats LIKE wildcards literally', () => {
+      say(room, 'video plan v2', 1_000);
+      say(room, '100% done', 1_100);
+      expect(messages.searchForAgent('pia', { terms: ['video', 'plan'], limit: 10 })).toHaveLength(1);
+      expect(messages.searchForAgent('pia', { terms: ['video', 'budget'], limit: 10 })).toHaveLength(0);
+      expect(messages.searchForAgent('pia', { terms: ['%'], limit: 10 })).toHaveLength(1);
+      expect(messages.searchForAgent('pia', { terms: ['_'], limit: 10 })).toHaveLength(0);
+    });
+
+    it('filters by channel name (with or without #) and by date range', () => {
+      const yesterday = say(room, 'video plan', Date.UTC(2026, 9, 9, 10));
+      say(room, 'video plan again', Date.UTC(2026, 9, 10, 8));
+      const dm = say(channelId, 'video plan in my DM', Date.UTC(2026, 9, 9, 11), {});
+      void dm;
+      expect(messages.searchForAgent('pia', { terms: ['video'], channel: '#awesome-videos', limit: 10 })).toHaveLength(2);
+      expect(messages.searchForAgent('pia', { terms: ['video'], channel: 'awesome-videos', limit: 10 })).toHaveLength(2);
+      const day = messages.searchForAgent('pia', {
+        terms: ['video'],
+        channel: room,
+        fromMs: Date.UTC(2026, 9, 9),
+        toMs: Date.UTC(2026, 9, 9) + DAY,
+        limit: 10,
+      });
+      expect(day.map((h) => h.id)).toEqual([yesterday]);
+    });
+
+    it('includes the agent\'s own DM and messages that @-mention it, but not system rows', () => {
+      const dmId = channels.create({ agentSession: 'pia', ownerUserId: 'user-a', name: 'DM', nowMs: 100 }).id;
+      const inDm = say(dmId, 'video hello', 1_000);
+      const mentioned = say(otherRoom, 'video: @pia please check', 2_000, { mentions: ['pia'] });
+      messages.insert({ channelId: room, senderType: 'system', senderId: 'system', content: 'video system note' });
+      const ids = messages.searchForAgent('pia', { terms: ['video'], limit: 10 }).map((h) => h.id);
+      expect(ids).toEqual(expect.arrayContaining([inDm, mentioned]));
+      expect(ids).toHaveLength(2);
     });
   });
 });

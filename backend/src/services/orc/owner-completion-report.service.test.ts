@@ -197,6 +197,35 @@ describe('OwnerCompletionReportService', () => {
     expect(postFallback).toHaveBeenCalledTimes(1);
   });
 
+  it('reply --work-item settles the chain wherever it was posted: no reminder, no cover message (CREW-503)', async () => {
+    const svc = make();
+    items = [item('s1', { origin: SLACK_ORIGIN, target: 'atlas', at: now, doneAt: now + MIN })];
+    now += 2 * MIN;
+    await svc.tick();
+    now += C.SETTLE_MS;
+    await svc.tick();
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(svc.noteWorkItemReply('s1')).toBe(1); // posted elsewhere: no answer key matched
+    now += 3 * C.REPORT_WAIT_MS;
+    await svc.tick();
+    await svc.tick();
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(postFallback).not.toHaveBeenCalled();
+    expect(svc.activeRecords).toHaveLength(0);
+  });
+
+  it('a reply naming another work item leaves the chain to be reported (negative)', async () => {
+    const svc = make();
+    items = [item('s1', { origin: SLACK_ORIGIN, target: 'atlas', at: now, doneAt: now + MIN })];
+    now += 2 * MIN;
+    await svc.tick();
+    now += C.SETTLE_MS;
+    await svc.tick();
+    expect(svc.noteWorkItemReply('other')).toBe(0);
+    expect(svc.noteWorkItemReply('')).toBe(0);
+    expect(svc.activeRecords).toHaveLength(1);
+  });
+
   it('an agent answer in the owner place after the work finished ends it (before asking, or after the ask)', async () => {
     const svc = make();
     items = incidentChain();

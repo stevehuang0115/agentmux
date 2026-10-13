@@ -62,7 +62,7 @@ OUT=$(CREWLY_API_URL="http://127.0.0.1:${PORT}" bash "$EXEC" --id no-grant 2>/de
 check "409: hint is the connect URL" "$(printf '%s' "$OUT" | jq -r .hint)" "https://cloud/start?token=j"
 
 check "missing id errors" "$(run_err)" "Missing required parameter: id (--id)"
-check "unknown option errors" "$(run_err --bogus 1)" "Unknown option: --bogus"
+check "unknown option errors" "$(run_err --bogus 1)" "Unknown argument: --bogus"
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

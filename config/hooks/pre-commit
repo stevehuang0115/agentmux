@@ -30,6 +30,35 @@ GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
 
+# --- Tagged debug logs (debugging SOP) -------------------------------------
+# A staged added line containing the debug tag prefix fails the commit.
+# Reports how many files were scanned. If the staged list cannot be read, the
+# commit fails (a guard must not pass silently). Markdown files are skipped
+# (docs may mention the tag); nothing staged is not an error (message-only amend).
+DEBUG_TAG='\[DEBUG-'
+if ! STAGED_FILES="$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null)"; then
+  echo -e "${RED}[CREWLY] Debug-tag scan: could not read the staged file list${NC}"
+  exit 1
+fi
+SCANNED=0
+DEBUG_HITS=""
+while IFS= read -r STAGED; do
+  [ -z "$STAGED" ] && continue
+  case "$STAGED" in *.md) continue ;; esac
+  SCANNED=$((SCANNED + 1))
+  HIT="$(git diff --cached -U0 -- "$STAGED" 2>/dev/null | grep -E "^\+[^+].*${DEBUG_TAG}|^\+${DEBUG_TAG}" || true)"
+  if [ -n "$HIT" ]; then
+    DEBUG_HITS="${DEBUG_HITS}${STAGED}\n"
+  fi
+done <<< "$STAGED_FILES"
+echo -e "${GREEN}[CREWLY] Debug-tag scan: ${SCANNED} file(s) scanned${NC}"
+if [ -n "$DEBUG_HITS" ]; then
+  echo -e "${RED}[CREWLY] COMMIT BLOCKED: staged debug log tagged [DEBUG-...] in:${NC}"
+  echo -e "${RED}${DEBUG_HITS}${NC}"
+  echo -e "${YELLOW}Remove them (grep -rn '\[DEBUG-' .) and commit again.${NC}"
+  exit 1
+fi
+
 # Check if curl is available
 if ! command -v curl &>/dev/null; then
   echo -e "${YELLOW}[CREWLY] curl not found — skipping quality gate check${NC}"

@@ -347,6 +347,28 @@ export class OwnerCompletionReportService {
     if (chatThreadId) this.noteAnswer(`chat:${conversationId}:${chatThreadId}`);
   }
 
+  /**
+   * An agent reported with `reply --work-item <id>`: the owner was told for
+   * every chain that item belongs to, wherever the post landed (its thread
+   * can differ from the thread the owner asked in) and whatever the item's
+   * status now is (a verified item still counts). The reminder stops and no
+   * cover message is posted (CREW-503).
+   *
+   * @param workItemId - The WorkItem the reply named
+   * @returns How many chains were settled
+   */
+  noteWorkItemReply(workItemId: string): number {
+    if (!workItemId) return 0;
+    const now = this.now();
+    let settled = 0;
+    for (const record of Object.values(this.store.active)) {
+      if (record.replyWorkItemId !== workItemId && !record.workItemIds.includes(workItemId)) continue;
+      this.end(record, 'answered', now);
+      settled++;
+    }
+    return settled;
+  }
+
   /** Records being reported (tests / diagnostics). */
   get activeRecords(): ChainReportRecord[] {
     return Object.values(this.store.active);

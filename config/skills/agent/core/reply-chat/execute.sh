@@ -34,7 +34,7 @@ while [[ $# -gt 0 ]]; do
     --work-item) WORK_ITEM="$2"; shift 2 ;;
     --json|-j) INPUT_JSON="$2"; shift 2 ;;
     --) shift; break ;;
-    *) if [[ -z "$INPUT_JSON" && ${1:0:1} == '{' ]]; then INPUT_JSON="$1"; shift; else error_exit "Unknown argument: $1"; fi ;;
+    *) if [[ -z "$INPUT_JSON" && ${1:0:1} == '{' ]]; then INPUT_JSON="$1"; shift; else unknown_arg_exit "$1"; fi ;;
   esac
 done
 

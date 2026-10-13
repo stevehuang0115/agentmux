@@ -18,16 +18,16 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
 const baseClasses = "font-semibold inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
 
 const variantClasses: Record<ButtonVariant, string> = {
-  primary: "bg-primary text-white hover:bg-primary/90",
-  secondary: "bg-surface-dark border border-border-dark hover:bg-background-dark",
-  danger: "bg-rose-600 text-white hover:bg-rose-500",
-  ghost: "text-text-secondary-dark hover:bg-background-dark hover:text-text-primary-dark",
-  'danger-ghost': "text-text-secondary-dark hover:text-rose-400",
-  success: "bg-emerald-600 text-white hover:bg-emerald-500",
-  warning: "bg-yellow-500 text-black hover:bg-yellow-400",
-  outline: "border border-border-dark text-text-secondary-dark hover:bg-surface-dark hover:text-text-primary-dark",
+  primary: "bg-primary text-on-primary shadow-[0_6px_18px_rgba(37,99,220,0.28)] hover:bg-primary/90",
+  secondary: "bg-surface-2 border border-border text-text hover:bg-surface-hover",
+  danger: "bg-danger-soft border border-danger/30 text-danger hover:bg-danger/25",
+  ghost: "text-text-2 hover:bg-surface-2 hover:text-text",
+  'danger-ghost': "text-text-2 hover:text-danger",
+  success: "bg-success-soft border border-success/30 text-success hover:bg-success/25",
+  warning: "bg-attention-soft border border-attention/30 text-attention hover:bg-attention/25",
+  outline: "border border-border text-text-2 hover:bg-surface-2 hover:text-text",
   // Inline text action ("Clear", "Switch", "3 replies"): no box, just the accent
-  link: "text-primary hover:underline underline-offset-2",
+  link: "text-primary-text hover:underline underline-offset-2",
 };
 
 const sizeClasses: Record<ButtonSize, string> = {

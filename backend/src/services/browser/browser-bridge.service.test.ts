@@ -812,6 +812,139 @@ describe('BrowserBridgeService — per-tab dispatch', () => {
 	});
 
 	// -------------------------------------------------------------------------
+	// Cleaning up the tabs agents open
+	// -------------------------------------------------------------------------
+
+	describe('agent tab cleanup', () => {
+		afterEach(() => {
+			delete process.env.CREWLY_TAB_IDLE_CLOSE_MINUTES;
+		});
+
+		const unbindCalls = (spy: jest.SpyInstance): number[] =>
+			(spy as unknown as { calls: Array<{ tool: string; params?: { tabId?: number } }> }).calls
+				.filter((c) => c.tool === 'unbindTab')
+				.map((c) => c.params?.tabId as number);
+
+		it('closes the tab on an explicit finish', async () => {
+			const bridge = BrowserBridgeService.getInstance();
+			const spy = stubSendCommand(bridge, [{ id: 'b1', success: true, result: { tabId: 42 } }, { id: 'u1', success: true, result: {} }]);
+			await bridge.bindAgentTab('agent-A');
+
+			const result = await bridge.unbindAgentTab('agent-A', { reason: 'agent_done' });
+
+			expect(result).toEqual({ released: true, tabClosed: true });
+			expect(unbindCalls(spy)).toEqual([42]);
+		});
+
+		it('releases without closing a tab this backend did not create', async () => {
+			const bridge = BrowserBridgeService.getInstance();
+			const spy = stubSendCommand(bridge, []);
+			// Existing tab adopted from elsewhere: not in ownedTabIds.
+			(bridge as unknown as { agentTabBindings: Map<string, unknown> }).agentTabBindings.set('agent-A', {
+				agentSession: 'agent-A', tabId: 7, boundAt: new Date(), lastActivityAt: new Date(),
+			});
+
+			const result = await bridge.unbindAgentTab('agent-A');
+
+			expect(result).toEqual({ released: true, tabClosed: false });
+			expect(unbindCalls(spy)).toEqual([]);
+		});
+
+		it('does not close a tab the owner is using, but still releases it', async () => {
+			const bridge = BrowserBridgeService.getInstance();
+			const spy = stubSendCommand(bridge, [{ id: 'b1', success: true, result: { tabId: 42 } }]);
+			bridge.setCloseGuard(() => 'owner has control');
+			await bridge.bindAgentTab('agent-A');
+
+			const result = await bridge.unbindAgentTab('agent-A', { reason: 'agent_done' });
+
+			expect(result).toEqual({ released: true, tabClosed: false });
+			expect(unbindCalls(spy)).toEqual([]);
+			expect(bridge.getBinding('agent-A')).toBeUndefined();
+		});
+
+		it('closes a tab left untouched after the turn ended, once the idle window passes', async () => {
+			process.env.CREWLY_TAB_IDLE_CLOSE_MINUTES = '0.001'; // 60ms
+			const bridge = BrowserBridgeService.getInstance();
+			const spy = stubSendCommand(bridge, [{ id: 'b1', success: true, result: { tabId: 42 } }]);
+			await bridge.bindAgentTab('agent-A');
+			bridge.noteAgentTurnEnded('agent-A');
+			await new Promise((r) => setTimeout(r, 80));
+
+			expect(await bridge.runSweepOnce()).toBe(1);
+			expect(unbindCalls(spy)).toEqual([42]);
+		});
+
+		it('leaves the tab alone while the turn has not ended', async () => {
+			process.env.CREWLY_TAB_IDLE_CLOSE_MINUTES = '0.001';
+			const bridge = BrowserBridgeService.getInstance();
+			stubSendCommand(bridge, [{ id: 'b1', success: true, result: { tabId: 42 } }]);
+			await bridge.bindAgentTab('agent-A');
+			await new Promise((r) => setTimeout(r, 80));
+
+			expect(await bridge.runSweepOnce()).toBe(0);
+			expect(bridge.getBinding('agent-A')).toBeDefined();
+		});
+
+		it('cancels the idle close when the agent works again or touches the tab', async () => {
+			process.env.CREWLY_TAB_IDLE_CLOSE_MINUTES = '0.001';
+			const bridge = BrowserBridgeService.getInstance();
+			stubSendCommand(bridge, [
+				{ id: 'b1', success: true, result: { tabId: 42 } },
+				{ id: 'b2', success: true, result: { tabId: 43 } },
+			]);
+			await bridge.bindAgentTab('agent-A');
+			await bridge.bindAgentTab('agent-B');
+			bridge.noteAgentTurnEnded('agent-A');
+			bridge.noteAgentTurnEnded('agent-B');
+			bridge.noteAgentBusy('agent-A');
+			await new Promise((r) => setTimeout(r, 80));
+			bridge.touchBinding('agent-B');
+
+			expect(await bridge.runSweepOnce()).toBe(0);
+			expect(bridge.listBindings()).toHaveLength(2);
+		});
+
+		it('is disabled by CREWLY_TAB_IDLE_CLOSE_MINUTES=0', async () => {
+			process.env.CREWLY_TAB_IDLE_CLOSE_MINUTES = '0';
+			const bridge = BrowserBridgeService.getInstance();
+			stubSendCommand(bridge, [{ id: 'b1', success: true, result: { tabId: 42 } }]);
+			await bridge.bindAgentTab('agent-A');
+			bridge.noteAgentTurnEnded('agent-A');
+			await new Promise((r) => setTimeout(r, 30));
+
+			expect(await bridge.runSweepOnce()).toBe(0);
+		});
+
+		it('keeps an idle tab the owner is watching and retries on the next sweep', async () => {
+			process.env.CREWLY_TAB_IDLE_CLOSE_MINUTES = '0.001';
+			const bridge = BrowserBridgeService.getInstance();
+			const spy = stubSendCommand(bridge, [{ id: 'b1', success: true, result: { tabId: 42 } }]);
+			let watched = true;
+			bridge.setCloseGuard(() => (watched ? 'owner is watching' : null));
+			await bridge.bindAgentTab('agent-A');
+			bridge.noteAgentTurnEnded('agent-A');
+			await new Promise((r) => setTimeout(r, 80));
+
+			expect(await bridge.runSweepOnce()).toBe(0);
+			expect(bridge.getBinding('agent-A')).toBeDefined();
+			watched = false;
+			expect(await bridge.runSweepOnce()).toBe(1);
+			expect(unbindCalls(spy)).toEqual([42]);
+		});
+
+		it('closes the agent tab when the agent stops', async () => {
+			const bridge = BrowserBridgeService.getInstance();
+			const spy = stubSendCommand(bridge, [{ id: 'b1', success: true, result: { tabId: 42 } }, { id: 'u1', success: true, result: {} }]);
+			await bridge.bindAgentTab('agent-A');
+
+			expect(await bridge.closeTabForStoppedAgent('agent-A')).toBe(true);
+			expect(unbindCalls(spy)).toEqual([42]);
+			expect(await bridge.closeTabForStoppedAgent('agent-A')).toBe(false);
+		});
+	});
+
+	// -------------------------------------------------------------------------
 	// Several browsers / backends on one Cloud account (incident 2026-09-23)
 	// -------------------------------------------------------------------------
 

@@ -13,7 +13,7 @@ import { CREWLY_APPS_CONSTANTS, ORCHESTRATOR_SESSION_NAME } from '../../constant
 import { AppsCloudClient, AppsCloudError, type AppsRequestOptions } from './apps-cloud.client.js';
 import type { AppRegistryEntry, AppsRegistryService } from './apps-registry.service.js';
 import { toOpenLinkInfos, usableMintedLink, type MintedOpenLink, type OpenLinkInfo } from './app-open-link.js';
-import { sanitizeAppData } from './app-wake-message.js';
+import { findTruncatedFields, resolveJsonPointer, sanitizeAppData } from './app-wake-message.js';
 
 const C = CREWLY_APPS_CONSTANTS;
 
@@ -407,6 +407,30 @@ export function requireCollectionList(v: unknown, what: string): string[] {
   }
   if (names.length > C.PUBLIC_REQUEST.MAX_COLLECTIONS) throw validation(`${what} can name at most ${C.PUBLIC_REQUEST.MAX_COLLECTIONS} collections.`);
   return names as string[];
+}
+
+/** Capability names an agent may ask for (Cloud's `APP_CAPABILITIES`); Cloud validates again. */
+export const REQUESTABLE_CAPABILITIES = ['microphone', 'media_capture'] as const;
+
+/** What an agent tells the owner after asking for a capability. */
+const CAPABILITY_REQUEST_MESSAGE = 'Requested: the owner allows it in Crewly Cloud (Apps -> the app -> Permissions). Until then the app keeps the default sandbox and the browser refuses the device.';
+
+/**
+ * Validate an agent's capability request.
+ *
+ * @param input - `{ capabilities, note? }` (capabilities: array or comma-separated string)
+ * @returns The body to send to Cloud
+ */
+export function validateCapabilityRequest(input: unknown): { capabilities: string[]; note?: string } {
+  const b = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
+  const raw = typeof b.capabilities === 'string' ? b.capabilities.split(',') : b.capabilities;
+  if (!Array.isArray(raw) || raw.length === 0) throw validation('Name at least one capability (microphone or media_capture).');
+  const caps = [...new Set(raw.map((c) => (typeof c === 'string' ? c.trim() : '')))];
+  const bad = caps.find((c) => !(REQUESTABLE_CAPABILITIES as readonly string[]).includes(c));
+  if (bad !== undefined) throw validation(`Unknown capability ${JSON.stringify(bad.slice(0, 40))}. Use: ${REQUESTABLE_CAPABILITIES.join(', ')}.`);
+  const note = typeof b.note === 'string' ? b.note.trim() : '';
+  if (note.length > 500) throw validation('note must be at most 500 characters.');
+  return { capabilities: caps, ...(note ? { note } : {}) };
 }
 
 /**
@@ -820,6 +844,38 @@ export class AppsService {
   }
 
   /**
+   * Ask the owner for extra browser permissions for an app (`microphone`, `media_capture`).
+   * Only records the request: Cloud grants a capability solely from the owner's own portal
+   * sign-in, so nothing here can turn one on. The owner sees a banner in the app.
+   *
+   * @param appId - App id
+   * @param input - `{ capabilities: string[] | comma string, note? }`
+   * @param caller - Agent (its own apps) or owner
+   * @returns Cloud's recorded request
+   */
+  async requestCapabilities(appId: unknown, input: unknown, caller: AppsCaller): Promise<{ appId: string; requested: true; capabilities: unknown; capabilityRequest: unknown; message: string }> {
+    const id = requireAppId(appId);
+    const body = validateCapabilityRequest(input);
+    await this.assertPublisher(id, caller);
+    const r = await this.deps.client.request<{ capabilities?: unknown; capabilityRequest?: unknown }>('POST', `/apps/${id}/capability-request`, { body, agent: caller.agentSession });
+    return { appId: id, requested: true, capabilities: r?.capabilities ?? [], capabilityRequest: r?.capabilityRequest ?? null, message: CAPABILITY_REQUEST_MESSAGE };
+  }
+
+  /**
+   * Withdraw a pending capability request.
+   *
+   * @param appId - App id
+   * @param caller - Agent (its own apps) or owner
+   * @returns `{ appId, cancelled: true }`
+   */
+  async cancelCapabilityRequest(appId: unknown, caller: AppsCaller): Promise<{ appId: string; cancelled: true }> {
+    const id = requireAppId(appId);
+    await this.assertPublisher(id, caller);
+    await this.deps.client.request('DELETE', `/apps/${id}/capability-request`, { agent: caller.agentSession });
+    return { appId: id, cancelled: true };
+  }
+
+  /**
    * Make an app private again (instant; always allowed).
    *
    * @param appId - App id
@@ -1168,10 +1224,8 @@ export class AppsService {
     const after = opts.after !== undefined && opts.after !== '' ? requireDocId(opts.after) : undefined;
     const path = `/apps/${requireAppId(appId)}/data/${requireCollection(collection)}`;
     await this.assertDataAccess(appId as string, caller);
-    return this.dataRequest('GET', path, {
-      query: { limit, after },
-      agent: caller.agentSession,
-    });
+    const raw = await this.deps.client.request<unknown>('GET', path, { query: { limit, after }, agent: caller.agentSession });
+    return this.withTruncationFlags(raw, 'list');
   }
 
   /**
@@ -1186,7 +1240,58 @@ export class AppsService {
   async getDoc(appId: unknown, collection: unknown, docId: unknown, caller: AppsCaller): Promise<unknown> {
     const path = this.docPath(appId, collection, docId);
     await this.assertDataAccess(appId as string, caller);
-    return this.dataRequest('GET', path, { agent: caller.agentSession });
+    const raw = await this.deps.client.request<unknown>('GET', path, { agent: caller.agentSession });
+    return this.withTruncationFlags(raw, 'doc');
+  }
+
+  /**
+   * The full, unshortened value of one field of a document (crewly#1145).
+   * Reads of a document cut strings over 64K characters for display and flag
+   * them in `truncated`; this returns the whole string so a caller (the
+   * app-data skill's `--get-field --out`) can write it to a file. The value
+   * is NOT sanitised: it is meant for a file, never for a terminal.
+   *
+   * @param appId - App id
+   * @param collection - Collection
+   * @param docId - Document id
+   * @param field - RFC 6901 JSON pointer into the document's `data` (`/photo`)
+   * @param caller - Agent or owner
+   * @returns `{ field, type, chars?, value }`
+   * @throws AppsCloudError validation (bad pointer), not_found (no such field)
+   */
+  async getDocField(appId: unknown, collection: unknown, docId: unknown, field: unknown, caller: AppsCaller): Promise<unknown> {
+    if (typeof field !== 'string' || !field.startsWith('/') || field.length > 1024) throw validation('field must be a JSON pointer into the document data, like /photo or /items/0/image.');
+    const path = this.docPath(appId, collection, docId);
+    await this.assertDataAccess(appId as string, caller);
+    const doc = (await this.deps.client.request<unknown>('GET', path, { agent: caller.agentSession })) as { data?: unknown } | null;
+    const hit = resolveJsonPointer(doc?.data, field);
+    if (!hit.found) throw new AppsCloudError(404, 'not_found', 'That document has no such field.');
+    const v = hit.value;
+    const type = v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v;
+    return { field, type, ...(typeof v === 'string' ? { chars: v.length } : {}), value: v };
+  }
+
+  /**
+   * Sanitise a document read for the agent and say which strings were cut.
+   * Adds `truncated: [{ field, chars }]` (per document for a list, with the
+   * doc `id`) only when something was cut, so a cropped base64 value is never
+   * mistaken for the whole.
+   */
+  private withTruncationFlags(raw: unknown, kind: 'doc' | 'list'): unknown {
+    const out = sanitizeAppData(raw) as Record<string, unknown> | null;
+    if (!out || typeof out !== 'object' || !raw || typeof raw !== 'object') return out;
+    const r = raw as Record<string, unknown>;
+    const hint = 'Strings over 65,536 characters are cut in this view. Fetch the whole value with app-data --get-field <collection> <docId> --field <field> --out <file>.';
+    if (kind === 'doc') {
+      const truncated = findTruncatedFields(r.data);
+      if (truncated.length > 0) Object.assign(out, { truncated, truncatedHint: hint });
+    } else if (Array.isArray(r.docs)) {
+      const truncated = (r.docs as Array<{ id?: unknown; data?: unknown }>).flatMap((d) =>
+        findTruncatedFields(d?.data).map((t) => ({ id: d?.id, ...t })),
+      );
+      if (truncated.length > 0) Object.assign(out, { truncated, truncatedHint: hint });
+    }
+    return out;
   }
 
   /**

@@ -244,6 +244,7 @@ describe('AgentRegistrationService', () => {
 			killSession: jest.fn().mockResolvedValue(undefined),
 			createSession: jest.fn().mockResolvedValue({ pid: 1234, cwd: '/test', name: 'test-session' }),
 			sendCtrlC: jest.fn().mockResolvedValue(undefined),
+			isAgentBusy: jest.fn().mockResolvedValue(false),
 			clearCurrentCommandLine: jest.fn().mockResolvedValue(undefined),
 			sendMessage: jest.fn().mockResolvedValue(undefined),
 			sendKey: jest.fn().mockResolvedValue(undefined),
@@ -313,6 +314,43 @@ describe('AgentRegistrationService', () => {
 		} else {
 			process.env.CREWLY_USE_MODULAR_PROMPTS = savedModularEnv;
 		}
+	});
+
+	describe('restart handover (fresh conversation after a plain stop/start)', () => {
+		const recovery = require('./runtime-session-recovery.js');
+		let writeSpy: jest.SpiedFunction<typeof recovery.writeRestartHandover>;
+		beforeEach(() => {
+			writeSpy = jest.spyOn(recovery, 'writeRestartHandover');
+		});
+		afterEach(() => writeSpy.mockRestore());
+
+		const persistence = () => ({
+			lastConversationsFile: () => '/state/last-conversations.json',
+			getRegisteredSessionsMap: () =>
+				new Map([
+					['pia', { claudeSessionId: 'mine' }],
+					['sam', { claudeSessionId: 'sams' }],
+				]),
+		});
+
+		it('keeps the handover note for the kickoff and excludes other sessions\' conversations', () => {
+			writeSpy.mockReturnValue({ file: '/h/pia-restart.md', note: 'read /h/pia-restart.md', previousSessionId: 'conv-1' });
+			(service as any).prepareRestartHandover('pia', '/proj', persistence());
+			expect((service as any).pendingRestartNotes.get('pia')).toBe('read /h/pia-restart.md');
+			const args = writeSpy.mock.calls[0][0] as any;
+			expect(args).toMatchObject({ sessionName: 'pia', cwd: '/proj', lastConversationsFile: '/state/last-conversations.json' });
+			expect([...(args.claimedByOthers as Set<string>)]).toEqual(['sams']);
+		});
+
+		it('leaves no note when there is nothing to hand over, and never throws', () => {
+			writeSpy.mockReturnValue(null);
+			(service as any).prepareRestartHandover('pia', '/proj', persistence());
+			expect((service as any).pendingRestartNotes.has('pia')).toBe(false);
+			writeSpy.mockImplementation(() => {
+				throw new Error('disk full');
+			});
+			expect(() => (service as any).prepareRestartHandover('pia', '/proj', persistence())).not.toThrow();
+		});
 	});
 
 	describe('closeOversizedConversation (fresh conversation at launch)', () => {
@@ -2611,6 +2649,57 @@ describe('AgentRegistrationService', () => {
 			);
 		});
 
+		describe('existing session recovery never interrupts a live agent (crewly#1260)', () => {
+			afterEach(() => {
+				mockGetIdleTimeMs.mockReturnValue(999999);
+			});
+
+			it('a mid-turn agent is left running: no runtime probe, no Ctrl+C', async () => {
+				mockSessionHelper.sessionExists.mockReturnValue(true);
+				mockSessionHelper.isAgentBusy.mockResolvedValue(true);
+				mockRuntimeService.detectRuntimeWithCommand.mockResolvedValue(false);
+
+				const result = await service.createAgentSession({
+					sessionName: 'test-session',
+					role: 'developer',
+					projectPath: '/test/project',
+					teamId: 'team-1',
+					memberId: 'member-1',
+				});
+
+				expect(result.success).toBe(true);
+				expect(mockRuntimeService.detectRuntimeWithCommand).not.toHaveBeenCalled();
+				expect(mockSessionHelper.sendCtrlC).not.toHaveBeenCalled();
+				expect(mockSessionHelper.killSession).not.toHaveBeenCalled();
+				mockSessionHelper.isAgentBusy.mockResolvedValue(false);
+			});
+
+			it('an agent with recent output counts as mid-turn', async () => {
+				mockSessionHelper.sessionExists.mockReturnValue(true);
+				mockGetIdleTimeMs.mockReturnValue(5_000);
+				mockRuntimeService.detectRuntimeWithCommand.mockResolvedValue(false);
+
+				const result = await service.createAgentSession({ sessionName: 'test-session', role: 'developer', projectPath: '/test/project' });
+
+				expect(result.success).toBe(true);
+				expect(mockSessionHelper.sendCtrlC).not.toHaveBeenCalled();
+			});
+
+			it('an already-registered agent whose runtime probe fails gets no Ctrl+C either', async () => {
+				mockSessionHelper.sessionExists.mockReturnValue(true);
+				mockRuntimeService.detectRuntimeWithCommand.mockResolvedValue(false);
+				mockStorageService.getTeams.mockResolvedValue([{
+					id: 'team-1',
+					members: [{ sessionName: 'test-session', role: 'developer', agentStatus: 'active' }],
+				}] as any);
+
+				const result = await service.createAgentSession({ sessionName: 'test-session', role: 'developer', projectPath: '/test/project' });
+
+				expect(result.success).toBe(true);
+				expect(mockSessionHelper.sendCtrlC).not.toHaveBeenCalled();
+			});
+		});
+
 		it('should not fail session creation if persistence registration fails', async () => {
 			mockSessionHelper.sessionExists
 				.mockReturnValueOnce(false)
@@ -2646,6 +2735,64 @@ describe('AgentRegistrationService', () => {
 			});
 			await (service as any).detectAndStoreSessionId('test-session', '/test/project');
 			expect(updateSessionId).not.toHaveBeenCalled();
+		});
+	});
+
+	describe('conversation after an idle stop (ResourceMode eviction)', () => {
+		const os = jest.requireActual('os');
+		const nodeFs = jest.requireActual('fs');
+		const nodePath = jest.requireActual('path');
+		let dir: string;
+		let lastFile: string;
+		const persistenceWith = (storedId: string | undefined, cwd?: string) => {
+			const updateSessionId = jest.fn();
+			(sessionModule.getSessionStatePersistence as any).mockReturnValue({
+				registerSession: jest.fn(),
+				unregisterSession: jest.fn(),
+				isSessionRegistered: jest.fn().mockReturnValue(false),
+				isRestoredSession: jest.fn().mockReturnValue(false),
+				getSessionId: jest.fn().mockReturnValue(storedId),
+				getSessionMetadata: jest.fn().mockReturnValue(cwd ? { cwd } : undefined),
+				getRegisteredSessionsMap: () => new Map(),
+				lastConversationsFile: () => lastFile,
+				updateSessionId,
+			});
+			return updateSessionId;
+		};
+		beforeEach(() => {
+			dir = nodeFs.mkdtempSync(nodePath.join(os.tmpdir(), 'evict-resume-'));
+			lastFile = nodePath.join(dir, 'last-conversations.json');
+		});
+		afterEach(() => nodeFs.rmSync(dir, { recursive: true, force: true }));
+
+		it('resumes the conversation a stop remembered when no id is stored', async () => {
+			nodeFs.writeFileSync(lastFile, JSON.stringify({ pia: { sessionId: 'remembered-conv', cwd: dir, at: Date.now() } }));
+			const updateSessionId = persistenceWith(undefined);
+			const flags: string[] = [];
+			const plan = await (service as any).planSessionRecovery('pia', RUNTIME_TYPES.CLAUDE_CODE, flags, dir);
+			expect(flags).toEqual(['--resume', 'remembered-conv']);
+			expect(plan.resumeSessionId).toBe('remembered-conv');
+			expect(updateSessionId).toHaveBeenCalledWith('pia', 'remembered-conv');
+		});
+
+		it('starts fresh when nothing is stored or remembered', async () => {
+			persistenceWith(undefined);
+			const flags: string[] = [];
+			const plan = await (service as any).planSessionRecovery('pia', RUNTIME_TYPES.CLAUDE_CODE, flags, dir);
+			expect(plan.resumeSessionId).toBeNull();
+			expect(flags[0]).toBe('--session-id');
+		});
+
+		it('relaunches in the directory the agent last ran in when the caller gives none', () => {
+			persistenceWith('x', dir);
+			expect((service as any).lastKnownCwd('pia')).toBe(dir);
+			// Stopped: the metadata is gone, the last-conversations entry keeps the cwd
+			persistenceWith(undefined);
+			nodeFs.writeFileSync(lastFile, JSON.stringify({ pia: { sessionId: 'c', cwd: dir, at: Date.now() } }));
+			expect((service as any).lastKnownCwd('pia')).toBe(dir);
+			// A directory that no longer exists is not used
+			nodeFs.writeFileSync(lastFile, JSON.stringify({ pia: { sessionId: 'c', cwd: nodePath.join(dir, 'gone'), at: Date.now() } }));
+			expect((service as any).lastKnownCwd('pia')).toBeUndefined();
 		});
 	});
 
@@ -5143,7 +5290,7 @@ describe('AgentRegistrationService', () => {
 				);
 
 				const path = require('path');
-				const os = require('os');
+				const os = jest.requireActual('os');
 				expect(result).toBe(
 					path.join(os.homedir(), '.crewly', 'prompts', 'test-agent-init.md'),
 				);
@@ -5159,7 +5306,7 @@ describe('AgentRegistrationService', () => {
 				);
 
 				const path = require('path');
-				const os = require('os');
+				const os = jest.requireActual('os');
 				expect(result).toBe(
 					path.join(os.homedir(), '.crewly', 'prompts', 'test-agent-init.md'),
 				);

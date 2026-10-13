@@ -12,6 +12,7 @@
 import { useEffect, useState } from 'react';
 import { apiService } from '../services/api.service';
 import { SCHEDULE_BADGE_POLL_MS } from '../constants/schedules.constants';
+import { setVisibleInterval } from '../utils/visible-interval';
 
 /**
  * Active recurring schedules, or null until the first successful load.
@@ -36,7 +37,7 @@ export function useScheduleCount(): number | null {
       }
     };
     void load();
-    const timer = setInterval(() => void load(), SCHEDULE_BADGE_POLL_MS);
+    const timer = setVisibleInterval(() => void load(), SCHEDULE_BADGE_POLL_MS);
     return () => {
       cancelled = true;
       clearInterval(timer);

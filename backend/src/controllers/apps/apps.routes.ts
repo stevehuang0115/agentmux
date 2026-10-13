@@ -12,6 +12,7 @@
  * - GET    /:appId/data/:collection                — `?limit&after`
  * - POST   /:appId/data/:collection                — add `{ data }`
  * - GET    /:appId/data/:collection/:docId         — one doc
+ * - GET    /:appId/data/:collection/:docId/field   — `?path=/pointer` full value of one field
  * - PUT    /:appId/data/:collection/:docId         — replace `{ data }`
  * - PATCH  /:appId/data/:collection/:docId         — merge `{ data, ifRev? }`
  * - DELETE /:appId/data/:collection/:docId         — delete
@@ -28,6 +29,8 @@
  * - DELETE /:appId/links                           — revoke all
  * - POST   /:appId/visibility-request              — ask the owner to make it public
  * - DELETE /:appId/visibility-request              — withdraw the request
+ * - POST   /:appId/capability-request             — `{ capabilities: ['microphone'|'media_capture'], note? }`: ask the owner for device access
+ * - DELETE /:appId/capability-request             — withdraw it
  * - POST   /:appId/make-private                    — private again (instant)
  * - POST   /:appId/files                           — upload a file (raw body, `X-File-Name`); answers its URL
  * - GET    /:appId/comments                        — `?status=open|resolved|all` (crewly#1056)
@@ -35,6 +38,12 @@
  * - POST   /:appId/comments/:commentId/replies     — reply `{ text }`
  * - POST   /:appId/comments/:commentId/resolve     — resolve (`/reopen` reopens)
  * - POST   /:appId/comments/:commentId/audio       — download its voice recordings here; answers local paths
+ * - POST   /handoffs                              — `{ fileName, sizeBytes, contentType?, note?, to? }`: reserve a large-file handoff; answers a presigned upload URL
+ * - POST   /handoffs/:handoffId/complete          — upload finished (Cloud checks the size)
+ * - GET    /handoffs/:handoffId                   — metadata + presigned download URL once ready (`GET /handoffs` lists)
+ * - POST   /upload-requests                      — `{ purpose, agentName?, maxFiles? }`: ask the owner for a (large) file; answers the upload link
+ * - GET    /upload-requests/:requestId            — status, limits and files (`DELETE` cancels the link)
+ * - POST   /handoffs/:handoffId/ack               — received: Cloud deletes the file (`DELETE /handoffs/:handoffId` withdraws)
  * - GET    /templates                              — `?q&tag&category&limit`: search Marketplace app templates
  * - GET    /templates/mine                         — this account's own templates
  * - POST   /templates/:templateId/use              — `{ name?, source? }`: a new app from a template (+ its files)
@@ -68,6 +77,7 @@ import {
   listDocs,
   addDoc,
   getDoc,
+  getDocField,
   setDoc,
   updateDoc,
   deleteDoc,
@@ -78,6 +88,8 @@ import {
   requestPublic,
   cancelPublicRequest,
   makePrivate,
+  requestCapabilities,
+  cancelCapabilityRequest,
   listComments,
   getComment,
   replyComment,
@@ -93,6 +105,15 @@ import {
   useTemplate,
   unlistTemplate,
   checkoutTemplateFiles,
+  createHandoff,
+  completeHandoff,
+  getHandoff,
+  listHandoffs,
+  ackHandoff,
+  cancelHandoff,
+  createUploadRequest,
+  getUploadRequest,
+  cancelUploadRequest,
 } from './apps.controller.js';
 
 const C = CREWLY_APPS_CONSTANTS;
@@ -193,6 +214,17 @@ export function createAppsRouter(): Router {
   router.post('/templates/:templateId/unlist', unlistTemplate);
   router.post('/:appId/template-request', requestTemplate);
   router.post('/:appId/template-files', checkoutTemplateFiles);
+  // File handoff (large files between agents): registered before the /:appId routes.
+  router.post('/handoffs', createHandoff);
+  router.get('/handoffs', listHandoffs);
+  router.get('/handoffs/:handoffId', getHandoff);
+  router.post('/handoffs/:handoffId/complete', completeHandoff);
+  router.post('/handoffs/:handoffId/ack', ackHandoff);
+  router.delete('/handoffs/:handoffId', cancelHandoff);
+  // Owner upload link (request-file): registered before the /:appId routes too.
+  router.post('/upload-requests', createUploadRequest);
+  router.get('/upload-requests/:requestId', getUploadRequest);
+  router.delete('/upload-requests/:requestId', cancelUploadRequest);
   router.post('/thumbnails/refresh-all', refreshAllThumbnails);
   router.post('/:appId/thumbnail/refresh', refreshThumbnail);
   router.post('/:appId/transfer', transferApp);
@@ -208,6 +240,7 @@ export function createAppsRouter(): Router {
   router.get('/:appId/data/:collection', listDocs);
   router.post('/:appId/data/:collection', addDoc);
   router.get('/:appId/data/:collection/:docId', getDoc);
+  router.get('/:appId/data/:collection/:docId/field', getDocField);
   router.put('/:appId/data/:collection/:docId', setDoc);
   router.patch('/:appId/data/:collection/:docId', updateDoc);
   router.delete('/:appId/data/:collection/:docId', deleteDoc);
@@ -217,6 +250,8 @@ export function createAppsRouter(): Router {
   router.delete('/:appId/links', revokeLinks);
   router.post('/:appId/visibility-request', requestPublic);
   router.delete('/:appId/visibility-request', cancelPublicRequest);
+  router.post('/:appId/capability-request', requestCapabilities);
+  router.delete('/:appId/capability-request', cancelCapabilityRequest);
   router.post('/:appId/make-private', makePrivate);
   router.get('/:appId/comments', listComments);
   router.get('/:appId/comments/:commentId', getComment);

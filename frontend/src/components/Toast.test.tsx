@@ -16,6 +16,9 @@ import type { Toast } from '../hooks/useToast';
 // Mock lucide-react icons
 vi.mock('lucide-react', () => ({
   X: () => <svg data-testid="x-icon" />,
+  CheckCircle2: () => <svg data-testid="success-icon" />,
+  AlertCircle: () => <svg data-testid="error-icon" />,
+  Info: () => <svg data-testid="info-icon" />,
 }));
 
 describe('ToastContainer', () => {
@@ -91,5 +94,18 @@ describe('ToastContainer', () => {
     render(<ToastContainer toasts={toasts} onDismiss={mockDismiss} />);
 
     expect(screen.getByRole('log')).toHaveAttribute('aria-live', 'polite');
+  });
+
+  it('wears the glass surface and a state icon per type', () => {
+    const toasts: Toast[] = [
+      { id: '1', message: 'Saved', type: 'success' },
+      { id: '2', message: 'Failed', type: 'error' },
+      { id: '3', message: 'Note', type: 'info' },
+    ];
+    render(<ToastContainer toasts={toasts} onDismiss={mockDismiss} />);
+    for (const type of ['success', 'error', 'info'] as const) {
+      expect(screen.getByTestId(`toast-${type}`)).toHaveClass('cw-glass-strong');
+      expect(screen.getByTestId(`${type}-icon`)).toBeInTheDocument();
+    }
   });
 });

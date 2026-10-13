@@ -28,6 +28,16 @@ jest.mock('../core/logger.service.js', () => ({
   },
 }));
 
+// The remembered queue id is written atomically (tmp + fsync + rename: several real I/O ticks).
+// These tests run on fake timers and poll with flushPromises, so use a one-step write here;
+// the atomic writer itself is covered in file-io.atomic-repair.test.ts.
+jest.mock('../../utils/file-io.utils.js', () => ({
+  ...jest.requireActual('../../utils/file-io.utils.js'),
+  atomicWriteJson: async (file: string, data: unknown) => {
+    await jest.requireActual('fs').promises.writeFile(file, JSON.stringify(data, null, 2), 'utf-8');
+  },
+}));
+
 jest.mock('../core/storage.service.js', () => ({
   StorageService: {
     getInstance: () => ({
@@ -950,6 +960,23 @@ describe('CloudSyncService', () => {
     it('backs off 30 s, 1 min, 2 min, 5 min, then every 5 min', () => {
       expect([1, 2, 3, 4, 5, 6, 50].map(registerRetryDelay))
         .toEqual([30_000, 60_000, 120_000, 300_000, 300_000, 300_000, 300_000]);
+    });
+
+    it.each([
+      ['the Retry-After header', { 'retry-after': '90' }, { error: 'rate_limited' }, 90_000],
+      ['the body retryAfter', {}, { error: 'rate_limited', retryAfter: 120 }, 120_000],
+      ['a cap on very long waits (daily limit)', { 'retry-after': '40000' }, { error: 'daily_limit' }, CLOUD_SYNC_CONSTANTS.RETRY_AFTER_MAX_MS],
+    ])('honours the relay 429 retry hint: %s', async (_name, headers, body, expectedMs) => {
+      mockFetch.mockImplementation(async () => {
+        const res = mockResponse({ success: false, ...body }, 429) as unknown as { headers: unknown };
+        res.headers = { get: (k: string) => (headers as Record<string, string>)[k.toLowerCase()] ?? null };
+        return res as unknown as Response;
+      });
+      service.start(configWithJwt);
+      await settle();
+      const health = service.getHealth().relayQueue!;
+      expect(health.queueId).toBeNull();
+      expect(health.nextAttemptAt! - Date.now()).toBe(expectedMs);
     });
 
     it('retries a 429 on the backoff schedule, reports it in health, then starts polling once accepted', async () => {

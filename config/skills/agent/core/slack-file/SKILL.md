@@ -49,5 +49,5 @@ the full file at `path`.
 | `not_visible` | No bot of your account is in the file's channel. Ask the owner to invite you (or the Crewly app) there. |
 | `foreign_workspace` | The link is from a Slack workspace your account has not connected. |
 | `file_deleted` | The file was deleted. |
-| `too_large` | Over 25 MB. |
+| `too_large` | Over 25 MB for this command. A file the owner attached to a message is downloaded for you up to 1 GB; if it is still too big, or not on Slack, get it with the `request-file` skill (an upload link for the owner's phone). **Do not ask the owner to compress it or use Drive.** |
 | `no_file_in_message` | The message link has no file attached. |

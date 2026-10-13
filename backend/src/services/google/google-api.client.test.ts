@@ -5,7 +5,7 @@
  * @module services/google/google-api.client.test
  */
 
-import { buildGoogleUrl, googleRequest, isInsufficientScopeError, type GoogleApiDeps } from './google-api.client.js';
+import { buildGoogleUrl, dropCachedToken, googleRequest, isInsufficientScopeError, type GoogleApiDeps } from './google-api.client.js';
 import { GoogleWorkspaceError } from './google-workspace-token.service.js';
 
 function response(status: number, body: unknown) {
@@ -150,6 +150,42 @@ describe('account and product plumbing', () => {
     };
     await expect(googleRequest(bound, 'https://g/x')).rejects.toMatchObject({ status: 401 });
     expect(clearOne).toHaveBeenCalledWith('work@company.com');
+  });
+});
+
+describe('dropCachedToken scoping', () => {
+  const failing = (account?: string) => {
+    const clearCacheFor = jest.fn();
+    const clearAll = jest.fn();
+    return {
+      clearCacheFor,
+      clearAll,
+      deps: {
+        tokens: { getAccessToken: jest.fn().mockResolvedValue('ya29.tok'), clearCache: clearAll, clearCacheFor },
+        fetchImpl: jest.fn().mockResolvedValue(response(401, '{}')) as unknown as typeof fetch,
+        ...(account ? { account } : {}),
+      },
+    };
+  };
+
+  it('a 401 on the DEFAULT account clears only the default slot, never every account', async () => {
+    const f = failing();
+    await expect(googleRequest(f.deps, 'https://g/x')).rejects.toMatchObject({ status: 401 });
+    expect(f.clearCacheFor).toHaveBeenCalledWith(undefined);
+    expect(f.clearAll).not.toHaveBeenCalled();
+  });
+
+  it('a 401 on a named account clears only that account', async () => {
+    const f = failing('work@company.com');
+    await expect(googleRequest(f.deps, 'https://g/x')).rejects.toMatchObject({ status: 401 });
+    expect(f.clearCacheFor).toHaveBeenCalledWith('work@company.com');
+    expect(f.clearAll).not.toHaveBeenCalled();
+  });
+
+  it('a provider without clearCacheFor falls back to clearCache(account)', () => {
+    const clear = jest.fn();
+    dropCachedToken({ getAccessToken: jest.fn(), clearCache: clear }, 'a@x.com');
+    expect(clear).toHaveBeenCalledWith('a@x.com');
   });
 });
 

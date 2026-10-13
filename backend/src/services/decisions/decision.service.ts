@@ -178,6 +178,12 @@ export interface DecisionServiceDeps {
    * Must not throw.
    */
   onCardEvent?: (decision: OwnerDecision, what: 'posted' | 'settled') => void;
+  /**
+   * An answered decision: hand an approved change to a recurring job run by
+   * someone else to that agent (crewly#1137). Returns a line for the asker, or
+   * null when nothing was handed off. Must not throw.
+   */
+  handOffChange?: (decision: OwnerDecision) => Promise<string | null>;
   now?: () => Date;
   logger?: ComponentLogger;
 }
@@ -415,6 +421,9 @@ export type ThreadReplyMessage = Pick<SlackIncomingMessage, 'channelId' | 'threa
 function threadReplyFingerprint(m: ThreadReplyMessage): string {
   return [m.userId ?? '', m.authorAgentSession ?? '', String(m.files?.length ?? 0), m.text ?? ''].join('\u0000');
 }
+
+/** Why a decision was withdrawn because its team moved to another machine. */
+const MOVED_REASON = 'The team moved to another machine';
 
 /**
  * Decision cards service.
@@ -1327,6 +1336,49 @@ export class DecisionService {
   }
 
   /**
+   * Withdraw the decisions of a team that moved to another machine, without
+   * touching their Slack cards (the target keeps the live copy; team move,
+   * crewly#1189).
+   *
+   * @param ids - Decision ids
+   * @param reopen - True to bring them back (rollback)
+   * @returns How many changed
+   */
+  async setMovedStatus(ids: readonly string[], reopen = false): Promise<number> {
+    let changed = 0;
+    for (const id of ids) {
+      const done = await this.deps.store.update(id, (cur) => {
+        if (reopen) return cur.status === 'cancelled' && cur.closedReason === MOVED_REASON ? { status: 'open', closedReason: undefined } : null;
+        return PENDING_DECISION_STATUSES.has(cur.status) ? { status: 'cancelled', closedReason: MOVED_REASON } : null;
+      });
+      if (done) changed += 1;
+    }
+    return changed;
+  }
+
+  /**
+   * Take over open decisions from a team that moved here (crewly#1189). Each
+   * gets a new id; the Slack card reference is kept, so a tap on the existing
+   * card resolves the copy. A decision whose card is already known is skipped.
+   *
+   * @param incoming - Decisions as the source had them
+   * @returns How many were added
+   */
+  async importMoved(incoming: ReadonlyArray<Record<string, unknown>>): Promise<number> {
+    const existing = await this.deps.store.list();
+    const known = new Set(existing.filter((d) => d.card).map((d) => `${d.card!.slackChannelId}:${d.card!.messageTs}`));
+    let added = 0;
+    for (const raw of incoming) {
+      const { id: _id, createdAt: _c, updatedAt: _u, ...draft } = raw as Record<string, unknown>;
+      const card = (draft['card'] ?? null) as { slackChannelId?: string; messageTs?: string } | null;
+      if (card?.slackChannelId && card.messageTs && known.has(`${card.slackChannelId}:${card.messageTs}`)) continue;
+      await this.deps.store.create(draft as unknown as Omit<OwnerDecision, 'id' | 'createdAt' | 'updatedAt'>);
+      added += 1;
+    }
+    return added;
+  }
+
+  /**
    * List decisions.
    *
    * @param which - `open` (open + parked) or `all`
@@ -1429,7 +1481,8 @@ export class DecisionService {
         ? `answered in the thread with ${describeAnswerFiles(resolved.answerFiles ?? [])}`
         : `“${resolved.answerText}”`;
     if (resolved.ticket) await this.logTicket(resolved, `owner decision ${resolved.id}: ${answer} (${via})`, true);
-    await this.notifyAsker(resolved, `${this.answerNote(resolved)}${siblingsLine(siblings)}`, batchNotes, { owner: true });
+    const handedOff = await this.deps.handOffChange?.(resolved).catch(() => null);
+    await this.notifyAsker(resolved, `${this.answerNote(resolved)}${siblingsLine(siblings)}${handedOff ? ` ${handedOff}` : ''}`, batchNotes, { owner: true });
     this.closeWatchdog(resolved);
     this.logger.info('Owner decision resolved', { decisionId: resolved.id, via, chosen: resolved.chosenKey ?? 'text' });
     return { handled: true, reason: 'resolved', decision: resolved };
@@ -1649,7 +1702,22 @@ export class DecisionService {
       this.logger.info('Wait-default decision past its deadline — asker told, nothing posted', { decisionId: updated.id });
       return 'acted';
     }
-    if (d.waitReminderAt || d.ownerRepliedAt) return null;
+    if (d.ownerRepliedAt) return null;
+    // The owner had the deadline and one reminder (a lifted reply question
+    // never gets one: the notice starts its clock) and said nothing: close it
+    // so it stops sitting among live cards, and tell the asker (#1243).
+    const quietSince = d.waitReminderAt ?? (d.kind === 'reply_question' ? d.deadlineNoticeAt : undefined);
+    if (quietSince && now.getTime() >= Date.parse(quietSince) + DECISION_CONSTANTS.WAIT_EXPIRE_AFTER_REMINDER_MS) {
+      const expired = await this.expire(d.id);
+      if (!expired) return null;
+      await this.tellAsker(
+        expired,
+        `[DECISION ${expired.id}] "${expired.question}" timed out: the owner did not answer after the deadline and a reminder, so the card was closed as expired. ` +
+          `Keep the work parked; if it still matters, ask again with ask-owner and say what is blocked.`,
+      );
+      return 'acted';
+    }
+    if (d.waitReminderAt) return null;
     // A question Crewly lifted out of a reply never nudges the owner: he
     // answers in the thread when he wants to. Only explicit ask-owner cards
     // get the one reminder (2026-10-08: "Still waiting on you: 你自己知道吗？").

@@ -72,8 +72,10 @@ export class SkillsReferenceModule implements PromptModule {
 			`- \`${p}/drive-search\` — find files in Drive by text, type or folder`,
 			`- \`${p}/drive-read\` — read a Drive file's content`,
 			`- \`${p}/drive-upload\` — put a file or text into Drive`,
+			`- \`${p}/send-file\` / \`receive-file\` — hand a LARGE file (video, archive, up to 2 GB) to another agent of this account, on this or another machine, via a temporary Crewly Cloud relay (needs Cloud sign-in). **For big files prefer these over Drive or Slack**; the receiver deletes it, unclaimed files vanish after 24 h`,
+			`- \`${p}/request-file\` — ask the OWNER for a big file (video, archive; or a Slack attachment that "could not be downloaded") with a private upload link they open on their phone; you are told to \`receive-file\` when it lands. **Never ask the owner to compress a file or put it in Drive**`,
 			`- \`${p}/docs-read\` / \`docs-write\` — read a Google Doc as text; create one or append to it`,
-			`- \`${p}/docs-comment\` — list, reply to, resolve or add comments in a Google Doc (the owner's feedback)`,
+			`- \`${p}/docs-comment\` — list comments in a Google Doc (the owner's feedback); reply/resolve/add are queued and posted as a batch after the owner's 「发 C<n>」`,
 			`- \`${p}/sheets-read\` / \`sheets-write\` — read a range as rows; create a sheet or append rows`,
 			`- \`${p}/slides-read\` / \`slides-create\` — read a deck as text; build one from an outline`,
 			`- \`${p}/gmail-search\` / \`gmail-read\` — search and read the owner's mail`,
@@ -157,6 +159,7 @@ export class SkillsReferenceModule implements PromptModule {
 			'- `core/record-learning` — record learnings while working',
 			'- `core/report-status` — report status to team leader or orchestrator',
 			'- `core/list-channels` — the channels you are in (rooms shared with agents of other teams, matched to Slack channels); post in one with `core/reply-channel --channel \'#name\'` (or its id)',
+			'- `core/search-chat` — search the chat history you can see (keyword, channel, date range). Before telling anyone you can\'t find an earlier conversation or request, search chat history with `core/search-chat`',
 			'',
 			'### Self-improvement skills (attention + calibration)',
 			'- `core/set-focus` — replace your focus list (up to 5 items are shown in your prompt)',
@@ -199,6 +202,7 @@ export class SkillsReferenceModule implements PromptModule {
 				'  - Colleagues on OTHER machines: talk to them in a shared Slack team channel (@ their name; `list-colleagues` shows who exists). The old `send-to-remote` / `reply-remote` / `list-devices` skills are deprecated — only answer a `[REMOTE:...]` message with `reply-remote`, never start one.',
 				'  - `delegate-task` / `assign-task` — assign work to agents',
 				'  - `get-team-status` / `get-agent-status` — monitor team state',
+				'  - `team-roster` / `find-owner-for "<request>"` — who owns what; route an owner request that names no agent',
 				'  - `create-team` / `update-team` / `start-team` / `stop-team` — team management',
 				'  - `start-agent` / `stop-agent` / `terminate-agent` — agent lifecycle',
 				'  - `create-cron` / `list-cron` / `update-cron` / `cancel-cron` — recurring tasks',
@@ -214,6 +218,7 @@ export class SkillsReferenceModule implements PromptModule {
 				'  - `delegate-task` — assign tasks to subordinates',
 				'  - `verify-output` — check completed work quality',
 				'  - `schedule-check` — schedule follow-up reminders',
+				'  - `update-charter` — keep your team\'s charter current (the orchestrator routes owner requests by it)',
 			);
 		} else {
 			lines.push(

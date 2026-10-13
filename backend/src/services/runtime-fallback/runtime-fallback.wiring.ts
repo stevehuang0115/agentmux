@@ -12,7 +12,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ORC_CONVERSATION_CONSTANTS, ORCHESTRATOR_SESSION_NAME, RUNTIME_FALLBACK_CONSTANTS, RUNTIME_TYPES } from '../../constants.js';
 import type { ApiKeyProvider } from '../../types/settings.types.js';
-import { buildHandoverSummary, claudeTranscriptPath } from '../agent/runtime-session-recovery.js';
+import { withHandoverPointers } from '../agent/handover-pointers.js';
+import { buildHandoverSummary, chainedHandoverBlock, claudeTranscriptPath, latestHandoverFile } from '../agent/runtime-session-recovery.js';
 import { claudeAccountConfigDir, describeClaudeAccounts, parseRuntimeTarget } from '../harness/claude-accounts.js';
 import { setRuntimeFallbackHooks } from './effective-runtime.js';
 import { computeRuntimeAvailability } from './runtime-availability.js';
@@ -116,6 +117,9 @@ export function writeRuntimeHandover(crewlyHome: string, req: HandoverRequest, c
 		const claudeHome = from.account ? claudeAccountConfigDir(from.account) : undefined;
 		summary = buildHandoverSummary(claudeTranscriptPath({ sessionId: req.conversationId, cwd, ...(claudeHome ? { claudeHome } : {}) }));
 	}
+	// The source conversation cannot be read (Antigravity, or no id): carry the
+	// session's previous handover forward instead of dropping what it held.
+	const carried = summary ? '' : chainedHandoverBlock(latestHandoverFile(dir, req.sessionName, file));
 	const why =
 		req.direction === 'switch'
 			? `You were running on ${runtimeLabel(req.from)}. It ran out of usage, so Crewly moved you to ${runtimeLabel(req.to)} until it resets.`
@@ -129,7 +133,11 @@ export function writeRuntimeHandover(crewlyHome: string, req: HandoverRequest, c
 			'Everything Crewly tracks — tasks, teams, OKRs, wiki — is still there; this file keeps only the end of what was said before.',
 			...(req.workItem ? ['', `You were on WorkItem ${req.workItem.id} ("${req.workItem.title}"). Continue it.`] : []),
 			'',
-			summary || `_The ${runtimeLabel(req.from)} conversation is not readable here; check your WorkItems and wiki for where you were._`,
+			withHandoverPointers(
+				summary ||
+					[`_The ${runtimeLabel(req.from)} conversation is not readable here; check your WorkItems and wiki for where you were._`, ...(carried ? ['', carried] : [])].join('\n'),
+				{ sessionName: req.sessionName, crewlyHome },
+			),
 			'',
 		].join('\n'),
 		'utf-8',
@@ -231,6 +239,13 @@ export function startBackendRuntimeFallback(ctx: RuntimeFallbackWiringContext): 
 	const service = new RuntimeFallbackService({
 		store: new FileRuntimeFallbackStore(path.join(ctx.crewlyHome, RUNTIME_FALLBACK_CONSTANTS.STATE_FILE)),
 		getAgent,
+		listSessions: async () => {
+			const names: string[] = [ORCHESTRATOR_SESSION_NAME];
+			for (const team of await ctx.storage.getTeams()) {
+				for (const m of team.members) if (m.sessionName) names.push(m.sessionName);
+			}
+			return names;
+		},
 		countAgentsOnRuntime: async (runtime) => {
 			let n = 0;
 			const orc = await ctx.storage.getOrchestratorStatus().catch(() => null);

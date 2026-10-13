@@ -68,7 +68,7 @@ OUT=$(run --id ready-one)
 check "already ready" "$(printf '%s' "$OUT" | jq -c '{state, executePath}')" '{"state":"already-ready","executePath":"/x/execute.sh"}'
 
 check "missing id" "$(run_err)" "Missing required parameter: id (--id)"
-check "unknown option" "$(run_err --yes)" "Unknown option: --yes"
+check "unknown option" "$(run_err --yes)" "Unknown argument: --yes"
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

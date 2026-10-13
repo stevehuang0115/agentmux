@@ -7,6 +7,7 @@
 
 import { TokenUsageService, cachedIsPartOfInput, calculateCost, dropCrossSessionDuplicates, eventCostRateSource, eventCostUsd, eventTokens } from './token-usage.service.js';
 import { calculateCost as cacheAwareCost } from './model-pricing.js';
+import { setUsageObserver } from '../usage-ledger/ledger-hooks.js';
 
 describe('TokenUsageService', () => {
   let service: TokenUsageService;
@@ -35,6 +36,25 @@ describe('TokenUsageService', () => {
       const b = TokenUsageService.getInstance();
       expect(a).not.toBe(b);
       TokenUsageService.resetInstance();
+    });
+  });
+
+  describe('usage ledger hook', () => {
+    afterEach(() => setUsageObserver(null));
+
+    it('tells the usage ledger about every recorded event', () => {
+      const seen: Array<[string, number]> = [];
+      setUsageObserver((session, event) => seen.push([session, event.input + event.output]));
+      service.recordUsage('s1', 'a1', 100, 20, 'claude-3-opus');
+      expect(seen).toEqual([['s1', 120]]);
+    });
+
+    it('is not broken by a failing observer', () => {
+      setUsageObserver(() => {
+        throw new Error('boom');
+      });
+      service.recordUsage('s1', 'a1', 100, 20, 'claude-3-opus');
+      expect(service.getUsageByAgent('a1').eventCount).toBe(1);
     });
   });
 

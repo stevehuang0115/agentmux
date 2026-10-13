@@ -73,7 +73,7 @@ while [[ $# -gt 0 ]]; do
     --steps)      [ $# -ge 2 ] || error_exit "--steps requires a value";      STEPS=$(add_steps "$STEPS" "$2" split); shift 2 ;;
     --step)       [ $# -ge 2 ] || error_exit "--step requires a value";       STEPS=$(add_steps "$STEPS" "$2");       shift 2 ;;
     --help|-h)    print_usage; exit 0 ;;
-    *) error_exit "Unknown option: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 if [ -n "$INPUT_JSON" ]; then

@@ -10,6 +10,12 @@ import { existsSync } from 'fs';
 import { hostname } from 'os';
 
 jest.mock('fs/promises');
+// persistIdentity goes through the atomic writer; route it to the writeFile mock these tests assert on.
+jest.mock('../../utils/file-io.utils.js', () => ({
+  atomicWriteJson: jest.fn(async (file: string, data: unknown) => {
+    await jest.requireMock('fs/promises').writeFile(file, JSON.stringify(data, null, 2), 'utf-8');
+  }),
+}));
 jest.mock('fs');
 jest.mock('os', () => ({
   ...jest.requireActual('os'),

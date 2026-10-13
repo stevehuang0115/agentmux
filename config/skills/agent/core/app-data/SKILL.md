@@ -1,7 +1,7 @@
 ---
 name: App Data
 description: Read and write the data of a Crewly App you published (the same collections the app's page sees through crewly.db) — list, get, set, update, add, delete. Use it to fill an app with content, act on what the owner entered, or answer an [APP CHANGES] message.
-version: 1.5.0
+version: 1.6.0
 category: productivity
 skillType: claude-skill
 assignableRoles:
@@ -44,6 +44,7 @@ bash execute.sh --app 28au74d9cj --set meta settings --data '{"title":"Weekly sh
 bash execute.sh --app 28au74d9cj --update items 1kx2-ab --data '{"done":true}' --if-rev 3
 bash execute.sh --app 28au74d9cj --add items --data '{"name":"eggs","done":false}'
 bash execute.sh --app 28au74d9cj --delete items 1kx2-ab
+bash execute.sh --app 28au74d9cj --get-field items 1kx2-ab --field /photo --out ./photo.png --decode   # full value of a cut field
 bash execute.sh --app 28au74d9cj --request-access --reason "write the morning briefing"   # ask the owner, see "Collaborators"
 bash execute.sh --app 28au74d9cj --collaborators                                          # who the owner let in
 bash execute.sh --app 28au74d9cj --owner                                                  # who the app's comments go to
@@ -200,3 +201,14 @@ write private information there.
 
 Collection names: `[A-Za-z0-9_-]{1,64}`. Doc ids: `[A-Za-z0-9_.:-]{1,128}`.
 Documents are JSON objects up to 256 KB.
+
+## Long values (over 65,536 characters)
+
+`--get` and `--list` cut any string over 65,536 characters (a base64 photo, a
+long document) so it cannot flood your terminal. A cut is never silent: the
+answer carries `truncated: [{"field":"/photo","chars":123456}]` (in a list,
+each entry also has the doc `id`). Do not parse a flagged value as if it were
+whole. Fetch it with `--get-field <collection> <docId> --field <pointer> --out
+<file>`: the full value goes to a file inside your project (nothing is printed
+but `{file, bytes}`). Add `--decode` for base64 / data-URL values to get the
+real binary (the image itself).

@@ -10,7 +10,8 @@
 import os from 'os';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
 import { getMemoryStats } from '../core/system-health.util.js';
-import { AGENT_SUSPEND_CONSTANTS } from '../../constants.js';
+import { AGENT_SUSPEND_CONSTANTS, SYSTEM_RESOURCE_ALERT_CONSTANTS } from '../../constants.js';
+import { isDriveWarm } from '../drive/drive-keep-warm.js';
 
 export const RESOURCE_MODE_CONSTANTS = {
 	DEFAULT_MAX_RUNNING_AGENTS: 6,
@@ -24,6 +25,15 @@ export const RESOURCE_MODE_CONSTANTS = {
 	SAMPLE_INTERVAL_MS: 30_000,
 	/** How long a queued start waits for a slot before giving up (messages stay queued) */
 	START_WAIT_MS: 2 * 60_000,
+	/**
+	 * A start that has waited this long for a slot stops the best available
+	 * agent even if it is idle for less than the idle timeout or has work in
+	 * flight: a waiting start often carries an owner message and must never be
+	 * blocked forever.
+	 */
+	RELAX_AFTER_MS: 3 * 60_000,
+	/** A wait record older than this since its last touch is a new wait */
+	WAIT_RECORD_TTL_MS: 10 * 60_000,
 	/** A started agent counts against the cap even before it shows as running */
 	ADMIT_TTL_MS: 3 * 60_000,
 	/** errorCode of a start that waited for a slot and got none (deferred, not failed) */
@@ -71,12 +81,19 @@ export interface ResourceModeDeps {
 	hasOwnerMessage: (sessionName: string) => boolean;
 	limits: () => Promise<{ maxRunning: number; idleTimeoutMinutes: number }>;
 	/**
-	 * The agent owes an owner thread right now (an unanswered owner message or
-	 * a promise there in the last 30 min). Such an agent is stopped to free a
-	 * slot only when no other candidate exists (2026-10-08: Atlas and Ella
-	 * were stopped mid-conversation).
+	 * The agent owes the owner: an unanswered owner message, a promise in an
+	 * owner thread, or a stated "starting now". Such an agent is never stopped
+	 * to free a slot unless memory is critical; the waiter waits for another
+	 * victim (2026-10-08: Atlas and Ella were stopped mid-conversation;
+	 * 2026-10-12: Pia was stopped with a video owed).
 	 */
 	owesOwnerThread?: (sessionName: string) => boolean;
+	/**
+	 * Why this agent must not be stopped for a slot: it has work queued for it,
+	 * owns an open ticket, or delegated work that is still open (its report is
+	 * still to come). Null/undefined = free to stop. Errors count as free.
+	 */
+	protectedReason?: (sessionName: string) => Promise<string | null | undefined>;
 	/** An agent was stopped to free a slot (the owner thread it owes is told) */
 	onStoppedForSlot?: (sessionName: string) => void;
 	/** A start waited for a slot and got none (deferred; its messages stay queued) */
@@ -100,7 +117,15 @@ export class ResourceModeService {
 	/** The start promise of each agent waiting for a slot (one per agent) */
 	private pendingStarts = new Map<string, Promise<boolean>>();
 	private pumping = false;
+	/** When the "no slot" reason was last logged per waiter (the pump retries every 10 s) */
+	private lastNoSlotLog = new Map<string, number>();
+	/** When each agent's start first began waiting for a slot (survives the 2-minute deferral, cleared on admission) */
+	private waitingSince = new Map<string, { since: number; touched: number }>();
 	private lastRunning = 0;
+	/** When each agent was last seen turning idle (events), or the first pump that saw it idle after seeing it busy */
+	private idleSince = new Map<string, number>();
+	/** Agents seen busy by a pump (their idle time starts at that sighting at the earliest) */
+	private lastSeenBusy = new Map<string, number>();
 	private lastCap: number = RESOURCE_MODE_CONSTANTS.DEFAULT_MAX_RUNNING_AGENTS;
 
 	/** Readings, overridable in tests. */
@@ -119,6 +144,44 @@ export class ResourceModeService {
 	static resetInstance(): void {
 		ResourceModeService.instance?.stop();
 		ResourceModeService.instance = null;
+	}
+
+	/**
+	 * An agent's working status changed. Idle time for eviction is counted
+	 * from the busy to idle transition, not from its last output: an agent
+	 * that was busy for an hour with a silent background task is not "idle for
+	 * 60 minutes" the moment it finishes (Pia, 2026-10-12).
+	 *
+	 * @param sessionName - Agent
+	 * @param idle - True on busy to idle, false on idle to busy
+	 * @param at - Epoch ms of the transition
+	 */
+	noteWorkingStatus(sessionName: string, idle: boolean, at: number = Date.now()): void {
+		if (idle) this.idleSince.set(sessionName, at);
+		else this.idleSince.delete(sessionName);
+		if (!idle) this.lastSeenBusy.delete(sessionName);
+	}
+
+	/** Idle time of a running agent counted from when it became idle. */
+	private withHonestIdle(running: RunningAgent[], now: number): RunningAgent[] {
+		return running.map((r) => {
+			if (r.busy) {
+				this.lastSeenBusy.set(r.sessionName, now);
+				this.idleSince.delete(r.sessionName);
+				return r;
+			}
+			const since = this.idleSince.get(r.sessionName) ?? this.lastSeenBusy.get(r.sessionName);
+			return since === undefined ? r : { ...r, idleMs: Math.min(r.idleMs, Math.max(0, now - since)) };
+		});
+	}
+
+	/** Whether memory is critical: the only case where an agent that owes the owner may be stopped for a slot. */
+	private memoryCritical(): boolean {
+		try {
+			return this.memoryStats().usedPercent >= SYSTEM_RESOURCE_ALERT_CONSTANTS.THRESHOLDS.MEMORY_CRITICAL;
+		} catch {
+			return false;
+		}
 	}
 
 	setDeps(deps: ResourceModeDeps | null): void {
@@ -253,6 +316,9 @@ export class ResourceModeService {
 				try { this.deps?.onStartDeferred?.(sessionName); } catch { /* best-effort */ }
 				resolve(false);
 			}, RESOURCE_MODE_CONSTANTS.START_WAIT_MS);
+			const nowMs = Date.now();
+			const rec = this.waitingSince.get(sessionName);
+			if (!rec || nowMs - rec.touched > RESOURCE_MODE_CONSTANTS.WAIT_RECORD_TTL_MS) this.waitingSince.set(sessionName, { since: nowMs, touched: nowMs });
 			const waiter: Waiter = { name: sessionName, owner: ownerTriggered, seq: this.seq++, resolve, timer };
 			this.waiters.push(waiter);
 			this.waiters.sort((a, b) => Number(b.owner) - Number(a.owner) || a.seq - b.seq);
@@ -268,9 +334,9 @@ export class ResourceModeService {
 		try {
 			const now = Date.now();
 			for (const [n, at] of this.admitted) if (now - at > RESOURCE_MODE_CONSTANTS.ADMIT_TTL_MS) this.admitted.delete(n);
-			const { maxRunning } = await this.deps.limits();
+			const { maxRunning, idleTimeoutMinutes } = await this.deps.limits();
 			this.lastCap = maxRunning;
-			const running = await this.deps.listRunning();
+			const running = this.withHonestIdle(await this.deps.listRunning(), now);
 			const names = new Set(running.map((r) => r.sessionName));
 			for (const n of names) this.admitted.delete(n);
 			let count = running.length + this.admitted.size;
@@ -284,8 +350,24 @@ export class ResourceModeService {
 			while (this.waiters.length > 0) {
 				if (this.mode !== 'pressure') { this.release(this.waiters.shift()!); continue; }
 				if (count >= maxRunning) {
-					const victim = this.pickVictim(pool);
-					if (!victim) break;
+					const head = this.waiters[0];
+					const rec = this.waitingSince.get(head.name);
+					if (rec) rec.touched = now;
+					const waitedMs = rec ? now - rec.since : 0;
+					const { victim, skipped, relaxedBecause } = await this.pickVictim(pool, idleTimeoutMinutes, waitedMs >= RESOURCE_MODE_CONSTANTS.RELAX_AFTER_MS, head.owner);
+					if (victim && relaxedBecause !== undefined) {
+						this.logger.warn('A start has waited too long for a slot; relaxing the eviction rules', {
+							waiter: head.name,
+							waitedMin: Math.round(waitedMs / 60000),
+							stopping: victim.sessionName,
+							idleMinutes: Math.round(victim.idleMs / 60000),
+							wasKeptBecause: relaxedBecause || 'it was not protected',
+						});
+					}
+					if (!victim) {
+						this.logNoSlot(this.waiters[0].name, count, maxRunning, idleTimeoutMinutes, skipped);
+						break;
+					}
 					try {
 						this.logger.info('Stopping longest-idle agent to free a slot', { sessionName: victim.sessionName, idleMinutes: Math.round(victim.idleMs / 60000), waiter: this.waiters[0].name });
 						await this.deps.stopAgent(victim.sessionName, victim.role);
@@ -313,25 +395,88 @@ export class ResourceModeService {
 	}
 
 	/**
-	 * Longest-idle agent that is not busy and has no owner message pending.
-	 * An agent that owes an owner thread is picked only when no other
-	 * candidate exists.
+	 * Longest-idle agent that may be stopped for a slot. Never one that is
+	 * busy, waiting for a start itself, always-on, holding an owner message,
+	 * Drive-warm, idle for less than the pressure idle timeout, or protected
+	 * by {@link ResourceModeDeps.protectedReason} (pending work, an open
+	 * ticket, an open delegation). An agent that owes the owner is never picked
+	 * unless memory is critical.
+	 *
+	 * @param running - Running agents
+	 * @param idleTimeoutMinutes - Pressure idle timeout; a younger idle is never stopped
+	 * @param relax - The first waiter has waited past RELAX_AFTER_MS: when no agent passes the rules, stop the best one anyway
+	 * @param ownerWaiter - The first waiter carries an owner message: the idle timeout does not protect an agent (the longest-idle one goes at once); busy, owner-message, Drive-warm and pending-work/ticket/delegation protections still apply
+	 * @returns The victim (if any), why each skipped agent was kept, and, when the rules were relaxed, why the victim had been kept
 	 */
-	private pickVictim(running: RunningAgent[]): RunningAgent | undefined {
+	private async pickVictim(
+		running: RunningAgent[],
+		idleTimeoutMinutes: number,
+		relax = false,
+		ownerWaiter = false,
+	): Promise<{ victim?: RunningAgent; skipped: string[]; relaxedBecause?: string }> {
 		const waiting = new Set(this.waiters.map((w) => w.name));
-		const candidates = running
+		const minIdleMs = ownerWaiter ? 0 : Math.max(0, idleTimeoutMinutes) * 60_000;
+		const skipped: string[] = [];
+		const ordered = running
 			.filter((r) => !r.busy
 				&& !waiting.has(r.sessionName)
 				&& !AGENT_SUSPEND_CONSTANTS.ALWAYS_ON_ROLES.includes(r.role as typeof AGENT_SUSPEND_CONSTANTS.ALWAYS_ON_ROLES[number])
-				&& !this.deps!.hasOwnerMessage(r.sessionName))
+				&& !this.deps!.hasOwnerMessage(r.sessionName)
+				// Kept warm for the owner's Drive mode session (specs/2026-10-09-drive-mode-v3.md §5)
+				&& !isDriveWarm(r.sessionName))
 			.sort((a, b) => b.idleMs - a.idleMs);
+		const candidates: RunningAgent[] = [];
+		const keptBecause = new Map<RunningAgent, string>();
+		const unprotected: RunningAgent[] = [];
+		for (const r of ordered) {
+			let why: string | null | undefined;
+			try { why = await this.deps!.protectedReason?.(r.sessionName); } catch { why = null; }
+			const tooYoung = r.idleMs < minIdleMs;
+			if (tooYoung || why) {
+				const text = [tooYoung ? `idle ${Math.round(r.idleMs / 60000)} min, under the ${idleTimeoutMinutes} min idle timeout` : '', why ?? ''].filter(Boolean).join('; ');
+				skipped.push(`${r.sessionName}: ${text}`);
+				keptBecause.set(r, text);
+				if (!why) unprotected.push(r);
+				continue;
+			}
+			candidates.push(r);
+		}
+		const critical = this.memoryCritical();
 		const owes = (r: RunningAgent): boolean => {
 			try { return this.deps!.owesOwnerThread?.(r.sessionName) === true; } catch { return false; }
 		};
-		return candidates.find((r) => !owes(r)) ?? candidates[0];
+		// An agent that owes the owner is never a victim (not even when the rules
+		// relax): the waiter waits for another one. Only critical memory overrides.
+		const owing = new Set(ordered.filter(owes));
+		for (const r of owing) if (!critical) skipped.push(`${r.sessionName}: it owes the owner an answer or a promised result`);
+		const eligible = (list: RunningAgent[]): RunningAgent[] => (critical ? list : list.filter((r) => !owing.has(r)));
+		const choose = (list: RunningAgent[]): RunningAgent | undefined => {
+			const ok = eligible(list);
+			return ok.find((r) => !owing.has(r)) ?? ok[0];
+		};
+		const victim = choose(candidates);
+		if (victim || !relax) return { victim, skipped };
+		// Relaxed: agents kept only by the idle timeout first, then the rest; longest idle within each.
+		const fallback = choose(unprotected) ?? choose(ordered);
+		return fallback ? { victim: fallback, skipped, relaxedBecause: keptBecause.get(fallback) ?? '' } : { skipped };
+	}
+
+	/** Log why a waiting start got no slot (at most once a minute per agent). */
+	private logNoSlot(waiter: string, running: number, cap: number, idleTimeoutMinutes: number, skipped: string[]): void {
+		const now = Date.now();
+		if (now - (this.lastNoSlotLog.get(waiter) ?? 0) < 60_000) return;
+		this.lastNoSlotLog.set(waiter, now);
+		this.logger.info('No agent can be stopped for a slot; the start waits', {
+			waiter,
+			running,
+			cap,
+			idleTimeoutMinutes,
+			kept: skipped.length > 0 ? skipped : ['every other running agent is busy, always-on, holds an owner message or is waiting for a start itself'],
+		});
 	}
 
 	private release(w: Waiter): void {
+		this.waitingSince.delete(w.name);
 		clearTimeout(w.timer);
 		w.resolve(true);
 	}

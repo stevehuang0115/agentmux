@@ -25,6 +25,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import chalk from 'chalk';
 import { WEB_CONSTANTS } from '../../../config/index.js';
+import { writeShutdownMarker } from '../utils/shutdown-marker.js';
 import { killOrphanedTestProcesses } from '../utils/process-cleanup.js';
 import {
 	describeReadiness,
@@ -80,6 +81,10 @@ interface StopReport {
 export async function stopCommand(options: StopOptions = {}): Promise<void> {
 	console.log(chalk.yellow('🛑 Stopping Crewly...'));
 	const report: StopReport = { stopped: [], stillRunning: [], leftAlone: [] };
+
+	// Deliberate stop: keeps the macOS supervisor and the launchd watchdog from
+	// relaunching Crewly. `crewly start` (or any fresh launch) clears it.
+	writeShutdownMarker();
 
 	try {
 		// 1. Who is running (skipped with --force: the backend may be wedged)

@@ -645,6 +645,32 @@ describe('BrowserProxyService', () => {
       await expect(cmdPromise).rejects.toThrow("timed out after 5000ms");
     });
 
+    it('fails a screenshot immediately when its extension disconnects, naming the size limit', async () => {
+      setupConnectedProxy();
+      const proxy = BrowserProxyService.getInstance();
+
+      const cmdPromise = proxy.sendCommand('screenshot', {}, undefined, 90000);
+      latestMockWs!._trigger(
+        'message',
+        JSON.stringify({ type: 'browser_event', event: 'disconnected', instanceId: 'id-1', instanceName: 'Chrome' }),
+      );
+
+      await expect(cmdPromise).rejects.toThrow(/disconnected while capturing 'screenshot'.*too large/);
+    });
+
+    it('fails a non-image command on disconnect without the size hint', async () => {
+      setupConnectedProxy();
+      const proxy = BrowserProxyService.getInstance();
+
+      const cmdPromise = proxy.sendCommand('click', {}, undefined, 90000);
+      latestMockWs!._trigger(
+        'message',
+        JSON.stringify({ type: 'browser_event', event: 'disconnected', instanceId: 'id-1', instanceName: 'Chrome' }),
+      );
+
+      await expect(cmdPromise).rejects.toThrow(/disconnected while running 'click'\. Retry/);
+    });
+
     it('should auto-select when only 1 instance is connected', async () => {
       setupConnectedProxy();
       const proxy = BrowserProxyService.getInstance();

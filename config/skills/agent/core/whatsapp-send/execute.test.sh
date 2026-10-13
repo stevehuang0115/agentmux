@@ -73,7 +73,7 @@ check "no session: refused" "$OK" "yes"
 check "no session: no request made" "$(cat "$STUB_LOG")" ""
 
 check "missing draft" "$(run_err)" "Missing required parameter: draft (--draft)"
-check "unknown option errors" "$(run_err --force)" "Unknown option: --force"
+check "unknown option errors" "$(run_err --force)" "Unknown argument: --force"
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

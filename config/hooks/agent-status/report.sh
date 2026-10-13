@@ -30,6 +30,14 @@
 # response is used. The same channel hands a busy agent an owner message
 # waiting in its Crewly queue at the next tool boundary (main agent only).
 #
+# Owner board (crewly#1247): for PreToolUse ONLY, the script also sends the tool
+# name and a `toolInput` object holding at most four top-level string fields of
+# tool_input — file_path/notebook_path/path (as filePath), command, url and (WebSearch only) query, each cut to 600
+# characters. The backend reduces them at once to "what kind of work" (a repo-relative
+# path, the executable and subcommand, host + path) and never stores or logs the
+# raw values; the POST goes to the local backend only. `CREWLY_BOARD_PUSH=0` in
+# the agent's environment stops the script sending `toolInput` at all.
+#
 # It never blocks or slows the agent: every path exits 0, and the POST has a
 # 2-second ceiling. A failed POST is dropped silently (the backend's screen
 # detection still covers the state).
@@ -71,6 +79,30 @@ field() {
 	fi
 }
 
+# Pick the board's tool_input fields (see the header). Prints a compact JSON
+# object, or nothing. Top-level `tool_input` only.
+tool_input_json() {
+	if command -v jq >/dev/null 2>&1; then
+		printf '%s' "$INPUT" | jq -c 'if type == "object" and (.tool_input | type) == "object" then (. as $root | .tool_input | {filePath: (.file_path // .notebook_path // .path), command: .command, url: .url, query: (if $root.tool_name == "WebSearch" then .query else null end)} | with_entries(select(.value | type == "string")) | with_entries(.value |= .[0:600]) | select(length > 0)) else empty end' 2>/dev/null
+	elif command -v node >/dev/null 2>&1; then
+		printf '%s' "$INPUT" | node -e '
+			let s = "";
+			process.stdin.on("data", (c) => { s += c; });
+			process.stdin.on("end", () => {
+				try {
+					const o = JSON.parse(s);
+					const t = o && typeof o === "object" && !Array.isArray(o) ? o.tool_input : undefined;
+					if (!t || typeof t !== "object" || Array.isArray(t)) return;
+					const out = {};
+					for (const [k, v] of [["filePath", t.file_path ?? t.notebook_path ?? t.path], ["command", t.command], ["url", t.url], ["query", o.tool_name === "WebSearch" ? t.query : undefined]]) {
+						if (typeof v === "string") out[k] = v.slice(0, 600);
+					}
+					if (Object.keys(out).length > 0) process.stdout.write(JSON.stringify(out));
+				} catch { /* not JSON: send nothing */ }
+			});' 2>/dev/null
+	fi
+}
+
 EVENT="$(field hook_event_name)"
 [ -z "$EVENT" ] && exit 0
 NOTIFICATION_TYPE="$(field notification_type)"
@@ -79,8 +111,13 @@ TOOL_USE_ID=""
 AGENT_ID=""
 SOURCE=""
 TOOL_NAME=""
+TOOL_INPUT=""
 case "$EVENT" in
-	PreToolUse) TOOL_USE_ID="$(field tool_use_id "$ID_PATTERN")" ;;
+	PreToolUse)
+		TOOL_USE_ID="$(field tool_use_id "$ID_PATTERN")"
+		TOOL_NAME="$(field tool_name '^[A-Za-z0-9_-]{1,64}$')"
+		if [ "${CREWLY_BOARD_PUSH:-1}" != "0" ]; then TOOL_INPUT="$(tool_input_json)"; fi
+		;;
 	PostToolUse)
 		TOOL_USE_ID="$(field tool_use_id "$ID_PATTERN")"
 		TOOL_NAME="$(field tool_name '^[A-Za-z0-9_-]{1,64}$')"
@@ -98,6 +135,7 @@ BODY="{\"event\":\"$EVENT\""
 [ -n "$AGENT_ID" ] && BODY="$BODY,\"agentId\":\"$AGENT_ID\""
 [ -n "$SOURCE" ] && BODY="$BODY,\"source\":\"$SOURCE\""
 [ -n "$TOOL_NAME" ] && BODY="$BODY,\"toolName\":\"$TOOL_NAME\""
+[ -n "$TOOL_INPUT" ] && BODY="$BODY,\"toolInput\":$TOOL_INPUT"
 BODY="$BODY}"
 
 ARGS=(-s --max-time 2 -X POST "$API_URL/api/agent-hooks"
@@ -112,19 +150,23 @@ if [ -n "${CREWLY_AGENT_AUTHORIZATION:-}" ]; then
 	ARGS+=(-H "X-Agent-Authorization: b64:$(printf '%s' "$CREWLY_AGENT_AUTHORIZATION" | base64 | tr -d '\n')")
 fi
 
-# Only a PostToolUse with a tool name can get a note back; everything else
-# discards the response.
-if [ "$EVENT" != "PostToolUse" ] || [ -z "$TOOL_NAME" ]; then
+# Only a PostToolUse with a tool name, or a SessionStart after a compact or
+# clear (the orchestrator gets its team roster back, specs/2026-10-10-team-
+# roster.md), can get a note back; everything else discards the response.
+WANTS_NOTE="false"
+if [ "$EVENT" = "PostToolUse" ] && [ -n "$TOOL_NAME" ]; then WANTS_NOTE="true"; fi
+if [ "$EVENT" = "SessionStart" ] && { [ "$SOURCE" = "compact" ] || [ "$SOURCE" = "clear" ]; }; then WANTS_NOTE="true"; fi
+if [ "$WANTS_NOTE" != "true" ]; then
 	curl "${ARGS[@]}" -o /dev/null --data "$BODY" >/dev/null 2>&1 || true
 	exit 0
 fi
 
 RESPONSE="$(curl "${ARGS[@]}" --data "$BODY" 2>/dev/null || true)"
 [ -z "$RESPONSE" ] && exit 0
-# Print {"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":<note>}}
+# Print {"hookSpecificOutput":{"hookEventName":"<event>","additionalContext":<note>}}
 # when the response carries a string additionalContext; nothing otherwise.
 if command -v jq >/dev/null 2>&1; then
-	printf '%s' "$RESPONSE" | jq -c 'if type == "object" and (.additionalContext | type) == "string" and (.additionalContext | length) > 0 then {hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: .additionalContext}} else empty end' 2>/dev/null || true
+	printf '%s' "$RESPONSE" | jq -c --arg ev "$EVENT" 'if type == "object" and (.additionalContext | type) == "string" and (.additionalContext | length) > 0 then {hookSpecificOutput: {hookEventName: $ev, additionalContext: .additionalContext}} else empty end' 2>/dev/null || true
 elif command -v node >/dev/null 2>&1; then
 	printf '%s' "$RESPONSE" | node -e '
 		let s = "";
@@ -133,9 +175,9 @@ elif command -v node >/dev/null 2>&1; then
 			try {
 				const o = JSON.parse(s);
 				if (o && typeof o.additionalContext === "string" && o.additionalContext.length > 0) {
-					process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: o.additionalContext } }));
+					process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: process.argv[1], additionalContext: o.additionalContext } }));
 				}
 			} catch { /* not JSON: no note */ }
-		});' 2>/dev/null || true
+		});' "$EVENT" 2>/dev/null || true
 fi
 exit 0

@@ -55,7 +55,7 @@ while [[ $# -gt 0 ]]; do
     --path|-p) [ $# -ge 2 ] || error_exit "--path requires a value"; FILE="$2"; shift 2 ;;
     --name)    [ $# -ge 2 ] || error_exit "--name requires a value"; NAME="$2"; shift 2 ;;
     --help|-h) print_usage; exit 0 ;;
-    *) error_exit "Unknown option: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 if [ -n "$INPUT_JSON" ]; then

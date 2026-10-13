@@ -39,6 +39,7 @@
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
 import { TICKET_CONSTANTS } from '../../constants.js';
 import { isInterim } from '../slack/slack-typing-placeholder.service.js';
+import { detectStatedIntent } from '../agent/stated-intent.js';
 import {
   type Request,
   type RequestPriority,
@@ -56,7 +57,7 @@ import {
   parseTicketNumber,
   ticketNeedsReview,
 } from '../../types/v2/ticket.types.js';
-import { answerNeedsOwner, isStaleTicket, staleCloseUpdate } from './ticket-hygiene.js';
+import { answerNeedsOwner, isStaleTicket, ownerMovedOn, staleCloseUpdate } from './ticket-hygiene.js';
 import { ACTIVE_OPEN_ITEM_STATUSES } from '../../types/v2/open-item.types.js';
 
 // ---------------------------------------------------------------------------
@@ -122,6 +123,11 @@ export interface TicketPatch {
   priority?: RequestPriority;
   kind?: TicketKind;
   assignee?: string | null;
+}
+
+/** The agent still owes the owner something (a question or a promise): the done gate would park the ticket. */
+function hasActiveOpenItem(t: Request): boolean {
+  return (t.openItems ?? []).some((i) => ACTIVE_OPEN_ITEM_STATUSES.has(i.status));
 }
 
 /** Statuses in which an agent answer can submit a ticket. */
@@ -191,6 +197,9 @@ export class TicketReviewService {
     if (message.senderType !== 'agent') return null;
     // "Got it — here is my plan" is not the answer.
     if (isInterim(message)) return null;
+    // "I'm building it now" is a promise, not the answer: submitting the ticket
+    // on it let a request die as 待验收 with nothing made (2026-10-10).
+    if (detectStatedIntent(message.content)) return null;
     return this.serial(async () => {
       const all = await this.deps.requests.listAll();
       const inChannel = all.filter(
@@ -261,10 +270,14 @@ export class TicketReviewService {
           continue;
         }
         if (t.status !== 'waiting_confirmation' || !ticketNeedsReview(t) || !t.submittedAt) continue;
-        // Silence accepts: a hard deadline from the answer, whatever the nudges did.
-        if (now - Date.parse(t.submittedAt) >= TICKET_CONSTANTS.REVIEW.AUTO_ACCEPT_MS) {
+        // Silence accepts: a hard deadline from the answer, whatever the nudges
+        // did — or sooner, once the owner has moved on in the thread without
+        // an objection (no ticket mechanics are ever shown to the owner).
+        const expired = now - Date.parse(t.submittedAt) >= TICKET_CONSTANTS.REVIEW.AUTO_ACCEPT_MS;
+        const movedOn = !expired && ownerMovedOn(t) && !hasActiveOpenItem(t);
+        if (expired || movedOn) {
           const tags = [...new Set([...t.tags, TICKET_CONSTANTS.REVIEW.AUTO_ACCEPTED_TAG])];
-          const r = await this.accept(t, tags);
+          const r = await this.accept(t, tags, TICKET_CONSTANTS.REVIEW.AUTO_ACCEPT_REASON);
           if (r.ok) autoAccepted += 1;
           else this.logger.debug('Auto-accept refused', { id: t.id, reason: r.reason });
           continue;
@@ -383,9 +396,11 @@ export class TicketReviewService {
    *
    * @param ticket - The ticket
    * @param tags - Tags to store
+   * @param reason - Why it was accepted without the owner's word: written to the
+   *   ticket's discussion and the log, never sent to the owner
    * @returns Result
    */
-  private async accept(ticket: Request, tags: string[]): Promise<ReviewActionResult> {
+  private async accept(ticket: Request, tags: string[], reason?: string): Promise<ReviewActionResult> {
     if (ticket.status === 'done') return { ok: false, reason: 'already_done', ticket };
     if (ticket.status === 'cancelled') return { ok: false, reason: 'cancelled', ticket };
     try {
@@ -395,8 +410,26 @@ export class TicketReviewService {
       }
       // #813: silence is recorded as acceptance, never as a review.
       const acceptedBy = tags.includes(TICKET_CONSTANTS.REVIEW.AUTO_ACCEPTED_TAG) ? 'silence' : 'owner';
-      const updated = await this.deps.requests.update(current.id, { status: 'done', accepted: true, ignoreDeadChildren: true, acceptedBy, tags });
-      this.logger.info('Ticket accepted', { tkt: tkt(updated), auto: tags.includes(TICKET_CONSTANTS.REVIEW.AUTO_ACCEPTED_TAG) });
+      const note = reason
+        ? [
+            ...(current.discussion ?? []),
+            {
+              at: this.now().toISOString(),
+              author: TICKET_CONSTANTS.REVIEW.AUTO_ACCEPT_NOTE_AUTHOR,
+              text: reason,
+              ref: `auto-accept-${this.now().toISOString()}`,
+            },
+          ]
+        : undefined;
+      const updated = await this.deps.requests.update(current.id, {
+        status: 'done',
+        accepted: true,
+        ignoreDeadChildren: true,
+        acceptedBy,
+        tags,
+        ...(note ? { discussion: note } : {}),
+      });
+      this.logger.info('Ticket accepted', { tkt: tkt(updated), auto: tags.includes(TICKET_CONSTANTS.REVIEW.AUTO_ACCEPTED_TAG), ...(reason ? { reason } : {}) });
       await this.receiptDone(updated);
       return { ok: true, ticket: updated };
     } catch (err) {
@@ -429,7 +462,7 @@ export class TicketReviewService {
         ...(ticket.acceptance ?? []),
         { text: why, source: 'reject', check: 'judgment', addedAt: at },
       ];
-      const discussion = [...(ticket.discussion ?? []), { at, author: 'owner', text: `打回：${why}`, ref: `reject-${at}` }];
+      const discussion = [...(ticket.discussion ?? []), { at, author: 'owner', text: `Sent back: ${why}`, ref: `reject-${at}` }];
       const updated = await this.deps.requests.update(ticket.id, {
         status: 'running',
         rejectCount: (ticket.rejectCount ?? 0) + 1,
@@ -597,12 +630,12 @@ export function nudgeText(t: Request, now: number): string {
   const hours = Math.max(1, Math.round((now - Date.parse(t.lastNudgeAt ?? t.submittedAt ?? t.updatedAt)) / 3_600_000));
   const marker = typeof t.ticketNumber === 'number' ? `[TICKET:${formatTicketNumber(t.ticketNumber)} ${t.id}] ` : '';
   const cmd = t.chatRef
-    ? ` 回复命令: bash config/skills/agent/core/reply-channel/execute.sh --channel ${t.chatRef.channelId} --thread ${t.chatRef.threadRootId} --content "<一两句>"`
+    ? ` Reply command: bash config/skills/agent/core/reply-channel/execute.sh --channel ${t.chatRef.channelId} --thread ${t.chatRef.threadRootId} --content "<one or two sentences>"`
     : '';
   return (
-    `${marker}你之前回答的「${t.title}」已经过了约 ${hours} 小时，对方还没回应。` +
-    `如果这件事需要对方确认结果（交付物、改动、需要拍板的），在原来的对话里用一两句自然的话问一下这样行不行——不要提工单、编号或"验收"这类词；` +
-    `如果只是回答了问题、不需要确认，什么都不用做。` +
+    `${marker}You answered "${t.title}" about ${hours} hours ago and they have not responded yet. ` +
+    `If this needs their confirmation of the result (a deliverable, a change, something to decide), ask in the original conversation, in a sentence or two of natural language, whether this works — do not mention tickets, numbers or the word "acceptance"; ` +
+    `if you only answered a question and no confirmation is needed, do nothing.` +
     cmd
   );
 }

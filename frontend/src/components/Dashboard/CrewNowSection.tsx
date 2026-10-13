@@ -50,7 +50,7 @@ export interface CrewNowSectionProps {
 export const CrewNowSection: React.FC<CrewNowSectionProps> = ({ crew }) => {
   const idle = idleLine(crew.idle);
   return (
-    <section aria-labelledby="crew-now-title" data-testid="crew-now">
+    <section aria-labelledby="crew-now-title" data-testid="crew-now" className="cw-glass rounded-2xl px-4 py-4 md:px-0">
       <div className="flex items-baseline justify-between gap-4 pb-2 md:px-4">
         <h2 id="crew-now-title" className="text-lg font-extrabold text-text">Your crew right now</h2>
         <Link to={ROUTES.teams} className="text-sm font-bold text-primary-text no-underline hover:text-text">

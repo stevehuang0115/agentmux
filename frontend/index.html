@@ -1,10 +1,13 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en" class="dark" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/logo/crewly-icon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#b6bfe6" />
+    <!-- Themes the page before first paint: the viewer's saved choice, else the system's. Keep in step with THEME_INIT_SCRIPT (packages/ui/src/theme-script.ts; a test checks it). -->
+    <script>(function(){try{var m=null;try{m=window.localStorage.getItem('crewly-theme')}catch(e){}var d=false;try{d=!!(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)}catch(e){}var t=(m==='light'||m==='dark')?m:(d?'dark':'light');document.documentElement.setAttribute('data-theme',t)}catch(e){}})();</script>
     <!-- Nunito font is self-hosted via @fontsource/nunito (imported in main.tsx) -->
     <title>Crewly AI Studio</title>
   </head>

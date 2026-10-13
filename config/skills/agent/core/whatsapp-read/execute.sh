@@ -51,7 +51,7 @@ while [[ $# -gt 0 ]]; do
     --before)    [ $# -ge 2 ] || error_exit "--before requires a value"; BEFORE="$2"; shift 2 ;;
     --chats)     LIST_CHATS=1; shift ;;
     --help|-h)   print_usage; exit 0 ;;
-    *) error_exit "Unknown option: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 

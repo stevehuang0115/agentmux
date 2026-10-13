@@ -71,7 +71,7 @@ check "json create" "$(last '.body.name')" '"Holiday"'
 OUT=$(run --create no-grant || true)
 check "not connected: reason" "$(printf '%s' "$OUT" | jq -r .reason)" "not_connected"
 check "not connected: hint" "$(printf '%s' "$OUT" | jq -r .hint)" "https://cloud/start?token=j"
-check "unknown flag" "$(run_err --bogus | jq -r .error)" "Unknown option: --bogus"
+check "unknown flag" "$(run_err --bogus | jq -r .error)" "Unknown argument: --bogus"
 
 echo "todo-lists: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

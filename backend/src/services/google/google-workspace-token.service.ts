@@ -283,7 +283,7 @@ export class GoogleWorkspaceTokenService {
     throw new GoogleWorkspaceError(
       404,
       GOOGLE_WORKSPACE_CONSTANTS.ERROR_CODES.NOT_CONNECTED,
-      `${email ?? 'This Google account'} is not connected for ${wanted}. Connect ${wanted} on the Connections page.`,
+      `${email ?? 'This Google account'} is not connected for ${wanted}. Ask the owner to connect ${wanted} (google-connect skill).`,
     );
   }
 
@@ -300,6 +300,24 @@ export class GoogleWorkspaceTokenService {
     }
     for (const key of [...this.cached.keys()]) {
       if (key === account || key.startsWith(`${account}\0`)) this.cached.delete(key);
+    }
+  }
+
+  /**
+   * Forget the cached tokens of exactly one Google account — the one a failed
+   * call acted as — and leave every other account's untouched.
+   *
+   * Unlike {@link clearCache}, `undefined` does not mean "everything": it
+   * means the default connection (the cache slot an unqualified call uses),
+   * so a 401 or a missing-scope answer on the default account does not make
+   * every other connected account re-fetch its token.
+   *
+   * @param account - The Google account; undefined for the default connection
+   */
+  clearCacheFor(account: string | undefined): void {
+    for (const key of [...this.cached.keys()]) {
+      const slot = key.split('\0')[0];
+      if (slot === (account ?? '')) this.cached.delete(key);
     }
   }
 

@@ -133,6 +133,24 @@ export interface AgentTimelineRow extends ChatMessageRow {
   channel_type: ChatChannelType;
 }
 
+/** One hit of {@link MessageStore.searchForAgent}. */
+export interface ChatSearchRow {
+  id: string;
+  channel_id: string;
+  channel_name: string;
+  channel_type: ChatChannelType;
+  sender_type: string;
+  sender_id: string;
+  content: string;
+  created_at: number;
+  thread_id: string | null;
+}
+
+/** Escape LIKE wildcards. */
+function likeEscape(term: string): string {
+  return term.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
 /** Result of inserting a message — includes whether this was a dedupe hit. */
 export interface MessageInsertResult {
   row: ChatMessageRow;
@@ -748,7 +766,7 @@ export class MessageStore {
   /**
    * Replace a message's content in place. Used for server-authored rows that
    * change state after they are posted (a ticket receipt turning into
-   * "已取消记录"); user and agent turns are never edited.
+   * "is no longer tracked"); user and agent turns are never edited.
    *
    * @param id - Message id
    * @param content - New content
@@ -995,6 +1013,108 @@ export class MessageStore {
          LIMIT ?`,
       )
       .all(...params) as AgentTimelineRow[];
+  }
+
+  /**
+   * Search the messages an agent can see — its DMs, the channels and huddles
+   * it is a member of, and any message that @-mentions it — by keywords (all
+   * must appear), optional channel and date range, newest first.
+   *
+   * @param agentSession - The agent whose view is searched
+   * @param opts.terms - Keywords, all required (case-insensitive substring)
+   * @param opts.channel - Channel id, or name (with or without `#`)
+   * @param opts.fromMs - Only messages created at or after this
+   * @param opts.toMs - Only messages created before this
+   * @param opts.limit - Most hits
+   * @returns Hits, newest first
+   */
+  searchForAgent(
+    agentSession: string,
+    opts: { terms: string[]; channel?: string; fromMs?: number; toMs?: number; limit: number },
+  ): ChatSearchRow[] {
+    const params: Array<string | number> = [
+      agentSession,
+      agentSession,
+      agentSession,
+      `%${likeEscape(JSON.stringify(agentSession))}%`,
+    ];
+    let where = `m.sender_type != 'system'
+      AND (m.agent_session = ? OR c.agent_session = ?
+           OR m.channel_id IN (SELECT channel_id FROM chat_channel_members WHERE member_session = ?)
+           OR m.mentions LIKE ? ESCAPE '\\')`;
+    for (const term of opts.terms) {
+      where += ` AND m.content LIKE ? ESCAPE '\\'`;
+      params.push(`%${likeEscape(term)}%`);
+    }
+    if (opts.channel) {
+      const name = opts.channel.replace(/^#/, '');
+      where += ` AND (m.channel_id = ? OR lower(replace(c.name, '#', '')) = lower(?))`;
+      params.push(opts.channel, name);
+    }
+    if (opts.fromMs !== undefined) {
+      where += ' AND m.created_at >= ?';
+      params.push(opts.fromMs);
+    }
+    if (opts.toMs !== undefined) {
+      where += ' AND m.created_at < ?';
+      params.push(opts.toMs);
+    }
+    params.push(opts.limit);
+    return this.db
+      .prepare(
+        `SELECT m.id, m.channel_id, c.name AS channel_name, c.type AS channel_type,
+                m.sender_type, m.sender_id, m.content, m.created_at, m.thread_id
+         FROM chat_messages m JOIN chat_channels c ON c.id = m.channel_id
+         WHERE ${where}
+         ORDER BY m.created_at DESC, m.rowid DESC
+         LIMIT ?`,
+      )
+      .all(...params) as ChatSearchRow[];
+  }
+
+  /**
+   * Every message since a time in the owner's live channels (not archived),
+   * oldest first, capped at the newest `limit` — Drive mode recall reads its
+   * window from here (specs/2026-10-08-drive-mode.md §7).
+   *
+   * @param sinceMs - Only messages created at or after this (epoch ms)
+   * @param limit - Most rows returned (newest kept)
+   * @returns Rows with their unified-log columns and channel, oldest first
+   */
+  listOwnerFeedRows(sinceMs: number, limit: number): Array<AgentTimelineRow> {
+    const rows = this.db
+      .prepare(
+        `SELECT m.rowid AS rowid, ${MESSAGE_SELECT_COLUMNS.split(',').map((c) => `m.${c.trim()}`).join(', ')},
+                m.source, m.direction, m.sender_kind, m.agent_session, m.ext_ref,
+                c.name AS channel_name, c.type AS channel_type
+         FROM chat_messages m JOIN chat_channels c ON c.id = m.channel_id
+         WHERE m.created_at >= ? AND c.archived_at IS NULL
+         ORDER BY m.created_at DESC, m.rowid DESC
+         LIMIT ?`,
+      )
+      .all(sinceMs, limit) as AgentTimelineRow[];
+    return rows.reverse();
+  }
+
+  /**
+   * When the owner last spoke in each conversation, all time: per channel
+   * for a DM, per thread (root message id) for a channel or huddle.
+   *
+   * @returns One row per conversation the owner ever wrote in
+   */
+  listOwnerTurnMarks(): Array<{ channelId: string; root: string; lastAt: number }> {
+    return (
+      this.db
+        .prepare(
+          `SELECT m.channel_id AS channelId,
+                  CASE WHEN c.type = 'dm' THEN '' ELSE COALESCE(m.thread_id, m.id) END AS root,
+                  MAX(m.created_at) AS lastAt
+           FROM chat_messages m JOIN chat_channels c ON c.id = m.channel_id
+           WHERE m.sender_type = 'user' AND COALESCE(m.sender_kind, 'owner') = 'owner'
+           GROUP BY m.channel_id, root`,
+        )
+        .all() as Array<{ channelId: string; root: string; lastAt: number }>
+    ).map((r) => ({ channelId: r.channelId, root: r.root, lastAt: Number(r.lastAt) }));
   }
 
   findPendingSlackDelivery(maxAgeMs: number, nowMs?: number): ChatMessageRow[] {

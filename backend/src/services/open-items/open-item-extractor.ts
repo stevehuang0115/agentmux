@@ -79,6 +79,8 @@ interface Sentence {
   prevLine?: string;
   /** Paragraph number (blank lines separate paragraphs) */
   para?: number;
+  /** The paragraph is introduced as a script / draft / transcript the agent is delivering ("口播脚本：", "Script:") */
+  scriptFrame?: boolean;
 }
 
 /**
@@ -130,6 +132,20 @@ function splitLine(line: string): string[] {
 /** A block between two rule lines (a draft the agent wrote for someone else to send). */
 const DRAFT_BLOCK = /^[ \t]*(?:-{3,}|—{2,}|_{3,}|\*{3,})[ \t]*$[\s\S]*?^[ \t]*(?:-{3,}|—{2,}|_{3,}|\*{3,})[ \t]*$/gmu;
 
+/**
+ * A line that introduces words the agent is DELIVERING, not saying to the
+ * owner: a video / voice script, a teleprompter text, a transcript, a draft
+ * ("口播脚本：", "台词", "逐字稿", "Script:"). Rhetorical lines inside it
+ * ("…对吧？") are not owner questions (#1243).
+ */
+const SCRIPT_FRAME = /脚本|台词|口播|逐字稿|讲稿|旁白|提词|字幕|\bscript\b|teleprompter|transcript|voice-?over|narration/iu;
+
+/**
+ * First-person narration with a tag question ("所以我当时觉得，我这个设计很好，对吧？"):
+ * a line of someone's story or a script, not a decision the agent needs.
+ */
+const NARRATIVE_VOICE = /^(?:所以|然后|那么|但是|可是|其实|就是)?[，,\s]*(?:我|我们)(?:当时|那时|那会儿|以前|曾经|后来|一开始)/u;
+
 /** A bullet or numbered list marker at the start of a line ("- ", "• ", "1. ", "2) ", "（3）", "3、"). */
 const LIST_MARKER = /^\s*(?:[-*•·]\s+|\d+[.)、]\s*|[（(]\d+[）)]\s*)/u;
 
@@ -145,21 +161,26 @@ export function splitSentences(text: string): Sentence[] {
   const noCode = text.replace(/```[\s\S]*?```/g, ' ').replace(DRAFT_BLOCK, '\n\n');
   let prevLine: string | undefined;
   let para = 0;
+  // An intro naming a script / draft frames the paragraph it opens (not later ones).
+  let scriptFrame = false;
   for (const raw of noCode.split(/\n/)) {
     const listItem = LIST_MARKER.test(raw);
     const line = raw.replace(LIST_MARKER, '').trim();
     if (!line) {
       para += 1;
+      scriptFrame = false;
       continue;
     }
     if (isNonProseLine(line)) {
       // A heading or quote still introduces what follows ("*问这几件事*").
       prevLine = line;
+      scriptFrame = SCRIPT_FRAME.test(line);
       continue;
     }
+    if (/[:：]\s*$/.test(line) && SCRIPT_FRAME.test(line)) scriptFrame = true;
     const parts = splitLine(line);
     const before = prevLine;
-    parts.forEach((p, i) => out.push({ text: p, index: i, line: parts, para, ...(listItem ? { listItem } : {}), ...(before ? { prevLine: before } : {}) }));
+    parts.forEach((p, i) => out.push({ text: p, index: i, line: parts, para, ...(scriptFrame ? { scriptFrame } : {}), ...(listItem ? { listItem } : {}), ...(before ? { prevLine: before } : {}) }));
     prevLine = line;
   }
   return out;
@@ -537,6 +558,7 @@ function endsAsQuestion(s: string): boolean {
  */
 function isListedOrForThirdParty(s: Sentence): boolean {
   if (s.listItem) return true;
+  if (s.scriptFrame || (NARRATIVE_VOICE.test(s.text) && /对吧|对不对|是吧|不是吗/u.test(s.text))) return true;
   if (THIRD_PARTY_FRAME.test(s.text)) return true;
   // The line right before introduces it ("每个人都问这四个：", "Questions to ask:").
   if (s.prevLine && THIRD_PARTY_FRAME.test(s.prevLine)) return true;

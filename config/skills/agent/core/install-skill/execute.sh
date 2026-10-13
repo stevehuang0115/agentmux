@@ -48,7 +48,7 @@ while [[ $# -gt 0 ]]; do
     --owner-said)        [ $# -ge 2 ] || error_exit "--owner-said requires a value"; OWNER_SAID="$2"; shift 2 ;;
     --force)             FORCE=true; shift ;;
     --help|-h)           print_usage; exit 0 ;;
-    *) error_exit "Unknown option: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 if [ -n "$INPUT_JSON" ]; then

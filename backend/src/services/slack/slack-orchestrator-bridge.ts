@@ -48,7 +48,8 @@ import type { MessageQueueService } from '../messaging/message-queue.service.js'
 import type { SlackThreadStoreService } from './slack-thread-store.service.js';
 import { getOwnerMessageWatchdog } from '../messaging/owner-message-watchdog.service.js';
 import { isOwnerAuthored } from './slack-auto-working.service.js';
-import { ORCHESTRATOR_SESSION_NAME, MESSAGE_QUEUE_CONSTANTS, SLACK_IMAGE_CONSTANTS, SLACK_FILE_DOWNLOAD_CONSTANTS, SLACK_FILE_FETCH_CONSTANTS, SLACK_BRIDGE_CONSTANTS, AUDITOR_SCHEDULER_CONSTANTS, THREAD_STATUS_CONSTANTS, OWNER_EVIDENCE_METADATA } from '../../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, MESSAGE_QUEUE_CONSTANTS, SLACK_IMAGE_CONSTANTS, SLACK_FILE_DOWNLOAD_CONSTANTS, SLACK_FILE_FETCH_CONSTANTS, SLACK_BRIDGE_CONSTANTS, AUDITOR_SCHEDULER_CONSTANTS, THREAD_STATUS_CONSTANTS, OWNER_EVIDENCE_METADATA, WORKTREE_JANITOR_CONSTANTS } from '../../constants.js';
+import { readFreeBytes } from '../worktree/low-disk-guard.js';
 import { LoggerService } from '../core/logger.service.js';
 import { CROSS_MACHINE_PREFIX } from '../../types/cross-machine.types.js';
 import { getCrossMachineMessageService } from './cross-machine-message.service.js';
@@ -1678,20 +1679,16 @@ Just type naturally to chat with the orchestrator!`;
       message.images = downloadedImages;
     }
 
-    // Send a warning back to Slack if any files were rejected
+    // Rejections are told to the agent (enrichTextWithFiles), not posted into the
+    // owner's thread: no system warning lines there.
     if (rejectionMessages.length > 0) {
-      try {
-        const maxMB = Math.round(SLACK_IMAGE_CONSTANTS.MAX_FILE_SIZE / (1024 * 1024));
-        const supportedTypes = SLACK_IMAGE_CONSTANTS.SUPPORTED_MIMES.map(m => m.replace('image/', '').toUpperCase()).join(', ');
-        const warningText = `:warning: Some image(s) could not be processed:\n${rejectionMessages.map(f => `• ${f}`).join('\n')}\n\nSupported types: ${supportedTypes}. Max size: ${maxMB} MB.`;
-        await this.slackService.sendMessage({
-          channelId: message.channelId,
-          text: warningText,
-          threadTs: message.threadTs || message.ts,
-        });
-      } catch (err) {
-        this.logger.warn('Failed to send rejection warning to Slack', { error: err instanceof Error ? err.message : String(err) });
-      }
+      message.fileFailures = [
+        ...(message.fileFailures ?? []),
+        ...rejectionMessages.map((m) => {
+          const i = m.indexOf(': ');
+          return { name: m.slice(0, i), reason: m.slice(i + 2) };
+        }),
+      ];
     }
   }
 
@@ -1730,6 +1727,15 @@ Just type naturally to chat with the orchestrator!`;
             throw new Error(`File too large: ${file.size} bytes (max ${maxMB} MB)`);
           }
 
+          // Never fill the disk: keep the low-disk threshold free after the download.
+          const free = await readFreeBytes(tempDir);
+          if (free !== null && free - file.size < WORKTREE_JANITOR_CONSTANTS.LOW_DISK_BYTES) {
+            throw new Error(
+              `Not enough disk space: ${file.size} bytes needed, ${free} bytes free ` +
+              `(at least ${WORKTREE_JANITOR_CONSTANTS.LOW_DISK_BYTES} bytes must stay free)`,
+            );
+          }
+
           const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
           const localPath = path.join(tempDir, `${file.id}-${safeName}`);
           const downloadUrl = file.url_private_download || file.url_private;
@@ -1738,7 +1744,13 @@ Just type naturally to chat with the orchestrator!`;
           const maxRedirects = SLACK_FILE_DOWNLOAD_CONSTANTS.MAX_DOWNLOAD_REDIRECTS;
           const timeoutMs = SLACK_FILE_DOWNLOAD_CONSTANTS.DOWNLOAD_TIMEOUT_MS;
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+          // The timeout is an idle timeout: reset on every received chunk so a large
+          // file can take as long as it needs while a stalled connection still aborts.
+          let timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+          const resetTimeout = (): void => {
+            clearTimeout(timeoutId);
+            timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+          };
           let currentUrl = downloadUrl;
           let response: Response | null = null;
 
@@ -1775,7 +1787,8 @@ Just type naturally to chat with the orchestrator!`;
 
             const fileStream = createWriteStream(localPath);
             const nodeStream = Readable.fromWeb(response.body as import('stream/web').ReadableStream);
-            await pipeline(nodeStream, fileStream);
+            nodeStream.on('data', resetTimeout);
+            await pipeline(nodeStream, fileStream, { signal: controller.signal });
           } catch (downloadErr) {
             // Clean up partial file on failure
             try { await fs.unlink(localPath); } catch { /* ignore if file doesn't exist */ }
@@ -1810,7 +1823,7 @@ Just type naturally to chat with the orchestrator!`;
           const fileName = batch[j].name;
           const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
           this.logger.warn('Failed to download file', { fileName, reason });
-          if (reason.startsWith('File too large:')) {
+          if (reason.startsWith('File too large:') || reason.startsWith('Not enough disk space:')) {
             rejectionMessages.push(`${fileName}: ${reason}`);
           }
         }
@@ -1821,18 +1834,15 @@ Just type naturally to chat with the orchestrator!`;
       message.attachments = downloadedFiles;
     }
 
+    // Told to the agent (enrichTextWithFiles), never posted into the owner's thread.
     if (rejectionMessages.length > 0) {
-      try {
-        const maxMB = Math.round(SLACK_FILE_DOWNLOAD_CONSTANTS.MAX_FILE_SIZE / (1024 * 1024));
-        const warningText = `:warning: Some file(s) could not be downloaded:\n${rejectionMessages.map(f => `• ${f}`).join('\n')}\n\nMax size: ${maxMB} MB.`;
-        await this.slackService.sendMessage({
-          channelId: message.channelId,
-          text: warningText,
-          threadTs: message.threadTs || message.ts,
-        });
-      } catch (err) {
-        this.logger.warn('Failed to send file rejection warning to Slack', { error: err instanceof Error ? err.message : String(err) });
-      }
+      message.fileFailures = [
+        ...(message.fileFailures ?? []),
+        ...rejectionMessages.map((m) => {
+          const i = m.indexOf(': ');
+          return { name: m.slice(0, i), reason: m.slice(i + 2) };
+        }),
+      ];
     }
   }
 
@@ -1948,20 +1958,32 @@ Just type naturally to chat with the orchestrator!`;
     // saw "have a look at this" with nothing to look at and answered about
     // the previous topic instead of saying it could not see the attachment
     // (2026-09-21, #daily-info). Name what is missing.
+    const explained = new Set<string>();
+    for (const f of message.fileFailures ?? []) {
+      if (explained.has(f.name)) continue;
+      explained.add(f.name);
+      const tooBig = f.reason.startsWith('File too large:') || f.reason.startsWith('Not enough disk space:');
+      text += `\n[Slack: the attachment ${f.name} could not be downloaded (${f.reason}).` +
+        (tooBig
+          ? ' Do not ask the owner to compress it or use Drive. Use the `request-file` skill to send the owner an upload link, and explain it in your own words.'
+          : '') +
+        ']';
+    }
     const delivered = (message.images?.length ?? 0) + (message.attachments?.length ?? 0);
     const attached = message.files?.length ?? 0;
-    if (attached > delivered) {
+    if (attached > delivered + explained.size) {
       const undelivered = (message.files ?? [])
         .filter((f) => {
           const name = f.name ?? '';
           return (
+            !explained.has(name) &&
             !(message.images ?? []).some((i) => i.name === name) &&
             !(message.attachments ?? []).some((a) => a.name === name)
           );
         })
         .map((f) => f.name || 'unnamed')
         .join(', ');
-      text += `\n[Slack: ${attached - delivered} attachment(s) could not be read${undelivered ? ` — ${undelivered}` : ''}. Say so rather than guessing what they contained; the owner may need to invite your Slack app to this channel.]`;
+      text += `\n[Slack: ${attached - delivered - explained.size} attachment(s) could not be read${undelivered ? ` — ${undelivered}` : ''}. Say so rather than guessing what they contained; the owner may need to invite your Slack app to this channel.]`;
     }
 
     return text;

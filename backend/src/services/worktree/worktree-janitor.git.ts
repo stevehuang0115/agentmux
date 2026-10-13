@@ -33,6 +33,8 @@ export interface RunCommandOptions {
 	timeoutMs?: number;
 	/** Extra environment variables merged over process.env */
 	env?: Record<string, string>;
+	/** Text written to the command's stdin (then closed) */
+	input?: string;
 }
 
 /**
@@ -56,7 +58,7 @@ export interface RunCommandOptions {
 export function runCommand(file: string, args: string[], options: RunCommandOptions = {}): Promise<CommandResult> {
 	return new Promise((resolve) => {
 		try {
-			execFile(
+			const child = execFile(
 				file,
 				args,
 				{
@@ -87,6 +89,11 @@ export function runCommand(file: string, args: string[], options: RunCommandOpti
 					resolve({ code, stdout: out, stderr: err || error.message });
 				},
 			);
+			if (options.input !== undefined) {
+				// A command that exits early closes the pipe: ignore EPIPE.
+				child.stdin?.on('error', () => undefined);
+				child.stdin?.end(options.input);
+			}
 		} catch (spawnErr) {
 			resolve({ code: null, stdout: '', stderr: spawnErr instanceof Error ? spawnErr.message : String(spawnErr) });
 		}
