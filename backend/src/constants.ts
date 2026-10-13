@@ -5429,6 +5429,12 @@ export const CLOUD_SYNC_CONSTANTS = {
 	 * backs off so a relay that is refusing (quota, outage) is not hammered.
 	 */
 	REGISTER_RETRY_BACKOFF_MS: [30_000, 60_000, 120_000, 300_000] as readonly number[],
+	/**
+	 * Upper bound (ms) on honouring a relay 429 `Retry-After`. A daily-limit
+	 * 429 can ask for hours; we re-check at most this often so a limit that was
+	 * raised or reset is noticed without a restart.
+	 */
+	RETRY_AFTER_MAX_MS: 10 * 60_000,
 	/** Device considered offline after this threshold (ms) */
 	OFFLINE_THRESHOLD_MS: 60_000,
 	/** HTTP request timeout for sync API calls (ms) */

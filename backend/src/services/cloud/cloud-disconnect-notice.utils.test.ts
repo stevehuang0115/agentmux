@@ -245,6 +245,7 @@ describe('relay queue registration failures', () => {
 
 	it('describes registration errors for the owner', () => {
 		expect(describeQueueError(QUOTA_ERROR)).toBe('relay quota full');
+		expect(describeQueueError('Queue registration failed: 429 {"error":"daily_limit","retryAfter":3600}')).toBe('this account reached its daily relay limit (resets at 00:00 UTC)');
 		expect(describeQueueError('Queue registration failed: 429 {"error":"rate_limited"}')).toBe('the relay is rate-limiting this account');
 		expect(describeQueueError('Queue registration failed: 403 Not authorized')).toBe('the relay queue belongs to another account');
 		expect(describeQueueError('Queue registration failed: 502 Bad Gateway')).toBe('the relay is returning errors');

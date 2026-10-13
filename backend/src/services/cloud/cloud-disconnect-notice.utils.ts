@@ -69,6 +69,7 @@ const DEFAULT_QUEUE_THRESHOLD_MS = 2 * 60 * 1000;
  */
 export function describeQueueError(error: string | null): string {
 	if (!error) return 'relay registration keeps failing';
+	if (/\b429\b/.test(error) && /daily_limit/.test(error)) return 'this account reached its daily relay limit (resets at 00:00 UTC)';
 	if (/\b429\b/.test(error)) return /quota_exceeded/.test(error) ? 'relay quota full' : 'the relay is rate-limiting this account';
 	if (/\b403\b/.test(error)) return 'the relay queue belongs to another account';
 	if (/\b401\b/.test(error)) return 'the relay rejected the sign-in';
