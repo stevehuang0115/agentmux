@@ -1,0 +1,183 @@
+[
+ {
+  "id": "D-700",
+  "question": "比预期短了一点 — 这版行不行？",
+  "options": [
+   {
+    "key": "a",
+    "label": "Yes"
+   },
+   {
+    "key": "b",
+    "label": "No"
+   },
+   {
+    "key": "c",
+    "label": "Reply in thread",
+    "detail": "you'll answer in words in this thread"
+   }
+  ],
+  "defaultKey": "wait",
+  "deadline": "2026-01-01T00:00:00.000Z",
+  "requestedBy": "agent-video",
+  "asker": "agent-video",
+  "status": "resolved",
+  "chosenKey": null,
+  "answerText": "我觉得这份食谱的内容可以再丰富一点，然后格式整理得更清楚，步骤不要太长。然后图片还是稍微少了一点，可以多拍几张。发布之前再检查一遍，信息要准确，日期也写上。介绍的部分还可以再多说一点，目前观察到比较有效的是把材料列成清单，做好了以后就可以拍成视频，有了视频就可以发给大家看，然后让大家一起试试。同时我们还可以把相关的做法加到里面去，让整个内容更完整一些。我觉得这份食谱的内容可以再丰富一点，然后格式整理得更清楚，步骤不要太长。然后图片还是稍微少了一点，可以多拍几张。发布之前再检查一遍，信息要准确，日期也写上。介绍的部分还可以再多说一点，目前观察到比较有效的是把材料列成清单，做好了以后就可以拍成视频，有了视频就可以发给大家看，然后让大家一起试试。同时我们还可以把相关的做法加到里面去，让整个内容更完整一些。我觉得这份食谱的内容可以再丰富一点，然后格式整理得更清楚，步骤不要太长。然后图片还是稍微少了一点，可以多拍几张。发布之前再检查一遍，信息要准确，日期也写上。介绍的部分还可以再多说一点，目前观察到比较有效的是把材料列成清单，做好了以后就可以拍成视频，有了视频就可以发给大家看，然后让大家一起试试。同时我们还可以把相关的做法加到里面去，让整个内容更完整一些。我觉得这份食谱的内容可以再丰富一点，然后格式整理得更清楚，步骤不要太长。然后图片还是稍微少了一点，可以多拍几张。发布之前再检查一遍，信息要准确，日期也写上。介绍的部分还可以再多说一点，目前观察到比较有效的是把材料列成清单，做好了以后就可以拍成视频，有了视频就可以发给大家看，然后让大家一起试试。同时我们还可以把相关的做法加到里面去，让整个内容更完整一些。我觉得这份食谱的内容可以再丰富一点，然后格式整理得更清楚，步骤不要太长。然后图片还是稍微少了一点，可以多拍几张。发布之前再检查一遍，信息要准确，日期也写上。介绍的部分还可以再多说一点，目前观察到比较有效的是把材料列成清单"
+ },
+ {
+  "id": "D-703",
+  "question": "没检查：我没有完整看过成片，音乐音量也没确认 — 这版（先不含日常视频）行不行？",
+  "options": [
+   {
+    "key": "a",
+    "label": "Yes"
+   },
+   {
+    "key": "b",
+    "label": "No"
+   },
+   {
+    "key": "c",
+    "label": "Reply in thread",
+    "detail": "you'll answer in words in this thread"
+   }
+  ],
+  "defaultKey": "wait",
+  "deadline": "2026-01-01T00:00:00.000Z",
+  "requestedBy": "agent-video",
+  "asker": "agent-video",
+  "status": "resolved",
+  "chosenKey": null
+ },
+ {
+  "id": "D-714",
+  "question": "另外提醒一下：这封转发里带着个人信息，别再往外转 — 要不要按上面的建议改出新版？",
+  "options": [
+   {
+    "key": "a",
+    "label": "Yes (recommended)",
+    "detail": "我建议改成：第一个月的第二项交付，直接按对方要的格式交，对方拿去就能发"
+   },
+   {
+    "key": "b",
+    "label": "No"
+   },
+   {
+    "key": "c",
+    "label": "Reply in thread",
+    "detail": "you'll answer in words in this thread"
+   }
+  ],
+  "defaultKey": "wait",
+  "deadline": "2026-01-01T00:00:00.000Z",
+  "requestedBy": "agent-research",
+  "asker": "agent-research",
+  "status": "resolved",
+  "chosenKey": null
+ },
+ {
+  "id": "D-719",
+  "question": "要动的一件事：把一位成员从内容团队调去做「找客户」，再新加两个 agent — 这样可以吗？",
+  "options": [
+   {
+    "key": "a",
+    "label": "Yes (recommended)",
+    "detail": "我建议做，但先做小：三个 agent，只盯一个数，和内容团队分开"
+   },
+   {
+    "key": "b",
+    "label": "No"
+   },
+   {
+    "key": "c",
+    "label": "Reply in thread",
+    "detail": "you'll answer in words in this thread"
+   }
+  ],
+  "defaultKey": "wait",
+  "deadline": "2026-01-01T00:00:00.000Z",
+  "requestedBy": "agent-marketing",
+  "asker": "agent-marketing",
+  "status": "resolved",
+  "chosenKey": null
+ },
+ {
+  "id": "D-720",
+  "question": "这天和其他已排的发布不冲突 — 日期这样行吗？",
+  "options": [
+   {
+    "key": "a",
+    "label": "Yes (recommended)",
+    "detail": "预览定稿了，我建议这样排，都在同一天："
+   },
+   {
+    "key": "b",
+    "label": "No"
+   },
+   {
+    "key": "c",
+    "label": "Reply in thread",
+    "detail": "you'll answer in words in this thread"
+   }
+  ],
+  "defaultKey": "wait",
+  "deadline": "2026-01-01T00:00:00.000Z",
+  "requestedBy": "agent-marketing",
+  "asker": "agent-marketing",
+  "status": "resolved",
+  "chosenKey": "a"
+ },
+ {
+  "id": "D-721",
+  "question": "要开工我还缺几样，你知道多少回多少 — 团队设成上面这样可以吗？",
+  "options": [
+   {
+    "key": "a",
+    "label": "Yes (recommended)",
+    "detail": "我建议这个团队先放三个 agent："
+   },
+   {
+    "key": "b",
+    "label": "No"
+   },
+   {
+    "key": "c",
+    "label": "Reply in thread",
+    "detail": "you'll answer in words in this thread"
+   }
+  ],
+  "defaultKey": "wait",
+  "deadline": "2026-01-01T00:00:00.000Z",
+  "requestedBy": "agent-marketing",
+  "asker": "agent-marketing",
+  "status": "resolved",
+  "chosenKey": null
+ },
+ {
+  "id": "D-723",
+  "question": "一般申诉后几天到两周会有结果，下来了跟我说一声，我把那两条重新排上 — 先停这两条，可以吗？",
+  "options": [
+   {
+    "key": "a",
+    "label": "Yes (recommended)",
+    "detail": "建议："
+   },
+   {
+    "key": "b",
+    "label": "No"
+   },
+   {
+    "key": "c",
+    "label": "Reply in thread",
+    "detail": "you'll answer in words in this thread"
+   }
+  ],
+  "defaultKey": "wait",
+  "deadline": "2026-01-01T00:00:00.000Z",
+  "requestedBy": "agent-marketing",
+  "asker": "agent-marketing",
+  "status": "resolved",
+  "chosenKey": "a"
+ }
+]

@@ -56,6 +56,20 @@ export function termsOf(text: string): Set<string> {
 }
 
 /**
+ * The part of a schedule label that names the job: its name and the start of
+ * its title, up to the first `:` / `(` / sentence end. The rest of a label is
+ * the job's instructions (hundreds of words), whose common words made any
+ * decision "mention" the job.
+ *
+ * @param label - Trigger name plus work item title
+ * @returns The identifying head of the label
+ */
+export function identityOf(label: string): string {
+	const cut = label.search(/[:(：（。\n]|\.\s/u);
+	return (cut > 0 ? label.slice(0, cut) : label).slice(0, C.MAX_IDENTITY_CHARS);
+}
+
+/**
  * Recurring schedules a set of triggers describes.
  *
  * @param triggers - Triggers (any status; only active cron ones count)
@@ -93,12 +107,14 @@ export function isApprovedChange(d: OwnerDecision): boolean {
  * @returns The best match, or null
  */
 export function scheduleOfDecision(d: OwnerDecision, schedules: readonly RecurringSchedule[]): RecurringSchedule | null {
-	const text = [d.question, ...d.options.map((o) => `${o.label} ${o.detail ?? ''}`), d.answerText ?? ''].join(' ');
+	// The card says what it is about; the owner's free-text answer (often a long
+	// voice transcript) says what they want, and its common words match any job.
+	const text = [d.question, ...d.options.map((o) => `${o.label} ${o.detail ?? ''}`)].join(' ');
 	const have = termsOf(text);
 	let best: { s: RecurringSchedule; coverage: number } | null = null;
 	for (const s of schedules) {
 		if (s.owner === d.asker || s.owner === d.requestedBy) continue;
-		const terms = termsOf(s.label);
+		const terms = termsOf(identityOf(s.label));
 		if (terms.size === 0) continue;
 		const shared = [...terms].filter((t) => have.has(t)).length;
 		const coverage = shared / terms.size;
