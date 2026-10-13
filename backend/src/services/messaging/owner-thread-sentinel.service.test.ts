@@ -86,6 +86,14 @@ describe('promise detection', () => {
     expect(parsePromisedMinutes('no time here')).toBeUndefined();
   });
 
+  it.each([['收到。视频做好发到 #awesome-videos'], ['上线后告诉你'], ['好了发你'], ['完成后发给你']])('%s → delivery promise (#1240)', (text) => {
+    expect(detectPromise(text)).not.toBeNull();
+  });
+
+  it('an already-done delivery report is not a promise', () => {
+    expect(detectPromise('已经做好，发在这里了')).toBeNull();
+  });
+
   it('does not time promises longer than the cap', () => {
     expect(detectPromise("I'll have it in 20 hours")).toEqual({});
   });
@@ -334,11 +342,38 @@ describe('promise deadline', () => {
     expect(h.nudges).toHaveLength(0);
   });
 
-  it('a promise without a time is not timed', async () => {
+  it('a promise without a time is timed by silence: nudged once after 45 min, not at 44 (#1240)', async () => {
     const h = make();
-    promised(h, "I'm checking the inbox");
+    promised(h, '收到。视频做好发到 #awesome-videos');
+    h.clock.t += 44 * MIN;
+    await h.sentinel.tick();
+    expect(h.nudges).toHaveLength(0);
+    h.clock.t += 2 * MIN;
+    await h.sentinel.tick();
+    expect(h.nudges).toHaveLength(1);
+    expect(h.nudges[0].text).toContain('you would post the result');
+    expect(h.posts[0].text).toContain('said it would post the result');
+    h.clock.t += 60 * MIN;
+    await h.sentinel.tick();
+    expect(h.nudges).toHaveLength(1);
+  });
+
+  it('any agent post in the thread resets the silence clock (#1240)', async () => {
+    const h = make();
+    promised(h, '视频做好发到 #awesome-videos');
+    h.clock.t += 40 * MIN;
+    h.sentinel.noteAgentPost({ ...THREAD, agent: ATLAS, text: '这是第一版。' });
+    h.clock.t += 40 * MIN;
+    await h.sentinel.tick();
+    expect(h.nudges).toHaveLength(0);
+  });
+
+  it('chatter with no promise starts no clock (#1240)', async () => {
+    const h = make();
+    promised(h, 'The answer is 42.');
     h.clock.t += 120 * MIN;
     await h.sentinel.tick();
+    expect(h.nudges).toHaveLength(0);
     expect(h.posts).toHaveLength(0);
   });
 });

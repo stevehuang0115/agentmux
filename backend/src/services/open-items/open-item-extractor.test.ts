@@ -287,3 +287,23 @@ describe('only the final question of a message is carded (2026-10-08 card audit)
   });
 });
 
+
+describe('script lines are not owner questions (#1243)', () => {
+  const qs = (text: string): string[] => extractOpenItems(text, opts).questions.map((q) => q.text);
+
+  it('a tag question inside a script the agent delivers creates no card', () => {
+    expect(qs('口播脚本：\n所以我当时觉得，我这个设计很好，是非常的一石多鸟，对吧？')).toEqual([]);
+  });
+
+  it('first-person narration ending in 对吧？ creates no card even without a frame', () => {
+    expect(qs('所以我当时觉得，我这个设计很好，是非常的一石多鸟，对吧？')).toEqual([]);
+  });
+
+  it('the agent own question after the script paragraph is still carded', () => {
+    expect(qs('Script:\n我们当时只有三个人，对吧？\n\n这版脚本可以吗？')).toEqual(['这版脚本可以吗？']);
+  });
+
+  it('a plain agent question still creates a card', () => {
+    expect(qs('周五的稿子已经写完。这版标题可以吗？')).toEqual(['这版标题可以吗？']);
+  });
+});
