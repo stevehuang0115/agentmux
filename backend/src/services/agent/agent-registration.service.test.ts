@@ -244,6 +244,7 @@ describe('AgentRegistrationService', () => {
 			killSession: jest.fn().mockResolvedValue(undefined),
 			createSession: jest.fn().mockResolvedValue({ pid: 1234, cwd: '/test', name: 'test-session' }),
 			sendCtrlC: jest.fn().mockResolvedValue(undefined),
+			isAgentBusy: jest.fn().mockResolvedValue(false),
 			clearCurrentCommandLine: jest.fn().mockResolvedValue(undefined),
 			sendMessage: jest.fn().mockResolvedValue(undefined),
 			sendKey: jest.fn().mockResolvedValue(undefined),
@@ -2646,6 +2647,57 @@ describe('AgentRegistrationService', () => {
 				'team-456',
 				undefined
 			);
+		});
+
+		describe('existing session recovery never interrupts a live agent (crewly#1260)', () => {
+			afterEach(() => {
+				mockGetIdleTimeMs.mockReturnValue(999999);
+			});
+
+			it('a mid-turn agent is left running: no runtime probe, no Ctrl+C', async () => {
+				mockSessionHelper.sessionExists.mockReturnValue(true);
+				mockSessionHelper.isAgentBusy.mockResolvedValue(true);
+				mockRuntimeService.detectRuntimeWithCommand.mockResolvedValue(false);
+
+				const result = await service.createAgentSession({
+					sessionName: 'test-session',
+					role: 'developer',
+					projectPath: '/test/project',
+					teamId: 'team-1',
+					memberId: 'member-1',
+				});
+
+				expect(result.success).toBe(true);
+				expect(mockRuntimeService.detectRuntimeWithCommand).not.toHaveBeenCalled();
+				expect(mockSessionHelper.sendCtrlC).not.toHaveBeenCalled();
+				expect(mockSessionHelper.killSession).not.toHaveBeenCalled();
+				mockSessionHelper.isAgentBusy.mockResolvedValue(false);
+			});
+
+			it('an agent with recent output counts as mid-turn', async () => {
+				mockSessionHelper.sessionExists.mockReturnValue(true);
+				mockGetIdleTimeMs.mockReturnValue(5_000);
+				mockRuntimeService.detectRuntimeWithCommand.mockResolvedValue(false);
+
+				const result = await service.createAgentSession({ sessionName: 'test-session', role: 'developer', projectPath: '/test/project' });
+
+				expect(result.success).toBe(true);
+				expect(mockSessionHelper.sendCtrlC).not.toHaveBeenCalled();
+			});
+
+			it('an already-registered agent whose runtime probe fails gets no Ctrl+C either', async () => {
+				mockSessionHelper.sessionExists.mockReturnValue(true);
+				mockRuntimeService.detectRuntimeWithCommand.mockResolvedValue(false);
+				mockStorageService.getTeams.mockResolvedValue([{
+					id: 'team-1',
+					members: [{ sessionName: 'test-session', role: 'developer', agentStatus: 'active' }],
+				}] as any);
+
+				const result = await service.createAgentSession({ sessionName: 'test-session', role: 'developer', projectPath: '/test/project' });
+
+				expect(result.success).toBe(true);
+				expect(mockSessionHelper.sendCtrlC).not.toHaveBeenCalled();
+			});
 		});
 
 		it('should not fail session creation if persistence registration fails', async () => {

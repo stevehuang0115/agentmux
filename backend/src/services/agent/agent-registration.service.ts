@@ -51,6 +51,7 @@ import {
 	SPEND_CAP_CONSTANTS,
 	RUNTIME_INPUT_SAFETY,
 	TUI_INPUT_GUARD,
+	INPUT_BLOCKED_RETRY_CONSTANTS,
 } from '../../constants.js';
 import { TuiInputGuardError, TuiPasteHoldError, screenShowsTurnInProgress, type TuiInputReading } from '../session/tui-input-guard.js';
 import { InputBlockedRetryService } from '../messaging/input-blocked-retry.service.js';
@@ -3996,6 +3997,20 @@ Loop until done, blocked, or explicitly reassigned:
 					};
 				}
 
+				// A healthy agent that is mid-turn cannot answer the runtime probe, and
+				// the Ctrl+C fallback below would interrupt it and exit Claude Code
+				// (2026-10-12 Sage/Atlas/Milo runtime_exited, #1260). Leave it alone.
+				if (await this.isAgentWorkingNow(sessionName, INPUT_BLOCKED_RETRY_CONSTANTS.RESTART_QUIET_MS)) {
+					this.logger.info('Session already exists and its agent is mid-turn — leaving it running, no recovery probe', {
+						sessionName,
+					});
+					return {
+						success: true,
+						sessionName,
+						message: 'Agent session is already running; recovery skipped',
+					};
+				}
+
 				this.logger.info(
 					'Session already exists, attempting intelligent recovery instead of killing',
 					{
@@ -4051,6 +4066,17 @@ Loop until done, blocked, or explicitly reassigned:
 								{ sessionName, runtimeType }
 							);
 							throw new Error(`${runtimeType} recovery requires full recreation`);
+						}
+
+						// Never interrupt a session that is registered: Ctrl+C at a live
+						// Claude Code prompt exits the runtime (#1260).
+						if (await this.checkAgentRegistration(sessionName, role)) {
+							this.logger.info('Session is already registered — not sending Ctrl+C', { sessionName });
+							return {
+								success: true,
+								sessionName,
+								message: 'Agent session is already running and registered; recovery skipped',
+							};
 						}
 
 						this.logger.info(
@@ -5288,6 +5314,23 @@ Loop until done, blocked, or explicitly reassigned:
 		try {
 			const helper = await this.getSessionHelper();
 			if (!helper.sessionExists(sessionName)) return true;
+		} catch {
+			return true;
+		}
+		return this.isAgentWorkingNow(sessionName, quietMs);
+	}
+
+	/**
+	 * Whether an existing session shows a live turn or agent output within
+	 * `quietMs`. Unsure (any error) counts as working.
+	 *
+	 * @param sessionName - The agent
+	 * @param quietMs - How long without output counts as not working
+	 * @returns True when the agent may be working
+	 */
+	private async isAgentWorkingNow(sessionName: string, quietMs: number): Promise<boolean> {
+		try {
+			const helper = await this.getSessionHelper();
 			if (await helper.isAgentBusy(sessionName)) return true;
 			const tracker = PtyActivityTrackerService.getInstance();
 			if (!tracker.hasActivity(sessionName)) return false;

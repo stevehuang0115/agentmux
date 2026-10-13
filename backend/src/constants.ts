@@ -1206,6 +1206,14 @@ export const TUI_INPUT_GUARD = {
 	RULE_STALE_PREFIX_MIN_CHARS: 40,
 	/** Most status/footer lines allowed below an input box */
 	FOOTER_MAX_LINES: 6,
+	/**
+	 * Most rows below the bottom rule when searching for a Claude Code /
+	 * Antigravity box. Claude Code lists background agents and shells under
+	 * the box, so a busy session can have well over FOOTER_MAX_LINES rows
+	 * there (crewly#1113). Only the box search uses this; turn-signal reading
+	 * keeps FOOTER_MAX_LINES.
+	 */
+	BOX_FOOTER_MAX_LINES: 14,
 	/** Most lines an input box may span */
 	MAX_BOX_LINES: 60,
 	/**

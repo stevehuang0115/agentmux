@@ -170,7 +170,7 @@ function dedent(line: string): string {
  * @returns The box, or null
  */
 function findRuledBox(lines: string[]): FoundBox | null {
-	const lowest = Math.max(0, lines.length - TUI_INPUT_GUARD.FOOTER_MAX_LINES - 1);
+	const lowest = Math.max(0, lines.length - TUI_INPUT_GUARD.BOX_FOOTER_MAX_LINES - 1);
 	let bottom = -1;
 	for (let i = lines.length - 1; i >= lowest; i--) {
 		if (isRule(lines[i])) {
