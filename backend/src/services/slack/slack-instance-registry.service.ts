@@ -565,6 +565,24 @@ export class SlackInstanceRegistryService {
   }
 
   /**
+   * Ask Cloud to put agents of ANOTHER machine in an existing Slack channel.
+   * Cloud pushes a `roomJoin` envelope to that machine (crewly-services#101: POST /api/cloud/slack/rooms/join; 400 bad request, 403 other account, 429 rate limit).
+   *
+   * @param body - Channel, target machine and the sessions on it
+   * @throws {SlackIdentityCloudError} when Cloud refuses or cannot be reached
+   */
+  async requestRoomJoin(body: {
+    slackChannelId: string;
+    slackChannelName: string;
+    targetInstanceId: string;
+    sessions: string[];
+  }): Promise<void> {
+    // Cloud cannot tell which instance is calling from the token alone.
+    const { deviceId } = await this.resolveIdentity();
+    await this.cloudRequest('POST', SLACK_CLOUD_CONSTANTS.ROOM_JOIN_PATH, { ...body, requesterInstanceId: deviceId });
+  }
+
+  /**
    * The account's Slack routing log for one channel: which machines each
    * message was pushed to, and why (Cloud keeps 14 days).
    *

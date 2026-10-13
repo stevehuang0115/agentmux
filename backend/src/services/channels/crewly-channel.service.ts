@@ -35,6 +35,7 @@ import type { Team } from '../../types/index.js';
 import {
   isAdhocMapping,
   slackChannelNameFor,
+  teamChannelLeader,
   teamChannelMembers,
   type RoomMembershipChange,
   type SlackTeamChannelService,
@@ -88,6 +89,8 @@ export interface CrewlyChannelAgent {
   name: string;
   teamId: string;
   teamName: string;
+  /** True for the team's leader (resolves "<team> Lead" in channel requests). */
+  isLead?: boolean;
 }
 
 /** Constructor dependencies. */
@@ -338,10 +341,15 @@ export class CrewlyChannelService {
    * @returns The channel
    * @throws CrewlyChannelError 400 on a bad name/roster, 409 on a name in use, 502 when Slack refuses
    */
-  async create(input: { name: string; purpose?: string; memberSessions: string[] }): Promise<CrewlyChannelDTO> {
+  async create(input: { name: string; purpose?: string; memberSessions: string[]; allowNoLocalMembers?: boolean }): Promise<CrewlyChannelDTO> {
     const name = this.normaliseName(input.name);
     const purpose = this.validatePurpose(input.purpose);
-    const members = await this.validateMembers(input.memberSessions, { min: 1 });
+    // allowNoLocalMembers: the orchestrator may open a channel for agents that all
+    // run on other machines (they join through Cloud); Slack must be connected then.
+    const members = await this.validateMembers(input.memberSessions, { min: input.allowNoLocalMembers ? 0 : 1 });
+    if (members.length === 0 && !this.deps.getRooms()?.isConnected()) {
+      throw new CrewlyChannelError('A channel with no agents on this machine needs Slack to be connected', 400, 'validation_error');
+    }
     await this.reconcile();
     this.assertNameFree(name);
     const store = await this.load();
@@ -669,10 +677,18 @@ export function agentsFromTeams(teams: Team[]): CrewlyChannelAgent[] {
   const out: CrewlyChannelAgent[] = [];
   for (const team of teams) {
     if (team.archived) continue;
-    for (const m of teamChannelMembers(team)) {
+    const members = teamChannelMembers(team);
+    const leader = teamChannelLeader(team, members);
+    for (const m of members) {
       if (seen.has(m.sessionName)) continue;
       seen.add(m.sessionName);
-      out.push({ sessionName: m.sessionName, name: m.name, teamId: team.id, teamName: team.name });
+      out.push({
+        sessionName: m.sessionName,
+        name: m.name,
+        teamId: team.id,
+        teamName: team.name,
+        ...(leader && leader.sessionName === m.sessionName ? { isLead: true } : {}),
+      });
     }
   }
   return out;

@@ -81,6 +81,7 @@ import { createTraceRouter } from '../controllers/trace/trace.controller.js';
 import { traceHttpMiddleware } from '../services/trace/trace-http.middleware.js';
 import { createChatV2Router } from '../controllers/chat-v2/index.js';
 import { createChannelsRouter } from '../controllers/channels/channels.routes.js';
+import { ChannelComposeService } from '../services/channels/crewly-channel-compose.service.js';
 import {
   CrewlyChannelService,
   agentsFromTeams,
@@ -388,7 +389,45 @@ export function createApiRoutes(apiController: ApiController): Router {
     setCrewlyChannelService(channels);
     void channels.start().catch(() => undefined);
   }
-  router.use('/channels', createChannelsRouter(() => getCrewlyChannelService()));
+  // The orchestrator's "make a channel with these agents, on any machine".
+  // Remote names come from Cloud's colleague directory; remote members join
+  // through a Cloud room-join request (resolved lazily — Slack/Cloud wire up
+  // after the routes).
+  let channelCompose: ChannelComposeService | null = null;
+  const getChannelCompose = (): ChannelComposeService | null => {
+    const channels = getCrewlyChannelService();
+    if (!channels) return null;
+    if (!channelCompose) {
+      channelCompose = new ChannelComposeService({
+        channels,
+        listAgents: async () => agentsFromTeams(await apiController.storageService.getTeams()),
+        listRemote: async () => {
+          const { getSlackDirectoryService } = await import('../services/slack/slack-directory.service.js');
+          const directory = getSlackDirectoryService();
+          if (!directory) return null;
+          const entries = await directory.list();
+          return entries
+            .filter((e) => e.source === 'this-account' && e.kind === 'agent' && e.agentSession && e.instanceId)
+            .map((e) => ({
+              agentSession: e.agentSession as string,
+              name: e.name,
+              instanceId: e.instanceId as string,
+              machine: e.machine,
+              team: e.team,
+              isLeader: e.isLeader,
+            }));
+        },
+        requestRoomJoin: async (body) => {
+          const { getSlackInstanceRegistryService } = await import('../services/slack/slack-instance-registry.service.js');
+          const registry = getSlackInstanceRegistryService();
+          if (!registry) throw new Error('Not connected to Crewly Cloud');
+          await registry.requestRoomJoin(body);
+        },
+      });
+    }
+    return channelCompose;
+  };
+  router.use('/channels', createChannelsRouter(() => getCrewlyChannelService(), getChannelCompose));
 
   // Keep legacy modular routes for handlers not yet migrated (for backward compatibility)
   // Note: Project routes consolidated into new architecture - no longer needed here

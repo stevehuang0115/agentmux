@@ -1360,12 +1360,23 @@ export class SlackTeamChannelService {
           this.deps.onRoomsChanged?.();
         }
       } else {
-        const channel = await this.deps.slack.createChannel(derived);
+        // 2026-10-13: a room another machine created (room-join request): link
+        // THAT Slack channel. Asking Slack to create by name could make a
+        // second channel when Slack normalised the name differently.
+        let channel: SlackChannelInfo;
+        if (input.existingChannelId) {
+          const found = await this.deps.slack.getChannelInfo(input.existingChannelId);
+          if (!found) throw new Error(`Slack channel ${input.existingChannelId} was not found`);
+          await this.deps.slack.joinChannel(found.id).catch(() => undefined);
+          channel = found;
+        } else {
+          channel = await this.deps.slack.createChannel(derived);
+        }
         // createChannel hands back an existing channel when the name is taken;
         // a team's channel must not be turned into a second room.
         const clash = current.mappings.find((m) => m.slackChannelId === channel.id);
         if (clash) throw new Error(`#${channel.name} is already linked to ${isAdhocMapping(clash) ? 'another channel' : 'a team'}`);
-        const ownerInvited = await this.inviteOwner(channel.id, channel.name);
+        const ownerInvited = input.existingChannelId ? false : await this.inviteOwner(channel.id, channel.name);
         if (input.purpose.trim()) {
           await this.deps.slack.setChannelPurpose(channel.id, input.purpose.trim()).catch((err: unknown) => {
             this.logger.debug('setPurpose failed (non-critical)', { error: err instanceof Error ? err.message : String(err) });
@@ -3468,6 +3479,55 @@ export class SlackTeamChannelService {
     });
     this.logger.info('Room message handed to an agent on another machine', { agentSession: hit.session, slackChannel: mapping.slackChannelName });
     return { ok: true, agentSession: hit.session, displayName: hit.name, via: 'cloud' };
+  }
+
+  /**
+   * A room-join request from another machine (via Cloud): link the existing
+   * Slack channel here with the given LOCAL agents as members, so they are in
+   * the room and show up in this machine's heartbeat `rooms`.
+   *
+   * Sessions that are not agents of this machine are rejected and reported,
+   * never silently dropped. A channel that is a team's channel is refused.
+   *
+   * @param input - Slack channel and the sessions Cloud addressed to this machine
+   * @returns Which sessions joined and which were rejected
+   */
+  async joinRoomFromCloud(input: {
+    slackChannelId: string;
+    slackChannelName: string;
+    sessions: string[];
+  }): Promise<{ ok: boolean; joined: string[]; rejected: string[]; error?: string }> {
+    await this.load();
+    const local = new Set<string>();
+    for (const team of await this.deps.storage.getTeams()) {
+      for (const m of teamChannelMembers(team)) local.add(m.sessionName);
+    }
+    const wanted = [...new Set((input.sessions ?? []).map((s) => localAgentSession(String(s))).filter(Boolean))];
+    const joined = wanted.filter((s) => local.has(s));
+    const rejected = wanted.filter((s) => !local.has(s));
+    if (rejected.length > 0) {
+      this.logger.warn('Room join: sessions are not agents of this machine', { slackChannel: input.slackChannelId, rejected });
+    }
+    if (joined.length === 0) return { ok: false, joined, rejected, error: 'no_local_members' };
+    const existing = (this.store?.mappings ?? []).find((m) => m.slackChannelId === input.slackChannelId);
+    if (existing && !isAdhocMapping(existing)) {
+      return { ok: false, joined: [], rejected: wanted, error: 'channel_belongs_to_a_team' };
+    }
+    try {
+      await this.ensureAgentChannel({
+        name: input.slackChannelName,
+        purpose: '',
+        memberSessions: joined,
+        existingChannelId: input.slackChannelId,
+        applyPrefix: false,
+      });
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      this.logger.warn('Room join failed', { slackChannel: input.slackChannelId, error });
+      return { ok: false, joined: [], rejected: wanted, error };
+    }
+    this.logger.info('Joined a room created on another machine', { slackChannel: input.slackChannelId, name: input.slackChannelName, agents: joined });
+    return { ok: true, joined, rejected };
   }
 
   /**

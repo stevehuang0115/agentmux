@@ -27,6 +27,7 @@ import type {
   SlackRawAttachment,
   SlackInboundMeta,
   SlackCloudEventEnvelope,
+  SlackRoomJoinRequest,
   SlackInteractionEvent,
   SlackReactionEvent,
 } from '../../types/slack.types.js';
@@ -511,6 +512,9 @@ export class SlackService extends EventEmitter {
   private seenInboundKeys: Map<string, number> = new Map();
   /** Whether an agent session runs on this instance (set by the initializer; agent-to-agent routing). */
   isLocalAgent: ((agentSession: string) => boolean) | null = null;
+
+  /** Handles a Cloud-pushed room-join request (wired to the team-channel service). */
+  roomJoinHandler: ((join: SlackRoomJoinRequest) => Promise<unknown> | unknown) | null = null;
   /** Whether a Slack conversation belongs to an agent's own app (the master bot cannot post there). Set by the initializer. */
   isAgentOwnedConversation: ((channelId: string) => boolean) | null = null;
   /** Slack user id of the person who installed the app (owner notifications go to their DM). Set by the initializer. */
@@ -1029,6 +1033,28 @@ export class SlackService extends EventEmitter {
     const event = envelope?.event;
     if (!event || typeof event !== 'object' || typeof event.type !== 'string') {
       this.logger.warn('Malformed slack_event envelope — dropped', { eventId: envelope?.eventId });
+      return null;
+    }
+    // Room join (2026-10-13): another machine's orchestrator put some of our
+    // agents in a Slack channel. Not a message: link the room, route nothing.
+    if (envelope.roomJoin || (event.type as string) === SLACK_CLOUD_CONSTANTS.ROOM_JOIN_EVENT_TYPE) {
+      const join = envelope.roomJoin;
+      if (!join || !join.slackChannelId || !(join.sessions instanceof Array)) {
+        this.logger.warn('Malformed room-join envelope — dropped', { eventId: envelope.eventId });
+        return null;
+      }
+      this.logger.info('Room-join request from Cloud', {
+        slackChannel: join.slackChannelId,
+        sessions: join.sessions,
+        requestedBy: join.requestedByInstanceId,
+      });
+      if (!this.roomJoinHandler) {
+        this.logger.warn('Room-join request arrived but no handler is wired — dropped', { slackChannel: join.slackChannelId });
+        return null;
+      }
+      void Promise.resolve(this.roomJoinHandler(join)).catch((err: unknown) => {
+        this.logger.warn('Room-join handler failed', { error: err instanceof Error ? err.message : String(err) });
+      });
       return null;
     }
     // Decision cards (specs/2026-10-01-decision-cards.md §5): a button click

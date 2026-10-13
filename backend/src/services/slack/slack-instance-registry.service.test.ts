@@ -526,6 +526,30 @@ describe('routing log', () => {
   });
 });
 
+describe('room join request (sender)', () => {
+  it('POSTs the contract body to Cloud, with our own instance id as requester', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ success: true, data: {} }));
+    await makeService().requestRoomJoin({ slackChannelId: 'C0ABC12345', slackChannelName: 'ce-growth', targetInstanceId: 'device-2', sessions: ['wang-lead'] });
+    const [call] = calls();
+    expect(call.method).toBe('POST');
+    expect(call.url).toBe('https://api.crewlyai.com/api/cloud/slack/rooms/join');
+    expect(call.body).toEqual({
+      slackChannelId: 'C0ABC12345',
+      slackChannelName: 'ce-growth',
+      targetInstanceId: 'device-2',
+      sessions: ['wang-lead'],
+      requesterInstanceId: 'device-1',
+    });
+  });
+
+  it('throws Cloud\'s refusal', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ success: false, error: 'rate limited', code: 'rate_limited' }, 429));
+    await expect(
+      makeService().requestRoomJoin({ slackChannelId: 'C0ABC12345', slackChannelName: 'x', targetInstanceId: 'd', sessions: ['a'] }),
+    ).rejects.toThrow('rate limited');
+  });
+});
+
 describe('singleton holder', () => {
   it('stores and clears the process-wide instance', () => {
     expect(getSlackInstanceRegistryService()).toBeNull();

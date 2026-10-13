@@ -29,7 +29,7 @@
  */
 
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
-import { OWNER_AUTH_CONSTANTS, API_SECURITY_CONSTANTS, SCHEDULED_COMMANDS } from '../constants.js';
+import { OWNER_AUTH_CONSTANTS, API_SECURITY_CONSTANTS, SCHEDULED_COMMANDS, ORCHESTRATOR_SESSION_NAME } from '../constants.js';
 import {
   ownerSessionCookieName,
   verifyAgentBadge,
@@ -451,6 +451,41 @@ export function rejectNonOwner(
   }
   sendOwnerAuthRequired(res, req);
   return true;
+}
+
+/**
+ * Whether the caller is the orchestrator itself, proven by its badge or the
+ * process tree (the bare `X-Agent-Session` header is not proof). No other
+ * agent qualifies.
+ *
+ * @param req - Request
+ * @returns True for the verified orchestrator
+ */
+export function isOrchestratorCaller(req: IdentifiableRequest): boolean {
+  const id = getCallerIdentity(req);
+  return isVerifiedAgent(id) && id.session === ORCHESTRATOR_SESSION_NAME;
+}
+
+/**
+ * {@link rejectNonOwner}, except that the verified orchestrator passes too.
+ *
+ * For actions the owner can ask the orchestrator to do on their behalf
+ * (owner-away rule: the owner is on the phone and talks to the orc, so a
+ * gate that only the dashboard can open leaves the request hanging). Every
+ * other agent still gets the route's 403.
+ *
+ * @param req - Request
+ * @param res - Response
+ * @param agentBody - 403 body for any other agent
+ * @returns True when a response was sent
+ */
+export function rejectNonOwnerOrOrchestrator(
+  req: Request,
+  res: Response,
+  agentBody: Record<string, unknown> = { success: false, error: OWNER_AUTH_CONSTANTS.ERRORS.OWNER_ONLY, message: 'Only the owner can do this.' },
+): boolean {
+  if (isOrchestratorCaller(req)) return false;
+  return rejectNonOwner(req, res, agentBody);
 }
 
 /**

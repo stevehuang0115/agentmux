@@ -1785,6 +1785,28 @@ describe('SlackService', () => {
       expect(service.getStatus().messagesSent).toBe(1);
     });
 
+    it('hands a Cloud room-join envelope to the handler and routes nothing', async () => {
+      const cloudService = new SlackService();
+      await cloudService.initialize({ ...cloudConfig, allowedUserIds: ['U123'] });
+      const handler = jest.fn().mockResolvedValue(undefined);
+      cloudService.roomJoinHandler = handler;
+      const emitted: unknown[] = [];
+      cloudService.on('message', (m) => emitted.push(m));
+      const roomJoin = { slackChannelId: 'C0ABC12345', slackChannelName: 'ce-growth', sessions: ['ce-owen'], requestedByInstanceId: 'inst-air' };
+      const result = cloudService.handleCloudEnvelope({
+        eventId: 'roomjoin-1',
+        slackTeamId: 'T1',
+        apiAppId: '',
+        source: 'master',
+        roomJoin,
+        event: { type: 'crewly_room_join', channel: 'C0ABC12345' } as never,
+        receivedAt: new Date().toISOString(),
+      });
+      expect(result).toBeNull();
+      expect(emitted).toHaveLength(0);
+      expect(handler).toHaveBeenCalledWith(roomJoin);
+    });
+
     it('the same Slack message event produces the same routing result via both transports', async () => {
       const { service: socketService, onMessage } = await bootSocket();
       const socketEmitted: any[] = [];

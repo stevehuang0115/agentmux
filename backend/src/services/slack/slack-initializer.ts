@@ -1080,6 +1080,15 @@ export async function startSlackTeamChannels(): Promise<void> {
       setSlackTeamChannelService(service);
     }
     await service.start();
+    // Another machine's orchestrator put some of our agents in a Slack channel
+    // (Cloud-pushed `roomJoin` envelope): link that channel here.
+    const joiningRooms = service;
+    getSlackService().roomJoinHandler = (join) =>
+      joiningRooms.joinRoomFromCloud({
+        slackChannelId: join.slackChannelId,
+        slackChannelName: join.slackChannelName,
+        sessions: join.sessions,
+      });
     // Owner messages in Slack that never reached any machine
     // (GET /api/slack/delivery-audit; specs/2026-10-04-room-delivery-audit.md).
     if (!getSlackDeliveryAuditService()) {
