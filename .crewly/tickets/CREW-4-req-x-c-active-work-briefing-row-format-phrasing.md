@@ -1,14 +1,14 @@
 ---
 id: CREW-4
 title: REQ-X-C — Active-work briefing row format phrasing review (orc-side)
-status: backlog
+status: cancelled
 priority: P2
 assignee: null
 team: null
 labels: [ milestone:backlog ]
 ownerReview: false
 createdAt: 2026-05-03T18:33:14.247Z
-updatedAt: 2026-09-28T16:49:52.991Z
+updatedAt: 2026-10-12T17:45:00.740Z
 workItemId: null
 requestId: null
 source: v1-migration
@@ -66,3 +66,4 @@ If the orc agent reads `## Open Requests` rows on restart and the row format sug
 ## Log
 
 - 2026-09-28T16:49:52.991Z · crewly-migration · created (backlog)
+- 2026-10-12T17:45:00.740Z · crewly-orc · backlog → cancelled — superseded: the restart briefing was reworked into the SESSION_CONTEXT handoff (answered / old threads marked context only), so this phrasing review no longer applies.

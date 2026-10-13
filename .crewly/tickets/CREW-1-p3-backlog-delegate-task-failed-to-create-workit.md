@@ -1,14 +1,14 @@
 ---
 id: CREW-1
 title: '[P3 — backlog] delegate-task → "Failed to create WorkItem in TaskPool"'
-status: backlog
+status: cancelled
 priority: P2
 assignee: null
 team: null
 labels: [ milestone:backlog ]
 ownerReview: false
 createdAt: 2026-04-30T13:38:48.950Z
-updatedAt: 2026-09-28T16:49:52.898Z
+updatedAt: 2026-10-12T17:44:59.234Z
 workItemId: null
 requestId: null
 source: v1-migration
@@ -68,3 +68,4 @@ _None yet._
 ## Log
 
 - 2026-09-28T16:49:52.898Z · crewly-migration · created (backlog)
+- 2026-10-12T17:44:59.234Z · crewly-orc · backlog → cancelled — already done: cannot reproduce; dozens of delegate-task calls created WorkItems today (10/12) without this error.

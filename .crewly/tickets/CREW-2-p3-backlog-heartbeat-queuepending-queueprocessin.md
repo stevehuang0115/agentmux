@@ -1,14 +1,14 @@
 ---
 id: CREW-2
 title: '[P3 — backlog] heartbeat `queuePending`/`queueProcessing` rendering "?" in UI'
-status: backlog
+status: cancelled
 priority: P2
 assignee: null
 team: null
 labels: [ milestone:backlog ]
 ownerReview: false
 createdAt: 2026-04-30T13:39:01.341Z
-updatedAt: 2026-09-28T16:49:52.967Z
+updatedAt: 2026-10-12T17:44:59.549Z
 workItemId: null
 requestId: null
 source: v1-migration
@@ -68,3 +68,4 @@ _None yet._
 ## Log
 
 - 2026-09-28T16:49:52.967Z · crewly-migration · created (backlog)
+- 2026-10-12T17:44:59.549Z · crewly-orc · backlog → cancelled — already done: heartbeat now returns numeric queuePending/queueProcessing (checked 10/12: 0 and 0).
