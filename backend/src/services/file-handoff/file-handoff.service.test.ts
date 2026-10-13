@@ -238,12 +238,22 @@ describe('FileHandoffService', () => {
       receiver = new FileHandoffService({ api: () => rapi, crewlyHomes: () => [crewlyHome], getFile });
     });
 
-    it('downloads into <inbox>/<id>/<name> with a sanitised name and acks', async () => {
+    it('downloads into <inbox>/<id>/<name> with a sanitised name and does not ack', async () => {
+      // An ack deletes the Cloud copy; a room message reaches several
+      // machines, and the first one would take the file from the rest.
       const f = await receiver.downloadToInbox(ID, inbox, 'ella');
       expect(f.path).toBe(path.join(inbox, ID, 'report.pdf'));
       expect(fs.readFileSync(f.path, 'utf8')).toBe('hello world');
-      expect(rcalls).toEqual([`GET /handoffs/${ID}`, `POST /handoffs/${ID}/ack`]);
+      expect(rcalls).toEqual([`GET /handoffs/${ID}`]);
       expect(fs.readdirSync(path.join(inbox, ID))).toEqual(['report.pdf']);
+    });
+
+    it('fetches a file once when two local agents receive it together, and reuses it after', async () => {
+      const [a, b] = await Promise.all([receiver.downloadToInbox(ID, inbox, 'ella'), receiver.downloadToInbox(ID, inbox, 'sam')]);
+      expect(a.path).toBe(b.path);
+      const again = await receiver.downloadToInbox(ID, inbox, 'ella');
+      expect(again.path).toBe(a.path);
+      expect(rcalls).toEqual([`GET /handoffs/${ID}`]);
     });
 
     it('rewrites markers to local paths', async () => {

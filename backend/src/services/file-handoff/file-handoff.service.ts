@@ -391,8 +391,13 @@ export class FileHandoffService {
   }
 
   /**
-   * Download one handoff into `<inboxRoot>/<handoffId>/<fileName>` and
-   * acknowledge it (Cloud then deletes its copy).
+   * Download one handoff into `<inboxRoot>/<handoffId>/<fileName>`.
+   *
+   * Not acknowledged: a room message reaches every machine (and every agent)
+   * in the room, and an ack deletes the Cloud copy, so the first receiver
+   * would take it from all the others. Cloud removes it after 24 h. A file
+   * already in this inbox is reused, and two local agents fetching the same
+   * one share a single download.
    *
    * @param handoffId - Id from a marker
    * @param inboxRoot - The inbox folder (`<project data dir>/inbox`)
@@ -402,6 +407,46 @@ export class FileHandoffService {
    * @throws When the handoff is not ready, the transfer fails, or the size differs
    */
   async downloadToInbox(handoffId: string, inboxRoot: string, agent: string | undefined, timeoutMs: number = C.DOWNLOAD_TIMEOUT_MS): Promise<InboxFile> {
+    const key = path.join(inboxRoot, handoffId);
+    const existing = this.inboxFileIn(key);
+    if (existing) return existing;
+    const running = this.inFlight.get(key);
+    if (running) return running;
+    const job = this.fetchToInbox(handoffId, inboxRoot, agent, timeoutMs).finally(() => this.inFlight.delete(key));
+    this.inFlight.set(key, job);
+    return job;
+  }
+
+  /** Downloads in progress, by `<inboxRoot>/<handoffId>`. */
+  private readonly inFlight = new Map<string, Promise<InboxFile>>();
+
+  /**
+   * The finished file in a handoff's inbox folder, if there is one.
+   *
+   * @param dir - `<inboxRoot>/<handoffId>`
+   * @returns The file, or null
+   */
+  private inboxFileIn(dir: string): InboxFile | null {
+    try {
+      const name = fs.readdirSync(dir).find((n) => !n.startsWith('.'));
+      if (!name) return null;
+      const dest = path.join(dir, name);
+      return { path: dest, fileName: name, sizeBytes: fs.statSync(dest).size };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The transfer itself, for {@link downloadToInbox}.
+   *
+   * @param handoffId - Id from a marker
+   * @param inboxRoot - The inbox folder
+   * @param agent - Receiving agent session
+   * @param timeoutMs - Ceiling for the transfer
+   * @returns Where the file is now
+   */
+  private async fetchToInbox(handoffId: string, inboxRoot: string, agent: string | undefined, timeoutMs: number): Promise<InboxFile> {
     const api = this.deps.api();
     const attr = agent ? { agent } : { asOwner: true };
     const meta = await api.request<{ status?: string; fileName?: string; sizeBytes?: number; download?: { url?: string } }>('GET', `/handoffs/${handoffId}`, { ...attr, timeoutMs });
@@ -421,9 +466,6 @@ export class FileHandoffService {
       fs.rmSync(part, { force: true });
       throw err;
     }
-    await api.request('POST', `/handoffs/${handoffId}/ack`, attr).catch((err: unknown) => {
-      this.log('warn', 'File handoff ack failed (Cloud removes it after 24 h)', { handoffId, reason: err instanceof Error ? err.message : String(err) });
-    });
     return { path: dest, fileName: name, sizeBytes: fs.statSync(dest).size };
   }
 
