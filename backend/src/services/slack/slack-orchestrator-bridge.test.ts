@@ -1542,6 +1542,59 @@ describe('SlackOrchestratorBridge', () => {
       expect(mockQueueService.enqueue).toHaveBeenCalled();
     });
 
+    // 2026-10-13, #pro-crewly-marketing: another machine's agent @'d this
+    // machine's orchestrator in a thread of an ad-hoc room. The room service
+    // hands it back (routeInbound -> null); the whole bridge path after that
+    // (shared-room guard, auditor prefix, @name lookup on `<@U…>` text) must
+    // reach the orchestrator, set up to answer in the same thread.
+    it('delivers an agent-authored room @ of this orchestrator to it, tied to the same thread', async () => {
+      (isOrchestratorActive as jest.Mock).mockResolvedValue(true);
+      mockChatV2EnsureChannel.mockReturnValue({ id: 'conv-orc', agentSession: 'crewly-orc' });
+      mockChatV2RecordTurn.mockReturnValue({ message: { id: 'm-orc' }, deduped: false });
+      const routeInbound = jest.fn().mockResolvedValue(null);
+      const sharedRoomOwnedElsewhere = jest.fn().mockResolvedValue(true);
+      mockTeamChannels.current = { findBySlackChannelId: jest.fn(() => null), routeInbound, sharedRoomOwnedElsewhere };
+      const mockQueueService = {
+        enqueue: jest.fn((msg: any) => {
+          msg?.sourceMetadata?.slackResolve?.('');
+          return { id: 'q-1' };
+        }),
+      };
+      const bridge = new SlackOrchestratorBridge();
+      bridge.setMessageQueueService(mockQueueService as any);
+      const slackService = (bridge as any).slackService;
+      const sendMessage = jest.spyOn(slackService, 'sendMessage').mockResolvedValue(undefined);
+      jest.spyOn(slackService, 'addReaction').mockResolvedValue(undefined);
+      await bridge.initialize();
+
+      const handled = new Promise<any>((resolve) => bridge.on('message_handled', resolve));
+      slackService.emit('message', {
+        text: '<@UORCBOT> Steve approved a new team on your machine (air). Please create and start it.',
+        channelId: 'C0C2WMFB9EF',
+        userId: 'UELLABOT',
+        ts: '1700000500.000200',
+        threadTs: '1700000400.000100',
+        authorAgentSession: 'crewly-marketing-ella-e6a6b8ea',
+        authorDisplayName: 'Ella',
+        mentionedAgentSessions: ['crewly-orc'],
+        room: { members: [{ agentSession: 'crewly-marketing-ella-e6a6b8ea', displayName: 'Ella', instanceId: 'mac', deviceName: 'mac', awake: true }] },
+      });
+      await handled;
+
+      expect(routeInbound).toHaveBeenCalledTimes(1);
+      // Mentioned agents bypass the "another machine owns this room" guard.
+      expect(sharedRoomOwnedElsewhere).not.toHaveBeenCalled();
+      expect(mockQueueService.enqueue).toHaveBeenCalledTimes(1);
+      const queued = mockQueueService.enqueue.mock.calls[0][0] as any;
+      expect(queued.content).toContain('Steve approved a new team');
+      expect(queued.sourceMetadata.channelId).toBe('C0C2WMFB9EF');
+      expect(queued.sourceMetadata.threadTs).toBe('1700000400.000100');
+      // Whatever the bridge posts back goes to that thread.
+      for (const call of sendMessage.mock.calls) {
+        expect((call[0] as any).threadTs).toBe('1700000400.000100');
+      }
+    });
+
     it('does not hand the orchestrator a shared-room message another machine owns (2026-10-03)', async () => {
       (isOrchestratorActive as jest.Mock).mockResolvedValue(true);
       const routeInbound = jest.fn().mockResolvedValue(null);
