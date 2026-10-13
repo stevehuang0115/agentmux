@@ -123,6 +123,12 @@ const EN_PROMISE: readonly RegExp[] = [
   /\bwaiting (?:for|on)\b/i,
 ];
 const ZH_PROMISE = /(正在|在做|在查|在看|在读|在写|马上|稍等|等(?:我|一下|下|会|你)|预计|一会|待会|稍后|这就|我来|我去|我先|做完|弄好|搞定后|完成后|回头)/;
+/**
+ * Delivery phrasings that promise a result later ("做好发到 #x", "好了发你",
+ * "完成后发给你", "上线后告诉你", "发到 #x"). Already-done reports ("已经做好，发在这里") are not.
+ */
+const ZH_DELIVERY_PROMISE = /(?:做好|弄好|写好|搞好|好了|完成|上线|出来|跑完|剪完)(?:了|后|之后)?[^。！？\n]{0,12}?(?:发|告诉|通知|给你|贴|交)|发到\s*[#＃]/u;
+const ZH_ALREADY_DONE = /已经|已(?:发|做好|完成|上线)|刚(?:刚|才)/u;
 const DURATION =
   /(?:~|～|约|大约|大概|about|around|approx\.?|roughly|in|within|需要|要)?\s*(\d+(?:\.\d+)?)\s*(?:[-–~～到至]\s*(\d+(?:\.\d+)?)\s*)?(minutes?|mins?|m\b|分钟|分|hours?|hrs?|h\b|小时)/i;
 const CN_DIGITS: Record<string, number> = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
@@ -185,7 +191,7 @@ export function detectPromise(text: string): DetectedPromise | null {
   if (!t) return null;
   const minutes = parsePromisedMinutes(t);
   const explicitEta = /(?:~|～|约|大约|预计|\beta\b)\s*\d/i.test(t) || /\b(?:in|within)\s+\d+\s*(?:min|minutes?|h|hours?)\b/i.test(t);
-  const said = explicitEta || EN_PROMISE.some((re) => re.test(t)) || ZH_PROMISE.test(t);
+  const said = explicitEta || EN_PROMISE.some((re) => re.test(t)) || ZH_PROMISE.test(t) || (ZH_DELIVERY_PROMISE.test(t) && !ZH_ALREADY_DONE.test(t));
   if (!said) return null;
   return minutes !== undefined && minutes <= C.MAX_PROMISE_MINUTES ? { minutes } : {};
 }
@@ -373,7 +379,12 @@ export class OwnerThreadSentinelService {
       const minutes = promise.minutes;
       entry.promise = {
         at,
-        ...(minutes !== undefined ? { minutes, deadlineAt: at + Math.max(C.MIN_DEADLINE_MS, minutes * C.DEADLINE_FACTOR * 60_000) } : {}),
+        ...(minutes !== undefined
+          ? { minutes, deadlineAt: at + Math.max(C.MIN_DEADLINE_MS, minutes * C.DEADLINE_FACTOR * 60_000) }
+          : // No time stated at all (a promise longer than the cap is deliberately untimed): silence is the clock (#1240).
+            parsePromisedMinutes(input.text) === undefined
+            ? { deadlineAt: at + C.NO_ETA_SILENCE_MS }
+            : {}),
       };
     } else {
       entry.promise = undefined;
@@ -590,17 +601,19 @@ export class OwnerThreadSentinelService {
     const name = this.nameOf(entry.agent);
     const ago = Math.max(1, Math.round((now - p.at) / 60_000));
     const activity = await this.deps.currentActivity?.(entry.agent).catch(() => null);
+    const said = p.minutes !== undefined ? `said ~${p.minutes} min` : 'said it would post the result';
+    const told = p.minutes !== undefined ? `"~${p.minutes} min"` : 'you would post the result';
     const line =
-      `⏱ ${name} said ~${p.minutes} min, ${ago} min ago, and hasn't posted since. ` +
+      `⏱ ${name} ${said}, ${ago} min ago, and hasn't posted since. ` +
       `Right now: ${activity ? clip(activity) : `no update from ${name}`}. I've asked ${name} for an update here.`;
     let acted = 0;
     if (await this.emit(entry, `deadline:${p.at}`, line, true)) acted++;
     const ref = entry.threadTs ? `${entry.slackChannelId}:${entry.threadTs}` : entry.slackChannelId;
     const nudge =
-      `[OWNER THREAD ${ref}] You told the owner "~${p.minutes} min" ${ago} min ago in this Slack thread and have not posted there since. ` +
+      `[OWNER THREAD ${ref}] You told the owner ${told} ${ago} min ago in this Slack thread and have not posted there since. ` +
       `Post a short update there now: reply --thread ${ref} "<what is done, what is left, when>". If you are blocked, say on what.`;
     if (await this.deps.nudgeAgent(entry.agent, nudge).catch(() => false)) acted++;
-    this.logger.info('Owner thread promise overdue — status posted, agent nudged', { key: entry.key, agent: entry.agent, minutes: p.minutes });
+    this.logger.info('Owner thread promise overdue — status posted, agent nudged', { key: entry.key, agent: entry.agent, minutes: p.minutes ?? null });
     return acted;
   }
 

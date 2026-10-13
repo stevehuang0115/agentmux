@@ -6980,6 +6980,12 @@ export const DECISION_CONSTANTS = {
 	 * (specs/2026-10-02-decision-card-thread-answers.md §2) (ms)
 	 */
 	WAIT_REMINDER_DELAY_MS: 30 * 60 * 1000,
+	/**
+	 * `wait` default: a card still unanswered this long after its one reminder
+	 * (a lifted reply question: after the deadline notice, it never gets a
+	 * reminder) expires instead of staying open for days (#1243) (ms)
+	 */
+	WAIT_EXPIRE_AFTER_REMINDER_MS: 24 * 60 * 60 * 1000,
 	/** Max characters of a withdrawn card's reason ("Closed — <reason>") */
 	CLOSED_REASON_MAX_CHARS: 120,
 	/** Withdraw reasons the harness itself uses (cancelWhere notes) */
@@ -7064,6 +7070,16 @@ export const OPEN_ITEMS_CONSTANTS = {
 	YES_LABEL: 'Yes',
 	NO_LABEL: 'No',
 	REPLY_LABEL: 'Reply in thread',
+	/** A lifted question shorter than this (characters) gets its subject prepended (#1242) */
+	QUESTION_MIN_CHARS: 20,
+	/** Still shorter than this after the subject was added (characters): too vague for a card, tracked without one */
+	QUESTION_VAGUE_CHARS: 12,
+	/** Suffix of the option the agent recommended */
+	RECOMMENDED_SUFFIX: ' (recommended)',
+	/** A sentence that recommends something ("我推荐 A", "I recommend B") */
+	RECOMMENDATION_PATTERN: /推荐|建议|我倾向|倾向于|我的看法|\bi(?:'d| would)? recommend|\bi suggest|\bmy recommendation|\bi(?:'d| would)? lean\b/iu,
+	/** A recommendation that argues against doing it ("不建议", "don't recommend") */
+	RECOMMENDATION_NEGATIVE_PATTERN: /不建议|不推荐|不要|别|不用|(?:do not|don'?t|wouldn'?t|not) (?:recommend|suggest)/iu,
 	/** `WorkItem.metadata` key of a follow-up WorkItem */
 	FOLLOW_UP_METADATA_KEY: 'openItemFollowUp',
 	/**
@@ -7925,6 +7941,11 @@ export const OWNER_THREAD_SENTINEL_CONSTANTS = {
 	DEADLINE_FACTOR: 1.5,
 	/** Floor of a promise deadline (ms) */
 	MIN_DEADLINE_MS: 3 * 60 * 1000,
+	/**
+	 * A promise with no stated time ("做好发到 #x", "I'll post the result") is
+	 * overdue after this much silence from the agent in the thread (#1240) (ms)
+	 */
+	NO_ETA_SILENCE_MS: 45 * 60 * 1000,
 	/** Longest promise the sentinel times (longer ones are not timed) */
 	MAX_PROMISE_MINUTES: 8 * 60,
 	/** Slot freeing / idle stop spare an agent whose owner message or promise is this recent */

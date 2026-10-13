@@ -1695,7 +1695,22 @@ export class DecisionService {
       this.logger.info('Wait-default decision past its deadline — asker told, nothing posted', { decisionId: updated.id });
       return 'acted';
     }
-    if (d.waitReminderAt || d.ownerRepliedAt) return null;
+    if (d.ownerRepliedAt) return null;
+    // The owner had the deadline and one reminder (a lifted reply question
+    // never gets one: the notice starts its clock) and said nothing: close it
+    // so it stops sitting among live cards, and tell the asker (#1243).
+    const quietSince = d.waitReminderAt ?? (d.kind === 'reply_question' ? d.deadlineNoticeAt : undefined);
+    if (quietSince && now.getTime() >= Date.parse(quietSince) + DECISION_CONSTANTS.WAIT_EXPIRE_AFTER_REMINDER_MS) {
+      const expired = await this.expire(d.id);
+      if (!expired) return null;
+      await this.tellAsker(
+        expired,
+        `[DECISION ${expired.id}] "${expired.question}" timed out: the owner did not answer after the deadline and a reminder, so the card was closed as expired. ` +
+          `Keep the work parked; if it still matters, ask again with ask-owner and say what is blocked.`,
+      );
+      return 'acted';
+    }
+    if (d.waitReminderAt) return null;
     // A question Crewly lifted out of a reply never nudges the owner: he
     // answers in the thread when he wants to. Only explicit ask-owner cards
     // get the one reminder (2026-10-08: "Still waiting on you: 你自己知道吗？").

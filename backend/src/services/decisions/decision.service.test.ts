@@ -703,11 +703,16 @@ describe('file replies in a thread with several cards (PR #957 review)', () => {
     const sentBefore = h.slack.sent.length;
     h.clock.now = new Date(h.clock.now.getTime() + DECISION_CONSTANTS.WAIT_REMINDER_DELAY_MS);
     expect(await h.service.tick()).toEqual([]);
-    h.clock.now = new Date(h.clock.now.getTime() + 24 * HOUR);
+    h.clock.now = new Date(h.clock.now.getTime() + 12 * HOUR);
     expect(await h.service.tick()).toEqual([]);
     expect(h.slack.sent).toHaveLength(sentBefore);
     expect(h.slack.sent.some((m) => /Still waiting on you/.test(m.text ?? ''))).toBe(false);
     for (const c of cards) expect((await h.service.get(c.id))?.status).toBe('open');
+    // …but a day after the deadline notice they expire quietly instead of staying open for days (#1243).
+    h.clock.now = new Date(h.clock.now.getTime() + 13 * HOUR);
+    await h.service.tick();
+    expect(h.slack.sent).toHaveLength(sentBefore);
+    for (const c of cards) expect((await h.service.get(c.id))?.status).toBe('expired');
   });
 
   it('three explicit wait cards in one thread get ONE reminder that lists them, and all are marked', async () => {
@@ -746,7 +751,7 @@ describe('first boot after the upgrade (PR #957 review)', () => {
     expect(await after.tick()).toEqual([]);
     expect(before.slack.sent).toHaveLength(sentBefore);
     expect((await after.get(d.id))?.waitReminderAt).toBeDefined();
-    clock.now = new Date(2026, 9, 3, 14, 0);
+    clock.now = new Date(2026, 9, 3, 13, 0);
     expect(await after.tick()).toEqual([]);
     expect(before.slack.sent).toHaveLength(sentBefore);
   });
@@ -909,9 +914,41 @@ describe('deadlines', () => {
     });
     expect((await h.service.get(d.id))?.waitReminderAt).toBeDefined();
     // Only once.
-    h.clock.now = new Date(2026, 9, 4, 12, 0);
+    h.clock.now = new Date(2026, 9, 3, 11, 0);
     expect(await h.service.tick()).toEqual([]);
     expect(h.slack.sent).toHaveLength(sentBefore + 1);
+  });
+
+  it('wait default: unanswered 24h after the reminder, the card expires and the asker is told (#1243)', async () => {
+    const h = await harness();
+    const d = await h.service.ask('dev-ann', { ...ticketAsk, default: 'wait' });
+    h.clock.now = new Date(2026, 9, 2, 12, 1);
+    await h.service.tick();
+    h.clock.now = new Date(h.clock.now.getTime() + DECISION_CONSTANTS.WAIT_REMINDER_DELAY_MS);
+    await h.service.tick();
+    const remindedAt = h.clock.now.getTime();
+    h.clock.now = new Date(remindedAt + DECISION_CONSTANTS.WAIT_EXPIRE_AFTER_REMINDER_MS - 60_000);
+    expect(await h.service.tick()).toEqual([]);
+    expect((await h.service.get(d.id))?.status).toBe('open');
+    const deliveredBefore = h.delivered.length;
+    h.clock.now = new Date(remindedAt + DECISION_CONSTANTS.WAIT_EXPIRE_AFTER_REMINDER_MS);
+    expect(await h.service.tick()).toEqual([d.id]);
+    expect((await h.service.get(d.id))?.status).toBe('expired');
+    expect(h.delivered.length).toBeGreaterThan(deliveredBefore);
+    expect(h.delivered.at(-1)?.text).toContain('timed out');
+  });
+
+  it('wait default: a card the owner replied to in the thread is never expired (#1243)', async () => {
+    const h = await harness();
+    const d = await h.service.ask('dev-ann', { ...ticketAsk, default: 'wait' });
+    h.clock.now = new Date(2026, 9, 2, 12, 1);
+    await h.service.tick();
+    h.clock.now = new Date(h.clock.now.getTime() + DECISION_CONSTANTS.WAIT_REMINDER_DELAY_MS);
+    await h.service.tick();
+    await h.deps.store.update(d.id, () => ({ ownerRepliedAt: h.clock.now.toISOString() }));
+    h.clock.now = new Date(h.clock.now.getTime() + 3 * DECISION_CONSTANTS.WAIT_EXPIRE_AFTER_REMINDER_MS);
+    expect(await h.service.tick()).toEqual([]);
+    expect((await h.service.get(d.id))?.status).toBe('open');
   });
 
   it('wait default: no reminder when the owner already posted in the thread', async () => {

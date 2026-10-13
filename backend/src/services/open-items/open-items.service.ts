@@ -41,7 +41,7 @@ import { ACTIVE_OPEN_ITEM_STATUSES, type RequestOpenItem } from '../../types/v2/
 import type { DecisionSource, OwnerDecision } from '../../types/decision.types.js';
 import { formatTicketNumber } from '../../types/v2/ticket.types.js';
 import { extractOpenItems, parseDue, type ExtractedQuestion } from './open-item-extractor.js';
-import { deriveEitherOrCard, deriveQuestionCard, groupEitherOr, questionContextBlocks, questionSimilarity, type DerivedQuestionCard } from './open-item-card.js';
+import { deriveEitherOrCard, deriveQuestionCard, groupEitherOr, isTooVague, questionContextBlocks, questionSimilarity, type DerivedQuestionCard } from './open-item-card.js';
 import { formatWhen } from '../decisions/decision-card.js';
 import { AgentPromptReferenceService, type ReplyReference } from '../orc/agent-prompt-reference.service.js';
 import { withQueueMeta } from '../messaging/queue-priority.js';
@@ -886,7 +886,11 @@ export class OpenItemsService {
       const q = group[0];
       qi += 1;
       const item: RequestOpenItem = { ...base('question', qi), type: 'question', text: q.text };
-      const skipped = await this.deps.skippedQuestion?.(request.id, message.senderId, q.text).catch(() => null);
+      // The card stores the enriched question (#1242); an earlier skip may match either form.
+      const enriched = group.length === 1 ? deriveQuestionCard(q, { content: message.content, title: request.title }).question : q.text;
+      const skipped =
+        (await this.deps.skippedQuestion?.(request.id, message.senderId, q.text).catch(() => null)) ??
+        (enriched !== q.text ? await this.deps.skippedQuestion?.(request.id, message.senderId, enriched).catch(() => null) : null);
       if (skipped) {
         out.push({ item, skippedDecisionId: skipped.id });
         continue;
@@ -907,7 +911,13 @@ export class OpenItemsService {
         ...(where.oldThreadLink ? { oldThreadLink: where.oldThreadLink } : {}),
       });
       // Consecutive either/or questions are ONE card, one button per alternative.
-      const derived = group.length > 1 ? deriveEitherOrCard(group) : deriveQuestionCard(q);
+      const derived = group.length > 1 ? deriveEitherOrCard(group) : deriveQuestionCard(q, { content: message.content, title: request.title });
+      // Still nothing to say what it is about after adding the subject: tracked, but no card (#1242).
+      if (group.length === 1 && isTooVague(derived)) {
+        this.logger.info('Question too vague for a card even with its subject — not carded', { tkt: ticketLabel(request), item: item.id });
+        out.push({ item });
+        continue;
+      }
       out.push({ item, card: { ...derived, context }, ...(where.cardPlace !== undefined ? { cardPlace: where.cardPlace } : {}) });
     }
     return out;

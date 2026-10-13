@@ -58,10 +58,19 @@ describe('trackedClosedReason (specs/2026-10-02-decision-card-thread-answers.md 
     expect(trackedClosedReason(reply, { request: null })).toBeNull();
   });
 
-  it('a ticket ask is moot once its project ticket is done or cancelled', () => {
+  it('an explicit ask-owner card stays open when its ticket is done (#1241)', () => {
     const ticket = { ticket: { projectId: 'p', projectPath: '/p', id: 'CE-7', title: 't' } };
     expect(trackedClosedReason(ticket, { ticketStatus: 'in_progress' })).toBeNull();
-    expect(trackedClosedReason(ticket, { ticketStatus: 'done' })).toBe('ticket done');
+    expect(trackedClosedReason(ticket, { ticketStatus: 'done' })).toBeNull();
+  });
+
+  it('a cancelled ticket still withdraws its explicit card', () => {
+    const ticket = { ticket: { projectId: 'p', projectPath: '/p', id: 'CE-7', title: 't' } };
     expect(trackedClosedReason(ticket, { ticketStatus: 'cancelled' })).toBe('ticket cancelled');
+  });
+
+  it('a derived card (requestRef) of a ticket whose request is done is still withdrawn', () => {
+    const derived = { ...reply, ticket: { projectId: 'p', projectPath: '/p', id: 'CE-7', title: 't' } };
+    expect(trackedClosedReason(derived, { request: req('done'), ticketStatus: 'done' })).toBe('ticket done');
   });
 });
