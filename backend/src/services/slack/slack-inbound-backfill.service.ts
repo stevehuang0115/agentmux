@@ -45,7 +45,7 @@ export interface BackfillLogger {
 /** Everything the backfill touches outside itself. */
 export interface SlackInboundBackfillDeps {
 	/** Slack channels this machine has had inbound traffic in since `sinceMs` */
-	listChannels: (sinceMs: number, limit: number) => string[];
+	listChannels: (sinceMs: number, limit: number) => string[] | Promise<string[]>;
 	/** Top-level messages in a channel after `oldestTs` (Slack ts), oldest first */
 	fetchHistory: (channelId: string, oldestTs: string) => Promise<BackfillSlackMessage[]>;
 	/** Replies of one thread after `oldestTs`, oldest first (root excluded) */
@@ -114,7 +114,7 @@ export class SlackInboundBackfillService {
 			const since = Math.max(gapStartMs - C.GAP_MARGIN_MS, now - C.MAX_LOOKBACK_MS);
 			const oldestTs = msToSlackTs(since);
 			const botUserId = this.deps.getBotUserId();
-			const channels = this.deps.listChannels(now - C.CHANNEL_ACTIVITY_WINDOW_MS, C.MAX_CHANNELS);
+			const channels = await this.deps.listChannels(now - C.CHANNEL_ACTIVITY_WINDOW_MS, C.MAX_CHANNELS);
 			for (const channelId of channels) {
 				result.channelsScanned++;
 				try {

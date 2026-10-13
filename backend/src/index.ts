@@ -5965,13 +5965,31 @@ void (async () => {
 	private startSlackInboundBackfill(): void {
 		void (async () => {
 			const { CloudSyncService } = await import('./services/cloud/cloud-sync.service.js');
+			const { getSlackTeamChannelService } = await import('./services/slack/slack-team-channel.service.js');
 			const sync = CloudSyncService.getInstance();
-			const reader = createSlackHistoryReader(() => getSlackService().getBotToken());
+			const teamChannels = async (): Promise<Array<{ slackChannelId: string; members: string[] }>> =>
+				(await getSlackTeamChannelService()?.listMappedRooms()) ?? [];
+			// A private room is readable only by a member agent's own bot; the
+			// workspace bot covers the rest (DMs, public channels).
+			const reader = createSlackHistoryReader(async (channelId) => {
+				const room = (await teamChannels()).find((r) => r.slackChannelId === channelId);
+				const memberToken = room?.members
+					.map((s) => getSlackAgentIdentityService()?.getInstalled(s)?.botToken)
+					.find((t): t is string => !!t);
+				return memberToken ?? getSlackService().getBotToken();
+			});
 			const backfill = new SlackInboundBackfillService({
-				listChannels: (sinceMs, limit) => getChatV2Service().listSlackInboundChannels(sinceMs, limit),
+				// Channels with prior owner inbound here, plus every mapped room (a
+				// brand-new room has no prior inbound but is exactly what an outage loses).
+				listChannels: async (sinceMs, limit) => [
+					...new Set([
+						...getChatV2Service().listSlackInboundChannels(sinceMs, limit),
+						...(await teamChannels()).map((r) => r.slackChannelId),
+					]),
+				].slice(0, limit),
 				fetchHistory: reader.fetchHistory,
 				fetchReplies: reader.fetchReplies,
-				hasMessage: (channelId, ts) => getChatV2Service().hasSlackInbound(channelId, ts),
+				hasMessage: (channelId, ts) => getChatV2Service().hasSlackMessageForBridge(channelId, ts),
 				getBotUserId: () => getSlackService().getCachedBotUserId(),
 				ingest: (event) =>
 					getSlackService().handleInboundEvent(event, { source: 'cloud', eventId: `backfill:${event.channel}:${event.ts}` }),
@@ -5989,7 +6007,7 @@ void (async () => {
 					if (!ownerUserId || !botToken) return;
 					const minutes = Math.round((Date.now() - since) / 60_000);
 					await createOwnerDirectDm({ botToken, ownerUserId }).send(
-						`这台机器连不上 Crewly Cloud 的消息队列已经 ${minutes} 分钟（Slack 消息暂时进不来）。恢复后我会自动补读这段时间你发的消息。`,
+						`This machine has been unable to reach its Crewly Cloud message queue for ${minutes} minutes, so new Slack messages are not arriving. Once it reconnects I will read back what you sent in the meantime.`,
 					);
 				})().catch((error) => {
 					this.logger.warn('Queue outage notice failed (non-fatal)', {

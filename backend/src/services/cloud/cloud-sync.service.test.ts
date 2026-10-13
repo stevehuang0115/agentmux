@@ -663,7 +663,6 @@ describe('CloudSyncService', () => {
   // for ~30 min; an owner Slack message sent meanwhile was lost for good.
   describe('queue registration outage (CREW-89)', () => {
     const token = buildJwt({ sub: 'user-abc-123' });
-    const HOME = path.join(os.tmpdir(), `cloud-sync-outage-${process.pid}-${Math.random().toString(36).slice(2)}`);
     let failRegister = true;
     const registerCalls = () => mockFetch.mock.calls.filter(([url]) => typeof url === 'string' && url.includes('/queue/register'));
     /** Registration reads the fallback file (real I/O): settle over several turns. */
@@ -673,7 +672,6 @@ describe('CloudSyncService', () => {
     };
 
     beforeEach(() => {
-      process.env['CREWLY_HOME'] = HOME;
       failRegister = true;
       mockFetch.mockImplementation(async (url: any) => {
         if (typeof url === 'string' && url.includes('/queue/register')) {
@@ -685,8 +683,8 @@ describe('CloudSyncService', () => {
       });
     });
     afterEach(async () => {
-      delete process.env['CREWLY_HOME'];
-      await fsp.rm(HOME, { recursive: true, force: true });
+      service.stop();
+      await fsp.rm(path.dirname(queueFile), { recursive: true, force: true });
     });
 
     it('emits inbound-gap-recovered with the gap start when registration comes back', async () => {
@@ -723,9 +721,11 @@ describe('CloudSyncService', () => {
       service.on('queue-outage', outage);
       service.start({ ...testConfig, token });
       await untilRegisterCalls(1);
-      const rounds = Math.ceil(CLOUD_SYNC_CONSTANTS.QUEUE_OUTAGE_NOTIFY_AFTER_MS / CLOUD_SYNC_CONSTANTS.REGISTER_INTERVAL_MS) + 3;
+      // Retries back off (30 s … 5 min), so step by the longest gap each round.
+      const step = Math.max(...CLOUD_SYNC_CONSTANTS.REGISTER_RETRY_BACKOFF_MS);
+      const rounds = Math.ceil(CLOUD_SYNC_CONSTANTS.QUEUE_OUTAGE_NOTIFY_AFTER_MS / step) + 3;
       for (let i = 0; i < rounds; i++) {
-        jest.advanceTimersByTime(CLOUD_SYNC_CONSTANTS.REGISTER_INTERVAL_MS);
+        jest.advanceTimersByTime(step);
         await untilRegisterCalls(i + 2);
       }
       expect(outage).toHaveBeenCalledTimes(1);

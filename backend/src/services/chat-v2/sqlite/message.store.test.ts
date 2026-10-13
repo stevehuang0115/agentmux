@@ -68,13 +68,6 @@ describe('MessageStore', () => {
         .run(JSON.stringify({ slackChannelId: channel, ts }), createdAt, row.id);
     };
 
-    it('hasSlackInbound matches channel + ts exactly', () => {
-      slackIn('C1', '1.5', 1000);
-      expect(messages.hasSlackInbound('C1', '1.5')).toBe(true);
-      expect(messages.hasSlackInbound('C1', '1.6')).toBe(false);
-      expect(messages.hasSlackInbound('C2', '1.5')).toBe(false);
-    });
-
     it('listSlackInboundChannels returns recent channels, newest first, within the window', () => {
       slackIn('Cold', '1.1', 100);
       slackIn('C1', '2.1', 2000);
@@ -87,7 +80,6 @@ describe('MessageStore', () => {
       const { row } = messages.insert({ channelId, senderType: 'agent', senderId: 'a', content: 'x' });
       db.prepare(`UPDATE chat_messages SET source='slack', direction='out', ext_ref=? WHERE id=?`)
         .run(JSON.stringify({ slackChannelId: 'C9', ts: '9.9' }), row.id);
-      expect(messages.hasSlackInbound('C9', '9.9')).toBe(false);
       expect(messages.listSlackInboundChannels(0, 10)).toEqual([]);
     });
   });

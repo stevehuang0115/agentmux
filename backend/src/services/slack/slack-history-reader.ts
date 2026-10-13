@@ -24,16 +24,17 @@ export interface SlackHistoryReader {
 /**
  * Build a reader that calls the Slack Web API with a bot token.
  *
- * @param getToken - Current bot token (null = Slack not configured)
+ * @param getToken - Bot token to read a channel with (null = none available). Per channel,
+ *   because a private room is readable only by a member agent's own bot.
  * @param fetchImpl - fetch override for tests
  * @returns The reader; its methods throw on a Slack `ok:false` or HTTP error
  */
 export function createSlackHistoryReader(
-	getToken: () => string | null,
+	getToken: (channelId: string) => string | null | Promise<string | null>,
 	fetchImpl: HistoryFetch = (input, init) => fetch(input, init),
 ): SlackHistoryReader {
-	async function call(method: string, params: Record<string, string>): Promise<{ messages?: BackfillSlackMessage[] }> {
-		const token = getToken();
+	async function call(method: string, channelId: string, params: Record<string, string>): Promise<{ messages?: BackfillSlackMessage[] }> {
+		const token = await getToken(channelId);
 		if (!token) throw new Error('Slack bot token not available');
 		const res = await fetchImpl(`${C.API_BASE}/${method}?${new URLSearchParams(params).toString()}`, {
 			headers: { Authorization: `Bearer ${token}` },
@@ -45,12 +46,12 @@ export function createSlackHistoryReader(
 	}
 	return {
 		async fetchHistory(channelId, oldestTs) {
-			const body = await call('conversations.history', { channel: channelId, oldest: oldestTs, limit: String(C.HISTORY_LIMIT) });
+			const body = await call('conversations.history', channelId, { channel: channelId, oldest: oldestTs, limit: String(C.HISTORY_LIMIT) });
 			// history is newest first
 			return [...(body.messages ?? [])].reverse();
 		},
 		async fetchReplies(channelId, threadTs, oldestTs) {
-			const body = await call('conversations.replies', { channel: channelId, ts: threadTs, oldest: oldestTs, limit: String(C.HISTORY_LIMIT) });
+			const body = await call('conversations.replies', channelId, { channel: channelId, ts: threadTs, oldest: oldestTs, limit: String(C.HISTORY_LIMIT) });
 			return (body.messages ?? []).filter((m) => m.ts !== threadTs);
 		},
 	};

@@ -1138,25 +1138,6 @@ export class MessageStore {
     return rows.map((r) => r.ch);
   }
 
-  /**
-   * Whether an inbound Slack message (channel + ts) is already stored.
-   *
-   * @param slackChannelId - Slack channel id
-   * @param ts - Slack message ts
-   * @returns True when a row with that ext_ref exists
-   */
-  hasSlackInbound(slackChannelId: string, ts: string): boolean {
-    const row = this.db
-      .prepare(
-        `SELECT 1 AS x FROM chat_messages
-         WHERE source = 'slack' AND direction = 'in'
-           AND json_extract(ext_ref, '$.slackChannelId') = ? AND json_extract(ext_ref, '$.ts') = ?
-         LIMIT 1`,
-      )
-      .get(slackChannelId, ts);
-    return row !== undefined;
-  }
-
   findPendingSlackDelivery(maxAgeMs: number, nowMs?: number): ChatMessageRow[] {
     const cutoff = (nowMs ?? Date.now()) - maxAgeMs;
     const rows = this.db
