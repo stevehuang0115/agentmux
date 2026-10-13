@@ -16,8 +16,9 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(cwd, { recursive: true, force: true }));
 
-function run(command: string, tool = 'Bash') {
+function run(command: string, tool = 'Bash', env: NodeJS.ProcessEnv = {}) {
 	const r = spawnSync('node', [HOOK], {
+		env: { ...process.env, CREWLY_GUARD_BLOCK_MAIN_PUSH: '', ...env },
 		input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: { command }, cwd }),
 		encoding: 'utf-8',
 	});
@@ -31,8 +32,6 @@ describe('blocked forms', () => {
 		'git push origin feat/x --force-with-lease',
 		'git push --force-with-lease=feat/x origin feat/x',
 		'git push origin +feat/x',
-		'git push origin main',
-		'git push origin HEAD:master',
 		'git reset --hard',
 		'git reset --hard HEAD~1',
 		'git clean -f',
@@ -58,9 +57,17 @@ describe('blocked forms', () => {
 		expect(r.stderr).toContain('stash');
 	});
 
-	it('blocks a bare push while main is checked out', () => {
+	it.each(['git push origin main', 'git push origin HEAD:master'])('blocks `%s` when main pushes are opted in', (cmd) => {
+		expect(run(cmd, 'Bash', { CREWLY_GUARD_BLOCK_MAIN_PUSH: '1' }).status).toBe(2);
+	});
+
+	it('blocks a bare push while main is checked out when main pushes are opted in', () => {
 		spawnSync('git', ['checkout', '-q', '-b', 'main'], { cwd });
-		expect(run('git push').status).toBe(2);
+		expect(run('git push', 'Bash', { CREWLY_GUARD_BLOCK_MAIN_PUSH: '1' }).status).toBe(2);
+	});
+
+	it.each(['git push origin main', 'git push origin HEAD:master'])('allows `%s` by default (some teams ship by pushing main)', (cmd) => {
+		expect(run(cmd).status).toBe(0);
 	});
 });
 

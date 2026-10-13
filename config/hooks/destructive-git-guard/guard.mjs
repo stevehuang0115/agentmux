@@ -2,8 +2,10 @@
 // Crewly destructive-git guard — a PreToolUse hook for the Bash tool that stops
 // an agent from running git commands that destroy its own unmerged work.
 //
-// Blocked: push --force / -f / --force-with-lease / +refspec (any branch), any
-// push to main or master (named, or a bare push while main/master is checked out),
+// Blocked: push --force / -f / --force-with-lease / +refspec (any branch),
+// push to main or master only when CREWLY_GUARD_BLOCK_MAIN_PUSH=1 (named, or a bare
+// push while main/master is checked out; off by default because some teams ship by
+// pushing main, e.g. CE and Bitbucket projects),
 // reset --hard, clean -f (any form that is not a dry run), branch -D (or -d -f),
 // checkout . / checkout -- ., restore . (unless --staged only).
 // Allowed: a normal `git push origin feat/x`, stash, branch -d, everything read-only.
@@ -21,6 +23,8 @@ import { execFileSync } from 'node:child_process';
 
 const PREFIX = 'destructive-git-guard:';
 const PROTECTED_BRANCHES = new Set(['main', 'master']);
+/** Pushing main/master is blocked only on opt-in: some teams ship by pushing main. */
+const BLOCK_MAIN_PUSH = process.env.CREWLY_GUARD_BLOCK_MAIN_PUSH === '1';
 const WRAPPERS = new Set(['sudo', 'command', 'nohup', 'time', 'exec', 'env', 'nice', 'builtin', 'stdbuf', 'timeout']);
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
 
@@ -119,6 +123,7 @@ function judgeGit(sub, rest, cwd, dir) {
 			const refs = pos.slice(1); // pos[0] is the remote
 			if (refs.some((r) => r.startsWith('+'))) return 'a +refspec is a force-push';
 			const target = (r) => r.replace(/^\+/, '').split(':').pop().replace(/^refs\/heads\//, '');
+			if (!BLOCK_MAIN_PUSH) return null;
 			if (refs.some((r) => PROTECTED_BRANCHES.has(target(r)))) return 'pushing to main/master directly';
 			if (refs.length === 0 && PROTECTED_BRANCHES.has(currentBranch(cwd, dir))) return 'pushing main/master directly';
 			return null;
