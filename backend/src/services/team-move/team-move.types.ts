@@ -75,6 +75,12 @@ export interface TeamMovePreflight {
   freeDiskBytes: number;
   tools: Record<string, boolean>;
   runtimes: Record<string, boolean>;
+  /**
+   * Whether this machine can read each remote of the moving team's repositories
+   * (`git ls-remote`, never prompting). Present only when Cloud told the target
+   * which remotes to test. Remotes are credential-free.
+   */
+  gitAccess?: Array<{ remote: string; ok: boolean; error?: string }>;
 }
 
 /** Package metadata Cloud keeps. */
@@ -99,6 +105,8 @@ export interface TeamMoveView {
   error?: string;
   failedAt?: TeamMoveStatus;
   targetPublicKey?: string;
+  /** Credential-free remotes of the team's repositories, for the target to test. */
+  remotes?: string[];
   preflight?: TeamMovePreflight;
   package?: TeamMovePackageMeta;
   report?: Record<string, unknown>;
@@ -133,6 +141,10 @@ export interface RepoPreflight {
   branch: string | null;
   /** `host/owner/repo` of origin (credentials and scheme removed). */
   remote: string | null;
+  /** The remote URL without credentials, so the target can test it. */
+  remoteUrl?: string;
+  /** The target cannot read the remote (it has no credentials for it); the repository is carried instead. */
+  remoteUnreachable?: boolean;
   noRemote: boolean;
   /** Tracked files with uncommitted changes. */
   modified: number;
@@ -223,6 +235,8 @@ export interface PackageRepo {
   carryError?: string;
   /** The repository itself travels in the package as a git bundle (see {@link PackageBundle}). */
   bundle?: PackageBundle;
+  /** Size of the repository's object store (bytes); scales the clone time limit on the target. */
+  sizeBytes?: number;
 }
 
 /** A repository carried as a `git bundle` inside the package. */
@@ -236,6 +250,8 @@ export interface PackageBundle {
   sha256?: string;
   /** Refs in the bundle. */
   refs?: number;
+  /** Why a repository that has a remote travels whole: the target cannot read that remote. */
+  why?: 'remote_unreachable';
 }
 
 /** Uncommitted work of a repository that travels in the package. */
@@ -390,8 +406,9 @@ export interface TeamMoveImportReport {
   /** Moved counts by kind; Cloud shows these. */
   moved: Record<string, number>;
   repos: {
-    cloned: Array<{ name: string; path: string; branch: string | null; headSha: string | null; viaBundle?: boolean }>;
-    failed: Array<{ name: string; reason: string }>;
+    cloned: Array<{ name: string; path: string; branch: string | null; headSha: string | null; viaBundle?: boolean; remoteUnreachable?: boolean; remote?: string }>;
+    /** A repository that could not be put in place; the team still starts. `needsLogin`: the target has no git credentials for `remote`. */
+    failed: Array<{ name: string; reason: string; remote?: string; needsLogin?: boolean }>;
     /** Uncommitted work carried from the source and applied on top of the clone. */
     carried?: Array<{ name: string; applied: number; untracked: number; failed: Array<{ path: string; reason: string }>; flattenedCommits: number; leftBehind: number }>;
   };
@@ -454,4 +471,21 @@ export interface LocalMoveState {
   phase: 'idle' | 'running' | 'done' | 'failed';
   error?: string;
   updatedAt: string;
+}
+
+/** What an import is doing right now (sent to Cloud and logged about every 30 s). */
+export interface ImportProgress {
+  step: 'repos';
+  /** The repository being fetched. */
+  repo: string;
+  /** Git's phase ("Receiving objects"); null before git printed anything. */
+  phase: string | null;
+  percent: number | null;
+  objectsDone: number | null;
+  objectsTotal: number | null;
+  /** Bytes received so far, when git reports them. */
+  bytes: number | null;
+  /** Transfer speed as git prints it. */
+  rate: string | null;
+  elapsedMs: number;
 }

@@ -43,10 +43,10 @@ import { generateTargetKeyPair, isPublicKeyString } from './team-move-crypto.js'
 import { TeamMoveBlockedError, TeamMoveExporter, buildEncryptedPackage } from './team-move-exporter.js';
 import { TeamMoveImportError, TeamMoveImporter } from './team-move-importer.js';
 import { MoveJournal, isMoveId, moveDirFor } from './team-move-journal.js';
-import { readRepoChanges } from './team-move-git.js';
+import { readRepoChanges, sanitizeRemote } from './team-move-git.js';
 import { hasRoomFor } from './team-move-preflight.js';
 import { TeamMoveSecretScanError } from './team-move-secret-scan.js';
-import type { PackageRepo, SourcePreflightReport, TeamMoveAction, TeamMoveOptions, TeamMovePreflight, TeamMovePreflightRelayData, TeamMoveRelayData, TeamMoveRole, TeamMoveView } from './team-move.types.js';
+import type { ImportProgress, PackageRepo, SourcePreflightReport, TeamMoveAction, TeamMoveOptions, TeamMovePreflight, TeamMovePreflightRelayData, TeamMoveRelayData, TeamMoveRole, TeamMoveView } from './team-move.types.js';
 
 const C = TEAM_MOVE_CONSTANTS;
 
@@ -112,7 +112,7 @@ export interface TeamMoveDriverDeps {
   /** Built per import so each uses the current services. */
   importer: () => TeamMoveImporter;
   archiver: TeamMoveArchiver;
-  preflight: (requiredTools?: readonly string[]) => Promise<TeamMovePreflight>;
+  preflight: (requiredTools?: readonly string[], remotes?: readonly string[]) => Promise<TeamMovePreflight>;
   /** Deliver a harness message to an agent of a team (waking it when stopped); returns false when it could not be delivered. */
   sendToAgent?: (sessionName: string, text: string) => Promise<boolean>;
   /** The teams on this machine (to find the lead to ask). */
@@ -270,7 +270,10 @@ export class TeamMoveDriver {
       await journal.ensure();
       await fs.writeFile(keyFile, JSON.stringify(pair), { mode: 0o600 });
     }
-    const preflight = await this.deps.preflight();
+    // Cloud lists the remotes of the team's repositories: test now whether this machine can read them,
+    // so the source carries the ones it cannot (a private repo without credentials here) in the package.
+    const fresh = await this.deps.cloud.get(view.moveId).catch(() => view);
+    const preflight = await this.deps.preflight(undefined, fresh.remotes ?? view.remotes ?? []);
     await this.deps.cloud.postTargetKey(view.moveId, { publicKey: pair.publicKey, preflight });
   }
 
@@ -289,12 +292,14 @@ export class TeamMoveDriver {
       skipFlagged: local.skipFlagged || fresh.options?.skipFlagged,
       carryChanges: local.carryChanges || fresh.options?.carryChanges,
     };
+    // Remotes the target said it cannot read: those repositories travel whole as a git bundle.
+    const unreachableRemotes = (fresh.preflight?.gitAccess ?? []).filter((g) => !g.ok).map((g) => g.remote);
     const stagingDir = path.join(journal.dir, 'package-staging');
     const cipherFile = path.join(journal.dir, 'package.enc');
 
     // Work that exists only here stops the move before anything else: no waiting for the team to go quiet first.
     if (!intent.allowDirty && !(await journal.isDone('export'))) {
-      const check = intent.carryChanges ? await this.carryBlockers(view.teamId) : await this.deps.exporter.checkRepos(view.teamId);
+      const check = intent.carryChanges ? await this.carryBlockers(view.teamId, unreachableRemotes) : await this.deps.exporter.checkRepos(view.teamId);
       if (check.blocking.length > 0) throw new TeamMoveBlockedError(check.blocking);
     }
 
@@ -308,6 +313,7 @@ export class TeamMoveDriver {
         allowDirty: intent.allowDirty,
         skipFlagged: intent.skipFlagged,
         carryChanges: intent.carryChanges,
+        unreachableRemotes,
       });
       const enc = await buildEncryptedPackage(stagingDir, cipherFile, targetKey, view.moveId);
       await fs.rm(stagingDir, { recursive: true, force: true });
@@ -367,13 +373,32 @@ export class TeamMoveDriver {
       await this.deps.cloud.postStatus(view.moveId, { status: 'importing' });
       await this.deps.cloud.downloadPackage(view.moveId, packageFile, pkg.size);
     }
+    // Progress posts go out one at a time and all land before `imported`, so Cloud never sees `importing` after it.
+    let sent: Promise<void> = Promise.resolve();
     const report = await this.deps.importer().run(
       { moveId: view.moveId, packageFile, privateKey: key.privateKey, expectedSha256: pkg.sha256 },
       journal,
+      { onProgress: (progress) => void (sent = sent.then(() => this.reportProgress(view.moveId, progress))) },
     );
+    await sent;
     await this.deps.cloud.postStatus(view.moveId, { status: 'imported', report });
     // The package is applied and its ciphertext deleted; the private key has done its job.
     await fs.rm(path.join(journal.dir, 'target-key.json'), { force: true });
+  }
+
+  /**
+   * Log what the import is doing and tell Cloud, so a long clone is not a
+   * silent "importing". Best effort: never fails the import.
+   */
+  private async reportProgress(moveId: string, progress: ImportProgress): Promise<void> {
+    const parts = [
+      progress.phase ? `${progress.phase}${progress.percent !== null ? ` ${progress.percent}%` : ''}` : 'starting',
+      progress.objectsTotal ? `${progress.objectsDone ?? 0}/${progress.objectsTotal} objects` : null,
+      progress.bytes !== null ? `${Math.round(progress.bytes / 1024 / 1024)} MiB` : null,
+      progress.rate,
+    ].filter(Boolean);
+    this.logger.info(`Team move importing ${progress.repo}: ${parts.join(', ')} (${Math.round(progress.elapsedMs / 1000)} s)`, { moveId, ...progress });
+    await this.deps.cloud.postStatus(moveId, { status: 'importing', progress }).catch((error) => this.logger.debug('Could not send import progress', { moveId, error: messageOf(error) }));
   }
 
   // -------------------------------------------------------------------------
@@ -418,7 +443,10 @@ export class TeamMoveDriver {
       ...(input.skipFlagged ? { skipFlagged: true } : {}),
       ...(input.carryChanges ? { carryChanges: true } : {}),
     };
-    const created = await this.deps.cloud.create({ teamId: input.teamId, sourceInstanceId: instanceId, targetInstanceId: input.targetInstanceId, ...(Object.keys(options).length ? { options } : {}) });
+    // The remotes let the target test whether it can read each repository before the source packages.
+    const inspected = await this.deps.exporter.checkRepos(input.teamId).then((c) => c.repos, () => [] as PackageRepo[]);
+    const remotes = [...new Set(inspected.map((r) => r.remoteUrl).filter((u): u is string => !!u).map(sanitizeRemote))];
+    const created = await this.deps.cloud.create({ teamId: input.teamId, sourceInstanceId: instanceId, targetInstanceId: input.targetInstanceId, ...(Object.keys(options).length ? { options } : {}), ...(remotes.length ? { remotes } : {}) });
     if (input.allowDirty || input.skipFlagged || input.carryChanges) {
       const journal = new MoveJournal(created.moveId, this.home, this.now);
       await journal.ensure();
@@ -428,8 +456,8 @@ export class TeamMoveDriver {
   }
 
   /** Blocking lines when uncommitted work would be carried: only repositories that cannot be carried. */
-  private async carryBlockers(teamId: string): Promise<{ blocking: string[] }> {
-    const report = await this.sourcePreflight({ teamId, carryChanges: true, quick: true });
+  private async carryBlockers(teamId: string, unreachableRemotes?: readonly string[]): Promise<{ blocking: string[] }> {
+    const report = await this.sourcePreflight({ teamId, carryChanges: true, quick: true, unreachableRemotes });
     const blocking = report.repos
       .filter((r) => r.isRepo && (r.modified > 0 || r.untracked > 0 || r.unpushed > 0 || !!r.bundle) && !(r.bundle ? r.bundle.possible && (r.carry === null || r.carry.possible) : r.carry?.possible))
       .map((r) => `${r.projectName} (${r.path}): ${r.bundle && !r.bundle.possible ? r.bundle.message : (r.carry?.reason ?? 'uncommitted changes (commit and push them)')}`);
@@ -443,10 +471,10 @@ export class TeamMoveDriver {
    * @param input - Team, whether carrying is wanted, whether to skip the package dry run, whether to ignore its cache
    * @returns The report
    */
-  async sourcePreflight(input: { teamId: string; carryChanges?: boolean; quick?: boolean; force?: boolean }): Promise<SourcePreflightReport> {
+  async sourcePreflight(input: { teamId: string; carryChanges?: boolean; quick?: boolean; force?: boolean; unreachableRemotes?: readonly string[]; targetName?: string }): Promise<SourcePreflightReport> {
     const stagingDir = await fs.mkdtemp(path.join(os.tmpdir(), 'crewly-team-move-preflight-'));
     try {
-      return await this.deps.exporter.preflight({ teamId: input.teamId, carryChanges: input.carryChanges, stagingDir, force: input.force, quick: input.quick });
+      return await this.deps.exporter.preflight({ teamId: input.teamId, carryChanges: input.carryChanges, stagingDir, force: input.force, quick: input.quick, unreachableRemotes: input.unreachableRemotes, targetName: input.targetName });
     } finally {
       await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
     }
@@ -488,11 +516,11 @@ export class TeamMoveDriver {
     const effectiveAction = request.action ?? action;
     try {
       if (effectiveRole === 'target') {
-        await this.deps.cloud.postPreflightResult(preflightId, { report: await this.deps.preflight() });
+        await this.deps.cloud.postPreflightResult(preflightId, { report: await this.deps.preflight(undefined, request.remotes ?? []) });
       } else if (effectiveAction === 'ask_team') {
         await this.deps.cloud.postPreflightResult(preflightId, { ask: await this.askTeam(request) });
       } else {
-        const report = await this.sourcePreflight({ teamId: request.teamId, carryChanges: request.options?.carryChanges, force: request.force });
+        const report = await this.sourcePreflight({ teamId: request.teamId, carryChanges: request.options?.carryChanges, force: request.force, unreachableRemotes: request.unreachableRemotes, targetName: request.targetName });
         await this.deps.cloud.postPreflightResult(preflightId, { report });
       }
     } catch (error) {

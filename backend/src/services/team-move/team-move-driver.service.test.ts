@@ -37,6 +37,7 @@ class FakeCloud {
   view: TeamMoveView | null = null;
   chunks = new Map<number, Buffer>();
   statuses: string[] = [];
+  progress: Array<Record<string, unknown>> = [];
   failure: string | null = null;
   readonly drivers = new Map<string, TeamMoveDriver>();
   sha = '';
@@ -49,7 +50,7 @@ class FakeCloud {
     const roleOf = (): TeamMoveRole => (instanceId === 'src' ? 'source' : 'target');
     const client = {
       isConnected: () => true,
-      create: async (body: { teamId: string; sourceInstanceId: string; targetInstanceId: string }) => {
+      create: async (body: { teamId: string; sourceInstanceId: string; targetInstanceId: string; remotes?: string[] }) => {
         self.view = {
           moveId: MOVE_ID,
           teamId: body.teamId,
@@ -57,6 +58,7 @@ class FakeCloud {
           source: { instanceId: body.sourceInstanceId, name: 'Mac' },
           target: { instanceId: body.targetInstanceId, name: 'Air' },
           status: 'requested',
+          ...(body.remotes ? { remotes: body.remotes } : {}),
           createdAt: 'x',
           updatedAt: 'x',
         };
@@ -91,7 +93,11 @@ class FakeCloud {
         await fs.writeFile(dest, all);
         return all.length;
       },
-      postStatus: async (_id: string, body: { status: TeamMoveReportStatus; report?: unknown; error?: string }) => {
+      postStatus: async (_id: string, body: { status: TeamMoveReportStatus; report?: unknown; error?: string; progress?: unknown }) => {
+        if (body.progress) {
+          self.progress.push(body.progress as Record<string, unknown>);
+          return;
+        }
         self.statuses.push(`${roleOf()}:${body.status}`);
         if (body.status === 'importing') self.set('importing');
         else if (body.status === 'imported') {
@@ -141,6 +147,8 @@ describe('TeamMoveDriver protocol', () => {
   let target: TeamMoveDriver;
   let started: string[];
   let stopped: string[];
+  let testedRemotes: string[];
+  let denyGit: boolean;
 
   beforeEach(async () => {
     fx = await buildSourceFixture();
@@ -152,6 +160,8 @@ describe('TeamMoveDriver protocol', () => {
     cloud = new FakeCloud();
     started = [];
     stopped = [];
+    testedRemotes = [];
+    denyGit = false;
 
     const poolFile = (home: string): string => path.join(home, 'task-pool', 'pool.json');
     const poolAdd = (home: string) => async (items: Array<{ id: string }>): Promise<number> => {
@@ -162,7 +172,10 @@ describe('TeamMoveDriver protocol', () => {
       await atomicWriteJson(poolFile(home), pool);
       return added;
     };
-    const preflight = async (): Promise<TeamMovePreflight> => ({ crewlyVersion: '9.9.9', freeDiskBytes: 50 * 1024 ** 3, tools: {}, runtimes: {} });
+    const preflight = async (_tools?: readonly string[], remotes: readonly string[] = []): Promise<TeamMovePreflight> => {
+      testedRemotes.push(...remotes);
+      return { crewlyVersion: '9.9.9', freeDiskBytes: 50 * 1024 ** 3, tools: {}, runtimes: {}, ...(remotes.length ? { gitAccess: remotes.map((remote) => ({ remote, ok: !denyGit })) } : {}) };
+    };
 
     const makeDriver = (instanceId: string, home: string, storage: StorageService): TeamMoveDriver =>
       new TeamMoveDriver({
@@ -256,6 +269,26 @@ describe('TeamMoveDriver protocol', () => {
     await expect(fs.stat(path.join(fx.home, 'team-moves', MOVE_ID, 'target-key.json'))).rejects.toThrow();
     await expect(fs.stat(path.join(targetHome, 'team-moves', MOVE_ID, 'target-key.json'))).rejects.toThrow();
     await expect(fs.stat(path.join(targetHome, 'team-moves', MOVE_ID, 'package.enc'))).rejects.toThrow();
+    // The importing move told Cloud what it was doing, and the status order did not change.
+    expect(cloud.progress.length).toBeGreaterThanOrEqual(1);
+    expect(cloud.progress[0]).toMatchObject({ step: 'repos', repo: expect.any(String) });
+  });
+
+  it('has the target test the repository remotes and carries the ones it cannot read in the package', async () => {
+    denyGit = true;
+    await source.startMove({ teamId: F.teamId, targetInstanceId: 'dst' });
+    await settle();
+
+    expect(cloud.failure).toBeNull();
+    expect(cloud.view!.status).toBe('completed');
+    // The source sent the remotes (no credentials) with the request; the target tested exactly those.
+    expect(cloud.view!.remotes).toHaveLength(1);
+    expect(testedRemotes).toEqual(cloud.view!.remotes);
+    expect(cloud.view!.preflight!.gitAccess).toEqual([{ remote: cloud.view!.remotes![0], ok: false }]);
+    const report = cloud.view!.report as { repos: { cloned: Array<{ viaBundle?: boolean; remoteUnreachable?: boolean }>; failed: unknown[] }; reconnect: Array<{ label: string }> };
+    expect(report.repos.failed).toEqual([]);
+    expect(report.repos.cloned[0]).toMatchObject({ viaBundle: true, remoteUnreachable: true });
+    expect(report.reconnect.map((r) => r.label).filter((l) => /^Sign in to .* on this machine$/.test(l))).toHaveLength(1);
   });
 
   it('rolls back: the target stops and archives its copy, the source restores and starts', async () => {

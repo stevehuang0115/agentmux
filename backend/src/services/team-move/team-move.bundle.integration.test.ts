@@ -245,6 +245,53 @@ describe('team move: repositories carried as git bundles', () => {
       expect(result.manifest.repos[0]!.carry).toMatchObject({ flattenedCommits: 1 });
     });
   });
+
+  describe('a private repository the target cannot read', () => {
+    it('is carried whole as a bundle, keeps its remote, and asks the owner to sign in later', async () => {
+      const remote = git(fx.projectDir, 'config', '--get', 'remote.origin.url');
+      const check = await exporter().checkRepos(F.teamId);
+      expect(check.repos[0]!.bundle).toBeUndefined(); // reachable as far as the source knows: cloned
+
+      const staging = path.join(fx.root, 'staging-unreachable');
+      const result = await exporter().export({ teamId: F.teamId, moveId: MOVE_ID, stagingDir: staging, unreachableRemotes: [remote] });
+      const repo = result.manifest.repos[0]!;
+      expect(repo.remoteUrl).toBe(remote);
+      expect(repo.bundle).toMatchObject({ mode: 'full', why: 'remote_unreachable', file: `projects/${F.projectId}/bundle/repo.bundle` });
+      expect(repo.note).toMatch(/can't reach this private repo; it will be carried in the package/);
+
+      const key = generateTargetKeyPair();
+      const file = path.join(fx.root, 'package-unreachable.enc');
+      const enc = await buildEncryptedPackage(staging, file, key.publicKey, MOVE_ID);
+      const report = await new TeamMoveImporter({
+        home: targetHome,
+        crewlyVersion: '9.9.9',
+        storage: targetStorage,
+        addWorkItems: async () => 0,
+        addDecisions: async () => 0,
+        adoptSlackMapping: async () => true,
+        startTeam: async () => ({ ok: true }),
+        hasCommand: () => true,
+        runtimeLogins: async () => ({ 'claude-code': true }),
+        machineName: () => 'iriss-air.lan',
+      }).run({ moveId: MOVE_ID, packageFile: file, privateKey: key.privateKey, expectedSha256: enc.sha256 });
+
+      const moved = (await targetStorage.getProjects()).find((p) => p.id === F.projectId)!;
+      expect(report.repos.failed).toEqual([]);
+      expect(report.repos.cloned[0]).toMatchObject({ viaBundle: true, remoteUnreachable: true });
+      expect(git(moved.path, 'rev-parse', 'HEAD')).toBe(git(fx.projectDir, 'rev-parse', 'HEAD'));
+      expect(git(moved.path, 'config', '--get', 'remote.origin.url')).toBe(remote);
+      expect(report.warnings.join(' ')).toMatch(/iriss-air\.lan can't reach the private repo .*carried in the package .*Log in to GitHub on iriss-air\.lan later to push\/pull/);
+      expect(report.started.ok).toBe(true);
+    });
+
+    it('words the preflight line with the target name and reports the repo as unreachable', async () => {
+      const remote = git(fx.projectDir, 'config', '--get', 'remote.origin.url');
+      const report = await exporter().preflight({ teamId: F.teamId, stagingDir: path.join(fx.root, 'pf'), quick: true, unreachableRemotes: [remote], targetName: 'iriss-air.lan' });
+      expect(report.repos[0]).toMatchObject({ remoteUnreachable: true, bundle: { mode: 'full', possible: true } });
+      expect(report.repos[0]!.bundle!.message).toMatch(/^iriss-air\.lan can't reach this private repo; it will be carried in the package \(.*\)\. Log in to GitHub on iriss-air\.lan later to push\/pull\.$/);
+    });
+  });
+
 });
 
 /** All files below a folder. */

@@ -41,7 +41,7 @@ import { createEncryptStream, createHashTap } from './team-move-crypto.js';
 import { StagingArea, walkFiles } from './team-move-fs.js';
 import { collectCarry, describeLeft, resolveCarryLimits, type CarryLimits, type CollectCarryResult, type CollectedCarry } from './team-move-carry.js';
 import { createBundle, estimateRepoBytes, formatBytes, resolveBundleLimits, type BundleLimits, type BundleMode } from './team-move-bundle.js';
-import { describeBlockingRepos, displayRemote, inspectRepo as defaultInspectRepo, readRepoChanges } from './team-move-git.js';
+import { describeBlockingRepos, displayRemote, inspectRepo as defaultInspectRepo, readRepoChanges, sanitizeRemote } from './team-move-git.js';
 import { TeamMoveSecretScanError, isSkippableFinding, scanStaging, type SecretFinding } from './team-move-secret-scan.js';
 import {
   identityOf,
@@ -159,7 +159,7 @@ interface RepoPlan {
   /** Why the repository cannot be carried. */
   carryError?: string;
   /** The repository itself travels as a git bundle. */
-  bundle?: { mode: BundleMode; estimate: number | null; possible: boolean; reason?: string };
+  bundle?: { mode: BundleMode; estimate: number | null; possible: boolean; reason?: string; /** The remote exists but the target cannot read it. */ unreachable?: boolean };
   /** The move is not blocked by this repository. */
   resolved: boolean;
 }
@@ -206,6 +206,8 @@ export interface ExportOptions {
   carryChanges?: boolean;
   /** Build and scan the package but never throw for secrets; report every finding (preflight). */
   dryRun?: boolean;
+  /** Remotes the target machine cannot read (its `git ls-remote` failed): those repositories travel whole as a git bundle. */
+  unreachableRemotes?: readonly string[];
 }
 
 /** A secret-scan finding with its owner-facing name. */
@@ -254,8 +256,11 @@ export function sanitizeTeamForMove(raw: Record<string, unknown>): Record<string
  * @param bundle - Its bundle plan
  * @returns One line, e.g. `no remote — will be carried in the package (0.8 GB)`
  */
-export function bundleMessage(repo: Pick<PackageRepo, 'remoteUrl' | 'unpushed'>, bundle: { mode: BundleMode; estimate: number | null }): string {
+export function bundleMessage(repo: Pick<PackageRepo, 'remoteUrl' | 'unpushed'>, bundle: { mode: BundleMode; estimate: number | null; unreachable?: boolean }, targetName?: string): string {
   const size = bundle.estimate !== null ? ` (${formatBytes(bundle.estimate)})` : '';
+  if (bundle.mode === 'full' && bundle.unreachable) {
+    return `${targetName ?? 'the target machine'} can't reach this private repo; it will be carried in the package${size}. Log in to GitHub on ${targetName ?? 'that machine'} later to push/pull.`;
+  }
   if (bundle.mode === 'full') return `no remote — will be carried in the package${size}`;
   return `${repo.unpushed} commit${repo.unpushed === 1 ? '' : 's'} not pushed — will be carried in the package as a git bundle${size}`;
 }
@@ -311,7 +316,8 @@ export class TeamMoveExporter {
    * @param assess - Also assess carrying for repositories that have a remote
    * @returns Plan by project id
    */
-  private async planRepos(repos: PackageRepo[], assess: boolean): Promise<Map<string, RepoPlan>> {
+  private async planRepos(repos: PackageRepo[], assess: boolean, unreachableRemotes: readonly string[] = []): Promise<Map<string, RepoPlan>> {
+    const unreachable = new Set(unreachableRemotes.map(sanitizeRemote));
     const carryLimits = this.deps.carryLimits ?? resolveCarryLimits();
     const bundleLimits = this.deps.bundleLimits ?? resolveBundleLimits();
     const plans = new Map<string, RepoPlan>();
@@ -321,16 +327,18 @@ export class TeamMoveExporter {
         plans.set(r.projectId, { resolved: false });
         continue;
       }
-      if (!r.remoteUrl || (assess && this.needsWork(r))) {
+      const cannotClone = !!r.remoteUrl && unreachable.has(sanitizeRemote(r.remoteUrl));
+      if (!r.remoteUrl || cannotClone || (assess && this.needsWork(r))) {
         let plan: RepoPlan | null = null;
-        if (r.remoteUrl) {
+        if (r.remoteUrl && !cannotClone) {
           const flat = await collectCarry(r.path, carryLimits);
           if (flat.ok && flat.carry.left.length === 0) plan = { carry: flat.carry, carryRes: flat, resolved: true };
           else if (r.unpushed === 0) plan = { carryRes: flat, carryError: flat.ok ? describeLeft(flat.carry.left) : flat.reason, resolved: false };
         }
         if (!plan) {
-          const mode: BundleMode = r.remoteUrl ? 'unpushed' : 'full';
+          const mode: BundleMode = r.remoteUrl && !cannotClone ? 'unpushed' : 'full';
           const bundle = await this.planBundle(mode, r.path, bundleLimits);
+          if (cannotClone) bundle.unreachable = true;
           if (bundle.possible && bundle.estimate !== null && bundleTotal + bundle.estimate > bundleLimits.totalBytes) {
             bundle.possible = false;
             bundle.reason = `the repositories to carry total about ${formatBytes(bundleTotal + bundle.estimate)}, over the ${formatBytes(bundleLimits.totalBytes)} limit (raise ${C.BUNDLES_MAX_MB_ENV} to allow it)`;
@@ -358,10 +366,19 @@ export class TeamMoveExporter {
     return plans;
   }
 
+  /** Record the size of each repository that will be cloned on the target, so it can scale the clone's time limit. */
+  private async recordSizes(repos: PackageRepo[]): Promise<void> {
+    for (const r of repos) {
+      if (!r.remoteUrl || r.bundle || !r.headSha) continue;
+      const bytes = await estimateRepoBytes(r.path);
+      if (bytes !== null && bytes > 0) r.sizeBytes = bytes;
+    }
+  }
+
   /** Put a plan's outcome on the repo record (what `check` and the manifest show). */
   private annotate(repo: PackageRepo, plan: RepoPlan): void {
     if (plan.bundle && plan.resolved) {
-      repo.bundle = { mode: plan.bundle.mode, bytes: plan.bundle.estimate ?? 0 };
+      repo.bundle = { mode: plan.bundle.mode, bytes: plan.bundle.estimate ?? 0, ...(plan.bundle.unreachable ? { why: 'remote_unreachable' as const } : {}) };
       repo.note = bundleMessage(repo, plan.bundle);
     }
     if (plan.carryError) repo.carryError = plan.carryError;
@@ -402,11 +419,11 @@ export class TeamMoveExporter {
    * @param input - Team, whether carrying is wanted, a scratch directory, whether to ignore the cached dry run, and whether to skip it altogether (`quick`)
    * @returns The report
    */
-  async preflight(input: { teamId: string; carryChanges?: boolean; stagingDir: string; force?: boolean; ttlMs?: number; quick?: boolean }): Promise<SourcePreflightReport> {
+  async preflight(input: { teamId: string; carryChanges?: boolean; stagingDir: string; force?: boolean; ttlMs?: number; quick?: boolean; unreachableRemotes?: readonly string[]; targetName?: string }): Promise<SourcePreflightReport> {
     const team = await this.requireTeam(input.teamId);
     const projects = await this.teamProjects(team);
     const inspected = await Promise.all(projects.map((p) => this.inspect({ id: p.id, name: p.name, path: p.path })));
-    const plans = await this.planRepos(inspected, true);
+    const plans = await this.planRepos(inspected, true, input.unreachableRemotes);
 
     const repos: RepoPreflight[] = [];
     for (const r of inspected) {
@@ -429,7 +446,7 @@ export class TeamMoveExporter {
             bytes: plan.bundle.estimate,
             possible: plan.bundle.possible,
             ...(plan.bundle.reason ? { reason: plan.bundle.reason } : {}),
-            message: plan.bundle.possible ? bundleMessage(r, plan.bundle) : `${r.remoteUrl ? 'commits not pushed' : 'no remote'} — cannot be carried: ${plan.bundle.reason}`,
+            message: plan.bundle.possible ? bundleMessage(r, plan.bundle, input.targetName) : `${plan.bundle.unreachable ? 'the target cannot reach the remote' : r.remoteUrl ? 'commits not pushed' : 'no remote'} — cannot be carried: ${plan.bundle.reason}`,
           }
         : null;
       const top = changes.files.slice(0, C.PREFLIGHT_TOP_FILES);
@@ -440,6 +457,8 @@ export class TeamMoveExporter {
         isRepo,
         branch: r.branch,
         remote: displayRemote(r.remoteUrl),
+        ...(r.remoteUrl ? { remoteUrl: sanitizeRemote(r.remoteUrl) } : {}),
+        ...(plan.bundle?.unreachable ? { remoteUnreachable: true } : {}),
         noRemote: isRepo && !r.remoteUrl,
         modified: changes.modified,
         untracked: changes.untracked,
@@ -453,13 +472,13 @@ export class TeamMoveExporter {
       });
     }
 
-    const key = JSON.stringify([team.id, !!input.carryChanges, inspected.map((r, i) => [r.path, r.headSha, r.dirty, r.unpushed, repos[i]!.modified, repos[i]!.untracked, repos[i]!.topFiles.map((f) => f.path)])]);
+    const key = JSON.stringify([team.id, !!input.carryChanges, [...(input.unreachableRemotes ?? [])].sort(), inspected.map((r, i) => [r.path, r.headSha, r.dirty, r.unpushed, repos[i]!.modified, repos[i]!.untracked, repos[i]!.topFiles.map((f) => f.path)])]);
     const ttl = input.ttlMs ?? C.PREFLIGHT_SCAN_TTL_MS;
     let heavy = !input.force && this.heavy && this.heavy.key === key && Date.now() - this.heavy.at < ttl ? this.heavy : null;
     if (!heavy && !input.quick) {
       const staging = path.resolve(input.stagingDir);
       try {
-        const result = await this.export({ teamId: team.id, moveId: `preflight-${Date.now()}`, stagingDir: staging, allowDirty: true, carryChanges: !!input.carryChanges, dryRun: true });
+        const result = await this.export({ teamId: team.id, moveId: `preflight-${Date.now()}`, stagingDir: staging, allowDirty: true, carryChanges: !!input.carryChanges, dryRun: true, unreachableRemotes: input.unreachableRemotes });
         const findings: PreflightFinding[] = result.scanFindings.slice(0, C.PREFLIGHT_MAX_FINDINGS).map((f) => ({ file: f.label, matches: f.matches, removable: f.removable }));
         heavy = {
           key,
@@ -518,7 +537,7 @@ export class TeamMoveExporter {
     const repos = await Promise.all(projects.map((p) => this.inspect({ id: p.id, name: p.name, path: p.path })));
     // Work that can travel in the package no longer blocks the move: uncommitted
     // changes, and whole repositories that have no remote (git bundle).
-    const plans = await this.planRepos(repos, !!options.carryChanges);
+    const plans = await this.planRepos(repos, !!options.carryChanges, options.unreachableRemotes);
     const carried = new Map<string, CollectedCarry>();
     for (const repo of repos) {
       const plan = plans.get(repo.projectId)!;
@@ -526,6 +545,7 @@ export class TeamMoveExporter {
       // A bundled repository with a clean working tree has nothing to patch.
       if (plan.carry && (!plan.bundle || plan.carry.patches.length + plan.carry.untracked.length > 0)) carried.set(repo.projectId, plan.carry);
     }
+    await this.recordSizes(repos);
     const blocking = describeBlockingRepos(repos.filter((r) => !plans.get(r.projectId)!.resolved));
     if (blocking.length > 0 && !options.allowDirty) throw new TeamMoveBlockedError(blocking);
 
@@ -703,6 +723,7 @@ export class TeamMoveExporter {
       remaining -= entry.bytes;
       repo.bundle = { mode: plan.bundle.mode, file: rel, bytes: entry.bytes, sha256: entry.sha256, refs: res.refs };
       if (plan.bundle.mode === 'full') repo.note = bundleMessage(repo, { ...plan.bundle, estimate: entry.bytes });
+      if (plan.bundle.unreachable) repo.bundle.why = 'remote_unreachable';
     }
     if (failures.length > 0 && !options.allowDirty) throw new TeamMoveBlockedError(failures);
   }

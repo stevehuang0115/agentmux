@@ -8326,8 +8326,18 @@ export const TEAM_MOVE_CONSTANTS = {
 	POLL_INTERVAL_MS: 5 * 60 * 1000,
 	/** Delay before the first pending-move check after boot (ms). */
 	BOOT_DELAY_MS: 20_000,
-	/** `git clone`/`fetch` timeout (ms). */
+	/** Shortest wall-clock limit of one git network call (ms); also the default when the repository size is unknown. */
 	GIT_TIMEOUT_MS: 15 * 60 * 1000,
+	/** Longest wall-clock limit of one git network call (ms), however big the repository. */
+	GIT_MAX_TIMEOUT_MS: 3 * 60 * 60 * 1000,
+	/** Transfer speed assumed when scaling the limit to the repository size (bytes per second). */
+	GIT_ASSUMED_BYTES_PER_SEC: 512 * 1024,
+	/** A git network call that prints no progress for this long is stalled and gets killed (ms). */
+	GIT_STALL_MS: 3 * 60 * 1000,
+	/** `git ls-remote` access test (ms). */
+	GIT_LS_REMOTE_TIMEOUT_MS: 30_000,
+	/** How often an import logs (and tells Cloud) what the clone is doing (ms). */
+	PROGRESS_REPORT_INTERVAL_MS: 30_000,
 	/** "Carry uncommitted changes": most bytes of patches and untracked files taken from one repository. */
 	CARRY_MAX_BYTES: 512 * 1024 * 1024,
 	/** ...largest single patch or untracked file. */

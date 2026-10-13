@@ -13,7 +13,7 @@ import * as path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { TEAM_MOVE_CONSTANTS } from '../../constants.js';
-import type { CloudManifestSummary, SourcePreflightReport, TeamMoveOptions, TeamMovePreflight, TeamMovePreflightAction, TeamMoveReportStatus, TeamMoveRole, TeamMoveView } from './team-move.types.js';
+import type { CloudManifestSummary, ImportProgress, SourcePreflightReport, TeamMoveOptions, TeamMovePreflight, TeamMovePreflightAction, TeamMoveReportStatus, TeamMoveRole, TeamMoveView } from './team-move.types.js';
 
 const C = TEAM_MOVE_CONSTANTS;
 
@@ -38,6 +38,10 @@ export interface PreflightRequest {
   options: TeamMoveOptions;
   /** Run the dry run again even if the last one is still fresh. */
   force?: boolean;
+  /** Target role: credential-free remotes of the team's repositories to test with `git ls-remote`. */
+  remotes?: string[];
+  /** Source role: remotes the target reported it cannot read. */
+  unreachableRemotes?: string[];
 }
 
 /** What a machine reports back for a preflight. */
@@ -220,7 +224,7 @@ export class TeamMoveCloudClient {
   }
 
   /** Ask Cloud to start a move (the owner path, or an instance acting for the owner). */
-  async create(body: { teamId: string; sourceInstanceId: string; targetInstanceId: string; options?: TeamMoveOptions }): Promise<{ moveId: string }> {
+  async create(body: { teamId: string; sourceInstanceId: string; targetInstanceId: string; options?: TeamMoveOptions; remotes?: string[] }): Promise<{ moveId: string }> {
     const data = await this.data<Json>(await this.request('POST', '', { json: body, retries: 1, headers: { 'X-Crewly-Acting-For': 'owner', 'X-Crewly-Acting-For-Role': 'owner' } }));
     const moveId = typeof data['moveId'] === 'string' ? data['moveId'] : null;
     if (!moveId) throw new TeamMoveCloudError('Cloud did not return a move id (unexpected answer to the create request)', 502, 'unexpected_response');
@@ -292,7 +296,7 @@ export class TeamMoveCloudClient {
   }
 
   /** Report a status. */
-  async postStatus(moveId: string, body: { status: TeamMoveReportStatus; report?: unknown; error?: string }): Promise<void> {
+  async postStatus(moveId: string, body: { status: TeamMoveReportStatus; report?: unknown; error?: string; progress?: ImportProgress }): Promise<void> {
     await this.request('POST', `/${encodeURIComponent(moveId)}/status`, { json: body });
   }
 

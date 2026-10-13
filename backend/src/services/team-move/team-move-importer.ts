@@ -32,8 +32,8 @@ import { applyTeamChat, type ApplyChatResult, type ChatRecords } from './team-mo
 import { createDecryptStream } from './team-move-crypto.js';
 import { hasTextExtension, looksLikeText, pathExists, rewritePathPrefix, sha256File, slugify, walkFiles, writeFileAtomic } from './team-move-fs.js';
 import { applyCarry } from './team-move-carry.js';
-import { restoreRepo } from './team-move-git.js';
-import { applyBundle, restoreFromBundle } from './team-move-bundle.js';
+import { displayRemote, git, restoreRepo, type GitProgress, type RemoteAccess } from './team-move-git.js';
+import { applyBundle, formatBytes, restoreFromBundle } from './team-move-bundle.js';
 import { runtimeLabel } from '../runtime-fallback/runtime-fallback.types.js';
 import { MoveJournal } from './team-move-journal.js';
 import { checkTools, hasRoomFor } from './team-move-preflight.js';
@@ -47,6 +47,7 @@ import type {
   TeamMoveImportReport,
   TeamMoveStartResult,
   TeamMoveManifest,
+  ImportProgress,
 } from './team-move.types.js';
 
 const C = TEAM_MOVE_CONSTANTS;
@@ -105,7 +106,21 @@ export interface ImportDeps {
   /** Free disk bytes (tests). */
   freeDisk?: (dir: string) => Promise<number | null>;
   restoreRepo?: typeof restoreRepo;
+  /**
+   * Test that this machine can read a remote before cloning it (`git ls-remote`,
+   * never prompting). A repository that fails is reported at once instead of
+   * waiting for a clone to fail. Omit to go straight to the clone.
+   */
+  checkRemote?: (remoteUrl: string) => Promise<RemoteAccess>;
+  /** How often a running clone reports progress (default 30 s). */
+  progressIntervalMs?: number;
   now?: () => string;
+}
+
+/** Hooks of one import run. */
+export interface ImportHooks {
+  /** Called about every 30 s while a repository is being fetched (and when it starts), with what git has done so far. */
+  onProgress?: (progress: ImportProgress) => void;
 }
 
 /** Inputs of one import. */
@@ -123,6 +138,11 @@ export interface ImportInput {
 export function projectsRoot(env: NodeJS.ProcessEnv = process.env, homeDir: string = os.homedir()): string {
   const fromEnv = env[C.PROJECTS_ROOT_ENV];
   return fromEnv && fromEnv.length > 0 ? path.resolve(fromEnv) : path.join(homeDir, C.DEFAULT_PROJECTS_DIR_NAME);
+}
+
+/** Record `origin` on a repository built from a bundle (best effort: it may exist already). */
+async function gitRemoteAdd(dest: string, remoteUrl: string): Promise<void> {
+  await git(dest, ['remote', 'add', 'origin', remoteUrl]).catch(() => undefined);
 }
 
 /** Copy result of {@link TeamMoveImporter.copyTree}. */
@@ -148,6 +168,7 @@ export class TeamMoveImporter {
   private readonly home: string;
   private readonly now: () => string;
   private readonly restore: typeof restoreRepo;
+  private hooks: ImportHooks = {};
 
   constructor(private readonly deps: ImportDeps) {
     this.home = deps.home ?? getCrewlyHomePath();
@@ -164,7 +185,8 @@ export class TeamMoveImporter {
    * @returns The report for the owner
    * @throws TeamMoveImportError for a package that must not be applied
    */
-  async run(input: ImportInput, journal: MoveJournal = new MoveJournal(input.moveId, this.home, this.now)): Promise<TeamMoveImportReport> {
+  async run(input: ImportInput, journal: MoveJournal = new MoveJournal(input.moveId, this.home, this.now), hooks: ImportHooks = {}): Promise<TeamMoveImportReport> {
+    this.hooks = hooks;
     const staging = path.join(journal.dir, 'staging');
     const step = <T>(name: ImportStep, fn: () => Promise<T>): Promise<T> => journal.run(name, fn);
 
@@ -205,6 +227,7 @@ export class TeamMoveImporter {
     const dataCounts = await step('data', () => this.importData(staging, manifest, mappings));
     const recordCounts = await step('records', () => this.importRecords(staging, manifest, mappings));
     const teamResult = await step('team', () => this.registerTeam(staging, manifest, mappings));
+    repoOutcome.warnings.push(...teamResult.notes);
     const started = await step('start', () => this.startTeam(manifest, teamResult.paused));
 
     return step('report', async () => {
@@ -351,14 +374,26 @@ export class TeamMoveImporter {
       }
       // Carried work sits on top of a commit the remote has (not the source's local head).
       let result;
+      const wholeBundle = repo.bundle?.file && repo.bundle.mode === 'full' && repo.bundle.why === 'remote_unreachable';
+      if (wholeBundle && repo.remoteUrl) {
+        const machine = (await Promise.resolve(this.deps.machineName?.()).catch(() => undefined)) || 'this machine';
+        warnings.push(`${repo.projectName}: ${machine} can't reach the private repo ${displayRemote(repo.remoteUrl) ?? ''}; it was carried in the package (${formatBytes(repo.bundle?.bytes ?? 0)}). Log in to GitHub on ${machine} later to push/pull.`);
+      }
       if (repo.bundle?.file) {
-        result = await this.restoreViaBundle(mapping.to, repo, path.join(staging, ...repo.bundle.file.split('/')));
+        result = await this.withProgress(repo.projectName, (onProgress) => this.restoreViaBundle(mapping.to, repo, path.join(staging, ...repo.bundle!.file!.split('/')), onProgress));
       } else {
-        result = await this.restore(mapping.to, repo.carry ? { ...repo, headSha: repo.carry.baseSha } : repo);
+        const access = repo.remoteUrl && this.deps.checkRemote ? await this.deps.checkRemote(repo.remoteUrl).catch((e: unknown): RemoteAccess => ({ ok: false, error: e instanceof Error ? e.message : String(e) })) : { ok: true };
+        if (!access.ok) {
+          // Fail this repository now (seconds), keep going with the rest and start the team.
+          failed.push({ name: repo.projectName, reason: `this machine cannot read ${displayRemote(repo.remoteUrl) ?? 'the remote'}: ${access.error ?? 'no access'}`, ...(repo.remoteUrl ? { remote: repo.remoteUrl } : {}), needsLogin: true });
+          continue;
+        }
+        const from = repo.carry ? { ...repo, headSha: repo.carry.baseSha } : repo;
+        result = await this.withProgress(repo.projectName, (onProgress) => this.restore(mapping.to, from, { sizeBytes: repo.sizeBytes, onProgress }));
       }
       for (const w of result.warnings) warnings.push(`${repo.projectName}: ${w}`);
-      if (result.ok) cloned.push({ name: repo.projectName, path: mapping.to, branch: result.branch, headSha: result.headSha, ...(repo.bundle?.file ? { viaBundle: true } : {}) });
-      else failed.push({ name: repo.projectName, reason: result.error ?? 'clone failed' });
+      if (result.ok) cloned.push({ name: repo.projectName, path: mapping.to, branch: result.branch, headSha: result.headSha, ...(repo.bundle?.file ? { viaBundle: true } : {}), ...(wholeBundle ? { remoteUnreachable: true, ...(repo.remoteUrl ? { remote: repo.remoteUrl } : {}) } : {}) });
+      else failed.push({ name: repo.projectName, reason: result.error ?? 'clone failed', ...(repo.remoteUrl ? { remote: repo.remoteUrl } : {}), needsLogin: /no git credentials|credentials for the remote/i.test(result.error ?? '') });
       if (result.ok && repo.carry) {
         const carryDir = path.join(staging, 'projects', repo.projectId, 'carry');
         const index = await this.readCarryIndex(carryDir);
@@ -387,19 +422,58 @@ export class TeamMoveImporter {
    * - `unpushed`: clone the remote as usual, then fetch the bundle (the
    *   commits the remote lacks) on top.
    */
-  private async restoreViaBundle(dest: string, repo: PackageRepo, bundleFile: string): ReturnType<typeof restoreRepo> {
+  private async restoreViaBundle(dest: string, repo: PackageRepo, bundleFile: string, onProgress?: (p: GitProgress) => void): ReturnType<typeof restoreRepo> {
     const recorded = { branch: repo.branch, headSha: repo.headSha };
     let result;
     if (repo.bundle?.mode === 'unpushed' && repo.remoteUrl) {
-      const base = await this.restore(dest, { ...repo, headSha: null });
+      const base = await this.restore(dest, { ...repo, headSha: null }, { sizeBytes: repo.sizeBytes, onProgress });
       if (!base.ok) return base;
       const applied = await applyBundle(dest, bundleFile, recorded);
       result = { ...applied, warnings: [...base.warnings, ...applied.warnings] };
     } else {
       result = await restoreFromBundle(dest, bundleFile, recorded);
+      // The repository kept its remote on the source: record it here so pull/push work once this machine is signed in.
+      if (result.ok && repo.remoteUrl) await gitRemoteAdd(dest, repo.remoteUrl);
     }
     if (result.ok) await fs.rm(bundleFile, { force: true });
     return result;
+  }
+
+  /**
+   * Run a repository restore and report what git is doing about every 30 s
+   * (and once at the start), so a long clone is visible in the log and to
+   * Cloud instead of looking stuck.
+   */
+  private async withProgress<T>(repoName: string, fn: (onProgress: (p: GitProgress) => void) => Promise<T>): Promise<T> {
+    const startedAt = Date.now();
+    let latest: GitProgress | null = null;
+    const emit = (): void => {
+      try {
+        this.hooks.onProgress?.({
+          step: 'repos',
+          repo: repoName,
+          phase: latest?.phase ?? null,
+          percent: latest?.percent ?? null,
+          objectsDone: latest?.objectsDone ?? null,
+          objectsTotal: latest?.objectsTotal ?? null,
+          bytes: latest?.bytes ?? null,
+          rate: latest?.rate ?? null,
+          elapsedMs: Date.now() - startedAt,
+        });
+      } catch {
+        /* progress is best effort */
+      }
+    };
+    emit();
+    const timer = setInterval(emit, this.deps.progressIntervalMs ?? C.PROGRESS_REPORT_INTERVAL_MS);
+    timer.unref?.();
+    try {
+      return await fn((p) => {
+        latest = p;
+      });
+    } finally {
+      clearInterval(timer);
+    }
   }
 
   /** The parsed `carry.json` of a repository, or null when missing or unreadable. */
@@ -559,7 +633,7 @@ export class TeamMoveImporter {
   // -------------------------------------------------------------------------
 
   /** Copy the team folder, then register the team (its first save announces it everywhere). */
-  private async registerTeam(staging: string, manifest: TeamMoveManifest, mappings: ProjectMapping[]): Promise<{ paused: boolean }> {
+  private async registerTeam(staging: string, manifest: TeamMoveManifest, mappings: ProjectMapping[]): Promise<{ paused: boolean; notes: string[] }> {
     const rewrites = this.rewritesFor(manifest, mappings);
     const tag = manifest.moveId.slice(0, 8);
     const teamDir = path.join(this.home, 'teams', manifest.team.id);
@@ -575,8 +649,42 @@ export class TeamMoveImporter {
     delete (team as { archived?: boolean }).archived;
     delete (team as { archivedAt?: string }).archivedAt;
     delete (team as { moveArchive?: unknown }).moveArchive;
+    const notes = await this.bindProjects(team, manifest);
     await this.deps.storage.saveTeam(team);
-    return { paused: !!(config['paused'] as unknown) };
+    return { paused: !!(config['paused'] as unknown), notes };
+  }
+
+  /**
+   * Make sure the team points at projects that exist on this machine. The
+   * start route needs a project to run the members in: a team that had none
+   * on the source (or only ones that did not come along) gets a home folder
+   * under the projects root, registered as a project, so it starts here too.
+   *
+   * @returns Owner-facing notes (empty when nothing had to change)
+   */
+  private async bindProjects(team: Team, manifest: TeamMoveManifest): Promise<string[]> {
+    const known = await this.deps.storage.getProjects();
+    const wanted = Array.isArray(team.projectIds) ? team.projectIds : [];
+    const present = wanted.filter((id) => known.some((p) => p.id === id));
+    const notes: string[] = [];
+    if (present.length < wanted.length) notes.push(`${wanted.length - present.length} project(s) of the team are not on this machine and were left out of its project list.`);
+    if (present.length === 0) {
+      const id = `team-home-${manifest.team.id}`;
+      let project = known.find((p) => p.id === id);
+      if (!project) {
+        const root = projectsRoot();
+        let dir = path.join(root, slugify(manifest.team.name || 'team'));
+        if (known.some((p) => path.resolve(p.path) === dir) || (await this.hasForeignContent(dir))) dir = path.join(root, `${slugify(manifest.team.name || 'team')}-${manifest.team.id.slice(0, 8)}`);
+        await fs.mkdir(dir, { recursive: true });
+        const at = this.now();
+        project = { id, name: manifest.team.name || 'Team', path: dir, teams: {}, status: 'stopped', createdAt: at, updatedAt: at } as Project;
+        await this.deps.storage.saveProject(project);
+      }
+      present.push(id);
+      notes.push(`The team has no project folder on the source; it runs from ${project.path} here.`);
+    }
+    team.projectIds = present;
+    return notes;
   }
 
   /**
@@ -641,8 +749,24 @@ export class TeamMoveImporter {
     for (const connector of manifest.requiredConnectors ?? []) {
       reconnect.push({ label: `${connector} connection`, kind: 'connector', url: CONNECTIONS_URL, detail: 'Connections are not moved; connect again on this machine.' });
     }
+    // Git sign-in: one item per host, for repositories carried because the remote was unreachable and for clones that failed.
+    const signIn = new Map<string, string[]>();
+    const noteSignIn = (remote: string | undefined, name: string): void => {
+      const host = (displayRemote(remote ?? null) ?? 'git').split('/')[0]!;
+      signIn.set(host, [...(signIn.get(host) ?? []), name]);
+    };
+    for (const c of repos.cloned) if (c.remoteUnreachable) noteSignIn(c.remote, c.name);
     for (const failure of repos.failed) {
-      reconnect.push({ label: `Git access for ${failure.name}`, kind: 'git', detail: failure.reason });
+      if (failure.needsLogin) noteSignIn(failure.remote, failure.name);
+      else reconnect.push({ label: `Git access for ${failure.name}`, kind: 'git', detail: failure.reason });
+    }
+    for (const [host, names] of signIn) {
+      const service = host === 'github.com' ? 'GitHub' : host;
+      reconnect.push({
+        label: `Sign in to ${service} on ${machine}`,
+        kind: 'git',
+        detail: `${names.join(', ')}: ${machine} has no ${service} credentials. Tell Crewly Orc in Slack "sign in to ${service} on ${machine}"; it runs ${host === 'github.com' ? '`gh auth login`' : 'the login'} and sends you a code link for your phone. Then push/pull from ${machine}.`,
+      });
     }
 
     const warnings: string[] = [...repoOutcome.warnings];
