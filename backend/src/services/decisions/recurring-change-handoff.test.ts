@@ -1,4 +1,6 @@
 import { handOffRecurringChange, isApprovedChange, recurringSchedules, scheduleOfDecision, termsOf, type RecurringSchedule } from './recurring-change-handoff.js';
+import fixtures from './recurring-change-handoff.fixtures.json';
+import labels from './recurring-change-handoff.labels.json';
 import type { OwnerDecision } from '../../types/decision.types.js';
 import type { Trigger } from '../../types/v2/trigger.types.js';
 
@@ -67,5 +69,29 @@ describe('recurring change hand-off (crewly#1137)', () => {
 		expect(await handOffRecurringChange(decision(), { listSchedules: () => [BRIEF], assign: async () => false })).toBeNull();
 		expect(await handOffRecurringChange(decision(), { listSchedules: () => { throw new Error('x'); }, assign })).toBeNull();
 		expect(assign).not.toHaveBeenCalled();
+	});
+
+	describe('real cards that were wrongly linked to unrelated jobs (2026-10)', () => {
+		const jobs: RecurringSchedule[] = [
+			{ triggerId: '809619f3', label: labels['steve-weekly-review-v2'], owner: 'atlas-runner' },
+			{ triggerId: '8e8feaf6', label: labels['listings-pr-watch'], owner: 'grace-runner' },
+		];
+		const cards = fixtures as unknown as OwnerDecision[];
+
+		it('uses all 7 recorded cards', () => {
+			expect(cards.map((c) => c.id)).toEqual(['D-700', 'D-703', 'D-714', 'D-719', 'D-720', 'D-721', 'D-723']);
+		});
+
+		it.each(['D-700', 'D-703', 'D-714', 'D-719', 'D-720', 'D-721', 'D-723'])('%s concerns neither job: no hand-off', (id) => {
+			const card = cards.find((c) => c.id === id)!;
+			expect(scheduleOfDecision(card, jobs)).toBeNull();
+		});
+
+		it('a card that names the job still matches it', () => {
+			const card = decision({ question: 'Steve weekly review: drop the time-per-business section from it?', asker: 'ella', requestedBy: 'ella' });
+			expect(scheduleOfDecision(card, jobs)?.triggerId).toBe('809619f3');
+			const watch = decision({ question: 'Should the listings-pr-watch job also check the PRs on weekends?', asker: 'ella', requestedBy: 'ella' });
+			expect(scheduleOfDecision(watch, jobs)?.triggerId).toBe('8e8feaf6');
+		});
 	});
 });

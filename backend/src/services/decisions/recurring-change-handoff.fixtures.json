@@ -1,0 +1,189 @@
+[
+ {
+  "id": "D-700",
+  "question": "比我说的 80 秒短了约 10 秒 — 这版行不行？",
+  "options": [
+   {
+    "key": "a",
+    "label": "Yes"
+   },
+   {
+    "key": "b",
+    "label": "No"
+   },
+   {
+    "key": "c",
+    "label": "Reply in thread",
+    "detail": "you'll answer in words in this thread"
+   }
+  ],
+  "defaultKey": "wait",
+  "deadline": "2026-10-14T16:00:00.000Z",
+  "requestedBy": "flopost-pia-50c4c954",
+  "asker": "flopost-pia-50c4c954",
+  "status": "resolved",
+  "chosenKey": null,
+  "answerText": "我觉得这边的话就是说可以再加上一些背景的那种音乐，这样的话让这个整个节奏感能够更强一点。然后还有一个呢，就是说这个，就是那个手机的那个设计，我觉得还是稍微弱了一点，还是可以把那个手机稍微做得再没有那么粗糙，就好看一点的吧，至少一看是个手机。然后我们的那些，就是日常的那些生活的那些视频，不是之前我传过来的吗？然后那些的话可以也看看你要不要添加在这个里面。然后呢，游戏的那个介绍呢，还可以再稍微多说一点，就是我目前观察到比较有效的，就是比如说像这种是生活习惯的这种卡片，这是一个，就是它表现好了以后就给它发卡。然后现在他们每天都在跟我说要发卡，发卡。比如说吃了鸡蛋，它的智商就变高了。然后它有这个智商了以后它就可以出去探险，还可以拿到徽章。然后还有这种准时卡，就是等于说要按时睡觉，按时起床，然后它就可以得到这个对应的金币。然后有了这个金币呢，这些小宠物就可以给它们买东西，可以带它们出去玩。然后还有就是这个它去运动了，打球了，然后或者弹钢琴了，然后给它发对应的卡。然后以及还有说帮它记录每次的这个表现分数怎么样。然后还有就是它这个小星星。然后小星星目前的话，我们本来是想说通过这个来记账的，然后结果现在就是连这个小星星都不需要发，他们就已经很规规矩矩了，全部都是靠这个小宠物里面的这些东西。然后另外还有很有意思的就是这个小宠物，它不是一段时间脏了，然后又会屎粑粑再放在这个桌子、这个地上。然后他们看到了，他们自己也会觉得很不舒服。他们就说，啊，我现在要干嘛，我要去收拾房间，我要去穿拖鞋，然后你帮我就是发一张卡，然后把这个东西清理掉。就然后我觉得这很有意思。就是至少说这些东西是work的。然后呢，同时呢，我们还可以就是说把这个具体的这个，就是他们不是也有收拾啊，然后也有干嘛的这种一些视频，我们可以把它加到里面去。然后那个说管不住的那个视频，我们不是也有一个，就是那种就是等于说他们是在那哭哭闹闹的。然后我们就可以把那个加到那里头去。"
+ },
+ {
+  "id": "D-703",
+  "question": "没检查：我没有亲耳听全片，音乐音量没听过；片中有孩子的真名，只在这里给你看 — 这版（先不含生活视频）行不行？",
+  "options": [
+   {
+    "key": "a",
+    "label": "Yes"
+   },
+   {
+    "key": "b",
+    "label": "No"
+   },
+   {
+    "key": "c",
+    "label": "Reply in thread",
+    "detail": "you'll answer in words in this thread"
+   }
+  ],
+  "defaultKey": "wait",
+  "deadline": "2026-10-14T16:00:00.000Z",
+  "requestedBy": "flopost-pia-50c4c954",
+  "asker": "flopost-pia-50c4c954",
+  "status": "resolved",
+  "chosenKey": null,
+  "answerText": "我觉得还有一个点没有说得太清楚的，就是说老父亲管不动了。然后呢，就是现在就是说，突然就想到了一个说，那我要不要就是做一个这种养成系的游戏，给他们去，看能不能让他们去规范一下他们。然后我们才就是说讲到说，因为正好他们又想养宠物，然后我们又没有，我们觉得还不 ready，所以就没有让他们养宠物。要不就是在这个游戏里面去进行养这种虚拟的宠物。就是我觉得要把这个东西要说清楚，就是为什么老父亲管不动，然后我们做了一个游戏。然后呢，这个游戏一路下来，对吧，是怎么怎么样。然后我看了一下，现在大概两分多钟。然后我看你，我想你能不能就是把它稍微在剪辑的时候，比如说中间的一些停顿点啊，稍微剪得间隔就短一点，让它能够节奏稍微快一点。这样的话就是说看看整个体验，就是能不能把这个速度压下来，就是降下来，把这个速度就是说能够把整个时长能够提到，比如说一分钟啊，或者是这样的一个时长。"
+ },
+ {
+  "id": "D-714",
+  "question": "另外提醒一下：这封转发里带着一位家长的姓名、邮箱和付款金额，别再往外转 — 要不要按上面的建议改出 v4？",
+  "options": [
+   {
+    "key": "a",
+    "label": "Yes (recommended)",
+    "detail": "我建议改成：第一个月的第二项交付「Phase 3 优先级」，直接按他要的格式交，Michael 拿去就能发"
+   },
+   {
+    "key": "b",
+    "label": "No"
+   },
+   {
+    "key": "c",
+    "label": "Reply in thread",
+    "detail": "you'll answer in words in this thread"
+   }
+  ],
+  "defaultKey": "wait",
+  "deadline": "2026-10-14T16:00:00.000Z",
+  "requestedBy": "think-tank-atlas-b4e166f6",
+  "asker": "think-tank-atlas-b4e166f6",
+  "status": "resolved",
+  "chosenKey": null,
+  "answerText": "好的 请你改一下proposal 然后我review一下"
+ },
+ {
+  "id": "D-719",
+  "question": "要动的一件事：Grace 从市场团队调过去做「找客户」，再新加 2 个 agent — 这样可以吗？",
+  "options": [
+   {
+    "key": "a",
+    "label": "Yes (recommended)",
+    "detail": "我建议做，但先做小：3 个 agent，只盯一个数，和内容团队分开"
+   },
+   {
+    "key": "b",
+    "label": "No"
+   },
+   {
+    "key": "c",
+    "label": "Reply in thread",
+    "detail": "you'll answer in words in this thread"
+   }
+  ],
+  "defaultKey": "wait",
+  "deadline": "2026-10-14T16:00:00.000Z",
+  "requestedBy": "crewly-marketing-ella-e6a6b8ea",
+  "asker": "crewly-marketing-ella-e6a6b8ea",
+  "status": "resolved",
+  "chosenKey": null,
+  "answerText": "我需要单独创建一个给王律师的增长团队 放到air那台机子上"
+ },
+ {
+  "id": "D-720",
+  "question": "周四这天和 10/14 的 X、10/16 的视频不冲突 — 日期这样行吗？",
+  "options": [
+   {
+    "key": "a",
+    "label": "Yes (recommended)",
+    "detail": "One to Many 英文预览定稿了（8 页 PDF，目录一行一章那版），我建议这样排，都在周四 10/15："
+   },
+   {
+    "key": "b",
+    "label": "No"
+   },
+   {
+    "key": "c",
+    "label": "Reply in thread",
+    "detail": "you'll answer in words in this thread"
+   }
+  ],
+  "defaultKey": "wait",
+  "deadline": "2026-10-14T16:00:00.000Z",
+  "requestedBy": "crewly-marketing-ella-e6a6b8ea",
+  "asker": "crewly-marketing-ella-e6a6b8ea",
+  "status": "resolved",
+  "chosenKey": "a",
+  "answerText": null
+ },
+ {
+  "id": "D-721",
+  "question": "要开工我还缺三样，你知道多少回多少 — 团队设成上面这样可以吗？",
+  "options": [
+   {
+    "key": "a",
+    "label": "Yes (recommended)",
+    "detail": "我建议这个团队先放 3 个 agent："
+   },
+   {
+    "key": "b",
+    "label": "No"
+   },
+   {
+    "key": "c",
+    "label": "Reply in thread",
+    "detail": "you'll answer in words in this thread"
+   }
+  ],
+  "defaultKey": "wait",
+  "deadline": "2026-10-14T16:00:00.000Z",
+  "requestedBy": "crewly-marketing-ella-e6a6b8ea",
+  "asker": "crewly-marketing-ella-e6a6b8ea",
+  "status": "resolved",
+  "chosenKey": null,
+  "answerText": "好的 你帮我去安排给Crewly总管 然后你也要把一些know how发给这个团队"
+ },
+ {
+  "id": "D-723",
+  "question": "一般申诉后几天到两周会有结果，下来了跟我说一声，我把那两条 X 重新排上 — 第 3 条先停这两条，可以吗？",
+  "options": [
+   {
+    "key": "a",
+    "label": "Yes (recommended)",
+    "detail": "建议："
+   },
+   {
+    "key": "b",
+    "label": "No"
+   },
+   {
+    "key": "c",
+    "label": "Reply in thread",
+    "detail": "you'll answer in words in this thread"
+   }
+  ],
+  "defaultKey": "wait",
+  "deadline": "2026-10-14T16:00:00.000Z",
+  "requestedBy": "crewly-marketing-ella-e6a6b8ea",
+  "asker": "crewly-marketing-ella-e6a6b8ea",
+  "status": "resolved",
+  "chosenKey": "a",
+  "answerText": null
+ }
+]
