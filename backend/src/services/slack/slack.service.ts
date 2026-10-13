@@ -914,7 +914,10 @@ export class SlackService extends EventEmitter {
       // Allow messages with text, files or a shared message
       const shared = sharedMessageText(event.attachments);
       if (!event.text && !shared && (!event.files || event.files.length === 0)) return null;
-      if (!event.user || !event.channel) return null;
+      // An app-less agent's post (master app, username override) carries no
+      // `user`; Cloud already named the agent, so its bot id stands in.
+      const userId = event.user ?? (meta.authorAgentSession ? event.bot_id : undefined);
+      if (!userId || !event.channel) return null;
 
       // Bypass user permission check for cross-machine messages —
       // these come from other bots and are authenticated by device ID,
@@ -925,7 +928,7 @@ export class SlackService extends EventEmitter {
       // Check user permissions (skip for cross-machine messages and for
       // messages the account's own agents wrote — those are colleagues, not
       // Slack users on the allow-list)
-      if (!isCrossMachine && !meta.authorAgentSession && !isUserAllowed(event.user, config)) {
+      if (!isCrossMachine && !meta.authorAgentSession && !isUserAllowed(userId, config)) {
         this.logger.info('Unauthorized user', { userId: event.user });
         return null;
       }
@@ -938,7 +941,7 @@ export class SlackService extends EventEmitter {
         id: event.ts || '',
         type: 'message',
         text: withSharedText(event.text || '', shared),
-        userId: event.user,
+        userId,
         channelId: event.channel,
         threadTs: event.thread_ts,
         ts: event.ts || '',
@@ -1067,17 +1070,24 @@ export class SlackService extends EventEmitter {
       this.emitReaction(event, 'cloud');
       return null;
     }
+    // Cloud names the author when an agent of this account wrote it. An agent
+    // with no Slack app of its own posts through the master app with a
+    // username override, which Slack delivers as a `bot_message` from the
+    // master bot — the bot filters below would drop every such post, so no
+    // app-less agent's @ ever reached a colleague (2026-10-13).
+    const agentAuthored = !!envelope.authorAgentSession;
     const allowedSubtypes: readonly string[] = SLACK_CLOUD_CONSTANTS.INBOUND_ALLOWED_SUBTYPES;
-    if (event.subtype && !allowedSubtypes.includes(event.subtype)) {
+    const subtypeOk = !event.subtype || allowedSubtypes.includes(event.subtype) || (agentAuthored && event.subtype === 'bot_message');
+    if (!subtypeOk) {
       this.logger.debug('Dropping Slack event subtype', { subtype: event.subtype, eventId: envelope.eventId });
       return null;
     }
     // Bolt's ignoreSelf equivalent: our own bot user's posts (replies the
     // orchestrator just sent) must not come back as inbound.
-    if (this.cachedBotUserId && event.user === this.cachedBotUserId) {
+    if (!agentAuthored && this.cachedBotUserId && event.user === this.cachedBotUserId) {
       return null;
     }
-    if (event.bot_id && !event.user) {
+    if (!agentAuthored && event.bot_id && !event.user) {
       return null;
     }
     // A message written by one of the account's agents: Cloud only forwards
