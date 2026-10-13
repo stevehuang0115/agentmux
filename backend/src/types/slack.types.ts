@@ -194,6 +194,15 @@ export interface CloudRoutingDecision {
   createdAt: string;
 }
 
+/** A request to put this machine's agents in an existing Slack channel (Cloud-pushed). */
+export interface SlackRoomJoinRequest {
+  slackChannelId: string;
+  slackChannelName: string;
+  /** Agent sessions on THIS machine to add as members */
+  sessions: string[];
+  requestedByInstanceId: string;
+}
+
 /**
  * `data` of a `slack_event` relay message pushed by Crewly Cloud (contract:
  * Slack v3 events). `event` is the raw Slack event object.
@@ -214,6 +223,12 @@ export interface SlackCloudEventEnvelope {
   room?: SlackRoomPresence;
   /** Set on a hand-off: the message is re-delivered, addressed to this agent */
   handoffTo?: string;
+  /**
+   * Set on a room-join request (`event.type === 'crewly_room_join'`): another
+   * machine's orchestrator put some of this machine's agents in a Slack channel.
+   * Not a message — never routed as one.
+   */
+  roomJoin?: SlackRoomJoinRequest;
   event: SlackRawInboundEvent;
   /**
    * `block_actions` only (Cloud ≥ auth 1.9.0): the full interactive payload

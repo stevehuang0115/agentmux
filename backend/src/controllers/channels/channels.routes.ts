@@ -4,6 +4,7 @@
  * - `GET    /api/channels`                       — list `{ channels }`; `?member=<session>` = that agent's channels; `?archived=true`
  * - `GET    /api/channels/:ref`                  — one channel by id, `#name`, name or Slack channel id
  * - `POST   /api/channels`                       — create `{ name, purpose?, memberSessions[] }`
+ * - `POST   /api/channels/compose`               — orchestrator: create/extend with named agents, any machine `{ name | channel, members[], purpose? }`
  * - `POST   /api/channels/refresh`               — read names/members from Slack now
  * - `PATCH  /api/channels/:ref`                  — rename `{ name }`
  * - `POST   /api/channels/:ref/members`          — add `{ sessionName }`
@@ -11,19 +12,28 @@
  * - `POST   /api/channels/:ref/archive`          — archive
  *
  * Reading is open to agents (to find a channel to post in); every change is
- * the owner's alone.
+ * the owner's alone — except create / add-member / compose, which the
+ * orchestrator may also do (it acts for an owner who asks from the phone).
  *
  * @module controllers/channels/channels.routes
  */
 
 import { Router, type Request, type Response } from 'express';
-import { rejectNonOwner } from '../../middleware/caller-identity.middleware.js';
+import { rejectNonOwner, rejectNonOwnerOrOrchestrator } from '../../middleware/caller-identity.middleware.js';
 import { CrewlyChannelError, type CrewlyChannelService } from '../../services/channels/crewly-channel.service.js';
+import type { ChannelComposeService } from '../../services/channels/crewly-channel-compose.service.js';
 
 const OWNER_ONLY_CHANNELS = Object.freeze({
   success: false,
   error: 'owner_only',
   message: 'Only the owner can create or change channels (Chat › Channels).',
+});
+
+/** What any other agent hears when it tries to open or extend a channel. */
+const OWNER_OR_ORC_CHANNELS = Object.freeze({
+  success: false,
+  error: 'owner_only',
+  message: 'Only the owner (or the orchestrator on the owner\'s behalf) can create channels or add members.',
 });
 
 /**
@@ -44,16 +54,25 @@ function sendError(res: Response, err: unknown): void {
  * Build the router.
  *
  * @param getService - Resolves the channel service (null → 503)
+ * @param getCompose - Resolves the compose service (null → 503)
  * @returns Router for `/api/channels`
  */
-export function createChannelsRouter(getService: () => CrewlyChannelService | null): Router {
+export function createChannelsRouter(
+  getService: () => CrewlyChannelService | null,
+  getCompose: () => ChannelComposeService | null = () => null,
+): Router {
   const router = Router();
 
   /** Run a handler with the service, answering 503 when it is not wired. */
   const withService =
-    (ownerOnly: boolean, fn: (service: CrewlyChannelService, req: Request, res: Response) => Promise<void>) =>
+    (ownerOnly: boolean | 'owner-or-orc', fn: (service: CrewlyChannelService, req: Request, res: Response) => Promise<void>) =>
     async (req: Request, res: Response): Promise<void> => {
-      if (ownerOnly && rejectNonOwner(req, res, OWNER_ONLY_CHANNELS)) return;
+      // 2026-10-13: the owner asks the orchestrator (from the phone) to open a
+      // channel; the orc must be able to, so create / add-member admit it. Every
+      // other change stays the owner's alone.
+      if (ownerOnly === 'owner-or-orc') {
+        if (rejectNonOwnerOrOrchestrator(req, res, OWNER_OR_ORC_CHANNELS)) return;
+      } else if (ownerOnly && rejectNonOwner(req, res, OWNER_ONLY_CHANNELS)) return;
       const service = getService();
       if (!service) {
         res.status(503).json({ success: false, error: 'unavailable', message: 'Channels are not ready yet' });
@@ -90,8 +109,27 @@ export function createChannelsRouter(getService: () => CrewlyChannelService | nu
   );
 
   router.post(
+    '/compose',
+    withService('owner-or-orc', async (_service, req, res) => {
+      const compose = getCompose();
+      if (!compose) {
+        res.status(503).json({ success: false, error: 'unavailable', message: 'Channels are not ready yet' });
+        return;
+      }
+      const body = req.body ?? {};
+      const result = await compose.compose({
+        name: typeof body.name === 'string' ? body.name : undefined,
+        channel: typeof body.channel === 'string' ? body.channel : undefined,
+        purpose: typeof body.purpose === 'string' ? body.purpose : undefined,
+        members: Array.isArray(body.members) ? body.members.filter((m: unknown): m is string => typeof m === 'string') : [],
+      });
+      res.status(result.channel.created ? 201 : 200).json({ success: true, data: result });
+    }),
+  );
+
+  router.post(
     '/',
-    withService(true, async (service, req, res) => {
+    withService('owner-or-orc', async (service, req, res) => {
       const body = req.body ?? {};
       const channel = await service.create({
         name: typeof body.name === 'string' ? body.name : '',
@@ -112,7 +150,7 @@ export function createChannelsRouter(getService: () => CrewlyChannelService | nu
 
   router.post(
     '/:ref/members',
-    withService(true, async (service, req, res) => {
+    withService('owner-or-orc', async (service, req, res) => {
       const sessionName = typeof req.body?.sessionName === 'string' ? req.body.sessionName : '';
       res.json({ success: true, data: await service.addMember(req.params.ref, sessionName) });
     }),

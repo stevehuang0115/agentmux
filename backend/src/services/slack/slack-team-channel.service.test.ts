@@ -5082,3 +5082,38 @@ describe('Crewly channels: ad-hoc rooms managed from Crewly and kept in step wit
     await expect(svc.ensureAgentChannel({ name: 'research', purpose: '', memberSessions: [ATLAS], applyPrefix: false })).rejects.toThrow(/already linked to a team/);
   });
 });
+
+describe('joinRoomFromCloud (room-join request from another machine)', () => {
+  it('links the EXISTING Slack channel with the given local sessions and never creates one', async () => {
+    slack.channels.set('CEXIST', { id: 'CEXIST', name: 'ce-growth', isArchived: false, isPrivate: false });
+    const rooms = jest.fn();
+    service.stop();
+    service = new SlackTeamChannelService({
+      slack,
+      chat: chat as unknown as TeamChannelChatApi,
+      storage,
+      getDispatcher: () => dispatcher,
+      onRoomsChanged: rooms,
+      storePath: path.join(tmpDir, 'slack-team-channels.json'),
+    });
+    const res = await service.joinRoomFromCloud({ slackChannelId: 'CEXIST', slackChannelName: 'ce-growth', sessions: ['crewly-alpha-sam'] });
+    expect(res).toMatchObject({ ok: true, joined: ['crewly-alpha-sam'], rejected: [] });
+    expect(slack.created).toEqual([]);
+    expect(await service.listRooms()).toEqual([{ channelId: 'CEXIST', agents: ['crewly-alpha-sam'] }]);
+    expect(rooms).toHaveBeenCalled();
+  });
+
+  it('rejects sessions that are not agents of this machine and reports them', async () => {
+    slack.channels.set('CEXIST', { id: 'CEXIST', name: 'ce-growth', isArchived: false, isPrivate: false });
+    const res = await service.joinRoomFromCloud({ slackChannelId: 'CEXIST', slackChannelName: 'ce-growth', sessions: ['crewly-alpha-leo', 'ghost'] });
+    expect(res).toMatchObject({ ok: true, joined: ['crewly-alpha-leo'], rejected: ['ghost'] });
+    const none = await service.joinRoomFromCloud({ slackChannelId: 'CEXIST', slackChannelName: 'ce-growth', sessions: ['ghost'] });
+    expect(none).toMatchObject({ ok: false, joined: [], error: 'no_local_members' });
+  });
+
+  it('fails (and creates nothing) when the Slack channel does not exist', async () => {
+    const res = await service.joinRoomFromCloud({ slackChannelId: 'CNOPE', slackChannelName: 'x', sessions: ['crewly-alpha-sam'] });
+    expect(res.ok).toBe(false);
+    expect(slack.created).toEqual([]);
+  });
+});

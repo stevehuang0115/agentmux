@@ -9,7 +9,7 @@ import express from 'express';
 import request from 'supertest';
 import { createChannelsRouter } from './channels.routes.js';
 import { CrewlyChannelError, type CrewlyChannelService } from '../../services/channels/crewly-channel.service.js';
-import { ownerUnlessAgentForTests } from '../../middleware/caller-identity.testing.js';
+import { agentAuthHeaders, callerIdentityForTests, ownerUnlessAgentForTests } from '../../middleware/caller-identity.testing.js';
 
 const CHANNEL = { id: 'huddle-1', name: 'tech-brief', origin: 'crewly', createdAt: 'now', slack: null, members: [] };
 
@@ -81,5 +81,39 @@ describe('/api/channels', () => {
     bare.use(ownerUnlessAgentForTests);
     bare.use('/api/channels', createChannelsRouter(() => null));
     expect((await request(bare).get('/api/channels')).status).toBe(503);
+  });
+
+  describe('the orchestrator acts for the owner (2026-10-13)', () => {
+    let real: express.Express;
+    const compose = { compose: jest.fn(async () => ({ channel: { id: 'h', name: 'x', slackChannelId: 'C1', created: true }, added: [], requested: [], notFound: [], ambiguous: [], failed: [], directoryUnavailable: false })) };
+
+    beforeEach(() => {
+      real = express();
+      real.use(callerIdentityForTests());
+      real.use(express.json());
+      real.use('/api/channels', createChannelsRouter(() => service as unknown as CrewlyChannelService, () => compose as never));
+    });
+
+    it('lets a verified orchestrator create, add members and compose', async () => {
+      const orc = agentAuthHeaders('crewly-orc');
+      expect((await request(real).post('/api/channels').set(orc).send({ name: 'x', memberSessions: ['a'] })).status).toBe(201);
+      expect((await request(real).post('/api/channels/huddle-1/members').set(orc).send({ sessionName: 'a' })).status).toBe(200);
+      const composed = await request(real).post('/api/channels/compose').set(orc).send({ name: 'x', members: ['Owen'] });
+      expect(composed.status).toBe(201);
+      expect(compose.compose).toHaveBeenCalledWith({ name: 'x', channel: undefined, purpose: undefined, members: ['Owen'] });
+    });
+
+    it('still refuses every other agent, and the orc on other mutations', async () => {
+      const atlas = agentAuthHeaders('eng-atlas');
+      expect((await request(real).post('/api/channels').set(atlas).send({ name: 'x', memberSessions: ['a'] })).status).toBe(403);
+      expect((await request(real).post('/api/channels/compose').set(atlas).send({ name: 'x', members: ['Owen'] })).status).toBe(403);
+      expect((await request(real).post('/api/channels/huddle-1/members').set(atlas).send({ sessionName: 'a' })).status).toBe(403);
+      // The bare header is not proof of being the orchestrator.
+      expect((await request(real).post('/api/channels').set('X-Agent-Session', 'crewly-orc').send({ name: 'x', memberSessions: ['a'] })).status).toBe(403);
+      const orc = agentAuthHeaders('crewly-orc');
+      expect((await request(real).delete('/api/channels/huddle-1/members/a').set(orc)).status).toBe(403);
+      expect((await request(real).post('/api/channels/huddle-1/archive').set(orc)).status).toBe(403);
+      expect((await request(real).patch('/api/channels/huddle-1').set(orc).send({ name: 'n' })).status).toBe(403);
+    });
   });
 });

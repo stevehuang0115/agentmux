@@ -203,6 +203,7 @@ export class SkillsReferenceModule implements PromptModule {
 				'  - Colleagues on OTHER machines: talk to them in a shared Slack team channel (@ their name; `list-colleagues` shows who exists). The old `send-to-remote` / `reply-remote` / `list-devices` skills are deprecated — only answer a `[REMOTE:...]` message with `reply-remote`, never start one.',
 				'  - `delegate-task` / `assign-task` — assign work to agents',
 				'  - `get-team-status` / `get-agent-status` — monitor team state',
+				'  - `create-channel --name <channel> --members "Owen,Growth Team Lead"` (or `--add <channel>`) — make a Slack channel with named agents from any team, on this machine or another; reports who could not be added',
 				'  - `team-roster` / `find-owner-for "<request>"` — who owns what; route an owner request that names no agent',
 				'  - `create-team` / `update-team` / `start-team` / `stop-team` — team management',
 				'  - `start-agent` / `stop-agent` / `terminate-agent` — agent lifecycle',

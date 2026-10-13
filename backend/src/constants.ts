@@ -2226,6 +2226,10 @@ export const SLACK_CLOUD_CONSTANTS = {
 	AGENTS_PATH: '/agents',
 	/** `POST` — deliver a room message to an agent on another machine */
 	HANDOFF_PATH: '/handoff',
+	/** `POST` — ask Cloud to put agents of another machine in a Slack channel (orchestrator-created rooms) */
+	ROOM_JOIN_PATH: '/rooms/join',
+	/** Event type of the Cloud-pushed room-join envelope */
+	ROOM_JOIN_EVENT_TYPE: 'crewly_room_join',
 	/** `GET` — the account's Slack routing log (where each channel message went and why, 14 days) */
 	ROUTING_DECISIONS_PATH: '/routing-decisions',
 	/** GET → who is who across the account (instances, teams, agents, bot users) */
