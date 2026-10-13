@@ -21,19 +21,26 @@
 - [ ] Refactoring (no functional change)
 - [ ] Test improvement
 
-## Testing
+## Evidence
 
-<!-- How did you verify this works? -->
+<!-- Proof it works. A screenshot is best; a command output next; for a bug fix, name the exact test that failed before and passes now. -->
 
-- [ ] Added/updated unit tests
-- [ ] Added/updated integration tests
-- [ ] Manually tested (describe below)
+**Before:** <screenshot / output / failing test run>
 
-<!-- If manually tested, describe the steps: -->
+**After:** <screenshot / output / passing test run>
+
+## Merge Danger
+
+<!-- One-way door = hard to undo: data migration, deletion, published artifact (npm, docker, deploy), outbound message. Everything else is two-way. -->
+
+**Door:** one-way | two-way
+
+**Blast radius:** <one word>
 
 ## Checklist
 
 - [ ] Code compiles without errors (`npm run build`)
+- [ ] A new test was seen failing before the fix (or mutation-checked)
 - [ ] Tests pass (`npm run test:unit`)
 - [ ] New source files have co-located test files (same directory, `.test.ts`)
 - [ ] Functions have JSDoc comments

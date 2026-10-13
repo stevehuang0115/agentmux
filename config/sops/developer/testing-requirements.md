@@ -56,6 +56,20 @@ describe('ComponentName', () => {
 - No test interdependencies
 - Clean up after tests
 
+When a test fails and the cause is unclear, follow the `debugging` SOP (red-capable loop first).
+
+## Anti-patterns
+
+Coverage percentage rewards all three. Avoid them.
+
+- **Tautological**: the assertion recomputes the expected value the way the code does (`expect(add(a, b)).toBe(a + b)`). Tell: it can never disagree with the code. Take expected values from a literal, a worked example or the spec. Prove a test is not tautological with the mutation check: break the code on purpose and see the test fail.
+- **Implementation-coupled**: the test checks how (private calls, call order), not what. Tell: it breaks on a refactor that changes no behavior.
+- **Horizontal slicing**: all tests first, then all code. Tell: many tests, none ever seen red. Work one test, one implementation, repeat. **Red before green**: see the new test fail before the fix.
+
+## Seams
+
+Test at agreed seams (public function, API route, CLI entry), not at every internal. For each seam write one line: what it catches and what it misses.
+
 ## Coverage Goals
 
 - Minimum 80% for new code

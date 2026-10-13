@@ -85,6 +85,10 @@ git worktree remove /tmp/crewly-{ticket-name}-{owner}
 
 **Solo work exception:** if you are the only developer active in the team and you're not parking work for parallel review, working directly in the main repo is acceptable. The worktree pattern is required only when there is a real risk of branch-state collision.
 
+## Destructive Git Is Blocked
+
+A hook blocks these in your Bash tool: force-push (`--force`, `-f`, `--force-with-lease`, `+ref`), any push to `main`/`master`, `reset --hard`, `clean -f`, `branch -D`, `checkout .`, `restore .`. Plain `git push origin feat/x` is fine. Instead: `git stash -u` before discarding, `branch -d` for merged branches, push a normal commit and open a PR. If you truly need one, ask your team lead. Limit: interpreter one-liners and variable-built commands are not seen.
+
 ## Before Pushing
 
 1. Run `npm run typecheck`
