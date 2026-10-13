@@ -8616,6 +8616,8 @@ export const RECURRING_CHANGE_HANDOFF_CONSTANTS = {
 	SURE_SHARED_TERMS: 3,
 	/** Terms shorter than this (Latin words) are noise */
 	MIN_WORD_CHARS: 3,
+	/** Chars of a schedule label that name the job (the rest is its instructions) */
+	MAX_IDENTITY_CHARS: 80,
 	/** `WorkItem.metadata` marker on the hand-off WorkItem */
 	METADATA_KEY: 'recurringChangeHandoff',
 	/** Option labels / answers that decline a change (nothing to hand off) */
