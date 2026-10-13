@@ -7,7 +7,7 @@ import { generateTargetKeyPair } from './team-move-crypto.js';
 import { buildEncryptedPackage } from './team-move-exporter.js';
 import { StagingArea } from './team-move-fs.js';
 import { TeamMoveImportError, TeamMoveImporter, projectsRoot, type ImportDeps } from './team-move-importer.js';
-import type { TeamMoveManifest } from './team-move.types.js';
+import type { ImportProgress, TeamMoveManifest } from './team-move.types.js';
 
 let counter = 0;
 
@@ -154,7 +154,7 @@ describe('TeamMoveImporter', () => {
       m.team.projectIds.push('p2');
     });
     const report = await run(p, deps({ restoreRepo: async () => ({ ok: false, branch: null, headSha: null, warnings: [], error: 'Permission denied (publickey)' }) }));
-    expect(report.repos.failed).toEqual([{ name: 'P One', reason: 'Permission denied (publickey)' }]);
+    expect(report.repos.failed).toEqual([{ name: 'P One', reason: 'Permission denied (publickey)', remote: 'git@x:y/z.git', needsLogin: false }]);
     expect(report.reconnect.find((r) => r.kind === 'git')!.detail).toMatch(/publickey/);
     expect(report.warnings.join(' ')).toMatch(/Docs: not a git repository/);
     expect(report.warnings.join(' ')).toMatch(/also used by Other/);
@@ -208,6 +208,119 @@ describe('TeamMoveImporter', () => {
     expect(item.label).toBe('Antigravity login on iriss-air');
     expect(item.detail).toContain('Ruth runs on Claude Code until Antigravity is logged in on iriss-air; it switches back automatically.');
     expect(report.reconnect.filter((r) => r.kind === 'runtime')).toHaveLength(1);
+  });
+
+  describe('a team without a project', () => {
+    const projectless = { id: 'team-1', name: 'SteamFun', members: [{ id: 'm1', name: 'A', sessionName: 's-a', role: 'developer', runtimeType: 'claude-code' }], projectIds: [] as string[], createdAt: 'x', updatedAt: 'x' };
+    const noProjects = (m: TeamMoveManifest): void => {
+      m.team.name = 'SteamFun';
+      m.projects = [];
+      m.repos = [];
+      m.team.projectIds = [];
+    };
+
+    it('gets a home project under the projects root so the start route has a project to run in', async () => {
+      const seen: Array<{ projectIds: string[]; known: string[] }> = [];
+      const startTeam = jest.fn(async (teamId: string) => {
+        const team = (await storage.getTeams()).find((t) => t.id === teamId)!;
+        // What the real start route needs: projectIds[0] is a project that exists.
+        seen.push({ projectIds: team.projectIds, known: (await storage.getProjects()).map((p) => p.id) });
+        return { ok: team.projectIds.length > 0 && (await storage.getProjects()).some((p) => p.id === team.projectIds[0]) };
+      });
+      const report = await run(await pack(noProjects, { config: projectless }), deps({ startTeam }));
+      const projects = await storage.getProjects();
+      expect(projects).toHaveLength(1);
+      expect(projects[0]!.path).toBe(path.join(root, 'projects', 'steamfun'));
+      expect((await fs.stat(projects[0]!.path)).isDirectory()).toBe(true);
+      expect(seen[0]!.projectIds).toEqual([projects[0]!.id]);
+      expect(report.started).toEqual({ requested: true, ok: true });
+      expect(report.warnings.join(' ')).toMatch(/no project folder on the source; it runs from .*steamfun/);
+    });
+
+    it('is idempotent: a second import of the same team id reuses the home project', async () => {
+      await run(await pack(noProjects, { config: projectless }), deps({ startTeam: async () => ({ ok: true }) }));
+      await fs.rm(path.join(home, 'teams'), { recursive: true, force: true });
+      await run(await pack(noProjects, { config: projectless }), deps({ startTeam: async () => ({ ok: true }) }));
+      expect(await storage.getProjects()).toHaveLength(1);
+    });
+
+    it('drops project ids that did not come along, so the start does not trip on a missing project', async () => {
+      const dangling = await pack(
+        (m) => {
+          m.projects = [];
+          m.repos = [];
+        },
+        { config: { ...projectless, projectIds: ['gone-1'] } },
+      );
+      await run(dangling, deps({ startTeam: async () => ({ ok: true }) }));
+      const [team] = await storage.getTeams();
+      const [project] = await storage.getProjects();
+      expect(team!.projectIds).toEqual([project!.id]);
+    });
+
+    it("keeps the team's own projects when it has them", async () => {
+      await run(await pack(), deps({ startTeam: async () => ({ ok: true }) }));
+      expect((await storage.getTeams())[0]!.projectIds).toEqual(['p1']);
+      expect(await storage.getProjects()).toHaveLength(1);
+    });
+  });
+
+  describe('repositories the target cannot clone', () => {
+    it('fails that repository with a sign-in item and still starts the team (no hang)', async () => {
+      const startTeam = jest.fn().mockResolvedValue({ ok: true });
+      const p = await pack((m) => void (m.repos[0]!.remoteUrl = 'https://github.com/stevehuang0115/edu-game.git'));
+      const report = await run(
+        p,
+        deps({
+          startTeam,
+          machineName: () => 'iriss-air.lan',
+          restoreRepo: async () => ({ ok: false, branch: null, headSha: null, warnings: [], error: "this machine has no git credentials for the remote (sign in to it first): fatal: could not read Username for 'https://github.com': terminal prompts disabled" }),
+        }),
+      );
+      expect(report.repos.failed).toEqual([expect.objectContaining({ name: 'P One', needsLogin: true, remote: 'https://github.com/stevehuang0115/edu-game.git' })]);
+      expect(report.reconnect.find((r) => r.label === 'Sign in to GitHub on iriss-air.lan')).toMatchObject({ kind: 'git', detail: expect.stringMatching(/P One.*gh auth login.*phone/) });
+      expect(startTeam).toHaveBeenCalled();
+      expect(report.started.ok).toBe(true);
+    });
+
+    it('tests access first and fails the repository in seconds without cloning', async () => {
+      const checkRemote = jest.fn().mockResolvedValue({ ok: false, error: 'no git credentials' });
+      const report = await run(await pack(), deps({ checkRemote, startTeam: async () => ({ ok: true }) }));
+      expect(checkRemote).toHaveBeenCalledWith('git@x:y/z.git');
+      expect(restoreCalls).toEqual([]);
+      expect(report.repos.failed[0]).toMatchObject({ name: 'P One', needsLogin: true });
+      expect(report.repos.failed[0]!.reason).toMatch(/cannot read x\/y\/z: no git credentials/);
+      expect(report.started.ok).toBe(true);
+    });
+
+    it('treats a throwing access test as "cannot read"', async () => {
+      const report = await run(await pack(), deps({ checkRemote: async () => Promise.reject(new Error('spawn failed')) }));
+      expect(report.repos.failed[0]!.reason).toMatch(/spawn failed/);
+    });
+  });
+
+  describe('progress', () => {
+    it('reports the clone about every interval with what git has done, and once at the start', async () => {
+      const events: ImportProgress[] = [];
+      const restore: ImportDeps['restoreRepo'] = async (_dest, _repo, options) => {
+        options?.onProgress?.({ phase: 'Receiving objects', percent: 40, objectsDone: 40, objectsTotal: 100, bytes: 5 * 1024 * 1024, rate: '2.00 MiB/s' });
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        return { ok: true, branch: 'main', headSha: 'abc', warnings: [] };
+      };
+      const p = await pack();
+      await new TeamMoveImporter(deps({ restoreRepo: restore, progressIntervalMs: 40 })).run({ moveId: p.moveId, packageFile: p.file, privateKey: p.key.privateKey }, undefined, { onProgress: (e) => events.push(e) });
+      expect(events[0]).toMatchObject({ step: 'repos', repo: 'P One', phase: null });
+      const later = events.slice(1);
+      expect(later.length).toBeGreaterThanOrEqual(2);
+      expect(later[later.length - 1]).toMatchObject({ phase: 'Receiving objects', percent: 40, objectsDone: 40, objectsTotal: 100, bytes: 5 * 1024 * 1024 });
+    });
+
+    it('passes the repository size so the time limit scales with it', async () => {
+      const sizes: Array<number | null | undefined> = [];
+      const p = await pack((m) => void (m.repos[0]!.sizeBytes = 1_600_000_000));
+      await run(p, deps({ restoreRepo: async (_d, _repo, options) => (sizes.push(options?.sizeBytes), { ok: true, branch: 'main', headSha: 'abc', warnings: [] }) }));
+      expect(sizes).toEqual([1_600_000_000]);
+    });
   });
 
   it('fails when there is not enough disk', async () => {

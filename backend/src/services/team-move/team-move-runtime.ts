@@ -36,6 +36,7 @@ import { TeamMoveCloudClient } from './team-move-cloud.client.js';
 import { TeamMoveDriver, type TeamMoveRelaySource } from './team-move-driver.service.js';
 import { TeamMoveExporter } from './team-move-exporter.js';
 import { TeamMoveImporter } from './team-move-importer.js';
+import { checkRemoteAccess } from './team-move-git.js';
 import { freeDiskBytes, runPreflight } from './team-move-preflight.js';
 
 /** Inputs of the composition. */
@@ -201,8 +202,9 @@ export function createTeamMoveDriver(input: TeamMoveRuntimeInput): TeamMoveDrive
         machineName: async () => (await identity().catch(() => null))?.deviceName || os.hostname(),
         runtimeLogins,
         freeDisk: freeDiskBytes,
+        checkRemote: checkRemoteAccess,
       }),
-    preflight: (tools) => runPreflight({ crewlyVersion: version(), diskPath: home, runtimeLogins }, tools),
+    preflight: (tools, remotes) => runPreflight({ crewlyVersion: version(), diskPath: home, runtimeLogins }, tools, remotes),
     sendToAgent: input.sendToAgent,
     getTeams: () => storage.getTeams(),
     isTeamIdle: async (teamId) => {

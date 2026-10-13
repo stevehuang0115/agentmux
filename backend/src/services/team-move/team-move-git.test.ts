@@ -107,7 +107,7 @@ describe('team-move-git', () => {
 
   it('fails clearly without a remote or with an unreachable one', async () => {
     expect((await restoreRepo(path.join(root, 'd6'), { remoteUrl: null, branch: null, headSha: null })).error).toMatch(/no remote/);
-    const bad = await restoreRepo(path.join(root, 'd7'), { remoteUrl: path.join(root, 'missing.git'), branch: 'main', headSha: null }, 20_000);
+    const bad = await restoreRepo(path.join(root, 'd7'), { remoteUrl: path.join(root, 'missing.git'), branch: 'main', headSha: null }, { timeoutMs: 20_000 });
     expect(bad.ok).toBe(false);
     expect(bad.error).toBeTruthy();
   });

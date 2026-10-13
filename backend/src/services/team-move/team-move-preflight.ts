@@ -13,6 +13,7 @@ import * as path from 'node:path';
 import { TEAM_MOVE_CONSTANTS } from '../../constants.js';
 import { buildHarnessPath, resolveExecutable } from '../harness/harness-exec.utils.js';
 import { compareVersions } from '../harness/harness-status.service.js';
+import { checkRemoteAccess, sanitizeRemote, type RemoteAccess } from './team-move-git.js';
 import type { TeamMovePreflight } from './team-move.types.js';
 
 /** Collaborators of the preflight (all injectable for tests). */
@@ -26,6 +27,8 @@ export interface PreflightDeps {
   hasCommand?: (binary: string) => boolean;
   /** Which runtimes are installed and logged in, by runtime id. */
   runtimeLogins?: () => Promise<Record<string, boolean>>;
+  /** Test that a git remote can be read (default: `git ls-remote`, never prompting). */
+  checkRemote?: (remoteUrl: string) => Promise<RemoteAccess>;
 }
 
 /**
@@ -82,9 +85,10 @@ export function checkTools(tools: readonly string[], hasCommand: (binary: string
  *
  * @param deps - Version, disk path and probes
  * @param requiredTools - Tools to check (the full known list when the package is not known yet)
+ * @param remotes - Git remotes of the moving team's repositories; each is tested with `git ls-remote` (never prompting)
  * @returns What Cloud receives with the target's public key
  */
-export async function runPreflight(deps: PreflightDeps, requiredTools: readonly string[] = TEAM_MOVE_CONSTANTS.KNOWN_TOOLS): Promise<TeamMovePreflight> {
+export async function runPreflight(deps: PreflightDeps, requiredTools: readonly string[] = TEAM_MOVE_CONSTANTS.KNOWN_TOOLS, remotes: readonly string[] = []): Promise<TeamMovePreflight> {
   const free = await (deps.freeDisk ?? freeDiskBytes)(deps.diskPath);
   const runtimes = deps.runtimeLogins ? await deps.runtimeLogins().catch(() => ({})) : {};
   return {
@@ -92,7 +96,28 @@ export async function runPreflight(deps: PreflightDeps, requiredTools: readonly 
     freeDiskBytes: free ?? 0,
     tools: checkTools(requiredTools, deps.hasCommand),
     runtimes,
+    ...(remotes.length > 0 ? { gitAccess: await checkGitAccess(remotes, deps.checkRemote ?? checkRemoteAccess) } : {}),
   };
+}
+
+/** Most remotes tested in one preflight. */
+const MAX_REMOTES_TESTED = 20;
+
+/**
+ * Test whether this machine can read each remote.
+ *
+ * @param remotes - Remote URLs (credentials are stripped from the answer)
+ * @param check - The access test
+ * @returns One entry per distinct remote
+ */
+export async function checkGitAccess(remotes: readonly string[], check: (remoteUrl: string) => Promise<RemoteAccess> = checkRemoteAccess): Promise<NonNullable<TeamMovePreflight['gitAccess']>> {
+  const distinct = [...new Set(remotes.map(sanitizeRemote))].slice(0, MAX_REMOTES_TESTED);
+  return Promise.all(
+    distinct.map(async (remote) => {
+      const res = await check(remote).catch((e: unknown): RemoteAccess => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+      return { remote, ok: res.ok, ...(res.error ? { error: sanitizeRemote(res.error).slice(0, 300) } : {}) };
+    }),
+  );
 }
 
 /**
