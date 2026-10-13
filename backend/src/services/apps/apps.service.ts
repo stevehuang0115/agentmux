@@ -890,6 +890,35 @@ export class AppsService {
   }
 
   /**
+   * Delete an app (unpublish): its URL stops working at once and Cloud removes
+   * its versions, files and data. Agents may delete only PRIVATE apps their
+   * team published; a public app is the owner's to delete (make it private
+   * first or ask the owner). The owner may delete any.
+   *
+   * @param appId - App id
+   * @param caller - Agent (apps its team published) or owner
+   * @returns `{ appId, deleted: true }`
+   * @throws AppsCloudError 403 not_your_app / 403 forbidden (public app) / 404 not_found
+   */
+  async deleteApp(appId: unknown, caller: AppsCaller): Promise<{ appId: string; deleted: true }> {
+    const id = requireAppId(appId);
+    await this.assertPublisher(id, caller);
+    if (caller.agentSession) {
+      const app = await this.deps.client.request<CloudAppView>('GET', `/apps/${id}`, { agent: caller.agentSession });
+      if (app.visibility === 'public') {
+        throw new AppsCloudError(403, 'forbidden', 'This app is public, so only the owner can delete it. Make it private first (--private) or ask the owner.');
+      }
+    }
+    try {
+      await this.deps.client.request('DELETE', `/apps/${id}`, { agent: caller.agentSession });
+    } catch (err) {
+      if (!(err instanceof AppsCloudError && err.status === 404)) throw err;
+    }
+    await this.deps.registry.markDeleted(id);
+    return { appId: id, deleted: true };
+  }
+
+  /**
    * Make an earlier retained version current.
    *
    * @param appId - App id
@@ -935,8 +964,10 @@ export class AppsService {
   /**
    * Transfer an app to another agent, so a new team can publish it.
    *
-   * Allowed: the owner, the orchestrator, the current publisher, or a lead of
-   * the publisher's team. The target must be a member of an existing,
+   * Allowed: the owner or the orchestrator only (crewly#1116); a team's own
+   * agents and leads cannot hand an app away. Every hand-over is recorded on
+   * the registry entry (`transfers`: when, from, to, by) and logged. Versions,
+   * data, comments and visibility live in Cloud and are untouched. The target must be a member of an existing,
    * non-archived team on this machine. Cloud is updated first (the portal's
    * publisher), then the local registry, which wake deliveries, team ownership
    * checks and thumbnails all read. The old and new publisher are told.
@@ -956,22 +987,15 @@ export class AppsService {
     if (!entry || entry.deleted) throw new AppsCloudError(404, 'not_found', 'No such app on this machine.');
     const me = caller.agentSession;
     const current = entry.agentSession ?? null;
-    if (me && me !== ORCHESTRATOR_SESSION_NAME && me !== current) {
-      const lead = !!current && !!this.deps.directory && (await this.deps.directory.leadsTeamOf(me, current).catch(() => false));
-      if (!lead) {
-        throw new AppsCloudError(
-          403,
-          C.ERROR_CODES.NOT_YOUR_APP,
-          'Only the owner, the orchestrator, the app\'s publisher or the lead of the publisher\'s team can transfer an app.',
-        );
-      }
+    if (me && me !== ORCHESTRATOR_SESSION_NAME) {
+      throw new AppsCloudError(403, C.ERROR_CODES.NOT_YOUR_APP, 'Only the owner or the orchestrator can transfer an app to another team. Ask the orchestrator.');
     }
     const target = this.deps.directory ? await this.deps.directory.member(toSession) : null;
     if (!target) throw validation(`${toSession} is not a member of an active team on this machine, so it cannot take over an app.`);
     if (current === toSession) return { appId: id, name: entry.name, publisher: toSession, previous: current, changed: false, notified: [] };
 
     await this.deps.client.request('PUT', `/apps/${id}/publisher`, { body: { session: toSession }, agent: me });
-    const moved = await this.deps.registry.setPublisher(id, toSession);
+    const moved = await this.deps.registry.setPublisher(id, toSession, me ?? 'owner');
     const previous = moved?.previous ?? current;
 
     const notified: string[] = [];
@@ -1198,15 +1222,20 @@ export class AppsService {
    *
    * @returns Entries without the poller cursor
    */
-  async list(caller: AppsCaller = {}): Promise<Array<Omit<AppRegistryEntry, 'cursor' | 'delivered' | 'wakes' | 'visitorWakes'>>> {
+  async list(caller: AppsCaller = {}): Promise<Array<Omit<AppRegistryEntry, 'cursor' | 'delivered' | 'wakes' | 'visitorWakes'> & { team: string | null }>> {
     const me = caller.agentSession;
     const entries = await this.deps.registry.list();
     const mine = await Promise.all(
       entries.map(async (e) => !me || e.agentSession === me || (!!this.deps.sameTeam && !!e.agentSession && (await this.deps.sameTeam(me, e.agentSession).catch(() => false)))),
     );
-    return entries
-      .filter((_e, i) => mine[i])
-      .map(({ cursor: _cursor, delivered: _delivered, wakes: _wakes, visitorWakes: _visitorWakes, ...rest }) => rest);
+    const visible = entries.filter((_e, i) => mine[i]);
+    // The owning team: the team of the app's publisher (null when unknown).
+    return Promise.all(
+      visible.map(async ({ cursor: _cursor, delivered: _delivered, wakes: _wakes, visitorWakes: _visitorWakes, ...rest }) => ({
+        ...rest,
+        team: rest.agentSession && this.deps.directory ? ((await this.deps.directory.member(rest.agentSession).catch(() => null))?.team ?? null) : null,
+      })),
+    );
   }
 
   /**

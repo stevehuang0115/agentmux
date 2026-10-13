@@ -749,6 +749,43 @@ describe('comments (crewly#1056)', () => {
   });
 });
 
+describe('AppsService.deleteApp (crewly#1081)', () => {
+  const who = { agentSession: 'dev-ella' };
+  let svc: AppsService;
+  let calls: Array<[string, string]>;
+  let visibility: string;
+
+  beforeEach(async () => {
+    visibility = 'private';
+    calls = [];
+    const req = jest.fn(async (method: string, p: string) => {
+      calls.push([method, p]);
+      if (method === 'GET') return { appId: ID, name: 'X', visibility };
+      return { deleted: true };
+    });
+    svc = new AppsService({ client: { request: req } as unknown as AppsCloudClient, registry, cards, sameTeam });
+    await registry.upsert(ID, { name: 'X', agentSession: 'dev-ella', source: '/w/x' });
+  });
+
+  it('the publisher deletes a private app: Cloud DELETE, then the registry marks it gone', async () => {
+    await expect(svc.deleteApp(ID, who)).resolves.toEqual({ appId: ID, deleted: true });
+    expect(calls).toContainEqual(['DELETE', `/apps/${ID}`]);
+    expect((await registry.get(ID))!.deleted).toBe(true);
+  });
+
+  it('an agent cannot delete a public app; the owner can', async () => {
+    visibility = 'public';
+    await expect(svc.deleteApp(ID, who)).rejects.toMatchObject({ status: 403, code: 'forbidden' });
+    expect(calls.some(([m]) => m === 'DELETE')).toBe(false);
+    await expect(svc.deleteApp(ID, {})).resolves.toMatchObject({ deleted: true });
+  });
+
+  it('an agent of another team cannot delete it', async () => {
+    await expect(svc.deleteApp(ID, { agentSession: 'dev-bob' })).rejects.toMatchObject({ status: 403, code: 'not_your_app' });
+    expect(calls).toEqual([]);
+  });
+});
+
 describe('AppsService.transfer', () => {
   const MILO = 'edu-game-milo-13e8d3ca';
   const ATLAS = 'think-tank-atlas-b4e166f6';
@@ -784,17 +821,35 @@ describe('AppsService.transfer', () => {
     await expect(svc.assertPublisher(ID, {})).resolves.toBeUndefined();
   });
 
-  it('the current publisher, the lead of its team and the orchestrator may transfer; other agents may not', async () => {
+  it('only the owner and the orchestrator may transfer: not the publisher, not its team lead, not other agents (crewly#1116)', async () => {
     await expect(svc.transfer(ID, MILO, { agentSession: 'edu-game-iva-11111111' })).rejects.toMatchObject({ status: 403, code: 'not_your_app' });
-    await expect(svc.transfer(ID, MILO, { agentSession: 'think-tank-lead-aaaaaaaa' })).resolves.toMatchObject({ changed: true });
-    await registry.setPublisher(ID, ATLAS);
-    await expect(svc.transfer(ID, MILO, { agentSession: ATLAS })).resolves.toMatchObject({ changed: true });
-    await registry.setPublisher(ID, ATLAS);
+    await expect(svc.transfer(ID, MILO, { agentSession: 'think-tank-lead-aaaaaaaa' })).rejects.toMatchObject({ status: 403, code: 'not_your_app' });
+    await expect(svc.transfer(ID, MILO, { agentSession: ATLAS })).rejects.toMatchObject({ status: 403, code: 'not_your_app' });
+    expect((await registry.get(ID))!.agentSession).toBe(ATLAS);
+    expect(request).not.toHaveBeenCalledWith('PUT', expect.anything(), expect.anything());
     await expect(svc.transfer(ID, MILO, { agentSession: 'crewly-orc' })).resolves.toMatchObject({ changed: true });
   });
 
+  it('records every hand-over on the registry entry (audit trail) and never touches Cloud data', async () => {
+    await svc.transfer(ID, MILO, { agentSession: 'crewly-orc' });
+    await svc.transfer(ID, ATLAS, {});
+    const e = (await registry.get(ID))!;
+    expect(e.transfers).toEqual([
+      { at: expect.any(String), from: ATLAS, to: MILO, by: 'crewly-orc' },
+      { at: expect.any(String), from: MILO, to: ATLAS, by: 'owner' },
+    ]);
+    const writes = request.mock.calls.filter(([m]) => m !== 'GET').map(([m, p]) => `${m} ${p}`);
+    expect(writes).toEqual([`PUT /apps/${ID}/publisher`, `PUT /apps/${ID}/publisher`]);
+  });
+
+  it('list shows the owning team of each app', async () => {
+    const rows = await svc.list({});
+    expect(rows).toEqual([expect.objectContaining({ appId: ID, agentSession: ATLAS, team: 'T' })]);
+  });
+
   it('does not tell the agent that made the transfer', async () => {
-    const r = await svc.transfer(ID, MILO, { agentSession: ATLAS });
+    await registry.setPublisher(ID, 'crewly-orc');
+    const r = await svc.transfer(ID, MILO, { agentSession: 'crewly-orc' });
     expect(r.notified).toEqual([MILO]);
   });
 

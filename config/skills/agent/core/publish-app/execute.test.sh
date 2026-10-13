@@ -82,6 +82,10 @@ class H(BaseHTTPRequestHandler):
             if data.get('owner') == 'channel:#nope':
                 return send(400, {'success': False, 'error': 'validation', 'message': 'No channel "#nope" on this machine.'})
             return send(200, {'success': True, 'data': {'appId': '28au74d9cj', 'owner': {'kind': 'channel', 'explicit': True, 'name': '#daily-brief'}, 'previous': None}})
+        if method == 'DELETE' and self.path == '/api/apps/28au74d9cj':
+            return send(200, {'success': True, 'data': {'appId': '28au74d9cj', 'deleted': True}})
+        if method == 'DELETE' and self.path == '/api/apps/bcdfghjkmn':
+            return send(403, {'success': False, 'error': 'forbidden', 'message': 'This app is public, so only the owner can delete it.'})
         if self.path == '/api/apps/28au74d9cj/transfer':
             return send(200, {'success': True, 'data': {'appId': '28au74d9cj', 'name': 'G', 'publisher': data['toSession'], 'previous': 'dev-ella', 'changed': True, 'notified': [data['toSession']]}})
         if self.path.endswith('/rollback'):
@@ -90,7 +94,7 @@ class H(BaseHTTPRequestHandler):
         if self.path.endswith('/versions'):
             return send(200, {'success': True, 'data': [{'version': 2, 'current': True, 'note': None, 'files': 1, 'totalBytes': 9, 'createdAt': 't', 'entry': 'index.html'}]})
         if self.path == '/api/apps':
-            return send(200, {'success': True, 'data': [{'appId': 'a', 'name': 'A', 'url': 'u', 'agentSession': 's', 'currentVersion': 1, 'source': '/x'},
+            return send(200, {'success': True, 'data': [{'appId': 'a', 'name': 'A', 'url': 'u', 'agentSession': 's', 'team': 'Alpha', 'currentVersion': 1, 'source': '/x'},
                 {'appId': 'b', 'name': 'B', 'deleted': True}]})
         send(404, {'success': False, 'error': 'not_found'})
     def do_GET(self): self._reply('GET')
@@ -167,10 +171,17 @@ check "transfer: output" "$OUT" '{"success":true,"appId":"28au74d9cj","publisher
 check "transfer: request" "$(jq -c '{path, body}' "$STUB_LOG")" '{"path":"/api/apps/28au74d9cj/transfer","body":{"toSession":"edu-game-milo-13e8d3ca"}}'
 check "transfer needs --app" "$(run_err --transfer-to x | grep -c -- '--app is required with --transfer-to')" "1"
 
+OUT=$(run --app 28au74d9cj --delete)
+check "delete: output" "$OUT" '{"success":true,"appId":"28au74d9cj","deleted":true}'
+check "delete: request" "$(jq -c '{method, path}' "$STUB_LOG")" '{"method":"DELETE","path":"/api/apps/28au74d9cj"}'
+check "delete needs --app" "$(run_err --delete | grep -c -- '--app is required with --delete')" "1"
+OUT=$(run --app bcdfghjkmn --delete || true)
+check "delete: public app refused" "$(printf '%s' "$OUT" | jq -r '.success, .reason' | tr '\n' ' ')" "false forbidden "
+
 OUT=$(run --app 28au74d9cj --versions)
 check "versions" "$OUT" '{"success":true,"versions":[{"version":2,"current":true,"note":null,"files":1,"totalBytes":9,"createdAt":"t"}]}'
 OUT=$(run --list)
-check "list hides deleted" "$OUT" '{"success":true,"apps":[{"appId":"a","name":"A","url":"u","agent":"s","currentVersion":1,"source":"/x"}]}'
+check "list hides deleted" "$OUT" '{"success":true,"apps":[{"appId":"a","name":"A","url":"u","agent":"s","team":"Alpha","currentVersion":1,"source":"/x"}]}'
 
 OUT=$(run --dir "$APPDIR" --name nologin; true)
 check "backend error mapped" "$OUT" '{"success":false,"status":409,"reason":"not_logged_in","message":"not signed in","hint":"crewly cloud login"}'

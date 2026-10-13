@@ -15,6 +15,21 @@ import path from 'path';
 import { CREWLY_APPS_CONSTANTS } from '../../constants.js';
 import { atomicWriteJson, safeReadJson } from '../../utils/file-io.utils.js';
 
+/** One publisher hand-over (audit trail on the registry entry). */
+export interface AppTransferRecord {
+  /** ISO time */
+  at: string;
+  /** Previous publisher session (null = none / the orchestrator) */
+  from: string | null;
+  /** New publisher session */
+  to: string;
+  /** Who did it: an agent session, or `owner` */
+  by: string;
+}
+
+/** Keep at most this many hand-overs per app. */
+const MAX_TRANSFER_RECORDS = 20;
+
 /** One app this instance published. */
 export interface AppRegistryEntry {
   appId: string;
@@ -35,6 +50,8 @@ export interface AppRegistryEntry {
   wakes?: Record<string, number>;
   /** Seqs above `cursor` already delivered (another batch for this app is still pending): skipped when re-read */
   delivered?: number[];
+  /** Publisher hand-overs, newest last (audit trail; capped at 20) */
+  transfers?: AppTransferRecord[];
   /** Visitor-triggered wakes on a UTC day, and visitor submissions not delivered over the daily cap (P3 §3) */
   visitorWakes?: VisitorWakeState;
 }
@@ -174,6 +191,7 @@ export class AppsRegistryService {
         createdAt: prev?.createdAt ?? now,
         updatedAt: now,
         ...(patch.deleted !== undefined ? { deleted: patch.deleted } : prev?.deleted ? { deleted: prev.deleted } : {}),
+        ...(prev?.transfers ? { transfers: prev.transfers } : {}),
         ...(prev?.wakes ? { wakes: prev.wakes } : {}),
         ...(prev?.visitorWakes ? { visitorWakes: prev.visitorWakes } : {}),
         ...(prev?.delivered && patch.cursor === undefined ? { delivered: prev.delivered } : {}),
@@ -190,15 +208,17 @@ export class AppsRegistryService {
    *
    * @param appId - App id
    * @param session - The new publisher's agent session
+   * @param by - Who handed it over (agent session, or `owner`); recorded in the audit trail
    * @returns The previous and the stored entry, or null for an unknown app
    */
-  setPublisher(appId: string, session: string): Promise<{ previous: string | null; entry: AppRegistryEntry } | null> {
+  setPublisher(appId: string, session: string, by = 'owner'): Promise<{ previous: string | null; entry: AppRegistryEntry } | null> {
     return this.mutate((d) => {
       const e = d.apps[appId];
       if (!e) return null;
       const previous = e.agentSession ?? null;
       e.agentSession = session;
       e.updatedAt = new Date().toISOString();
+      e.transfers = [...(e.transfers ?? []), { at: e.updatedAt, from: previous, to: session, by }].slice(-MAX_TRANSFER_RECORDS);
       return { previous, entry: { ...e } };
     });
   }

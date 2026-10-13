@@ -138,6 +138,18 @@ describe('AppsRegistryService.setPublisher', () => {
     expect(await reg.find({ agentSession: 'milo-1', source: '/w/az' })).toMatchObject({ appId: 'aaaaaaaaaa' });
   });
 
+  it('keeps an audit trail of hand-overs that survives a republish and is capped at 20', async () => {
+    const reg = new AppsRegistryService(home);
+    await reg.upsert('aaaaaaaaaa', { name: 'AZ', agentSession: 'atlas-1', source: '/w/az' });
+    await reg.setPublisher('aaaaaaaaaa', 'milo-1', 'crewly-orc');
+    await reg.upsert('aaaaaaaaaa', { name: 'AZ', agentSession: 'milo-1', source: '/w/az' });
+    expect((await reg.get('aaaaaaaaaa'))!.transfers).toEqual([{ at: expect.any(String), from: 'atlas-1', to: 'milo-1', by: 'crewly-orc' }]);
+    for (let i = 0; i < 25; i++) await reg.setPublisher('aaaaaaaaaa', `x-${i}`);
+    const t = (await reg.get('aaaaaaaaaa'))!.transfers!;
+    expect(t).toHaveLength(20);
+    expect(t[19]).toMatchObject({ to: 'x-24', by: 'owner' });
+  });
+
   it('is null for an unknown app', async () => {
     expect(await new AppsRegistryService(home).setPublisher('bbbbbbbbbb', 'x-1')).toBeNull();
   });
