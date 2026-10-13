@@ -30,7 +30,7 @@ import { pausedSlackNotice, pausedThreadNotices } from '../team/team-pause-notic
 import { notePerson } from '../people/people-directory.service.js';
 import { dedicatedDecisionFor } from '../people/dedicated-agent.js';
 import { getTicketIntakeService } from '../v3/ticket-intake.service.js';
-import { intakeWithin, slackIntakeMessage, ticketOfOutcome, markAndLinkTicket, linkLateTicket } from '../v3/ticket-channel-hooks.js';
+import { intakeWithin, slackIntakeMessage, ticketOfOutcome, markAndLinkTicket, linkLateTicket, isOwnerChatMessage } from '../v3/ticket-channel-hooks.js';
 import type { Request } from '../../types/v2/request.types.js';
 import { CREWLY_CONSTANTS, RUNTIME_FALLBACK_CONSTANTS } from '../../constants.js';
 import { isInterim } from './slack-typing-placeholder.service.js';
@@ -3181,30 +3181,56 @@ export class SlackTeamChannelService {
       const intake = getTicketIntakeService();
       if (!intake || remoteAgent) return null;
       const required = planned ? [...planned].filter(([, mode]) => mode === 'required').map(([s]) => s) : [...mentions];
-      const ownsMessage = !isAdhocMapping(mapping) || !!handoffTo || required.length > 0;
-      if (!ownsMessage) return null;
       const targetAgent = handoffTo ?? (mentions.length === 1 ? mentions[0] : required.length === 1 ? required[0] : undefined);
       // The workspace bot is not a member of a private ad-hoc room; post the
       // receipt as the agent that will answer, when it has its own bot.
       const postAs = isAdhocMapping(mapping)
         ? [targetAgent, ...required].find((s): s is string => !!s && !!this.deps.identities?.getInstalled(s))
         : undefined;
+      // The thread's root is the owner's own message: replies in it are asks,
+      // not answers to an agent (see IntakeMessage.threadRootIsOwner).
+      let threadRootIsOwner = false;
+      if (message.threadTs && message.threadTs !== message.ts) {
+        const root = this.deps.chat.findSlackThreadRoot(mapping.chatChannelId, message.threadTs);
+        const ownerId = this.deps.getOwnerUserId?.() ?? null;
+        const rootUser = typeof root?.metadata?.slackUserId === 'string' ? root.metadata.slackUserId : undefined;
+        threadRootIsOwner = !!root && isOwnerChatMessage(root) && (!ownerId || rootUser === ownerId);
+      }
+      const intakeMessage = slackIntakeMessage(
+        {
+          text: message.text ?? '',
+          slackChannelId: message.channelId,
+          ts: message.ts,
+          threadTs: message.threadTs,
+          userId: message.userId,
+          userName: message.user?.realName || message.user?.name,
+          hasFiles: message.hasFiles,
+          threadRootIsOwner,
+          ownerUserId: this.deps.getOwnerUserId?.() ?? null,
+        },
+        'team-channel',
+        { ...(targetAgent ? { targetAgent } : {}), ...(postAs ? { receiptPostAs: postAs } : {}) },
+      );
+      // In a room shared across machines every machine sees the message and
+      // only one files the ticket: the one whose agent hears it. "Hears" is
+      // any target (an awake agent picked to answer an un-@'d message is only
+      // `optional`, and that machine still owns the ask), a hand-off, or an
+      // @. A room with no cross-machine presence is this machine's alone.
+      // 2026-10-13: requiring a *required* target dropped every un-@'d owner
+      // ask in an ad-hoc room.
+      const ownsMessage =
+        !isAdhocMapping(mapping) || !!handoffTo || required.length > 0 || (planned?.size ?? 0) > 0 || !message.room;
+      if (!ownsMessage) {
+        this.logger.info('Owner message left to the machine that hears it — no ticket filed here', {
+          slackChannel: `#${mapping.slackChannelName}`,
+          ts: message.ts,
+        });
+        await intake.recordSkipped(intakeMessage, 'room_owned_elsewhere');
+        return null;
+      }
       const outcome = await intakeWithin(
         intake,
-        slackIntakeMessage(
-          {
-            text: message.text ?? '',
-            slackChannelId: message.channelId,
-            ts: message.ts,
-            threadTs: message.threadTs,
-            userId: message.userId,
-            userName: message.user?.realName || message.user?.name,
-            hasFiles: message.hasFiles,
-            ownerUserId: this.deps.getOwnerUserId?.() ?? null,
-          },
-          'team-channel',
-          { ...(targetAgent ? { targetAgent } : {}), ...(postAs ? { receiptPostAs: postAs } : {}) },
-        ),
+        intakeMessage,
         undefined,
         // Filed after the message went out without its marker: link the
         // ticket to the copy that was dispatched (crewly#1015 follow-up L2).

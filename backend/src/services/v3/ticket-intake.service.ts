@@ -238,6 +238,13 @@ export interface IntakeMessage {
    * in a thread with no ticket answers whoever started it — an agent.
    */
   isThreadReply?: boolean;
+  /**
+   * With `isThreadReply`: the thread's root is the OWNER's own message (not an
+   * agent's brief). If that root opened no ticket (intake missed it, or it
+   * read as a pure question), the owner's replies are still asks — they must
+   * not be dropped as answers to an agent.
+   */
+  threadRootIsOwner?: boolean;
   /** Where to post the receipt; omitted = no receipt */
   receipt?: ReceiptTarget;
 }
@@ -493,6 +500,19 @@ export class TicketIntakeService {
   }
 
   /**
+   * Log that an owner message never reached {@link intake} because the caller
+   * skipped it (e.g. another machine owns a shared room's message). Without
+   * this, a dropped ask leaves no trace in the intake log. Never throws.
+   *
+   * @param message - The message
+   * @param reason - Why the caller skipped intake
+   */
+  async recordSkipped(message: IntakeMessage, reason: string): Promise<void> {
+    if (!message.isOwner) return;
+    await this.recordOutcome(message, { action: 'ignored', reason });
+  }
+
+  /**
    * Record what happened to an owner message (#828 coverage). Duplicates are
    * the same message delivered twice and are not counted again. Never throws.
    *
@@ -623,10 +643,19 @@ export class TicketIntakeService {
     const fileOnly = suppressFileOnly(text, (message.attachments?.length ?? 0) > 0);
     if (fileOnly) return this.ignored(message, fileOnly);
 
+    // A reply in a thread the OWNER started that holds no ticket (intake missed
+    // the root, or read it as a question): the replies are his asks and
+    // corrections, not answers to an agent (2026-10-13, AZ star video).
+    const ownerRooted = !threadTicket && !!message.isThreadReply && !!message.threadRootIsOwner;
     if (!threadTicket) {
-      // A reply in a thread an agent started (a brief, a question): the owner
-      // is answering it. Only a genuinely new ask becomes a ticket.
-      if (message.isThreadReply && !isGenuinelyNewAsk(text, classifyOwnerMessage(text, { inThread: true }))) {
+      const threadAsk = classifyOwnerMessage(text, { inThread: true });
+      if (ownerRooted) {
+        // Only pure acknowledgements, approvals and status pings stay quiet.
+        const quiet = threadAsk.signals.some((s) => s === 'ack_only' || s === 'approval' || s === 'status_ping');
+        if (quiet && !isGenuinelyNewAsk(text, threadAsk)) return this.ignored(message, 'thread_reply');
+      } else if (message.isThreadReply && !isGenuinelyNewAsk(text, threadAsk)) {
+        // A reply in a thread an agent started (a brief, a question): the
+        // owner is answering it. Only a genuinely new ask becomes a ticket.
         return this.ignored(message, 'thread_reply');
       }
     }
@@ -642,9 +671,11 @@ export class TicketIntakeService {
     const rescued = ask.verdict === 'new_ask' || ask.verdict === 'question';
     // "Is Nova online yet?" is a ping, not an ask — even when the intent
     // classifier calls it actionable.
-    if (!rescued && ask.signals.includes('status_ping') && ask.ask === 0) return this.ignored(message, 'status_ping');
-    if (intent.intentCategory === 'query' && !rescued) return this.ignored(message, 'query');
-    if (intent.intentLevel === 'L0' && !rescued) return this.ignored(message, 'not_actionable');
+    if (!ownerRooted) {
+      if (!rescued && ask.signals.includes('status_ping') && ask.ask === 0) return this.ignored(message, 'status_ping');
+      if (intent.intentCategory === 'query' && !rescued) return this.ignored(message, 'query');
+      if (intent.intentLevel === 'L0' && !rescued) return this.ignored(message, 'not_actionable');
+    }
 
     // A finished ticket's thread: the new ticket still records where it came from.
     const ticket = await this.createTicket(all, message, text, {
