@@ -178,6 +178,12 @@ export interface DecisionServiceDeps {
    * Must not throw.
    */
   onCardEvent?: (decision: OwnerDecision, what: 'posted' | 'settled') => void;
+  /**
+   * An answered decision: hand an approved change to a recurring job run by
+   * someone else to that agent (crewly#1137). Returns a line for the asker, or
+   * null when nothing was handed off. Must not throw.
+   */
+  handOffChange?: (decision: OwnerDecision) => Promise<string | null>;
   now?: () => Date;
   logger?: ComponentLogger;
 }
@@ -1475,7 +1481,8 @@ export class DecisionService {
         ? `answered in the thread with ${describeAnswerFiles(resolved.answerFiles ?? [])}`
         : `“${resolved.answerText}”`;
     if (resolved.ticket) await this.logTicket(resolved, `owner decision ${resolved.id}: ${answer} (${via})`, true);
-    await this.notifyAsker(resolved, `${this.answerNote(resolved)}${siblingsLine(siblings)}`, batchNotes, { owner: true });
+    const handedOff = await this.deps.handOffChange?.(resolved).catch(() => null);
+    await this.notifyAsker(resolved, `${this.answerNote(resolved)}${siblingsLine(siblings)}${handedOff ? ` ${handedOff}` : ''}`, batchNotes, { owner: true });
     this.closeWatchdog(resolved);
     this.logger.info('Owner decision resolved', { decisionId: resolved.id, via, chosen: resolved.chosenKey ?? 'text' });
     return { handled: true, reason: 'resolved', decision: resolved };

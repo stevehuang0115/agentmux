@@ -40,6 +40,7 @@ import type { WorkItem } from '../../types/v2/work-item.types.js';
 import { ACTIVE_OPEN_ITEM_STATUSES, type RequestOpenItem } from '../../types/v2/open-item.types.js';
 import type { DecisionSource, OwnerDecision } from '../../types/decision.types.js';
 import { formatTicketNumber } from '../../types/v2/ticket.types.js';
+import { readProjectTicketLink } from '../../types/project-ticket.types.js';
 import { extractOpenItems, parseDue, type ExtractedQuestion } from './open-item-extractor.js';
 import { deriveEitherOrCard, deriveQuestionCard, groupEitherOr, isTooVague, questionContextBlocks, questionSimilarity, type DerivedQuestionCard } from './open-item-card.js';
 import { formatWhen } from '../decisions/decision-card.js';
@@ -285,6 +286,37 @@ function belongsTo(wi: WorkItem, request: Request): boolean {
 }
 
 /**
+ * Project ticket ids a promise names ("the links for CE-16 and CE-36"), upper-cased.
+ * The request's own ticket label (TKT-185) is not one.
+ *
+ * @param text - The promise's words
+ * @param request - The request the promise was made in
+ * @returns Referenced ids
+ */
+export function projectTicketRefs(text: string, request: Request): Set<string> {
+  const own = typeof request.ticketNumber === 'number' ? formatTicketNumber(request.ticketNumber).toUpperCase() : '';
+  const out = new Set<string>();
+  for (const m of text.matchAll(OPEN_ITEMS_CONSTANTS.PROJECT_TICKET_REF_PATTERN)) {
+    const id = m[0].toUpperCase();
+    if (id !== own) out.add(id);
+  }
+  return out;
+}
+
+/**
+ * Whether a WorkItem works on one of the named project tickets.
+ *
+ * @param wi - WorkItem
+ * @param ids - Upper-cased project ticket ids
+ * @returns True when linked
+ */
+function namesProjectTicket(wi: WorkItem, ids: ReadonlySet<string>): boolean {
+  const link = readProjectTicketLink(wi.metadata as Record<string, unknown> | undefined);
+  const id = (link?.id ?? wi.projectTaskId ?? '').toUpperCase();
+  return id !== '' && ids.has(id);
+}
+
+/**
  * The delegated child work a commitment waits on: WorkItems of the request
  * given to someone else, started around the promise and not already finished
  * before it.
@@ -294,13 +326,21 @@ function belongsTo(wi: WorkItem, request: Request): boolean {
  * @param pool - Every WorkItem
  * @returns Child WorkItem ids
  */
-export function childWorkFor(request: Request, item: Pick<RequestOpenItem, 'agent' | 'createdAt'>, pool: readonly WorkItem[]): string[] {
+export function childWorkFor(request: Request, item: Pick<RequestOpenItem, 'agent' | 'createdAt'> & { text?: string }, pool: readonly WorkItem[]): string[] {
   const at = Date.parse(item.createdAt);
   const from = at - OPEN_ITEMS_CONSTANTS.CHILD_LOOKBACK_MS;
   const to = at + OPEN_ITEMS_CONSTANTS.CHILD_LOOKAHEAD_MS;
   const out = new Set<string>();
+  const named = projectTicketRefs(item.text ?? '', request);
   for (const wi of pool) {
-    if (isBookkeeping(wi) || !belongsTo(wi, request)) continue;
+    if (isBookkeeping(wi)) continue;
+    // Work done outside the request: a project ticket the promise names (crewly#1037).
+    if (named.size > 0 && wi.status !== 'cancelled' && namesProjectTicket(wi, named)) {
+      const done = wi.completedAt ? Date.parse(wi.completedAt) : NaN;
+      if (!(CHILD_DONE.has(wi.status) && Number.isFinite(done) && done < at)) out.add(wi.id);
+      continue;
+    }
+    if (!belongsTo(wi, request)) continue;
     if (!wi.target || wi.target === item.agent) continue;
     if (wi.status === 'cancelled') continue;
     const created = Date.parse(wi.createdAt);
