@@ -7080,6 +7080,8 @@ export const OPEN_ITEMS_CONSTANTS = {
 	RECOMMENDATION_PATTERN: /推荐|建议|我倾向|倾向于|我的看法|\bi(?:'d| would)? recommend|\bi suggest|\bmy recommendation|\bi(?:'d| would)? lean\b/iu,
 	/** A recommendation that argues against doing it ("不建议", "don't recommend") */
 	RECOMMENDATION_NEGATIVE_PATTERN: /不建议|不推荐|不要|别|不用|(?:do not|don'?t|wouldn'?t|not) (?:recommend|suggest)/iu,
+	/** A project ticket id named in a promise ("CE-16"); the work done under it fulfils the promise wherever it ran (crewly#1037) */
+	PROJECT_TICKET_REF_PATTERN: /\b[A-Z]{2,6}-\d{1,5}\b/g,
 	/** `WorkItem.metadata` key of a follow-up WorkItem */
 	FOLLOW_UP_METADATA_KEY: 'openItemFollowUp',
 	/**
@@ -8548,4 +8550,23 @@ export const CANVAS_CONSTANTS = {
 	TERMINAL_MAX_FAILURES: 5,
 	/** A Chrome session counts as the agent's browser while it was active this recently (ms) */
 	BROWSER_ACTIVE_MS: 10 * 60_000,
+} as const;
+
+/**
+ * Hand-off of an owner-approved change to a recurring job to the agent that
+ * runs it (crewly#1137).
+ */
+export const RECURRING_CHANGE_HANDOFF_CONSTANTS = {
+	/** Share of the schedule's name/title terms the decision text must contain */
+	MIN_COVERAGE: 0.6,
+	/** Distinct terms the decision and the schedule must share */
+	MIN_SHARED_TERMS: 2,
+	/** ...or this many shared terms whatever the coverage (labels mixing two languages) */
+	SURE_SHARED_TERMS: 3,
+	/** Terms shorter than this (Latin words) are noise */
+	MIN_WORD_CHARS: 3,
+	/** `WorkItem.metadata` marker on the hand-off WorkItem */
+	METADATA_KEY: 'recurringChangeHandoff',
+	/** Option labels / answers that decline a change (nothing to hand off) */
+	DECLINE_PATTERN: /^\s*(?:(?:no|nope|not now|skip|wait|keep|cancel|don'?t)\b|不|别|先不|算了|保持)/iu,
 } as const;

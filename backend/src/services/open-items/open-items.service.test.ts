@@ -1634,3 +1634,33 @@ describe('CREW-440: a card tap settles the conditional promise stored beside the
     });
   });
 });
+
+describe('a promise names project tickets: work done outside the request fulfils it (crewly#1037)', () => {
+  function ownWork(h: Harness, projectTicket: string, status: WorkItem['status'] = 'running', completedOffsetMs?: number): WorkItem {
+    const wi = createWorkItem({ id: `wi-${projectTicket}`, type: 'delegate', owner: 'team_lead', target: KAI, title: `Write ${projectTicket}` });
+    wi.status = status;
+    wi.createdAt = new Date(h.clock.now.getTime() - 3 * HOUR).toISOString();
+    wi.metadata = { projectTicket: { projectPath: '/p', id: projectTicket } };
+    if (completedOffsetMs !== undefined) wi.completedAt = new Date(h.clock.now.getTime() + completedOffsetMs).toISOString();
+    h.pool.push(wi);
+    return wi;
+  }
+
+  it('links the work of CE-16 and CE-36 (no request link, created hours earlier) as the promise\'s children', async () => {
+    const h = harness();
+    const t = await ticket(h);
+    ownWork(h, 'CE-16');
+    ownWork(h, 'CE-36');
+    ownWork(h, 'CE-99');
+    await h.service.onAgentMessage(msg(h, '明天中午把 CE-16 和 CE-36 的文章链接发你。'));
+    expect((await h.requests.getById(t.id))!.openItems![0].childWorkItemIds?.sort()).toEqual(['wi-CE-16', 'wi-CE-36']);
+  });
+
+  it('work finished before the promise, or the request\'s own TKT label, is not linked', async () => {
+    const h = harness();
+    const t = await ticket(h);
+    ownWork(h, 'CE-16', 'done', -HOUR);
+    await h.service.onAgentMessage(msg(h, '明天中午把 CE-16 的链接发你，见 TKT-185。'));
+    expect((await h.requests.getById(t.id))!.openItems![0].childWorkItemIds).toBeUndefined();
+  });
+});

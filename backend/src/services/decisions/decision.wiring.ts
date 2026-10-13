@@ -7,7 +7,7 @@
  * @module services/decisions/decision.wiring
  */
 
-import { ORCHESTRATOR_SESSION_NAME, TICKET_AUTOPILOT_CONSTANTS } from '../../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, RECURRING_CHANGE_HANDOFF_CONSTANTS, TICKET_AUTOPILOT_CONSTANTS } from '../../constants.js';
 import type { Team } from '../../types/index.js';
 import type { SlackIncomingMessage, SlackInteractionEvent, SlackReactionEvent } from '../../types/slack.types.js';
 import { isUserAllowed } from '../../types/slack.types.js';
@@ -25,6 +25,10 @@ import { DecisionError, DecisionService, type BlockActionsPayload, type Decision
 import { DecisionStore } from './decision-store.js';
 import { TicketThreadStore, setTicketThreadStore, getTicketThreadStore } from './ticket-thread-store.js';
 import { pickTicketAsker, teamOfSession, trackedClosedReason, type TrackedState } from './decision-routing.js';
+import { handOffRecurringChange, recurringSchedules } from './recurring-change-handoff.js';
+import { TriggerEngine } from '../v3/trigger-engine.service.js';
+import { TaskPoolService } from '../task-pool/task-pool.service.js';
+import { createWorkItem } from '../../types/v2/work-item.types.js';
 import { createSkipAllCommandInterceptor } from './decision-skip-command.js';
 
 /** What the composition root provides. */
@@ -200,6 +204,22 @@ export function createDecisionService(input: DecisionWiringInput): DecisionServi
       const event = sentinelEventForDecision(d, what);
       if (event) reportOwnerThreadBlocking(d.asker, event);
     },
+    handOffChange: (d) =>
+      handOffRecurringChange(d, {
+        listSchedules: () => recurringSchedules(TriggerEngine.getInstance().list('active')),
+        assign: async (schedule, brief, decision) => {
+          const wi = createWorkItem({
+            type: 'delegate',
+            owner: 'system',
+            target: schedule.owner,
+            title: `Approved change to ${schedule.label}`.slice(0, 100),
+            description: brief,
+            metadata: { [RECURRING_CHANGE_HANDOFF_CONSTANTS.METADATA_KEY]: { decisionId: decision.id, triggerId: schedule.triggerId } },
+          });
+          await TaskPoolService.getInstance().addToPool(wi, { creatorSession: decision.asker });
+          return true;
+        },
+      }),
     deliverToAgent: (session, text) => (session === ORCHESTRATOR_SESSION_NAME ? input.sendToOrchestrator(text) : input.sendToAgent(session, text)),
     ...(input.queueForAgent ? { queueForAgent: input.queueForAgent } : {}),
     closeWatchdog: (session, slackChannelId, threadTs) => {
