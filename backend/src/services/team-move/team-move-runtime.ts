@@ -48,6 +48,9 @@ export interface TeamMoveRuntimeInput {
   sendToAgent?: (sessionName: string, text: string) => Promise<boolean>;
 }
 
+/** Member states that count as up after a start: booting or running. */
+const RUNNING_AGENT_STATUSES: ReadonlySet<string> = new Set(['starting', 'started', 'active', 'activating']);
+
 /**
  * Call a team route of this backend as the owner's Cloud-approved action.
  *
@@ -187,6 +190,10 @@ export function createTeamMoveDriver(input: TeamMoveRuntimeInput): TeamMoveDrive
           // so a member whose runtime is missing here starts on its fallback chain.
           getRuntimeFallbackService()?.invalidateAvailability();
           return teamRoute(teamId, 'start');
+        },
+        isTeamRunning: async (teamId) => {
+          const team = (await storage.getTeams()).find((t) => t.id === teamId);
+          return !!team && team.members.length > 0 && team.members.every((m) => RUNNING_AGENT_STATUSES.has(m.agentStatus));
         },
         getStandIns: async (teamId) => {
           const fallback = getRuntimeFallbackService();
