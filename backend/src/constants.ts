@@ -713,6 +713,8 @@ export const CONTROL_PLANE_GUARD_CONSTANTS = {
 		'config/hooks/credential-guard',
 		// The live-checkout guard: an agent must not be able to switch it off.
 		'config/hooks/live-checkout-guard',
+		// The destructive-git guard: an agent must not be able to switch it off.
+		'config/hooks/destructive-git-guard',
 		'dist',
 	],
 	/** Write-protected files under the install root. */
@@ -737,6 +739,22 @@ export const LIVE_CHECKOUT_GUARD_CONSTANTS = {
 	CLAUDE_MATCHER: 'Bash|Edit|Write|MultiEdit|NotebookEdit',
 	/** Codex tools the hook is attached to (shell, plus its patch tool). */
 	CODEX_MATCHER: 'Bash|apply_patch|Edit|Write',
+} as const;
+
+/**
+ * Destructive-git guard: blocks force-push, push to main/master, reset --hard,
+ * clean -f, branch -D, checkout . and restore . in an agent's Bash tool, so an
+ * agent cannot destroy its own unmerged work.
+ */
+export const DESTRUCTIVE_GIT_GUARD_CONSTANTS = {
+	/** Backend env var; `0` turns the guard off for sessions launched by this backend (the owner/TL override). */
+	KILL_SWITCH_ENV: 'CREWLY_DESTRUCTIVE_GIT_GUARD',
+	/** Value of KILL_SWITCH_ENV that disables the guard. */
+	KILL_SWITCH_OFF_VALUE: '0',
+	/** The hook script (node), relative to the install root. */
+	HOOK_SCRIPT: 'config/hooks/destructive-git-guard/guard.mjs',
+	/** Claude Code tool the hook is attached to. */
+	CLAUDE_MATCHER: 'Bash',
 } as const;
 
 /**
@@ -3170,6 +3188,21 @@ export const ORC_CONVERSATION_CONSTANTS = {
 	OWNERSHIP_HEAD_BYTES: 256 * 1024,
 	/** Most of an earlier handover carried into a new one when the source conversation is unreadable */
 	CHAINED_HANDOVER_MAX_CHARS: 16_000,
+} as const;
+
+/** Pointer header (open work, suggested skills) written at the top of a handover file. */
+export const HANDOVER_POINTERS_CONSTANTS = {
+	/** Task pool file under CREWLY_HOME (dir, file) */
+	POOL_DIR: 'task-pool',
+	POOL_FILE: 'pool.json',
+	/** WorkItem statuses that count as still open for the agent */
+	OPEN_STATUSES: ['queued', 'scheduled', 'proposed', 'accepted', 'running', 'blocked', 'escalated'] as readonly string[],
+	MAX_OPEN_WORK: 15,
+	MAX_LINKS: 10,
+	TITLE_CHARS: 80,
+	/** Markers around the header, so a chained handover can strip it */
+	START_MARK: '<!-- handover-pointers -->',
+	END_MARK: '<!-- /handover-pointers -->',
 } as const;
 
 /**

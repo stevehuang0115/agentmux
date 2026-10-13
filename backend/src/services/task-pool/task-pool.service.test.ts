@@ -632,6 +632,23 @@ describe('TaskPoolService', () => {
       expect(after.status).toBe('queued');
     });
 
+    it('does not dispatch a blocked task (by claim or by id) until its blocker is done (decompose-goal blockedBy)', async () => {
+      const blocker = makeWorkItem({ type: 'cron_run', title: 'blocker' });
+      await service.addToPool(blocker);
+      const dependent = makeWorkItem({ type: 'cron_run', title: 'dependent', dependsOn: [blocker.id] });
+      await service.addToPool(dependent);
+
+      // Only the blocker is offered; the dependent cannot be taken by id either.
+      expect(await service.claimSpecificItem('agent-b', dependent.id)).toBeNull();
+      const first = await service.claimFromPool('agent-a');
+      expect(first!.workItem.id).toBe(blocker.id);
+      expect(await service.claimFromPool('agent-b')).toBeNull();
+
+      await service.completeItem(blocker.id, undefined, AGENT_ACTOR);
+      const second = await service.claimFromPool('agent-b');
+      expect(second!.workItem.id).toBe(dependent.id);
+    });
+
     it('keeps the dependent blocked until ALL deps complete', async () => {
       const depA = makeWorkItem({ type: 'cron_run', title: 'dep-a' });
       const depB = makeWorkItem({ type: 'cron_run', title: 'dep-b' });

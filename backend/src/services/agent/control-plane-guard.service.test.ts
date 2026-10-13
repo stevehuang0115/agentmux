@@ -307,10 +307,11 @@ describe('control-plane-guard.service', () => {
 			const script = path.join(REPO_ROOT, AGENT_STATUS_HOOK_CONSTANTS.HOOK_SCRIPT);
 			expect(existsSync(script)).toBe(true);
 			expect(settings.hooks.Notification[0].hooks[0].command).toBe(`bash '${script}'`);
-			// Control-plane guard, the live-checkout guard, then the status hook for every tool (runtime turn state).
-			expect(settings.hooks.PreToolUse).toHaveLength(3);
+			// Control-plane guard, the live-checkout guard, the destructive-git guard, then the status hook for every tool (runtime turn state).
+			expect(settings.hooks.PreToolUse).toHaveLength(4);
 			expect(settings.hooks.PreToolUse[1].hooks[0].command).toContain('live-checkout-guard/guard.mjs');
-			expect(settings.hooks.PreToolUse[2]).toEqual({ matcher: '*', hooks: [{ type: 'command', command: `bash '${script}'` }] });
+			expect(settings.hooks.PreToolUse[2].hooks[0].command).toContain('destructive-git-guard/guard.mjs');
+			expect(settings.hooks.PreToolUse[3]).toEqual({ matcher: '*', hooks: [{ type: 'command', command: `bash '${script}'` }] });
 		});
 
 		it('writes the subagent guard into the same settings file, pointing at the real script (#852)', async () => {
@@ -332,7 +333,7 @@ describe('control-plane-guard.service', () => {
 				expect(JSON.stringify(settings.hooks[event])).not.toContain('subagent.sh');
 				expect(settings.hooks[event]).toHaveLength(1);
 			}
-			expect(settings.hooks.PreToolUse).toHaveLength(3);
+			expect(settings.hooks.PreToolUse).toHaveLength(4);
 			expect(settings.hooks.Notification).toBeDefined();
 		});
 

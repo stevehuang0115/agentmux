@@ -33,6 +33,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { ANTIGRAVITY_CONSTANTS, RUNTIME_TYPES, ORC_CONVERSATION_CONSTANTS, FRESH_TASK_CONVERSATION_CONSTANTS } from '../../constants.js';
+import { redactHandoverText, stripHandoverPointers, withHandoverPointers } from './handover-pointers.js';
 import { getAntigravityConfigDir } from '../../utils/antigravity-settings.utils.js';
 import { resolveProjectSlugCandidatesSync } from '../monitoring/claude-session-tokens.service.js';
 
@@ -695,7 +696,9 @@ export function buildHandoverSummary(filePath: string): string {
     blocks.unshift(b);
     total += b.length;
   }
-  return blocks.join('\n\n');
+  // A token pasted into the conversation must not be copied into a plain file
+  // (and from there into every later handover).
+  return redactHandoverText(blocks.join('\n\n'));
 }
 
 /**
@@ -774,7 +777,7 @@ export function chainedHandoverBlock(prev: HandoverFileInfo | null): string {
   if (!prev) return '';
   try {
     const raw = fs.readFileSync(prev.path, 'utf-8');
-    const body = raw.replace(/^# [^\n]*\n+/, '').trim();
+    const body = redactHandoverText(stripHandoverPointers(raw.replace(/^# [^\n]*\n+/, '').trim()));
     const max = ORC_CONVERSATION_CONSTANTS.CHAINED_HANDOVER_MAX_CHARS;
     const clipped = body.length > max ? `${body.slice(0, max)}\n…(clipped; full file above)` : body;
     return [`_Your earlier handover is carried forward below (full file: ${prev.path})._`, '', clipped].join('\n');
@@ -1023,7 +1026,7 @@ export function writeRestartHandover(args: {
       'Everything Crewly tracks — tasks, teams, OKRs, wiki, chat history (search-chat) — is still there; this file keeps only the end of what was said before.',
       `The full transcript: ${previous.transcript}`,
       '',
-      body,
+      withHandoverPointers(body, { sessionName: args.sessionName, crewlyHome: path.dirname(args.handoverDir) }),
       '',
     ].join('\n'),
     'utf-8',

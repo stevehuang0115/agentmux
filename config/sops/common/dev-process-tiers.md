@@ -99,7 +99,7 @@ If two rules disagree, the higher tier wins.
 4. One TL or senior reviewer + one peer reviewer.
 5. CHANGELOG entry if user-visible.
 6. Manual smoke test of the changed flow before merge.
-7. Rollback plan stated in PR description (how to revert + what data state requires fixup).
+7. Merge Danger filled in on the PR (Door + Blast radius). A one-way door needs the rollback rehearsal from Tier 3. One-way = data migration, deletion, published artifact (npm, docker, deploy), outbound message.
 
 **Skipped vs Release Path:**
 - No staged rollout (merge-and-deploy together).

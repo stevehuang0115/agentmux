@@ -1,6 +1,7 @@
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { prepareLiveCheckoutGuard, type LiveCheckoutGuard } from './live-checkout-guard.service.js';
+import { prepareDestructiveGitGuard, type DestructiveGitGuard } from './destructive-git-guard.service.js';
 import { CONTROL_PLANE_GUARD_CONSTANTS, AGENT_STATUS_HOOK_CONSTANTS, SUBAGENT_GUARD_CONSTANTS, RUNTIME_INPUT_SAFETY, claudeAutoCompactWindow } from '../../constants.js';
 
 /**
@@ -203,6 +204,8 @@ export function toRuleSpecifier(absPath: string, isDirectory: boolean): string {
  *   control-plane group) and its `Read(...)` deny rules; omit to leave it out
  * @param liveCheckoutGuard - The live-checkout guard hook (a PreToolUse group on
  *   Bash and the file-editing tools); omit to leave it out
+ * @param destructiveGitGuard - The destructive-git guard hook (a PreToolUse group on
+ *   Bash); omit to leave it out
  * @returns Settings object ready to serialise
  */
 export function buildControlPlaneSettings(
@@ -212,6 +215,7 @@ export function buildControlPlaneSettings(
 	subagentHookCommand?: string,
 	credentialGuard?: { hookCommand: string; matcher: string; denyRules: string[] },
 	liveCheckoutGuard?: Pick<LiveCheckoutGuard, 'hookCommand' | 'matcher'> | null,
+	destructiveGitGuard?: Pick<DestructiveGitGuard, 'hookCommand' | 'matcher'> | null,
 ): ControlPlaneSettings {
 	const deny: string[] = [];
 	for (const { path: p, isDirectory } of paths.writeDenied) {
@@ -247,6 +251,12 @@ export function buildControlPlaneSettings(
 		settings.hooks.PreToolUse.push({
 			matcher: liveCheckoutGuard.matcher,
 			hooks: [{ type: 'command', command: liveCheckoutGuard.hookCommand }],
+		});
+	}
+	if (destructiveGitGuard) {
+		settings.hooks.PreToolUse.push({
+			matcher: destructiveGitGuard.matcher,
+			hooks: [{ type: 'command', command: destructiveGitGuard.hookCommand }],
 		});
 	}
 	const append = (event: string, group: HookGroup): void => {
@@ -341,7 +351,7 @@ export async function prepareControlPlaneGuard(
 	await fs.writeFile(pathsPath, pathsBody, 'utf-8');
 	await fs.writeFile(
 		settingsPath,
-		`${JSON.stringify(buildControlPlaneSettings(paths, hookCommand, statusHookCommand, subagentHookCommand, credentialGuard, prepareLiveCheckoutGuard(roots.installRoot, env)), null, 2)}\n`,
+		`${JSON.stringify(buildControlPlaneSettings(paths, hookCommand, statusHookCommand, subagentHookCommand, credentialGuard, prepareLiveCheckoutGuard(roots.installRoot, env), prepareDestructiveGitGuard(roots.installRoot, env)), null, 2)}\n`,
 		'utf-8',
 	);
 

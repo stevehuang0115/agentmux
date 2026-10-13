@@ -57,6 +57,7 @@ import {
   findClaudeTranscript,
   lastTurnContextTokens,
 } from './runtime-session-recovery.js';
+import { withHandoverPointers } from './handover-pointers.js';
 import { effectiveClaudeAccount } from '../runtime-fallback/effective-runtime.js';
 import { claudeAccountConfigDir } from '../harness/claude-accounts.js';
 import { getSessionStatePersistence } from '../session/session-state-persistence.js';
@@ -1055,7 +1056,10 @@ export class FreshTaskConversationService {
         `Everything Crewly tracks — tasks, teams, OKRs, wiki — is still there; this file keeps only the end of what was said.`,
         `The full transcript: ${transcript}`,
         ``,
-        body || '_Nothing readable was found at the end of the old conversation._',
+        withHandoverPointers(body || '_Nothing readable was found at the end of the old conversation._', {
+          sessionName,
+          crewlyHome: this.deps.crewlyHome(),
+        }),
         ``,
       ].join('\n'),
       'utf-8',

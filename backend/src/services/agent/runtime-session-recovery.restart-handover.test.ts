@@ -139,6 +139,19 @@ describe('restart handover', () => {
       expect(out!.note).toContain('search-chat');
     });
 
+    it('puts the open-work and suggested-skills pointers above the transcript tail, once', () => {
+      transcript(claudeHome, 'conv-1', 1 * DAY);
+      fs.mkdirSync(path.join(root, 'task-pool'), { recursive: true });
+      fs.writeFileSync(
+        path.join(root, 'task-pool', 'pool.json'),
+        JSON.stringify({ workItems: [{ id: 'wi-9', title: 'Cut video one', status: 'running', target: 'pia' }], claims: [] }),
+      );
+      const text = fs.readFileSync(writeRestartHandover({ sessionName: 'pia', cwd, claudeHomes: [claudeHome], handoverDir })!.file, 'utf-8');
+      expect(text).toContain('- wi-9 — Cut video one (running)');
+      expect(text.indexOf('## Open work')).toBeLessThan(text.indexOf('Plan the three videos'));
+      expect(text.split('## Suggested skills')).toHaveLength(2);
+    });
+
     it('does nothing when there is no recent conversation', () => {
       expect(writeRestartHandover({ sessionName: 'pia', cwd, claudeHomes: [claudeHome], handoverDir })).toBeNull();
       expect(fs.existsSync(handoverDir)).toBe(false);

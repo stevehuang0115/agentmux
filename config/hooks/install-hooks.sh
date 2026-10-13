@@ -57,6 +57,12 @@ for HOOK_FILE in "$HOOKS_SOURCE"/*; do
     continue
   fi
 
+  # Only plain git hook files: skip agent-hook directories (they are wired by
+  # the backend via --settings, e.g. destructive-git-guard) and test files.
+  if [ ! -f "$HOOK_FILE" ] || [[ "$HOOK_NAME" == *.test.* ]]; then
+    continue
+  fi
+
   TARGET_PATH="$HOOKS_TARGET/$HOOK_NAME"
 
   # If a non-Crewly hook already exists, back it up
