@@ -2,7 +2,7 @@
  * Tests for turning a reply question into a decision card
  * (specs/2026-10-01-reply-open-items.md §4).
  */
-import { alternativeLabel, deriveEitherOrCard, groupEitherOr, choiceAlternatives, deriveQuestionCard, questionContextBlocks, questionSimilarity, refersBack, sensitiveKindOf } from './open-item-card.js';
+import { alternativeLabel, deriveEitherOrCard, groupEitherOr, choiceAlternatives, deriveQuestionCard, isTooVague, questionContextBlocks, questionSimilarity, refersBack, sensitiveKindOf } from './open-item-card.js';
 
 describe('deriveQuestionCard', () => {
   it('TKT-185: the stated fallback becomes the default ("不同意的话我就删掉")', () => {
@@ -203,5 +203,50 @@ describe('either/or questions in one reply', () => {
   it('strips lead words and clips labels to 40 characters', () => {
     expect(alternativeLabel('还是先等一等？')).toBe('先等一等');
     expect(alternativeLabel(`Or ${'x'.repeat(60)}?`).length).toBeLessThanOrEqual(40);
+  });
+});
+
+describe('derived cards stand on their own (#1242)', () => {
+  const content = '封面样张：A 手绘组织图，B 只有书名。\n\n这样可以吗？';
+
+  it('a vague question gets the subject sentence in front of it', () => {
+    const card = deriveQuestionCard({ type: 'question', text: '这样可以吗？' }, { content });
+    expect(card.question).toContain('封面样张：A 手绘组织图，B 只有书名');
+    expect(card.question).toContain('这样可以吗？');
+  });
+
+  it('with no subject sentence the ticket title is used', () => {
+    const card = deriveQuestionCard({ type: 'question', text: '你同意吗？' }, { content: '你同意吗？', title: 'Book cover samples' });
+    expect(card.question).toBe('Book cover samples — 你同意吗？');
+  });
+
+  it('a long question is left unchanged', () => {
+    const text = '第 13 章「互评当体检用」这个读法放在书里，你同意这样写吗？';
+    expect(deriveQuestionCard({ type: 'question', text }, { content: `前面一句话在这里说明。${text}` }).question).toBe(text);
+  });
+
+  it('a recommendation lands on the option it names, with the reason', () => {
+    const msg = '两个封面：A 手绘组织图，B 只有书名。我推荐 A，因为读者一眼能看懂内容。\n\n用哪个封面，A 还是 B？';
+    const card = deriveQuestionCard({ type: 'question', text: '用哪个封面，A 还是 B？' }, { content: msg });
+    const a = card.options.find((o) => o.key === 'a');
+    expect(a?.label).toBe('A (recommended)');
+    expect(a?.detail).toContain('因为读者一眼能看懂内容');
+    expect(card.options.find((o) => o.key === 'b')?.label).toBe('B');
+  });
+
+  it('a yes/no recommendation marks Yes; a negative one marks No', () => {
+    const yes = deriveQuestionCard({ type: 'question', text: '这版文案可以发吗？' }, { content: '我建议现在就发，赶得上周五。\n\n这版文案可以发吗？' });
+    expect(yes.options[0].label).toBe('Yes (recommended)');
+    const no = deriveQuestionCard({ type: 'question', text: '这版文案可以发吗？' }, { content: '我不建议现在发，数据还没核完。\n\n这版文案可以发吗？' });
+    expect(no.options[1].label).toBe('No (recommended)');
+  });
+
+  it('no context: behaviour is unchanged', () => {
+    expect(deriveQuestionCard({ type: 'question', text: '这样可以吗？' }).question).toBe('这样可以吗？');
+  });
+
+  it('a card whose question stays thin is too vague to post', () => {
+    expect(isTooVague(deriveQuestionCard({ type: 'question', text: '你同意吗？' }, { content: '你同意吗？' }))).toBe(true);
+    expect(isTooVague(deriveQuestionCard({ type: 'question', text: '这样可以吗？' }, { content }))).toBe(false);
   });
 });

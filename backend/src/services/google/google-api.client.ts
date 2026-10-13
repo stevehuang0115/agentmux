@@ -16,6 +16,12 @@ export interface GoogleTokenProvider {
   getAccessToken(options?: { account?: string; product?: GoogleProduct }): Promise<string>;
   clearCache(account?: string): void;
   /**
+   * Drop the cached tokens of one account only (undefined = the default
+   * connection, never "all"). Optional: test doubles and older providers
+   * may not have it — {@link dropCachedToken} falls back to `clearCache`.
+   */
+  clearCacheFor?(account: string | undefined): void;
+  /**
    * Scopes on the token last issued for this account (and the person the
    * call acts for), when Cloud reported them. Optional: test doubles and
    * older providers may not know.
@@ -144,6 +150,19 @@ export interface GoogleRequestInit {
 }
 
 /**
+ * Forget the cached token for the account a call acted as — and only that
+ * account. `clearCache(undefined)` clears every connected account, which is
+ * wrong when one account's token was rejected.
+ *
+ * @param tokens - Token provider
+ * @param account - Account the failed call used; undefined for the default connection
+ */
+export function dropCachedToken(tokens: GoogleTokenProvider, account: string | undefined): void {
+  if (tokens.clearCacheFor) tokens.clearCacheFor(account);
+  else tokens.clearCache(account);
+}
+
+/**
  * Authenticated call to a Google API.
  *
  * @param deps - Token provider + fetch
@@ -190,14 +209,14 @@ export async function googleRequest<T>(deps: GoogleApiDeps, url: string, init: G
   if (!res.ok) {
     const message = googleErrorMessage(text) ?? `Google request failed (${res.status})`;
     if (res.status === 401) {
-      deps.tokens.clearCache(deps.account);
+      dropCachedToken(deps.tokens, deps.account);
       throw new GoogleWorkspaceError(401, CODES.GOOGLE_ERROR, `Google rejected the access token: ${message}`);
     }
     if (isInsufficientScopeError(res.status, text)) {
       // The grant is narrower than this call (2026-10-08: Gmail drafts need
       // gmail.compose). Only the owner can widen it; the cached token must
       // go so the call after the reconnect carries the new scope.
-      deps.tokens.clearCache(deps.account);
+      dropCachedToken(deps.tokens, deps.account);
       throw new GoogleWorkspaceError(403, CODES.REAUTH_REQUIRED, message, {
         reason: 'insufficient_scope',
         ...(deps.product ? { product: deps.product } : {}),

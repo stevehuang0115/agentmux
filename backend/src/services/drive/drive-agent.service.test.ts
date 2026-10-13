@@ -197,7 +197,7 @@ describe('end and recap', () => {
     expect(h.calls.find((c) => c.method === 'POST' && c.url.endsWith('/replies'))?.body).toMatchObject({ recap: true, nextStep: false });
     expect(h.closed).toEqual([['ella', 'dm-ella']]);
     // Closed: no more replies to it.
-    await expect(h.service.agentReply('ella', SID, { text: 'more', interim: false, recap: false })).rejects.toMatchObject({ status: 404 });
+    await expect(h.service.agentReply('ella', SID, { text: 'more', interim: false, recap: false })).rejects.toMatchObject({ status: 404, message: expect.stringContaining('closed at') });
   });
 
   it('a recap naming a next step keeps it tracked (nextStep true)', async () => {
@@ -259,6 +259,23 @@ describe('v3: keep-warm', () => {
   });
 });
 
+describe('status check (refresh)', () => {
+  it('a refresh push runs the status check and fetches nothing from Cloud', async () => {
+    const refreshStatus = jest.fn(async () => undefined);
+    const h = harness({}, { refreshStatus });
+    expect(await h.service.handle(push({ v: 1, kind: 'drive', op: 'refresh', sessionId: SID, id: 'r1', instanceId: 'mac' }))).toBe('done');
+    expect(refreshStatus).toHaveBeenCalledTimes(1);
+    expect(h.calls).toEqual([]);
+  });
+
+  it('a refresh push without a handler is harmless, and a failing check is reported as failed', async () => {
+    const h = harness();
+    expect(await h.service.handle(push({ v: 1, kind: 'drive', op: 'refresh', sessionId: SID, id: 'r1', instanceId: 'mac' }))).toBe('done');
+    const bad = harness({}, { refreshStatus: async () => Promise.reject(new Error('boom')) });
+    expect(await bad.service.handle(push({ v: 1, kind: 'drive', op: 'refresh', sessionId: SID, id: 'r2', instanceId: 'mac' }))).toBe('failed');
+  });
+});
+
 describe('helpers', () => {
   it('owner turn text names the reply command', () => {
     expect(ownerTurnText(SID, 'agent', 'Ella', 'hi')).toMatch(/^\[Drive mode · session drv_abcdefghijkl\]/);
@@ -274,5 +291,20 @@ describe('helpers', () => {
     const answered = { ...base, conversationId: 'c1', agentSession: 'ella', turns: [{ from: 'owner' as const, name: 'o', text: 'a', at: '2026-10-08T09:00:00Z' }, { from: 'agent' as const, name: 'e', text: 'b', at: '2026-10-08T09:01:00Z' }] };
     const waiting = { ...base, conversationId: 'c2', agentSession: 'ella', turns: [{ from: 'owner' as const, name: 'o', text: 'a', at: '2026-10-08T08:00:00Z' }] };
     expect(pickConversation([answered, waiting], SID, 'ella', false)?.conversationId).toBe('c2');
+  });
+});
+
+describe('session log copy (op:log)', () => {
+  it('fetches the log with the machine token and stores both renderings; a malformed answer fails the push', async () => {
+    const save = jest.fn(async () => '/home/x/.crewly/drive-logs/2026-10-11-drv_abcdefghijkl.md');
+    const h = harness(
+      { '/machine/log': { id: SID, base: '2026-10-11-drv_abcdefghijkl', markdown: '# log', jsonl: '{}\n' } },
+      { logStore: { save } as unknown as DriveAgentDeps['logStore'] },
+    );
+    expect(await h.service.handle(push({ v: 1, kind: 'drive', op: 'log', sessionId: SID, instanceId: 'mac' }))).toBe('done');
+    expect(h.calls[0]).toMatchObject({ method: 'GET', url: `https://api.crewlyai.com/api/cloud/talk/session/${SID}/machine/log?instanceId=mac`, auth: 'Bearer machine-token' });
+    expect(save).toHaveBeenCalledWith('2026-10-11-drv_abcdefghijkl', '# log', '{}\n');
+    const bad = harness({ '/machine/log': { id: SID } }, { logStore: { save } as unknown as DriveAgentDeps['logStore'] });
+    expect(await bad.service.handle(push({ v: 1, kind: 'drive', op: 'log', sessionId: SID, instanceId: 'mac' }))).toBe('failed');
   });
 });

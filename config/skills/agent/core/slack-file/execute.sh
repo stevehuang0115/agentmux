@@ -26,7 +26,7 @@ while [ $# -gt 0 ]; do
     get) CMD="get"; REF="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
     --out|-o) OUT="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
-    *) if [ -z "$REF" ] && [ "$CMD" = "get" ]; then REF="$1"; shift; else echo "{\"error\":\"Unknown argument: $1\"}" >&2; exit 1; fi ;;
+    *) if [ -z "$REF" ] && [ "$CMD" = "get" ]; then REF="$1"; shift; else unknown_arg_exit "$1"; fi ;;
   esac
 done
 

@@ -14,12 +14,19 @@
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
     },
+    "./theme-script": {
+      "types": "./dist/theme-script.d.ts",
+      "import": "./dist/theme-script.js",
+      "require": "./dist/theme-script.cjs"
+    },
     "./theme.css": "./theme.css",
     "./tokens.css": "./tokens.css",
+    "./glass.css": "./glass.css",
     "./tailwind-preset": "./tailwind-preset.cjs",
     "./styles.css": "./dist/styles.css"
   },
   "files": [
+    "glass.css",
     "dist",
     "theme.css",
     "tokens.css",
@@ -28,6 +35,7 @@
   "scripts": {
     "build": "tsup && tailwindcss -c tailwind.config.cjs -i src/styles.css -o dist/styles.css --minify",
     "typecheck": "tsc --noEmit",
+    "lint:ios12": "node scripts/lint-ios12.mjs",
     "test": "vitest run"
   },
   "peerDependencies": {

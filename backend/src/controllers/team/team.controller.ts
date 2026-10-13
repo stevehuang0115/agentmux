@@ -619,7 +619,7 @@ function resolveAgentStatus(
 export async function activateAgentBySession(
   context: ApiContext,
   sessionName: string,
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; deferred?: boolean }> {
   try {
     const found = await context.storageService.findMemberBySessionName(sessionName);
     if (!found) {
@@ -643,7 +643,11 @@ export async function activateAgentBySession(
     ) {
       reportOwnerThreadBlocking(sessionName, { kind: 'start_failed', ...(result.error ? { detail: result.error } : {}) });
     }
-    return { success: result.success, error: result.error };
+    return {
+      success: result.success,
+      error: result.error,
+      ...(result.errorCode === RESOURCE_MODE_CONSTANTS.START_DEFERRED_ERROR_CODE ? { deferred: true } : {}),
+    };
   } catch (err) {
     reportOwnerThreadBlocking(sessionName, { kind: 'start_failed', detail: err instanceof Error ? err.message : String(err) });
     return { success: false, error: err instanceof Error ? err.message : String(err) };

@@ -37,6 +37,7 @@ import { createWorkItem, type WorkItem } from '../../types/v2/work-item.types.js
 import type { OwnerDecision } from '../../types/decision.types.js';
 import { PROJECT_TICKET_CONSTANTS } from '../../constants.js';
 import { TokenUsageService } from '../monitoring/token-usage.service.js';
+import { setRequestObserver, type RequestMeta } from '../usage-ledger/ledger-hooks.js';
 
 const WI_ID = '2c2a1c55-2222-4222-8222-222222222222';
 
@@ -148,6 +149,20 @@ describe('trace-recorder', () => {
 	});
 
 	describe('requests', () => {
+		it('tells the usage ledger what a new request is about', () => {
+			const seen: RequestMeta[] = [];
+			setRequestObserver((m) => seen.push(m));
+			try {
+				const r = request({ origin: { channel: 'slack-dm', ref: 'msg-1', threadRef: '1700.1', author: 'U1' } });
+				const id = assignRequestTrace(r)!;
+				expect(seen).toEqual([
+					expect.objectContaining({ traceId: id, requestId: r.id, ticketId: 'TKT-012', title: 'Build the landing page', channel: 'slack-dm', threadRef: '1700.1' }),
+				]);
+			} finally {
+				setRequestObserver(null);
+			}
+		});
+
 		it('an owner ticket starts a request trace', async () => {
 			const r = request();
 			const id = assignRequestTrace(r)!;
@@ -180,6 +195,20 @@ describe('trace-recorder', () => {
 				['waiting_confirmation', 'queued', 'system'],
 				['done', 'ok', 'owner'],
 			]);
+		});
+	});
+
+	describe('awaiting_followup (CREW-440)', () => {
+		const item = (status: string): never => ({ id: 'c-1', type: 'commitment', status, agent: 'a', text: 't', sourceMessageId: 'm', createdAt: '2026-10-09T16:31:00Z' }) as never;
+
+		it('marks who the ticket waits on: the owner when only conditional promises are active, else an agent', async () => {
+			const r = request();
+			const id = assignRequestTrace(r)!;
+			traceRequestStatus({ ...r, status: 'awaiting_followup', openItems: [item('waiting_owner'), item('skipped')] }, 'waiting_confirmation');
+			traceRequestStatus({ ...r, status: 'done' }, 'awaiting_followup');
+			traceRequestStatus({ ...r, status: 'awaiting_followup', openItems: [item('waiting_owner'), item('overdue')] }, 'done');
+			const statuses = (await events(id)).filter((e) => e.type === 'request.status');
+			expect(statuses.map((e) => e.data?.followupWaitsOn)).toEqual(['owner', undefined, 'agent']);
 		});
 	});
 

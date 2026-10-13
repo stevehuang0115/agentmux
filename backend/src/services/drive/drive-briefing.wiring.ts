@@ -10,6 +10,7 @@
 
 import { DRIVE_BRIEFING_CONSTANTS, ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
 import type { Team } from '../../types/index.js';
+import type { RosterTeam } from '../team-roster/team-roster.builder.js';
 import { resolveMemberSessionName } from '../../utils/member-session-name.utils.js';
 import { getTeamLeads } from '../../utils/team.utils.js';
 import type { OwnerTurnMark } from '../briefing/briefing-cards.js';
@@ -31,6 +32,8 @@ export interface BriefingWiringDeps {
   orchestratorRunning: () => boolean;
   /** The orchestrator's display name */
   orchestratorName: string;
+  /** The team roster (v4 overview); absent or failing = the overview uses the snapshot's own items */
+  roster?: () => Promise<RosterTeam[]>;
   now?: () => Date;
 }
 
@@ -85,7 +88,8 @@ export async function collectSnapshotSources(deps: BriefingWiringDeps): Promise<
   }
 
   const feed = await read(() => deps.ownerFeed(now.getTime() - C.OWNER_FEED_WINDOW_MS, C.OWNER_FEED_SCAN_LIMIT), { messages: [], ownerTurns: [] });
-  return { now, agents, teams: teamRows, tickets, workItems, waiting, ownerFeed: feed };
+  const roster = deps.roster ? await read(deps.roster, [] as RosterTeam[]) : [];
+  return { now, agents, teams: teamRows, tickets, workItems, waiting, ownerFeed: feed, ...(roster.length ? { roster } : {}) };
 }
 
 function safeBool(fn: () => boolean): boolean {

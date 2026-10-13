@@ -17,6 +17,7 @@
 
 import { EventEmitter } from 'events';
 import { promises as fsp } from 'fs';
+import { atomicWriteJson } from '../../utils/file-io.utils.js';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 import { randomUUID } from 'crypto';
@@ -130,6 +131,46 @@ export function registerRetryDelay(failures: number): number {
  */
 /** The relay refused a queue id because it belongs to another account. */
 class QueueForbiddenError extends Error {}
+
+/** The relay answered 429 with a Retry-After: per-account rate or daily limit. */
+export class RelayRateLimitedError extends Error {
+  /**
+   * @param message - English description including the status and body
+   * @param retryAfterMs - How long the relay asked us to wait (0 when unknown)
+   */
+  constructor(message: string, readonly retryAfterMs: number) {
+    super(message);
+    this.name = 'RelayRateLimitedError';
+  }
+}
+
+/**
+ * Build the error for a failed relay response. A 429 becomes a
+ * {@link RelayRateLimitedError} carrying the relay's `Retry-After` header
+ * (seconds) or, failing that, the body's `retryAfter` / `retry_after`.
+ *
+ * @param response - The non-ok response
+ * @param what - Message prefix, e.g. `Queue registration failed`
+ * @returns The error to throw
+ */
+async function relayFailure(response: Response, what: string): Promise<Error> {
+  const errorText = await response.text().catch(() => '');
+  const message = `${what}: ${response.status} ${errorText}`;
+  if (response.status !== 429) return new Error(message);
+  let seconds = Number.parseInt(response.headers?.get?.('retry-after') ?? '', 10);
+  if (!Number.isFinite(seconds)) {
+    try {
+      const body = JSON.parse(errorText) as { retryAfter?: unknown; retry_after?: unknown };
+      seconds = Number(body.retryAfter ?? body.retry_after);
+    } catch {
+      seconds = NaN;
+    }
+  }
+  const retryAfterMs = Number.isFinite(seconds) && seconds > 0
+    ? Math.min(seconds * 1000, CLOUD_SYNC_CONSTANTS.RETRY_AFTER_MAX_MS)
+    : 0;
+  return new RelayRateLimitedError(message, retryAfterMs);
+}
 
 export class CloudSyncService extends EventEmitter {
   private static instance: CloudSyncService | null = null;
@@ -478,8 +519,7 @@ export class CloudSyncService extends EventEmitter {
     });
 
     if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      throw new Error(`Failed to send message: ${response.status} ${errorText}`);
+      throw await relayFailure(response, 'Failed to send message');
     }
 
     this.logger.info('Message sent via Cloud Sync', { to: toDeviceId, type, peerSessionId: targetDevice.sessionId });
@@ -529,8 +569,7 @@ export class CloudSyncService extends EventEmitter {
       signal: AbortSignal.timeout(CLOUD_SYNC_CONSTANTS.REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      throw new Error(`Failed to send message (queueId path): ${response.status} ${errorText}`);
+      throw await relayFailure(response, 'Failed to send message (queueId path)');
     }
     this.logger.info('Message sent via Cloud Sync (queueId path)', { peerQueueId, type });
   }
@@ -567,6 +606,8 @@ export class CloudSyncService extends EventEmitter {
       this.queueFailures += 1;
       this.queueFailingSince ??= Date.now();
       delay = registerRetryDelay(this.queueFailures);
+      // The relay told us when to come back (per-account limit): never earlier.
+      if (err instanceof RelayRateLimitedError) delay = Math.max(delay, err.retryAfterMs);
       // Not "may not work": without a queue id the Slack instance heartbeat
       // is skipped, so Cloud marks this machine stale and every inbound
       // Slack event is queued instead of delivered (2026-09-21).
@@ -708,10 +749,9 @@ export class CloudSyncService extends EventEmitter {
     });
 
     if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      const message = `Queue registration failed: ${response.status} ${errorText}`;
-      if (response.status === 403) throw new QueueForbiddenError(message);
-      throw new Error(message);
+      const failure = await relayFailure(response, 'Queue registration failed');
+      if (response.status === 403) throw new QueueForbiddenError(failure.message);
+      throw failure;
     }
 
     const data = await response.json() as { success: boolean; queueId?: string; peerQueueId?: string | null };
@@ -781,7 +821,7 @@ export class CloudSyncService extends EventEmitter {
     const file = this.fallbackQueueFile();
     try {
       await fsp.mkdir(dirname(file), { recursive: true });
-      await fsp.writeFile(file, JSON.stringify({ queueId, takenAt: new Date().toISOString() }, null, 2), 'utf-8');
+      await atomicWriteJson(file, { queueId, takenAt: new Date().toISOString() }, { mode: 0o600 });
     } catch (err) {
       this.logger.warn('Could not persist the fallback queue id — a restart will take another', {
         error: err instanceof Error ? err.message : String(err),

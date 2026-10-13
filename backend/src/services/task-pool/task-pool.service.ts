@@ -234,8 +234,8 @@ export interface AddToPoolOptions {
  */
 /** Note put on an unassigned item when it is routed to a decider. */
 export const UNASSIGNED_ROUTE_NOTE =
-  '[没有指定执行人，交给你决定] 适合你就自己做；更适合别人就用 delegate-task 派给他（带上原内容），然后取消这一条。' +
-  '一段时间没人接会交给再上一级。';
+  '[No assignee set — yours to decide] If it suits you, do it yourself; if someone else is a better fit, hand it to them with delegate-task (include the original content), then cancel this item. ' +
+  'If nobody picks it up for a while, it goes to the next level up.';
 
 /** Who decides unassigned work (owner, 2026-09-24). */
 export interface UntargetedRouterDeps {
@@ -717,6 +717,45 @@ export class TaskPoolService {
   // -----------------------------------------------------------------------
   // Core Pool Operations
   // -----------------------------------------------------------------------
+
+  /**
+   * Add work items that came with a team from another machine (team move,
+   * crewly#1189), exactly as they were: ids, status and links are kept, no
+   * routing or request inference is applied. Items already in the pool are
+   * skipped, so a resumed import adds nothing twice.
+   *
+   * @param items - Work items from the package
+   * @returns How many were added
+   */
+  async importWorkItems(items: readonly WorkItem[]): Promise<number> {
+    let added = 0;
+    for (const item of items) {
+      if (!isWorkItem(item)) continue;
+      if (await this.storage.findWorkItem(item.id)) continue;
+      await this.storage.addWorkItem(item);
+      added += 1;
+    }
+    if (added > 0) await this.storage.flush();
+    return added;
+  }
+
+  /**
+   * Remove the work items of a team that moved to another machine (team move,
+   * crewly#1189) together with their claims, so nothing here tries to wake
+   * agents that live elsewhere now. The mover keeps copies for rollback.
+   *
+   * @param ids - Work item ids
+   * @returns How many items were removed
+   */
+  async removeWorkItemsForMove(ids: readonly string[]): Promise<number> {
+    if (ids.length === 0) return 0;
+    const idSet = new Set(ids);
+    const claimIds = new Set((await this.storage.getClaims()).filter((c) => idSet.has(c.workItemId)).map((c) => c.id));
+    const removed = await this.storage.removeWorkItems(idSet);
+    await this.storage.removeClaims(claimIds);
+    await this.storage.flush();
+    return removed;
+  }
 
   /**
    * Adds an execution-ready WorkItem to the pool.
@@ -2163,6 +2202,7 @@ export class TaskPoolService {
     );
     if (verdict === 'verified') {
       await this.resolveBlockedDependents(workItemId);
+      await this.closeRejectedParentOfRetry(workItemId);
     }
     // #819: a verdict rendered THROUGH this method directly (POST /verdict,
     // or an escalation's owner resolution) never completes the tracking
@@ -2188,6 +2228,37 @@ export class TaskPoolService {
       }
     }
     return updated;
+  }
+
+  /**
+   * CREW-403: once a retry is verified, make sure the `rejected` parent it
+   * replaced is marked as dealt with.
+   *
+   * `rejected` only has a `→ queued` edge, so the parent can never be
+   * verified itself; its disposition (`succeeded_by` the retry) is what tells
+   * the escalation paths to leave it alone. The bridge stamps that when it
+   * creates the retry, but the stamp is best-effort. This re-applies it
+   * (idempotent: an existing disposition wins) so a lost stamp cannot leave a
+   * parent whose work is done sitting undisposed and escalating to the
+   * orchestrator, who cannot render a verdict on it.
+   *
+   * @param workItemId - The WorkItem that was just verified
+   */
+  private async closeRejectedParentOfRetry(workItemId: string): Promise<void> {
+    try {
+      const wi = await this.storage.findWorkItem(workItemId);
+      const parentId = wi?.metadata?.['sourceWorkItemId'];
+      if (!wi || typeof parentId !== 'string' || !workItemId.startsWith(`${parentId}:retry:`)) return;
+      await this.disposeFailedWorkItem(parentId, {
+        reason: `retry ${workItemId} verified`,
+        successorWorkItemId: workItemId,
+      });
+    } catch (err) {
+      this.logger.warn('Failed to close rejected parent after retry verified (non-fatal)', {
+        workItemId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**
@@ -2280,6 +2351,8 @@ export class TaskPoolService {
     }
     if (workItem.status === 'queued') {
       workItem = (await this.resumeOwnQueuedItemForCompletion(workItem, actor)) ?? workItem;
+    } else if (workItem.status === 'blocked') {
+      workItem = (await this.resumeOwnBlockedItemForCompletion(workItem, actor)) ?? workItem;
     }
     if (this.requiresVerification(workItem)) {
       await this.submitForVerification(workItemId, actor, result);
@@ -2333,6 +2406,59 @@ export class TaskPoolService {
         },
       );
       this.logger.info('Completion from the item\'s own agent landed while it was queued — resumed to finish it', {
+        workItemId: workItem.id,
+        agentId: session,
+      });
+      return resumed;
+    });
+  }
+
+  /**
+   * Puts a `blocked` WorkItem back to `running` when the agent that worked it
+   * reports it complete, so the completion lands instead of failing
+   * `blocked → done*` with a 409.
+   *
+   * CE-232 (CREW-439): Vera reported `[BLOCKED]` on her own running item
+   * (`blockItem`, which releases the claim), then finished the work and her
+   * `POST /task-pool/complete` was refused — there is no `blocked → done`
+   * transition and, unlike `queued`, no rescue. Only the item's owner gets
+   * one: the holder of its latest claim. A general `blocked → done` for anyone
+   * is deliberately not added. A `waiting_on_human` park (the reconciler
+   * resumes it itself) and a dependency block (never claimed, so it has no
+   * claim holder) are left alone.
+   *
+   * @param workItem - The blocked WorkItem
+   * @param actorInput - Who is completing it
+   * @returns The resumed (running) WorkItem, or null when the caller is not
+   *   the item's claim holder, the block is a human-wait park, or it is no
+   *   longer blocked
+   */
+  private async resumeOwnBlockedItemForCompletion(
+    workItem: WorkItem,
+    actorInput: TransitionActorInput,
+  ): Promise<WorkItem | null> {
+    if (workItem.blockSource === WORK_ITEM_BLOCK_SOURCES.WAITING_ON_HUMAN) return null;
+    const session = normalizeTransitionActor(actorInput)?.session;
+    if (!session) return null;
+    if ((await this.latestClaimHolder(workItem.id)) !== session) return null;
+
+    return this.withClaimLock(async () => {
+      const current = await this.storage.findWorkItem(workItem.id);
+      if (!current || current.status !== 'blocked') return current ?? null;
+      const resumed = await this.transitionStatus(
+        workItem.id,
+        'running',
+        { role: 'system', session, via: 'completeItem:resume-own-blocked' },
+        (wi) => {
+          wi.blockedReason = undefined;
+          wi.blockSource = undefined;
+          wi.metadata = {
+            ...(wi.metadata ?? {}),
+            completedWhileBlockedAt: new Date().toISOString(),
+          };
+        },
+      );
+      this.logger.info('Completion from the item\'s claim holder landed while it was blocked — resumed to finish it', {
         workItemId: workItem.id,
         agentId: session,
       });

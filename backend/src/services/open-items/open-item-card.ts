@@ -208,7 +208,125 @@ export function sensitiveKindOf(text: string): DecisionSensitiveKind | undefined
  * deriveQuestionCard({ type: 'question', text: '这个读法，你同意吗？', fallback: '不同意的话我就删掉，只留事实。' })
  * // → options Yes / No ("删掉，只留事实"), default b (No), yesKey a
  */
-export function deriveQuestionCard(q: ExtractedQuestion): DerivedQuestionCard {
+export function deriveQuestionCard(q: ExtractedQuestion, ctx: QuestionCardContext = {}): DerivedQuestionCard {
+  return enrichCard(deriveBaseCard(q), q, ctx);
+}
+
+/** Message and ticket words that make a derived card readable on its own (#1242). */
+export interface QuestionCardContext {
+  /** The agent message the question came from */
+  content?: string;
+  /** What the work is about (the owner's ask / ticket title), used when the message has no subject sentence */
+  title?: string;
+}
+
+/**
+ * The sentence right before the question in the message: what "这样可以吗？"
+ * is about. Skips questions, headings, quotes and sentences with nothing in them.
+ *
+ * @param content - The agent message
+ * @param question - The question sentence
+ * @returns The subject sentence, or ''
+ */
+export function questionSubject(content: string, question: string): string {
+  const at = questionIndex(content, question);
+  if (at <= 0) return '';
+  const parts = content
+    .slice(0, at)
+    .split(/(?<=[。！？!?.])\s*|\n+/u)
+    .map((p) => p.replace(/^[\s>*_#\-•·\d.)、]+/u, '').replace(/[*_]+$/u, '').trim())
+    .filter((p) => meaningful(p) >= 6 && !/[?？]$/u.test(p));
+  const last = parts[parts.length - 1] ?? '';
+  return last.replace(/[：:。.!！;；]+$/u, '');
+}
+
+/**
+ * Whether a question cannot be understood alone: short, or pointing back ("这样可以吗？").
+ *
+ * @param question - Question sentence
+ * @returns True when it needs its subject
+ */
+function needsSubject(question: string): boolean {
+  return meaningful(question) < OPEN_ITEMS_CONSTANTS.QUESTION_MIN_CHARS || /^(?:你看)?(?:这个|这版|这条|这样|this|that)/iu.test(question.trim());
+}
+
+/**
+ * The agent's recommendation sentence in the message, if any (not the question itself).
+ *
+ * @param content - Agent message
+ * @param question - The question sentence
+ * @returns Sentence and whether it argues against, or null
+ */
+function recommendationOf(content: string, question: string): { text: string; negative: boolean } | null {
+  const C = OPEN_ITEMS_CONSTANTS;
+  const hits = content
+    .split(/(?<=[。！？!?.])\s*|\n+/u)
+    .map((x) => x.replace(/^[\s>*_#\-•·]+/u, '').replace(/[*_]+$/u, '').trim())
+    .filter((x) => x && x !== question.trim() && !/[?？]$/u.test(x) && C.RECOMMENDATION_PATTERN.test(x));
+  const text = hits[hits.length - 1];
+  return text ? { text: tidy(text), negative: C.RECOMMENDATION_NEGATIVE_PATTERN.test(text) } : null;
+}
+
+/**
+ * Make a derived card stand alone: prepend the subject to a vague question,
+ * and carry the agent's recommendation onto the option it favours (#1242).
+ *
+ * @param card - Base card
+ * @param q - The extracted question
+ * @param ctx - Message and title
+ * @returns Enriched card (a new object)
+ */
+function enrichCard(card: DerivedQuestionCard, q: ExtractedQuestion, ctx: QuestionCardContext): DerivedQuestionCard {
+  const C = OPEN_ITEMS_CONSTANTS;
+  const max = DECISION_CONSTANTS.QUESTION_MAX_CHARS;
+  let out = card;
+  if (needsSubject(q.text)) {
+    const subject = (ctx.content ? questionSubject(ctx.content, q.text) : '') || (ctx.title ? tidy(ctx.title) : '');
+    if (subject && !q.text.includes(subject)) {
+      const joined = `${subject} — ${q.text}`;
+      out = { ...out, question: joined.length > max ? `${joined.slice(0, max - 1)}…` : joined };
+    }
+  }
+  const rec = ctx.content ? recommendationOf(ctx.content, q.text) : null;
+  if (rec) {
+    const labelMax = DECISION_CONSTANTS.OPTION_LABEL_MAX_CHARS;
+    const mark = (o: DecisionOption): DecisionOption => ({
+      ...o,
+      label: o.label.length + C.RECOMMENDED_SUFFIX.length > labelMax ? o.label : `${o.label}${C.RECOMMENDED_SUFFIX}`,
+      detail: detail(rec.text),
+    });
+    const mentions = (o: DecisionOption): boolean => {
+      const l = o.label.trim();
+      if (!l || l === C.YES_LABEL || l === C.NO_LABEL || l === C.REPLY_LABEL) return false;
+      const esc = l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return /^[\w ]+$/u.test(l) ? new RegExp(`(?<![\\w])${esc}(?![\\w])`, 'i').test(rec.text) : rec.text.includes(l);
+    };
+    const named = out.options.findIndex(mentions);
+    const target = named >= 0 ? named : out.options.findIndex((o) => o.label === (rec.negative ? C.NO_LABEL : C.YES_LABEL));
+    // An option the harness derived from a fallback already carries the agent's words: keep them.
+    if (target >= 0 && !out.options[target].detail) out = { ...out, options: out.options.map((o, i) => (i === target ? mark(o) : o)) };
+  }
+  return out;
+}
+
+/**
+ * Whether a derived card's question is still too thin to post after
+ * enrichment (nothing in it says what it is about).
+ *
+ * @param card - The enriched card
+ * @returns True when no card should be posted
+ */
+export function isTooVague(card: DerivedQuestionCard): boolean {
+  return meaningful(card.question) < OPEN_ITEMS_CONSTANTS.QUESTION_VAGUE_CHARS && card.derivedFrom === 'generic';
+}
+
+/**
+ * The card before enrichment.
+ *
+ * @param q - The question
+ * @returns Base card
+ */
+function deriveBaseCard(q: ExtractedQuestion): DerivedQuestionCard {
   const C = OPEN_ITEMS_CONSTANTS;
   const question = q.text;
   const sensitive = sensitiveKindOf(`${q.text} ${q.fallback ?? ''}`);

@@ -97,7 +97,9 @@ describe('PromptAssemblyService', () => {
 			expect(names).toContain('standing-answers');
 			// Model tiers for leads with "Optimize usage" on (crewly#1173)
 			expect(names).toContain('model-tiers');
-			expect(names.length).toBe(28);
+			// Team roster for the orchestrator (specs/2026-10-10-team-roster.md)
+			expect(names).toContain('team-roster');
+			expect(names.length).toBe(29);
 		});
 
 		it('should use default token budget of 28000', () => {

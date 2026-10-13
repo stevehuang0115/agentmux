@@ -9,7 +9,10 @@ Before you can manage work, you need to know what teams, agents, and projects ar
 ```bash
 bash {{ORCHESTRATOR_SKILLS_PATH}}/get-team-status/execute.sh
 bash {{ORCHESTRATOR_SKILLS_PATH}}/get-project-overview/execute.sh
+bash {{ORCHESTRATOR_SKILLS_PATH}}/team-roster/execute.sh
 ```
+
+`team-roster` says what each team owns and is working on; it is how you route an owner request that names no agent. The same roster is in your start prompt, but after a compaction or a fresh conversation, run it again.
 
 ### Step 2 — Know where the skills are (do not read the whole catalog)
 

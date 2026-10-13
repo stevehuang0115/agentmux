@@ -22,10 +22,18 @@
  *  - `warm` (push `op:'warm'`, v3): read which agents to keep warm from
  *    Cloud, record them in the keep-warm registry (idle stop and slot freeing
  *    leave them alone) and pre-start the ones that are stopped;
+ *  - `refresh` (push `op:'refresh'`): the session just opened and the voice
+ *    is about to check with the teams: ask the agents that hold the owner's
+ *    open items to bring them up to date, then rebuild and upload the
+ *    status snapshot so the voice reads fresh state (`deps.refreshStatus`);
+ *  - `log` (push `op:'log'`, v4): Cloud keeps every session's log; this
+ *    machine stores a copy as `~/.crewly/drive-logs/<date>-<sessionId>.md` +
+ *    `.jsonl` (see drive-log.store.ts), readable by a local Claude Code;
  *  - two-phase answers (v3): the delivered words ask for `reply --drive
  *    --ack` within seconds, then the full result.
  *
- * Nothing the owner or the agents say is logged.
+ * Nothing the owner or the agents say is written to this machine's server
+ * logs; the session log above is a separate file, kept 30 days.
  *
  * @module services/drive/drive-agent.service
  */
@@ -33,6 +41,7 @@
 import { DRIVE_CONSTANTS } from '../../constants.js';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
 import { clip, speakable } from '../briefing/briefing.utils.js';
+import { getDriveLogStore, type DriveLogStore } from './drive-log.store.js';
 import type { OwnerTurnMark } from '../briefing/briefing-cards.js';
 import type { IncomingMessage } from '../cloud/cloud-sync.types.js';
 import { isDriveModeRow } from './drive-row.utils.js';
@@ -126,6 +135,14 @@ export interface DriveAgentDeps {
   keepWarm?: DriveKeepWarm;
   /** Start a stopped agent now (it goes ahead of ordinary starts while warm); never throws */
   prestart?: (agentSession: string) => Promise<void>;
+  /**
+   * Check with the teams (`op:'refresh'`): ask the agents holding the owner's
+   * open items for a current status, wait briefly, then rebuild and upload
+   * the status snapshot. Resolves when the fresh snapshot is uploaded.
+   */
+  refreshStatus?: () => Promise<void>;
+  /** Where session logs are kept (default: `~/.crewly/drive-logs`) */
+  logStore?: DriveLogStore;
   fetchImpl?: (input: string, init: RequestInit) => Promise<Response>;
   now?: () => Date;
   logger?: ComponentLogger;
@@ -197,6 +214,8 @@ export class DriveAgentService {
       if (data.op === 'deliver') await this.deliver(data, instanceId);
       else if (data.op === 'recall') await this.recall(data, instanceId);
       else if (data.op === 'warm') await this.warm(data, instanceId);
+      else if (data.op === 'refresh') await this.deps.refreshStatus?.();
+      else if (data.op === 'log') await this.saveLog(data, instanceId);
       else await this.end(data, instanceId);
       return 'done';
     } catch (error) {
@@ -283,7 +302,18 @@ export class DriveAgentService {
     if (!text) throw new DriveAgentError(400, 'Reply text is required.');
     if (text.length > C.TEXT_MAX_CHARS) throw new DriveAgentError(400, `Too long for Drive mode (max ${C.TEXT_MAX_CHARS} characters) — say it short; details go in a normal reply.`);
     const conv = pickConversation(await this.deps.store.list(), sessionId, agentSession, input.recap);
-    if (!conv) throw new DriveAgentError(404, 'You have no open Drive mode conversation in that session. Answer the usual way (reply).');
+    if (!conv) {
+      // Say WHY: a conversation that closed reads differently from one that never existed.
+      const closed = (await this.deps.store.list())
+        .filter((c) => c.sessionId === sessionId && c.closedAt && (c.agentSession === agentSession || (c.members ?? []).includes(agentSession)))
+        .sort((a, b) => Date.parse(b.closedAt as string) - Date.parse(a.closedAt as string))[0];
+      throw new DriveAgentError(
+        404,
+        closed
+          ? `That Drive mode conversation closed at ${closed.closedAt}, so the owner is no longer listening on the phone. Answer the usual way (reply).`
+          : 'You have no open Drive mode conversation in that session. Answer the usual way (reply).',
+      );
+    }
     if (input.recap) return this.recap(conv, agentSession, text);
     const interim = input.interim || input.ack === true;
     await this.deps.recordAgentTurn({ agentSession, channelId: conv.channelId, ...(conv.threadId ? { threadId: conv.threadId } : {}), text, interim, sessionId });
@@ -380,6 +410,14 @@ export class DriveAgentService {
     const fresh = registry.set(data.sessionId, state.warm, state.warmUntil);
     if (fresh.length) this.logger.info('Drive mode: keeping agents warm', { sessionId: data.sessionId, agents: fresh });
     for (const agent of fresh) await this.deps.prestart?.(agent).catch(() => undefined);
+  }
+
+  /** Keep the session log (`op:'log'`): fetch it from Cloud and write it under `~/.crewly/drive-logs/`. */
+  private async saveLog(data: DriveRelayData, instanceId: string): Promise<void> {
+    const raw = (await this.cloudGet(`/${data.sessionId}/machine/log?instanceId=${encodeURIComponent(instanceId)}`)) as { base?: unknown; markdown?: unknown; jsonl?: unknown } | null;
+    if (!raw || typeof raw.base !== 'string' || typeof raw.markdown !== 'string' || typeof raw.jsonl !== 'string') throw new Error('Cloud sent a malformed session log');
+    const file = await (this.deps.logStore ?? getDriveLogStore()).save(raw.base, raw.markdown, raw.jsonl);
+    this.logger.info('Drive mode: session log saved', { sessionId: data.sessionId, file });
   }
 
   private async end(data: DriveRelayData, instanceId: string): Promise<void> {

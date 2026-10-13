@@ -20,12 +20,12 @@ function response(status: number, body: unknown) {
 const googleError = (status: number, message = 'Insufficient permissions') => response(status, { error: { code: status, message } });
 
 let fetchMock: jest.Mock;
-let tokens: { getAccessToken: jest.Mock; clearCache: jest.Mock; grantedScopes: jest.Mock };
+let tokens: { getAccessToken: jest.Mock; clearCache: jest.Mock; clearCacheFor: jest.Mock; grantedScopes: jest.Mock };
 let svc: DocsCommentsService;
 
 beforeEach(() => {
   fetchMock = jest.fn();
-  tokens = { getAccessToken: jest.fn().mockResolvedValue('ya29.tok'), clearCache: jest.fn(), grantedScopes: jest.fn().mockReturnValue(NARROW) };
+  tokens = { getAccessToken: jest.fn().mockResolvedValue('ya29.tok'), clearCache: jest.fn(), clearCacheFor: jest.fn(), grantedScopes: jest.fn().mockReturnValue(NARROW) };
   const deps: GoogleApiDeps = { tokens, fetchImpl: fetchMock as unknown as typeof fetch, product: 'drive' };
   svc = new DocsCommentsService(deps);
 });
@@ -156,7 +156,9 @@ describe('reauth_required', () => {
       message: expect.stringContaining('Google Drive edit access'),
     });
     expect(call(1).url.pathname).toBe('/drive/v3/files/DOC1');
-    expect(tokens.clearCache).toHaveBeenCalled();
+    // Scoped to the account this service acts as (here the default), never all of them.
+    expect(tokens.clearCacheFor).toHaveBeenCalledWith(undefined);
+    expect(tokens.clearCache).not.toHaveBeenCalled();
   });
 
   it('treats a drive.file 404 the same way', async () => {
@@ -167,7 +169,7 @@ describe('reauth_required', () => {
   it('passes the error through when the doc itself is not readable (wrong id)', async () => {
     fetchMock.mockResolvedValueOnce(googleError(404, 'File not found')).mockResolvedValueOnce(googleError(404, 'File not found'));
     await expect(svc.add('NOPE', 'x')).rejects.toMatchObject({ status: 404, code: 'google_error' });
-    expect(tokens.clearCache).not.toHaveBeenCalled();
+    expect(tokens.clearCacheFor).not.toHaveBeenCalled();
   });
 
   it('passes the error through when the grant already has full drive', async () => {

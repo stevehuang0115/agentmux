@@ -50,7 +50,7 @@ while [[ $# -gt 0 ]]; do
     --new-topic) NEW_TOPIC="1"; shift ;;
     --json|-j) INPUT_JSON="$2"; shift 2 ;;
     --help|-h) print_usage; exit 0 ;;
-    *) echo "Unknown argument: $1" >&2; print_usage >&2; exit 2 ;;
+    *) print_usage >&2; unknown_arg_exit "$1" ;;
   esac
 done
 

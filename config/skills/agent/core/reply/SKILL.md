@@ -64,6 +64,8 @@ When your prompt names a ticket, a message, a work item or a decision, pass
 that reference — the harness finds the conversation and thread:
 
 ```bash
+# Old follow-up (a date in the prompt, days back)? Verify first: read the thread since, the ticket status, and for
+# email work the Sent folder / drafts. Already done -> close it, do NOT message the owner.
 # [FOLLOW-UP TKT-187] … Run: reply --ticket TKT-187 "<your message>"
 bash config/skills/agent/core/reply/execute.sh --ticket TKT-187 "Preview is here: https://…"
 
@@ -88,6 +90,11 @@ bash config/skills/agent/core/reply/execute.sh --new-thread "Wiki link audit" "F
 
 Keep the `CREWLY_SESSION_NAME=<you>` prefix when your prompt shows one — it
 tells the system that you are the one replying.
+
+**Text with double quotes or several lines:** pipe it on stdin
+(`cat <<'EOF' | bash .../reply/execute.sh` ... `EOF`) instead of a quoted
+argument -- a stray `"` splits the text and nothing is sent. Check for
+`"success":true` in the output; do not cut it off with `| tail -1`.
 
 ## Options
 

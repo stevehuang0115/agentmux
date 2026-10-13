@@ -11,7 +11,7 @@
  * @module hooks/usePinnedChats
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { ORCHESTRATOR_SESSION } from '../utils/team-chat.utils';
 
 const PINNED_KEY = 'crewly-chat-pinned';
@@ -66,5 +66,7 @@ export function usePinnedChats(): UsePinnedChatsResult {
 
   const isPinned = useCallback((key: string) => pinned.has(key), [pinned]);
 
-  return { pinned, isPinned, toggle };
+  // Stable identity: consumers list this in memo/effect deps, and a fresh
+  // object every render turns those into a render loop.
+  return useMemo(() => ({ pinned, isPinned, toggle }), [pinned, isPinned, toggle]);
 }

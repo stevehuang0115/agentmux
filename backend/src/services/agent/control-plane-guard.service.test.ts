@@ -12,7 +12,7 @@ import {
 	applyControlPlaneSettingsFlag,
 	ControlPlaneSettings,
 } from './control-plane-guard.service.js';
-import { CONTROL_PLANE_GUARD_CONSTANTS, AGENT_STATUS_HOOK_CONSTANTS, SUBAGENT_GUARD_CONSTANTS } from '../../constants.js';
+import { CONTROL_PLANE_GUARD_CONSTANTS, AGENT_STATUS_HOOK_CONSTANTS, SUBAGENT_GUARD_CONSTANTS, claudeAutoCompactWindow } from '../../constants.js';
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..', '..');
 
@@ -146,6 +146,10 @@ describe('control-plane-guard.service', () => {
 			// A faint predicted user message in an empty input, accepted by Tab,
 			// was once submitted as the owner's approval.
 			expect(settings.promptSuggestionEnabled).toBe(false);
+		});
+
+		it('sets the Claude Code auto-compact window (owner 2026-10-10: ~350k)', () => {
+			expect(settings.autoCompactWindow).toBe(claudeAutoCompactWindow());
 		});
 
 		it('attaches the hook to PreToolUse for Bash', () => {
@@ -303,9 +307,11 @@ describe('control-plane-guard.service', () => {
 			const script = path.join(REPO_ROOT, AGENT_STATUS_HOOK_CONSTANTS.HOOK_SCRIPT);
 			expect(existsSync(script)).toBe(true);
 			expect(settings.hooks.Notification[0].hooks[0].command).toBe(`bash '${script}'`);
-			// Guard first, then the status hook for every tool (runtime turn state).
-			expect(settings.hooks.PreToolUse).toHaveLength(2);
-			expect(settings.hooks.PreToolUse[1]).toEqual({ matcher: '*', hooks: [{ type: 'command', command: `bash '${script}'` }] });
+			// Control-plane guard, the live-checkout guard, the destructive-git guard, then the status hook for every tool (runtime turn state).
+			expect(settings.hooks.PreToolUse).toHaveLength(4);
+			expect(settings.hooks.PreToolUse[1].hooks[0].command).toContain('live-checkout-guard/guard.mjs');
+			expect(settings.hooks.PreToolUse[2].hooks[0].command).toContain('destructive-git-guard/guard.mjs');
+			expect(settings.hooks.PreToolUse[3]).toEqual({ matcher: '*', hooks: [{ type: 'command', command: `bash '${script}'` }] });
 		});
 
 		it('writes the subagent guard into the same settings file, pointing at the real script (#852)', async () => {
@@ -327,7 +333,7 @@ describe('control-plane-guard.service', () => {
 				expect(JSON.stringify(settings.hooks[event])).not.toContain('subagent.sh');
 				expect(settings.hooks[event]).toHaveLength(1);
 			}
-			expect(settings.hooks.PreToolUse).toHaveLength(2);
+			expect(settings.hooks.PreToolUse).toHaveLength(4);
 			expect(settings.hooks.Notification).toBeDefined();
 		});
 
@@ -410,5 +416,20 @@ describe('control-plane-guard.service', () => {
 				'claude --dangerously-skip-permissions --settings "/h/(x)y.json"',
 			);
 		});
+	});
+});
+
+describe('claudeAutoCompactWindow', () => {
+	it('defaults to 350k', () => {
+		expect(claudeAutoCompactWindow({})).toBe(350_000);
+	});
+	it('takes an override in tokens, clamped to 100k–1M', () => {
+		expect(claudeAutoCompactWindow({ CREWLY_CLAUDE_AUTOCOMPACT_WINDOW: '400000' })).toBe(400_000);
+		expect(claudeAutoCompactWindow({ CREWLY_CLAUDE_AUTOCOMPACT_WINDOW: '5000' })).toBe(100_000);
+		expect(claudeAutoCompactWindow({ CREWLY_CLAUDE_AUTOCOMPACT_WINDOW: '9000000' })).toBe(1_000_000);
+	});
+	it('leaves Claude Code its own default on `auto`, and ignores junk', () => {
+		expect(claudeAutoCompactWindow({ CREWLY_CLAUDE_AUTOCOMPACT_WINDOW: 'auto' })).toBeNull();
+		expect(claudeAutoCompactWindow({ CREWLY_CLAUDE_AUTOCOMPACT_WINDOW: 'lots' })).toBe(350_000);
 	});
 });

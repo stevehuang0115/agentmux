@@ -185,7 +185,7 @@ describe('FormLabel Component', () => {
 
       expect(screen.getByText('Required Label')).toBeInTheDocument();
       expect(screen.getByText('*')).toBeInTheDocument();
-      expect(screen.getByText('*')).toHaveClass('text-red-500', 'ml-1');
+      expect(screen.getByText('*')).toHaveClass('text-danger', 'ml-1');
     });
 
     it('should not show required asterisk by default', () => {
@@ -302,21 +302,21 @@ describe('FormInput Component', () => {
       render(<FormInput placeholder="Error input" error />);
 
       const input = screen.getByPlaceholderText('Error input');
-      expect(input).toHaveClass('border-red-500');
+      expect(input).toHaveClass('border-danger');
     });
 
     it('should not apply error class by default', () => {
       render(<FormInput placeholder="Normal input" />);
 
       const input = screen.getByPlaceholderText('Normal input');
-      expect(input).not.toHaveClass('border-red-500');
+      expect(input).not.toHaveClass('border-danger');
     });
 
     it('should not apply error class when error is false', () => {
       render(<FormInput placeholder="Normal input" error={false} />);
 
       const input = screen.getByPlaceholderText('Normal input');
-      expect(input).not.toHaveClass('border-red-500');
+      expect(input).not.toHaveClass('border-danger');
     });
   });
 
@@ -401,21 +401,21 @@ describe('FormTextarea Component', () => {
       render(<FormTextarea placeholder="Error textarea" error />);
 
       const textarea = screen.getByPlaceholderText('Error textarea');
-      expect(textarea).toHaveClass('border-red-500');
+      expect(textarea).toHaveClass('border-danger');
     });
 
     it('should not apply error class by default', () => {
       render(<FormTextarea placeholder="Normal textarea" />);
 
       const textarea = screen.getByPlaceholderText('Normal textarea');
-      expect(textarea).not.toHaveClass('border-red-500');
+      expect(textarea).not.toHaveClass('border-danger');
     });
 
     it('should not apply error class when error is false', () => {
       render(<FormTextarea placeholder="Normal textarea" error={false} />);
 
       const textarea = screen.getByPlaceholderText('Normal textarea');
-      expect(textarea).not.toHaveClass('border-red-500');
+      expect(textarea).not.toHaveClass('border-danger');
     });
   });
 

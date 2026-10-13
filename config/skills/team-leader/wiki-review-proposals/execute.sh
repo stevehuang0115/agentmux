@@ -23,7 +23,7 @@ Usage: execute.sh --vault <vault> [--accept <proposed page> | --reject <proposed
 Without --accept/--reject: lists pending proposals.
 HELP
       exit 0 ;;
-    *) error_exit "Unknown argument: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 require_param "vaultPath (--vault)" "$VAULT_PATH"

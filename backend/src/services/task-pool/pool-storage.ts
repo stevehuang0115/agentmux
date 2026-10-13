@@ -12,7 +12,7 @@ import * as path from 'path';
 import {
   ensureDir,
   safeReadJson,
-  atomicWriteJson,
+  atomicWriteFile,
   modifyJsonFile,
 } from '../../utils/file-io.utils.js';
 import type { WorkItem } from '../../types/v2/work-item.types.js';
@@ -66,7 +66,7 @@ const WRITE_DEBOUNCE_MS = 500;
  * Persists task pool state to a JSON file with atomic writes.
  *
  * Uses the same patterns as the rest of the Crewly backend:
- * - {@link atomicWriteJson} for crash-safe writes
+ * - {@link atomicWriteFile} for crash-safe writes
  * - {@link modifyJsonFile} for locked read-modify-write cycles
  * - Debounced flushing to reduce disk I/O under burst writes
  */
@@ -264,6 +264,26 @@ export class PoolStorage {
   }
 
   /**
+   * Removes several claims at once (in place, one flush scheduled). Used by
+   * the pool prune, which writes them to the archive first.
+   *
+   * @param claimIds - IDs to remove
+   * @returns How many were removed
+   */
+  async removeClaims(claimIds: ReadonlySet<string>): Promise<number> {
+    const data = await this.load();
+    let removed = 0;
+    for (let i = data.claims.length - 1; i >= 0; i--) {
+      if (claimIds.has(data.claims[i].id)) {
+        data.claims.splice(i, 1);
+        removed += 1;
+      }
+    }
+    if (removed > 0) this.markDirty();
+    return removed;
+  }
+
+  /**
    * Directory the pool file lives in (`~/.crewly/task-pool` by default).
    *
    * @returns Absolute directory path
@@ -314,8 +334,18 @@ export class PoolStorage {
     if (!this.dirty || !this.cache) return;
 
     this.cache.lastUpdatedAt = new Date().toISOString();
-    await atomicWriteJson(this.filePath, this.cache);
+    // Cleared BEFORE the write: a change made while it runs sets the flag
+    // again and gets its own flush. Clearing it after would swallow that
+    // change until the next unrelated write.
     this.dirty = false;
+    try {
+      // Compact JSON: the pretty-printed file was twice the size and the
+      // whole-file rewrite is the cost of every pool write (crewly#1108).
+      await atomicWriteFile(this.filePath, JSON.stringify(this.cache));
+    } catch (err) {
+      this.dirty = true;
+      throw err;
+    }
     this.logger.debug?.('Pool data flushed to disk', { path: this.filePath });
   }
 

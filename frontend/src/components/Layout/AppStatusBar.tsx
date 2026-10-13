@@ -21,6 +21,7 @@ import { useUpdateStatusItem } from '../UpdateBanner';
 import { runtimeFallbackService, type RuntimeFallbackState } from '../../services/runtime-fallback.service';
 import { exhaustedPhrase, formatResetTime } from '../Settings/RuntimeFallbackPanel';
 import { LINKS } from '../../constants/routes.constants';
+import { setVisibleInterval } from '../../utils/visible-interval';
 
 /** How often the runtime-usage state is re-read (ms). */
 export const RUNTIME_USAGE_POLL_MS = 60_000;
@@ -68,7 +69,7 @@ export function useRuntimeUsageItem(pollMs: number = RUNTIME_USAGE_POLL_MS): Sys
 			}
 		};
 		void load();
-		const timer = setInterval(() => void load(), pollMs);
+		const timer = setVisibleInterval(() => void load(), pollMs);
 		return () => {
 			cancelled = true;
 			clearInterval(timer);

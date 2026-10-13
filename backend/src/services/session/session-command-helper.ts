@@ -26,6 +26,7 @@ import { quietShellLine } from '../../utils/shell-history.js';
 import { PtyActivityTrackerService } from '../agent/pty-activity-tracker.service.js';
 import { attributeOwnPastes, boxIsOnlyMarkersAndPiecesOf, classifyTuiInput, isPasteMarker, pasteShowsAs, pasteShowsAsSplit, screenShowsTurnInProgress, TuiInputGuardError, TuiPasteHoldError, type TuiInputReading, type TuiInputStage } from './tui-input-guard.js';
 import { forgetInputCircuit, noteInputDelivered, noteInputRefused } from './input-circuit-breaker.js';
+import { redactedScreenExcerpt } from '../../utils/screen-excerpt.js';
 import { getCrewlyHomePath } from '../core/crewly-home.utils.js';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -180,6 +181,9 @@ export class SessionCommandHelper {
 	/** Per session: settled reads in a row that stayed unreadable (see readInputBoxSettled) */
 	private static readonly unreadableReads = new Map<string, number>();
 
+	/** Per session: redacted bottom rows of the last screen that stayed unreadable (for owner alerts) */
+	private static readonly unreadableExcerpts = new Map<string, string>();
+
 	/** The watcher re-reading boxes that hold a paste of ours */
 	private static watchTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -212,6 +216,7 @@ export class SessionCommandHelper {
 		SessionCommandHelper.ownPastes.delete(sessionName);
 		SessionCommandHelper.stuckSince.delete(sessionName);
 		SessionCommandHelper.unreadableReads.delete(sessionName);
+		SessionCommandHelper.unreadableExcerpts.delete(sessionName);
 		forgetInputLedger(sessionName);
 		forgetInputCircuit(sessionName);
 		SessionCommandHelper.stopWatchingIfIdle();
@@ -742,6 +747,7 @@ export class SessionCommandHelper {
 		SessionCommandHelper.inFlight.clear();
 		SessionCommandHelper.stuckSince.clear();
 		SessionCommandHelper.unreadableReads.clear();
+		SessionCommandHelper.unreadableExcerpts.clear();
 		SessionCommandHelper.lastRepaintAt.clear();
 		resetInputLedgerForTestingHook();
 		SessionCommandHelper.stopWatchingIfIdle();
@@ -820,11 +826,38 @@ export class SessionCommandHelper {
 		const reading = await this.readInputBoxSettledOnce(sessionName, message, stage);
 		if (reading.state !== 'unknown') {
 			SessionCommandHelper.unreadableReads.delete(sessionName);
+			SessionCommandHelper.unreadableExcerpts.delete(sessionName);
 			return reading;
 		}
 		const count = (SessionCommandHelper.unreadableReads.get(sessionName) ?? 0) + 1;
 		SessionCommandHelper.unreadableReads.set(sessionName, count);
 		return reading;
+	}
+
+	/**
+	 * Redacted bottom rows of the last screen of this session that stayed
+	 * unreadable, for owner alerts ('' once it reads again).
+	 *
+	 * @param sessionName - The session
+	 * @returns The excerpt
+	 */
+	static unreadableExcerpt(sessionName: string): string {
+		return SessionCommandHelper.unreadableExcerpts.get(sessionName) ?? '';
+	}
+
+	/**
+	 * Redacted bottom rows of the screen now (words kept, secrets masked).
+	 *
+	 * @param sessionName - The session
+	 * @returns The excerpt, or '' when the screen cannot be captured
+	 */
+	private unreadableExcerptNow(sessionName: string): string {
+		try {
+			const view = this.backend.captureInputView?.call(this.backend, sessionName);
+			return view ? redactedScreenExcerpt(view.lines) : '';
+		} catch {
+			return '';
+		}
 	}
 
 	/**
@@ -899,6 +932,7 @@ export class SessionCommandHelper {
 				if (reading.state !== 'unknown') return reading;
 			}
 		}
+		SessionCommandHelper.unreadableExcerpts.set(sessionName, this.unreadableExcerptNow(sessionName));
 		this.logger.warn('Input box still unreadable — screen shape (letters and digits masked)', {
 			sessionName,
 			stage,

@@ -12,6 +12,12 @@
  *   to child processes. It also sources the user's shell profile, picking up
  *   NVM/Homebrew paths that LaunchAgents miss.
  *
+ *   Terminal can go away (its session is closed, the user session is reset), and
+ *   the supervisor and backend die with it. A small launchd watchdog
+ *   (`com.crewly.watchdog`, every 60 s) therefore re-opens the same `.command`
+ *   in Terminal when Crewly is down and nobody stopped it on purpose. It never
+ *   runs the backend itself, so the TCC reasoning above still holds.
+ *
  * **Linux** — systemd user service (`systemctl --user`)
  *   No TCC equivalent on Linux, so a standard systemd unit file works.
  *   The service sources the user's shell profile for NVM/PATH consistency.
@@ -59,6 +65,27 @@ const LOGIN_ITEM_NAME = 'Crewly Backend';
 
 /** Path to the generated .command file (macOS) */
 const COMMAND_FILE_PATH = path.join(SERVICE_DIR, 'crewly-start.command');
+
+/** Label of the launchd watchdog LaunchAgent (macOS) */
+export const WATCHDOG_LABEL = 'com.crewly.watchdog';
+
+/** Path of the watchdog LaunchAgent plist */
+const WATCHDOG_PLIST_PATH = path.join(os.homedir(), 'Library', 'LaunchAgents', `${WATCHDOG_LABEL}.plist`);
+
+/** Installed copy of the watchdog script (kept under ~/.crewly, not in the npm tree) */
+const WATCHDOG_SCRIPT_PATH = path.join(SERVICE_DIR, 'crewly-watchdog.sh');
+
+/** Where the package ships the watchdog script, relative to the package root */
+const WATCHDOG_SOURCE_RELATIVE = path.join('config', 'service', 'crewly-watchdog.sh');
+
+/** Watchdog log (written by the script itself) */
+const WATCHDOG_LOG_PATH = path.join(LOG_DIR, 'watchdog.log');
+
+/** Flag file: while present the watchdog does not relaunch Crewly */
+const WATCHDOG_PAUSE_PATH = path.join(SERVICE_DIR, 'run', 'watchdog-paused');
+
+/** Seconds between watchdog runs */
+const WATCHDOG_INTERVAL_SECS = 60;
 
 /** Legacy LaunchAgent plist label */
 const LEGACY_PLIST_LABEL = 'com.crewly.backend';
@@ -268,10 +295,16 @@ export async function serviceCommand(
 		case 'logs':
 			await serviceLogs(options);
 			break;
+		case 'pause':
+			setWatchdogPaused(true);
+			break;
+		case 'resume':
+			setWatchdogPaused(false);
+			break;
 		default:
 			console.log(chalk.red(`Unknown action: ${action}`));
 			console.log(
-				chalk.gray('Usage: crewly service <install|uninstall|status|restart|stop|start|upgrade|logs>'),
+				chalk.gray('Usage: crewly service <install|uninstall|status|restart|stop|start|upgrade|logs|pause|resume>'),
 			);
 			process.exit(1);
 	}
@@ -375,6 +408,10 @@ async function installDarwin(
 
 	if (fs.existsSync(COMMAND_FILE_PATH) && !options.force) {
 		console.log(chalk.yellow('Service is already installed.'));
+		// Installs that predate the watchdog get it without --force.
+		if (!fs.existsSync(WATCHDOG_PLIST_PATH)) {
+			await installWatchdog(projectRoot);
+		}
 		console.log(
 			chalk.gray('Use --force to overwrite, or run "crewly service status".'),
 		);
@@ -386,6 +423,7 @@ async function installDarwin(
 	console.log(chalk.green(`  Created ${COMMAND_FILE_PATH}`));
 
 	await registerLoginItem();
+	await installWatchdog(projectRoot);
 
 	console.log('');
 	console.log(chalk.green('Crewly service installed successfully!'));
@@ -409,6 +447,14 @@ async function installDarwin(
 	console.log(
 		chalk.gray(`  - Extra env (DEFAULT_RUNTIME, CREWLY_API_TOKEN, ...): ${SERVICE_ENV_PATH}`),
 	);
+	console.log(
+		chalk.gray(
+			`  - Watchdog (launchd, every ${WATCHDOG_INTERVAL_SECS}s) re-opens it in Terminal if Terminal was closed; log: ${WATCHDOG_LOG_PATH}`,
+		),
+	);
+	console.log(
+		chalk.gray('  - "crewly stop" / "crewly service stop" are respected; "crewly service pause" disables the watchdog'),
+	);
 	console.log('');
 	console.log(
 		chalk.cyan('To start now: open ' + COMMAND_FILE_PATH),
@@ -419,6 +465,7 @@ async function installDarwin(
  * macOS uninstall: removes Login Item and .command file.
  */
 async function uninstallDarwin(): Promise<void> {
+	await uninstallWatchdog();
 	await removeLoginItem();
 
 	if (fs.existsSync(COMMAND_FILE_PATH)) {
@@ -452,6 +499,21 @@ async function statusDarwin(): Promise<void> {
 		console.log(chalk.green(`  Process: Running (PID ${pid})`));
 	} else {
 		console.log(chalk.yellow('  Process: Not running'));
+	}
+
+	const watchdogInstalled = fs.existsSync(WATCHDOG_PLIST_PATH) && fs.existsSync(WATCHDOG_SCRIPT_PATH);
+	const watchdogLoaded = watchdogInstalled && (await isWatchdogLoaded());
+	if (!watchdogInstalled) {
+		console.log(chalk.yellow('  Watchdog: Not installed — run "crewly service install"'));
+	} else if (!watchdogLoaded) {
+		console.log(chalk.yellow(`  Watchdog: Installed but not loaded — run "launchctl bootstrap gui/$(id -u) ${WATCHDOG_PLIST_PATH}"`));
+	} else if (fs.existsSync(WATCHDOG_PAUSE_PATH)) {
+		console.log(chalk.yellow('  Watchdog: Loaded but PAUSED — run "crewly service resume"'));
+	} else {
+		console.log(chalk.green('  Watchdog: Loaded'));
+	}
+	if (fs.existsSync(SHUTDOWN_MARKER_PATH)) {
+		console.log(chalk.gray('  Stopped on purpose (shutdown marker present): the watchdog will not relaunch until Crewly is started again'));
 	}
 
 	const hasLegacy = fs.existsSync(LEGACY_PLIST_PATH);
@@ -1039,6 +1101,154 @@ async function migrateLegacyLaunchAgent(): Promise<void> {
 }
 
 // ===========================================================================
+// Watchdog (macOS)
+// ===========================================================================
+
+/** Shutdown marker written by stop/shutdown and honoured by the supervisor and the watchdog */
+const SHUTDOWN_MARKER_PATH = path.join(
+	SERVICE_DIR,
+	SAFE_RESTART_CONSTANTS.SHUTDOWN_MARKER_DIR,
+	SAFE_RESTART_CONSTANTS.SHUTDOWN_MARKER_FILE,
+);
+
+/**
+ * Renders the LaunchAgent plist of the watchdog: RunAtLoad plus a 60 s
+ * StartInterval, background priority. The PATH includes /usr/sbin (lsof).
+ *
+ * @param scriptPath - Absolute path of the installed watchdog script
+ * @returns Plist XML
+ */
+export function generateWatchdogPlist(scriptPath: string = WATCHDOG_SCRIPT_PATH): string {
+	const esc = (v: string): string => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>${WATCHDOG_LABEL}</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>${esc(scriptPath)}</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StartInterval</key>
+	<integer>${WATCHDOG_INTERVAL_SECS}</integer>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>Nice</key>
+	<integer>10</integer>
+	<key>LowPriorityIO</key>
+	<true/>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+	<key>StandardOutPath</key>
+	<string>/dev/null</string>
+	<key>StandardErrorPath</key>
+	<string>/dev/null</string>
+</dict>
+</plist>
+`;
+}
+
+/**
+ * Installs (or refreshes) the watchdog: copies the script shipped in the
+ * package to ~/.crewly, writes the LaunchAgent plist and (re)loads it. Never
+ * throws: the watchdog is a safety net and must not fail the service install.
+ *
+ * @param projectRoot - Crewly package root (source of the script)
+ * @returns true when installed and loaded
+ */
+async function installWatchdog(projectRoot: string): Promise<boolean> {
+	try {
+		const source = path.join(projectRoot, WATCHDOG_SOURCE_RELATIVE);
+		const script = fs.readFileSync(source, 'utf-8');
+		fs.mkdirSync(path.dirname(WATCHDOG_PLIST_PATH), { recursive: true });
+		fs.mkdirSync(LOG_DIR, { recursive: true });
+		fs.writeFileSync(WATCHDOG_SCRIPT_PATH, script, { mode: 0o755 });
+		fs.writeFileSync(WATCHDOG_PLIST_PATH, generateWatchdogPlist(WATCHDOG_SCRIPT_PATH));
+		console.log(chalk.green(`  Created ${WATCHDOG_SCRIPT_PATH}`));
+		console.log(chalk.green(`  Created ${WATCHDOG_PLIST_PATH}`));
+	} catch (error) {
+		const msg = error instanceof Error ? error.message : String(error);
+		console.log(chalk.yellow(`  Could not install the watchdog: ${msg}`));
+		return false;
+	}
+	try {
+		// bootout first so a re-install picks up a changed plist
+		await execAsync(`launchctl bootout gui/$(id -u)/${WATCHDOG_LABEL} 2>/dev/null`).catch(() => undefined);
+		await execAsync(`launchctl bootstrap gui/$(id -u) "${WATCHDOG_PLIST_PATH}"`);
+		console.log(chalk.green('  Loaded watchdog LaunchAgent'));
+		return true;
+	} catch {
+		console.log(chalk.yellow('  Watchdog written but not loaded (it loads at next login).'));
+		console.log(chalk.gray(`  Load now: launchctl bootstrap gui/$(id -u) ${WATCHDOG_PLIST_PATH}`));
+		return false;
+	}
+}
+
+/**
+ * Unloads the watchdog and removes its plist and script (the log is kept).
+ */
+async function uninstallWatchdog(): Promise<void> {
+	try {
+		await execAsync(`launchctl bootout gui/$(id -u)/${WATCHDOG_LABEL} 2>/dev/null`);
+		console.log(chalk.green('  Unloaded watchdog LaunchAgent'));
+	} catch {
+		// Not loaded
+	}
+	for (const file of [WATCHDOG_PLIST_PATH, WATCHDOG_SCRIPT_PATH]) {
+		if (fs.existsSync(file)) {
+			try {
+				fs.unlinkSync(file);
+				console.log(chalk.green(`  Removed ${file}`));
+			} catch {
+				console.log(chalk.yellow(`  Could not remove ${file} — please delete manually`));
+			}
+		}
+	}
+}
+
+/**
+ * Whether launchd has the watchdog loaded in the user's GUI domain.
+ *
+ * @returns true when `launchctl print` finds it
+ */
+export async function isWatchdogLoaded(): Promise<boolean> {
+	try {
+		await execAsync(`launchctl print gui/$(id -u)/${WATCHDOG_LABEL}`);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * `crewly service pause|resume`: toggles the flag file the watchdog checks.
+ *
+ * @param paused - true to pause, false to resume
+ */
+function setWatchdogPaused(paused: boolean): void {
+	assertSupportedPlatform();
+	if (process.platform !== 'darwin') {
+		console.log(chalk.yellow('The watchdog is macOS only; systemd already restarts the service on Linux.'));
+		return;
+	}
+	if (paused) {
+		fs.mkdirSync(path.dirname(WATCHDOG_PAUSE_PATH), { recursive: true });
+		fs.writeFileSync(WATCHDOG_PAUSE_PATH, `${new Date().toISOString()}\n`);
+		console.log(chalk.green('Watchdog paused: Crewly will not be relaunched automatically. Undo: crewly service resume'));
+	} else {
+		if (fs.existsSync(WATCHDOG_PAUSE_PATH)) fs.unlinkSync(WATCHDOG_PAUSE_PATH);
+		console.log(chalk.green('Watchdog resumed.'));
+	}
+}
+
+// ===========================================================================
 // Restart
 // ===========================================================================
 
@@ -1231,6 +1441,10 @@ async function stopService(options: ServiceOptions = {}): Promise<void> {
 		return;
 	}
 
+	// A deliberate stop: the watchdog must not bring Crewly back. Cleared by the
+	// next start (`crewly service start`, the supervisor, `crewly start`).
+	writeStopMarker();
+
 	// Find the parent PID (the bash while-true wrapper)
 	let parentPid: number | null = null;
 	try {
@@ -1270,6 +1484,16 @@ async function stopService(options: ServiceOptions = {}): Promise<void> {
 	}
 
 	console.log(chalk.green('Crewly service stopped.'));
+}
+
+/** Records that the owner stopped Crewly on purpose (best-effort). */
+function writeStopMarker(): void {
+	try {
+		fs.mkdirSync(path.dirname(SHUTDOWN_MARKER_PATH), { recursive: true });
+		fs.writeFileSync(SHUTDOWN_MARKER_PATH, `${JSON.stringify({ requestedAt: new Date().toISOString(), pid: process.pid, by: 'crewly service stop' })}\n`);
+	} catch {
+		// Without the marker the worst case is a relaunch the owner can stop again.
+	}
 }
 
 // ===========================================================================
@@ -1390,6 +1614,7 @@ async function upgradeService(options: ServiceOptions): Promise<void> {
 			const commandFileContent = generateCommandFile(newProjectRoot, captureServiceEnvironment());
 			fs.writeFileSync(COMMAND_FILE_PATH, commandFileContent, { mode: 0o755 });
 			console.log(chalk.green(`  Updated ${COMMAND_FILE_PATH}`));
+			if (fs.existsSync(WATCHDOG_PLIST_PATH)) await installWatchdog(newProjectRoot);
 		} else {
 			const wrapperContent = generateLinuxWrapper(newProjectRoot, captureServiceEnvironment());
 			fs.writeFileSync(SYSTEMD_WRAPPER_PATH, wrapperContent, { mode: 0o755 });

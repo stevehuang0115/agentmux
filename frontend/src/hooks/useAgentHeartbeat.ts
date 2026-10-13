@@ -10,6 +10,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { apiService } from '../services/api.service';
 import type { Team, TeamMember } from '../types';
+import { setVisibleInterval } from '../utils/visible-interval';
 
 // ========================= Types =========================
 
@@ -145,7 +146,7 @@ export function useAgentHeartbeat(): UseAgentHeartbeatResult {
 
     init();
 
-    const intervalId = setInterval(fetchHeartbeats, POLL_INTERVAL_MS);
+    const intervalId = setVisibleInterval(fetchHeartbeats, POLL_INTERVAL_MS);
 
     return () => {
       isMountedRef.current = false;

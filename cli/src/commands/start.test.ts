@@ -11,6 +11,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { shouldOpenDashboard } from '../utils/open-dashboard.js';
 
 describe('start command headless mode logic', () => {
 	// -----------------------------------------------------------------------
@@ -50,25 +51,25 @@ describe('start command headless mode logic', () => {
 	describe('browser opening logic', () => {
 		/**
 		 * Replicates the openBrowser resolution from startCommand.
-		 * Uses the same logic: headless forces false, otherwise browser !== false.
+		 * Opt-in only: --open (or CREWLY_OPEN_BROWSER=1) on an interactive, non-headless start.
 		 */
 		function resolveOpenBrowser(headless: boolean, browser?: boolean): boolean {
-			return headless ? false : browser !== false;
+			return shouldOpenDashboard({ headless, open: browser, env: {}, interactive: true });
 		}
 
 		it('forces openBrowser to false in headless mode regardless of browser flag', () => {
 			expect(resolveOpenBrowser(true, true)).toBe(false);
 		});
 
-		it('allows browser opening in standard mode by default', () => {
-			expect(resolveOpenBrowser(false, undefined)).toBe(true);
+		it('does not open the browser in standard mode by default', () => {
+			expect(resolveOpenBrowser(false, undefined)).toBe(false);
 		});
 
-		it('respects --no-browser flag in standard mode', () => {
+		it('does not open when --open is absent', () => {
 			expect(resolveOpenBrowser(false, false)).toBe(false);
 		});
 
-		it('allows browser opening when browser is explicitly true in standard mode', () => {
+		it('opens when --open is passed in standard mode', () => {
 			expect(resolveOpenBrowser(false, true)).toBe(true);
 		});
 	});

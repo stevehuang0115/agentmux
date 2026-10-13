@@ -250,6 +250,9 @@ export class LiveReconcilerDataProvider implements ReconcilerDataProvider {
   // it null, which makes `evictIdleAgent` fall back to "no candidate"
   // and the wake-pressure path skips as before.
   private agentRegistration: IAgentRegistrationServiceLike | null = null;
+  // Told after the reconciler evicts an idle agent, so work it still owes is
+  // put back and the agent restarted (the same hook every stop path runs).
+  private onAgentStopped: ((sessionName: string, why: string) => void) | null = null;
 
   // Memory-pressure broadcast state. Per-instance to keep counters
   // isolated, but the publish throttle ensures we don't flood orc even
@@ -290,6 +293,15 @@ export class LiveReconcilerDataProvider implements ReconcilerDataProvider {
   constructor() {
     this.logger = LoggerService.getInstance().createComponentLogger('ReconcilerDataProvider');
     this.storage = StorageService.getInstance();
+  }
+
+  /**
+   * Inject the hook run after the reconciler stops an agent.
+   *
+   * @param hook - Receives the session and a reason, or null
+   */
+  setAgentStoppedHook(hook: ((sessionName: string, why: string) => void) | null): void {
+    this.onAgentStopped = hook;
   }
 
   /**
@@ -1208,6 +1220,7 @@ export class LiveReconcilerDataProvider implements ReconcilerDataProvider {
         'inactive' as never,
         'idle_exit_pressure',
       );
+      try { this.onAgentStopped?.(victim.sessionName, 'evicted by the reconciler'); } catch { /* best-effort */ }
       return true;
     } catch (err) {
       this.logger.error('evictIdleAgent failed', {
@@ -1394,6 +1407,17 @@ export class LiveReconcilerDataProvider implements ReconcilerDataProvider {
             batched: marked.length,
             attempt: this.redeliverCount.get(action.workItemId),
             nextCooldownMs: this.redeliverCooldownMs(action.workItemId),
+          });
+        }
+        if (!delivered) {
+          // CREW-438: say why nothing went out — redispatch() has several quiet exits.
+          this.logger.warn('Redelivery of WorkItem brief returned false', {
+            agent: agentSessionName,
+            workItemId: action.workItemId,
+            status: wi.status,
+            target: wi.target,
+            batched: batch.length,
+            hasTarget: Boolean(wi.target),
           });
         }
         return delivered ? { outcome: 'ok' } : { outcome: 'failed', reason: 'redelivery not delivered' };

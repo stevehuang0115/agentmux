@@ -22,22 +22,22 @@ describe('StatusDot', () => {
 
     it.each(greenStatuses)('maps "%s" to emerald-400', (status) => {
       render(<StatusDot status={status} />);
-      expect(screen.getByTestId('status-dot')).toHaveClass('bg-emerald-400');
+      expect(screen.getByTestId('status-dot')).toHaveClass('bg-success');
     });
 
     it.each(yellowStatuses)('maps "%s" to yellow-400', (status) => {
       render(<StatusDot status={status} />);
-      expect(screen.getByTestId('status-dot')).toHaveClass('bg-yellow-400');
+      expect(screen.getByTestId('status-dot')).toHaveClass('bg-attention');
     });
 
     it.each(grayStatuses)('maps "%s" to the muted token', (status) => {
       render(<StatusDot status={status} />);
-      expect(screen.getByTestId('status-dot')).toHaveClass('bg-text-secondary-dark/50');
+      expect(screen.getByTestId('status-dot')).toHaveClass('bg-muted-dot');
     });
 
     it('maps "error" to rose-400', () => {
       render(<StatusDot status="error" />);
-      expect(screen.getByTestId('status-dot')).toHaveClass('bg-rose-400');
+      expect(screen.getByTestId('status-dot')).toHaveClass('bg-danger');
     });
   });
 

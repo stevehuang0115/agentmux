@@ -5,14 +5,16 @@
  * `config/hooks/agent-status/report.sh` (#815). The hook sends only an event
  * name, a notification type, a tool-use id, a subagent id and its session
  * (X-Agent-Session); anything else in the body is ignored and never stored
- * or logged. Events feed both the waiting-on-human signal and the runtime
+ * or logged (the one exception: a PreToolUse's `toolInput` slice, reduced at once by the
+ * owner board's normalizer and never kept raw, crewly#1247). Events feed both the waiting-on-human signal and the runtime
  * turn state (specs/2026-10-02-restart-busy-and-resume.md).
  *
  * @module controllers/agent-hooks/agent-hooks.controller
  */
 
 import type { Request, Response } from 'express';
-import { AGENT_STATUS_HOOK_CONSTANTS, CREDENTIAL_GUARD_CONSTANTS, TL_DELEGATION_CONSTANTS, TRACE_CONSTANTS, TURN_STATE_CONSTANTS } from '../../constants.js';
+import { AGENT_STATUS_HOOK_CONSTANTS, CREDENTIAL_GUARD_CONSTANTS, ORCHESTRATOR_SESSION_NAME, TEAM_ROSTER_CONSTANTS, TL_DELEGATION_CONSTANTS, TRACE_CONSTANTS, TURN_STATE_CONSTANTS } from '../../constants.js';
+import { TeamRosterService } from '../../services/team-roster/team-roster.service.js';
 import { TlDelegationService } from '../../services/tl-delegation/tl-delegation.service.js';
 import { CredentialGuardAlertService } from '../../services/monitoring/credential-guard-alerts.js';
 import { recordHookEvent } from '../../services/monitoring/agent-hook-state.js';
@@ -20,6 +22,8 @@ import { AgentTurnStateService, type TurnHookIds } from '../../services/monitori
 import { traceSubagentSendBack } from '../../services/trace/trace-recorder.js';
 import { joinHookNotes, ownerHookNoteFor } from '../../services/messaging/owner-hook-message.js';
 import { WindDownService } from '../../services/system/wind-down.service.js';
+import { getBoardActivity } from '../../services/board/board-activity.tracker.js';
+import { parseToolInput } from '../../services/board/board-activity.normalizer.js';
 
 /** Header the hook identifies its session with (same as the skills' lib.sh). */
 const SESSION_HEADER = 'x-agent-session';
@@ -36,6 +40,8 @@ const SESSION_HEADER = 'x-agent-session';
  *   about waiting or turns, e.g. an idle prompt)
  * - `toolUseId` / `agentId` are optional; anything but a plain identifier is a 400
  * - `source` (SessionStart) must be startup / resume / clear / compact
+ * - A `SessionStart` of the orchestrator after a `compact` or `clear` answers the team roster as
+ *   `additionalContext` (the context just lost the prompt that carried it; specs/2026-10-10-team-roster.md)
  * - `SubagentSendBack` (from the subagent guard) is recorded in the session's
  *   run trace only; 202 with `recorded` = whether the session had a trace
  *
@@ -122,9 +128,38 @@ export function receiveAgentHook(req: Request, res: Response): void {
 		toolName = body.toolName;
 	}
 
+	// Owner board (crewly#1247): what the agent is doing. The tool input slice (PreToolUse
+	// only) is reduced to a path / command name / host here and never stored raw.
+	try {
+		getBoardActivity().recordHook(sessionName, event, {
+			...(toolName ? { toolName } : {}),
+			...(event === 'PreToolUse' ? { toolInput: parseToolInput((req.body as { toolInput?: unknown }).toolInput) } : {}),
+			...(ids.toolUseId ? { toolUseId: ids.toolUseId } : {}),
+			...(notificationType ? { notificationType } : {}),
+			...(ids.agentId ? { isSubagent: true } : {}),
+		});
+	} catch {
+		// the board must never break a hook
+	}
 	const signal = recordHookEvent(sessionName, event, notificationType);
 	const turnChanged = AgentTurnStateService.getInstance().recordHook(sessionName, event, ids);
 	const recorded = signal !== null || turnChanged;
+	// The orchestrator's context was just compacted or cleared: the roster in
+	// its start prompt is gone, so hand it back (never blocks: no note on failure).
+	if (
+		event === 'SessionStart' &&
+		sessionName === ORCHESTRATOR_SESSION_NAME &&
+		ids.source !== undefined &&
+		(TEAM_ROSTER_CONSTANTS.REINJECT_SOURCES as readonly string[]).includes(ids.source)
+	) {
+		void TeamRosterService.getInstance()
+			.renderForPrompt()
+			.catch(() => '')
+			.then((roster) => {
+				res.status(202).json({ success: true, recorded, ...(roster ? { additionalContext: roster } : {}) });
+			});
+		return;
+	}
 	// A PostToolUse with a tool name may come back with notes the hook hands
 	// to Claude Code as additionalContext: an owner message waiting in the
 	// queue (handed over at this tool boundary instead of at the end of the

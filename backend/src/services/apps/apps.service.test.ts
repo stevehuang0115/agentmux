@@ -445,6 +445,21 @@ describe('P3: public requests', () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it('capability request: validates names, sends them to Cloud, owner approves; cancel; ownership enforced', async () => {
+    await registry.upsert(ID, { name: 'Poll', agentSession: 'dev-ella' });
+    const who = { agentSession: 'dev-ella' };
+    request.mockResolvedValueOnce({ capabilities: [], capabilityRequest: { capabilities: ['microphone'] } });
+    const out = await service.requestCapabilities(ID, { capabilities: 'microphone, microphone', note: ' noise meter ' }, who);
+    expect(request).toHaveBeenLastCalledWith('POST', `/apps/${ID}/capability-request`, { body: { capabilities: ['microphone'], note: 'noise meter' }, agent: 'dev-ella' });
+    expect(out).toMatchObject({ appId: ID, requested: true, message: expect.stringMatching(/^Requested: the owner allows it/) });
+    await expect(service.requestCapabilities(ID, { capabilities: ['laser'] }, who)).rejects.toMatchObject({ status: 400 });
+    await expect(service.requestCapabilities(ID, {}, who)).rejects.toMatchObject({ status: 400 });
+    await expect(service.requestCapabilities(ID, { capabilities: ['microphone'], note: 'x'.repeat(501) }, who)).rejects.toThrow(/note/);
+    await expect(service.cancelCapabilityRequest(ID, who)).resolves.toEqual({ appId: ID, cancelled: true });
+    expect(request).toHaveBeenLastCalledWith('DELETE', `/apps/${ID}/capability-request`, { agent: 'dev-ella' });
+    await expect(service.requestCapabilities(ID, { capabilities: ['microphone'] }, { agentSession: 'dev-bob' })).rejects.toMatchObject({ status: 403 });
+  });
+
   it('cancel and make-private; ownership enforced', async () => {
     await registry.upsert(ID, { name: 'Poll', agentSession: 'dev-ella' });
     const who = { agentSession: 'dev-ella' };
@@ -501,6 +516,43 @@ describe('P3: app data sanitised for the agent (§4)', () => {
     request.mockResolvedValueOnce({ docs: [doc], next: null });
     await expect(service.listDocs(ID, 'items', {}, who)).resolves.toEqual({ docs: [expected], next: null });
     await expect(service.deleteDoc(ID, 'items', 'd1', who)).resolves.toEqual({ deleted: true });
+  });
+});
+
+describe('long strings in app data (crewly#1145)', () => {
+  const LONG = 'A'.repeat(70_000);
+  const who = { agentSession: 'dev-ella' };
+
+  it('flags a cut string on get and list instead of cropping silently', async () => {
+    await registry.upsert(ID, { name: 'G', agentSession: 'dev-ella' });
+    const doc = { id: 'd1', rev: 1, data: { name: 'x', photo: LONG, nested: [{ img: LONG }] } };
+    request.mockResolvedValueOnce(doc);
+    const got = (await service.getDoc(ID, 'items', 'd1', who)) as Record<string, any>;
+    expect(got.truncated).toEqual([
+      { field: '/photo', chars: 70_000 },
+      { field: '/nested/0/img', chars: 70_000 },
+    ]);
+    expect(got.truncatedHint).toMatch(/--get-field/);
+    expect(got.data.photo.length).toBeLessThan(70_000);
+    request.mockResolvedValueOnce({ docs: [doc], next: null });
+    const list = (await service.listDocs(ID, 'items', {}, who)) as Record<string, any>;
+    expect(list.truncated[0]).toEqual({ id: 'd1', field: '/photo', chars: 70_000 });
+  });
+
+  it('adds no flag when nothing was cut', async () => {
+    await registry.upsert(ID, { name: 'G', agentSession: 'dev-ella' });
+    request.mockResolvedValueOnce({ id: 'd1', rev: 1, data: { a: 'short' } });
+    expect(await service.getDoc(ID, 'items', 'd1', who)).not.toHaveProperty('truncated');
+  });
+
+  it('getDocField returns the whole raw string, and refuses bad or missing pointers', async () => {
+    await registry.upsert(ID, { name: 'G', agentSession: 'dev-ella' });
+    request.mockResolvedValue({ id: 'd1', rev: 1, data: { photo: LONG, 'a/b': { 'c~d': ['z'] } } });
+    await expect(service.getDocField(ID, 'items', 'd1', '/photo', who)).resolves.toEqual({ field: '/photo', type: 'string', chars: 70_000, value: LONG });
+    await expect(service.getDocField(ID, 'items', 'd1', '/a~1b/c~0d/0', who)).resolves.toMatchObject({ value: 'z' });
+    await expect(service.getDocField(ID, 'items', 'd1', '/nope', who)).rejects.toMatchObject({ status: 404 });
+    await expect(service.getDocField(ID, 'items', 'd1', 'photo', who)).rejects.toMatchObject({ status: 400 });
+    await expect(service.getDocField(ID, 'items', 'd1', '/photo', { agentSession: 'dev-bob' })).rejects.toMatchObject({ code: 'not_your_app' });
   });
 });
 

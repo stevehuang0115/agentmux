@@ -104,6 +104,9 @@ describe('SkillsReferenceModule', () => {
 			// Crewly channels span teams: every agent can find and post in its own.
 			expect(result).toContain('core/list-channels');
 			expect(result).toContain("reply-channel --channel '#name'");
+			// Before saying "I can't find it", look in the chat log.
+			expect(result).toContain('core/search-chat');
+			expect(result).toContain('search chat history');
 		});
 
 		it('sends the orchestrator to harness-login and forbids interactive logins in bash', async () => {
@@ -236,6 +239,21 @@ describe('SkillsReferenceModule', () => {
 			expect(out).toContain('drive-search');
 			expect(out).toContain('drive-read');
 			expect(out).toContain('drive-upload');
+		});
+
+		it('points agents at send-file / receive-file for large files instead of Drive or Slack', async () => {
+			const out = await module.build(baseConfig);
+
+			expect(out).toContain('core/send-file');
+			expect(out).toContain('receive-file');
+			expect(out).toContain('prefer these over Drive or Slack');
+		});
+
+		it('points agents at request-file when the owner\'s file is too large, never at compression or Drive', async () => {
+			const out = await module.build(baseConfig);
+
+			expect(out).toContain('core/request-file');
+			expect(out).toContain('Never ask the owner to compress a file or put it in Drive');
 		});
 
 		it('names every connector family, not just Drive', async () => {

@@ -48,6 +48,7 @@ import {
   type BriefingQueue,
 } from './briefing.types.js';
 import { conversationKey, liveCards, liveQuestionIds, ownerLastIndex, type OwnerTurnMark } from './briefing-cards.js';
+import { reviewSummary, ownerWords, triageReview } from './briefing-review.js';
 import { clip, orderBriefing, parseLaterTime, sensitiveReason, speakable, spokenSummary } from './briefing.utils.js';
 
 const C = BRIEFING_CONSTANTS;
@@ -105,6 +106,18 @@ export interface BriefingDeps {
   postOwnerMessage: (target: BriefingPostTarget, text: string) => Promise<{ channelId: string; threadId?: string }>;
   /** The agent's first reply in that conversation after `sinceMs`, if any */
   findAgentReply: (agentSession: string, channelId: string, threadId: string | undefined, sinceMs: number) => Promise<{ text: string; at: string } | null>;
+  /**
+   * Whether the project ticket a decision card belongs to is already closed
+   * (done / cancelled): the work the card waited on is over, so the card is
+   * not read out. Absent or unknown = keep the card.
+   */
+  isCardTicketClosed?: (ticket: { projectId: string; projectPath: string; id: string }) => Promise<boolean>;
+  /**
+   * The owner decided a card by voice: write it into the project ticket the
+   * card belongs to right away (a log line), so the records say so before
+   * the team has acted on it. Best effort; a failure never blocks the answer.
+   */
+  noteDecision?: (input: { ticket: { projectId: string; projectPath: string; id: string }; agentName: string; summary: string; answer: string }) => Promise<void>;
   store: BriefingStateStore;
   now?: () => Date;
   logger?: ComponentLogger;
@@ -168,6 +181,24 @@ export class BriefingService {
     // Forget state of items that are gone (answered elsewhere, closed…).
     void this.deps.store.prune(new Set(all.map((g) => g.item.id))).catch(() => undefined);
     return { items: orderBriefing(items).slice(0, C.MAX_ITEMS), lookupsPending, hidden, generatedAt: now.toISOString() };
+  }
+
+  /**
+   * The agents holding the owner's open items, with one line per item: who to
+   * ask for a current status when Drive opens ("let me check with the teams").
+   *
+   * @returns One entry per agent
+   */
+  async statusCheckTargets(): Promise<Array<{ agentSession: string; agentName: string; items: string[] }>> {
+    const { items } = await this.queue();
+    const byAgent = new Map<string, { agentSession: string; agentName: string; items: string[] }>();
+    for (const item of items) {
+      const entry = byAgent.get(item.agentSession) ?? { agentSession: item.agentSession, agentName: item.agentName, items: [] };
+      const ref = item.answerTarget.kind === 'decision' ? `card ${item.answerTarget.decisionId}` : item.answerTarget.kind === 'ticket' ? `ticket ${item.answerTarget.tkt ?? item.answerTarget.ticketId}` : 'your question to the owner';
+      entry.items.push(`${ref}: ${item.label ?? item.summary}`);
+      byAgent.set(item.agentSession, entry);
+    }
+    return [...byAgent.values()];
   }
 
   /**
@@ -237,6 +268,13 @@ export class BriefingService {
       ownerLastAt,
     });
     if (dropped.length > 0) this.logger.debug('Briefing: cards left out', { count: dropped.length });
+    // A card whose ticket is already done / cancelled waits on nothing: the
+    // work shipped or was dropped after the card was asked.
+    const closedChecks = await Promise.all(
+      live.map(async (d) => (d.ticket && this.deps.isCardTicketClosed ? this.deps.isCardTicketClosed(d.ticket).catch(() => false) : false)),
+    );
+    const openCards = live.filter((_, i) => !closedChecks[i]);
+    if (openCards.length < live.length) this.logger.debug('Briefing: cards of closed tickets left out', { count: live.length - openCards.length });
     const questions = requests.flatMap((r) =>
       (r.openItems ?? [])
         .filter((it) => it.type === 'question' && OPEN_QUESTION_STATUSES.has(it.status) && !it.decisionId && r.chatRef)
@@ -244,11 +282,11 @@ export class BriefingService {
     );
     const keepQuestions = liveQuestionIds(
       questions.map((q) => ({ id: q.id, agent: q.it.agent, text: q.it.text, createdAt: q.it.createdAt, conversation: chatConversation(q.r.chatRef) })),
-      live,
+      openCards,
       { now: now.getTime(), ownerLastAt },
     );
     const out: GatheredItem[] = [];
-    for (const d of live) {
+    for (const d of openCards) {
       const item = decisionItem(d, who(d.system ? ORCHESTRATOR_SESSION_NAME : d.asker), now);
       if (item) out.push({ item, state: state.items[item.id] ?? {}, decision: d });
     }
@@ -258,6 +296,15 @@ export class BriefingService {
       out.push({ item, state: state.items[item.id] ?? {}, request: r });
     }
     for (const t of reviews) {
+      // awaiting_followup is held by the agent's own open items, not by an OK.
+      if (t.status === 'awaiting_followup') continue;
+      // The owner's own question, a status check or a voice note the agent
+      // answered in the conversation is not a deliverable to accept.
+      const verdict = triageReview(t, now.getTime());
+      if (!verdict.surface) {
+        this.logger.debug('Briefing: review left out', { reason: verdict.reason });
+        continue;
+      }
       const item = reviewItem(t, who(t.assignee ?? t.reply?.by), now);
       out.push({ item, state: state.items[item.id] ?? {} });
     }
@@ -317,6 +364,12 @@ export class BriefingService {
         optionKey ? decisions.chooseFromDashboard(decisionId, matchOptionKey(item, optionKey)?.key ?? optionKey, 'voice') : decisions.answerInWords(decisionId, text as string, 'voice'),
       );
       await this.deps.store.update(item.id, () => null);
+      // The decision is in the ticket's record now, not only in what was said.
+      const decidedTicket = g.decision?.ticket;
+      if (decidedTicket && this.deps.noteDecision) {
+        const answer = optionKey ? (matchOptionKey(item, optionKey)?.label ?? optionKey) : (text as string);
+        await this.deps.noteDecision({ ticket: decidedTicket, agentName: item.agentName, summary: item.summary, answer }).catch((err) => this.logger.warn('Briefing: decision not noted on its ticket', { itemId: item.id, error: err instanceof Error ? err.message : String(err) }));
+      }
       this.logger.info('Briefing: decision answered by voice', { itemId: item.id, how: optionKey ? 'option' : 'words' });
       return { status: 'done', itemId: item.id, spoken: `Done. ${item.agentName} has your answer.` };
     }
@@ -582,8 +635,8 @@ export function reviewItem(t: TicketListItem, who: { name: string; team?: string
   const soon = !Number.isNaN(autoAt) && autoAt - now.getTime() <= C.REVIEW_SOON_MS;
   const reason = sensitiveReason([t.title, t.description]);
   const lines = [
-    `Finished work: ${speakable(t.title)}${t.tkt ? ` (${t.tkt})` : ''}`,
-    ...(t.description ? [`Asked for: ${clip(speakable(t.description), 600)}`] : []),
+    `The owner asked ${who.name}: ${speakable(ownerWords(t.title))}${t.tkt ? ` (${t.tkt})` : ''}`,
+    ...(t.description ? [`Their words: ${clip(speakable(t.description), 600)}`] : []),
     ...(t.reply?.excerpt ? [`${who.name}'s answer: ${clip(speakable(t.reply.excerpt), 800)}`] : []),
     ...t.acceptance.filter((a) => a.text).map((a) => `Check: ${speakable(a.text)}`),
     ...(t.rejectCount > 0 ? [`Sent back ${t.rejectCount} time(s) before.`] : []),
@@ -596,7 +649,8 @@ export function reviewItem(t: TicketListItem, who: { name: string; team?: string
     agentSession: t.assignee ?? t.reply?.by ?? ORCHESTRATOR_SESSION_NAME,
     agentName: who.name,
     ...(who.team ? { teamName: who.team } : {}),
-    summary: spokenSummary('review', who.name, t.title),
+    summary: reviewSummary(who.name, t, t.reply?.excerpt),
+    label: clip(ownerWords(t.description || t.title), C.REVIEW_LABEL_MAX_CHARS),
     details: clip(lines.join('\n'), C.DETAILS_MAX_CHARS),
     options: [
       { key: REVIEW_ACCEPT, label: 'Accept' },

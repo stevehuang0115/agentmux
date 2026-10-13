@@ -16,15 +16,16 @@
 
 @source "./dist";
 
-/* Legacy names: unchanged hex values (tokens.test.ts checks they equal the
-   dark tokens in tokens.css). */
-@theme {
-  --color-primary: #2a73ea;
-  --color-background-dark: #111721;
-  --color-surface-dark: #1a222c;
-  --color-text-primary-dark: #f6f7f8;
-  --color-text-secondary-dark: #9ab0d9;
-  --color-border-dark: #313a48;
+/* Legacy names: they now resolve through the variables, so a theme swap
+   reaches them too. With no data-theme the variables hold the original dark
+   values (tokens.test.ts checks the legacy hex still equals them). */
+@theme inline {
+  --color-primary: rgb(var(--c-primary));
+  --color-background-dark: rgb(var(--c-bg));
+  --color-surface-dark: rgb(var(--c-surface));
+  --color-text-primary-dark: rgb(var(--c-text));
+  --color-text-secondary-dark: rgb(var(--c-text-2));
+  --color-border-dark: rgb(var(--c-border));
 }
 
 /* Redesign names (specs/2026-10-02-ui-redesign.md §Tokens), resolved from

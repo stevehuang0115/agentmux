@@ -5,7 +5,7 @@
  * out, the size cap.
  */
 
-import { agentStateOf, buildBriefingSnapshot, capSnapshot, logMessage, safeText, ticketStatus, waitingRef, workItemStatus, type SnapshotSources } from './drive-briefing-snapshot.js';
+import { agentStateOf, buildBriefingSnapshot, collapseReviews, capSnapshot, logMessage, safeText, ticketStatus, waitingRef, workItemStatus, type SnapshotSources } from './drive-briefing-snapshot.js';
 import type { BriefingSnapshot } from './drive-briefing.contract.js';
 
 const NOW = new Date('2026-10-09T10:00:00.000Z');
@@ -134,5 +134,117 @@ describe('capSnapshot', () => {
     expect(out.items.map((i) => i.ref)).toEqual(['R-1']);
     const tighter = capSnapshot(s, full - 250);
     expect(tighter.agents[0].lastToOwner).toHaveLength(1);
+  });
+});
+
+describe('ticket freshness', () => {
+  const day = (n: number): string => new Date(NOW.getTime() - n * 24 * 60 * 60 * 1000).toISOString();
+  const ticket = (over: Partial<SnapshotSources['tickets'][number]>): SnapshotSources['tickets'][number] => ({
+    project: 'ce-site',
+    id: 'CE-1',
+    title: 'A ticket',
+    status: 'in_progress',
+    labels: [],
+    assignee: 'vera-1',
+    team: 't-ce',
+    updatedAt: day(0),
+    workItemId: null,
+    log: [],
+    ...over,
+  });
+  const itemOf = (tickets: SnapshotSources['tickets'], ref: string) => buildBriefingSnapshot(sources({ tickets, workItems: [] })).items.find((i) => i.ref === ref)!;
+
+  it('gives every ticket its last-activity date and idle days', () => {
+    const i = itemOf([ticket({ id: 'CE-1', updatedAt: day(1), log: [`${day(1)} · vera-1 · wrote the intro`] })], 'CE-1');
+    expect(i.lastActivityAt).toBe(day(1));
+    expect(i.idleDays).toBe(1);
+    expect(i.maybeOutdated).toBeUndefined();
+    expect(i.last).toBe('wrote the intro');
+  });
+
+  it('uses a newer Log line over updatedAt', () => {
+    const i = itemOf([ticket({ updatedAt: day(6), log: [`${day(2)} · vera-1 · progress`] })], 'CE-1');
+    expect(i.lastActivityAt).toBe(day(2));
+    expect(i.idleDays).toBe(2);
+  });
+
+  it('marks open tickets silent past the threshold as maybe outdated, with the age in the spoken text', () => {
+    const inProgress = itemOf([ticket({ status: 'in_progress', updatedAt: day(5), log: [`${day(5)} · vera-1 · started`] })], 'CE-1');
+    expect(inProgress.maybeOutdated).toBe(true);
+    expect(inProgress.idleDays).toBe(5);
+    expect(inProgress.last).toBe('May be outdated: no update for 5 days. Last note: started');
+    // Backlog gets the longer 14-day allowance.
+    expect(itemOf([ticket({ status: 'backlog', updatedAt: day(10) })], 'CE-1').maybeOutdated).toBeUndefined();
+    const backlog = itemOf([ticket({ status: 'backlog', updatedAt: day(15) })], 'CE-1');
+    expect(backlog.maybeOutdated).toBe(true);
+    expect(backlog.last).toBe('May be outdated: no update for 15 days.');
+  });
+
+  it('does not mark parked tickets or finished ones', () => {
+    expect(itemOf([ticket({ status: 'backlog', updatedAt: day(40), labels: ['parked'] })], 'CE-1').maybeOutdated).toBeUndefined();
+    expect(itemOf([ticket({ status: 'done', updatedAt: day(0.5) })], 'CE-1').maybeOutdated).toBeUndefined();
+  });
+
+  it('does not report an outdated in-progress ticket as what its assignee is doing now', () => {
+    const snap = buildBriefingSnapshot(sources({ tickets: [ticket({ status: 'in_progress', updatedAt: day(6) })], workItems: [] }));
+    expect(snap.agents.find((a) => a.session === 'vera-1')?.activity).toBeUndefined();
+    const fresh = buildBriefingSnapshot(sources({ tickets: [ticket({ status: 'in_progress', updatedAt: day(0.1) })], workItems: [] }));
+    expect(fresh.agents.find((a) => a.session === 'vera-1')?.activity?.ref).toBe('CE-1');
+  });
+
+  it('stays backward compatible: the old fields are unchanged and the new ones are optional', () => {
+    const i = itemOf([ticket({ status: 'in_progress', updatedAt: day(6) })], 'CE-1');
+    expect(i).toMatchObject({ ref: 'CE-1', kind: 'ticket', status: 'in_progress', updatedAt: day(6), project: 'ce-site' });
+    // Work items keep their old shape.
+    const wi = buildBriefingSnapshot(sources()).items.find((x) => x.kind === 'work')!;
+    expect(wi.maybeOutdated).toBeUndefined();
+    expect(wi.lastActivityAt).toBeUndefined();
+  });
+});
+
+describe('collapsing review entries per agent', () => {
+  const review = (id: string, who: string, title: string, minutes: number, tkt: string) => ({
+    id: `t:${id}`,
+    kind: 'review' as const,
+    agentSession: `${who.toLowerCase()}-1`,
+    agentName: who,
+    summary: `${who} finished: ${title}. Accept it or send it back?`,
+    since: ago(minutes),
+    urgency: 'low' as const,
+    answerTarget: { kind: 'ticket', ticketId: id, tkt },
+  });
+
+  it('one entry per agent with several reviews; decisions and single reviews stay as they are', () => {
+    const waiting = [
+      review('a', 'Milo', 'Bigger pet home', 300, 'TKT-1'),
+      { id: 'd:D-7', kind: 'decision' as const, agentSession: 'ella-1', agentName: 'Ella', summary: 'Ella asks which cut', since: ago(20), urgency: 'normal' as const, answerTarget: { kind: 'decision', decisionId: 'D-7' } },
+      review('b', 'Milo', 'Multi photo upload', 200, 'TKT-2'),
+      review('c', 'Milo', 'Setting overlay', 100, 'TKT-3'),
+      review('d', 'Ella', 'Competitor UI notes', 50, 'TKT-4'),
+    ];
+    const out = collapseReviews(waiting);
+    expect(out).toHaveLength(3);
+    expect(out[0]).toMatchObject({
+      agentName: 'Milo',
+      summary: 'Milo reports back on 3 things you asked for: Bigger pet home, Multi photo upload, Setting overlay - any you want changed?',
+      since: ago(300),
+      refs: ['TKT-1', 'TKT-2', 'TKT-3'],
+    });
+    expect(out[1].id).toBe('d:D-7');
+    expect(out[2].summary).toContain('Ella finished: Competitor UI notes');
+  });
+
+  it('flows into the snapshot with refs; a lone review keeps the old shape', () => {
+    const s = buildBriefingSnapshot(
+      sources({ waiting: [review('a', 'Milo', 'A', 30, 'TKT-1'), review('b', 'Milo', 'B', 20, 'TKT-2'), review('c', 'Ella', 'C', 10, 'TKT-3')] }),
+    );
+    expect(s.waiting).toHaveLength(2);
+    expect(s.waiting[0]).toMatchObject({ ref: 'TKT-1', kind: 'review', refs: ['TKT-1', 'TKT-2'] });
+    expect(s.waiting[1]).not.toHaveProperty('refs');
+  });
+
+  it('says "and N more" past four', () => {
+    const many = ['A', 'B', 'C', 'D', 'E', 'F'].map((t, i) => review(String(i), 'Milo', t, 60 - i, `TKT-${i}`));
+    expect(collapseReviews(many)[0].summary).toBe('Milo reports back on 6 things you asked for: A, B, C, D and 2 more - any you want changed?');
   });
 });

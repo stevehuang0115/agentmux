@@ -1,0 +1,124 @@
+/*
+ * Crewly "Glass" surfaces (design language v2). Imported by tokens.css, so
+ * every host that has the tokens has these classes.
+ *
+ *   .cw-wall          the sunset sky (or its night version) behind everything
+ *   .cw-glass         level 1: cards, rows, stat tiles
+ *   .cw-glass-2       level 2: regions / grouping areas, calmer than a card
+ *   .cw-glass-strong  windows, menus, toasts, the dock: stays legible over content
+ *   .cw-glass-warn    decisions waiting on the owner
+ *   .cw-bar           sidebar / header / phone tab bar (add your own border-side width, e.g. border-r)
+ *   .cw-logo          the Crewly mark, inverted to white except on the light theme
+ *   .cw-kind-<kind>   the colour of a step kind chip (read edit run find browse delegate think)
+ *
+ * Old Safari (iOS 12): the SOLID colour is declared first and is what those
+ * browsers paint. Translucency and blur live inside one @supports block that
+ * accepts either the prefixed or the standard property. No flex gap, no
+ * aspect-ratio, no inset, no :is/:where, no nesting: this file is meant to
+ * pass `npm run lint:ios12` as it is.
+ *
+ * In Tailwind's `components` layer so a utility on the same element
+ * (`rounded-2xl`, `border-0`, `bg-transparent`) still wins.
+ */
+@layer components {
+  .cw-wall {
+    background-color: var(--wall-color);
+    background-image: var(--wall);
+    color: var(--text);
+  }
+
+  .cw-glass,
+  .cw-glass-2,
+  .cw-glass-strong,
+  .cw-glass-warn {
+    border: 1px solid var(--edge-fb);
+    box-shadow: var(--crewly-shadow-2);
+    color: var(--text);
+  }
+  .cw-glass {
+    background-color: var(--glass-fb);
+  }
+  .cw-glass-2 {
+    background-color: var(--glass-2-fb);
+  }
+  .cw-glass-strong {
+    background-color: var(--glass-strong-fb);
+    box-shadow: var(--crewly-shadow-3);
+  }
+  .cw-glass-warn {
+    background-color: var(--glass-warn-fb);
+    border-color: var(--edge-fb);
+  }
+  .cw-bar {
+    background-color: var(--glass-fb);
+    border-color: var(--edge-fb);
+    color: var(--text);
+  }
+
+  @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+    .cw-glass {
+      background-color: var(--glass);
+      border-color: var(--edge);
+      -webkit-backdrop-filter: var(--glass-blur);
+      backdrop-filter: var(--glass-blur);
+    }
+    .cw-glass-2 {
+      background-color: var(--glass-2);
+      border-color: var(--edge);
+      -webkit-backdrop-filter: var(--glass-blur);
+      backdrop-filter: var(--glass-blur);
+    }
+    .cw-glass-strong {
+      background-color: var(--glass-strong);
+      border-color: var(--edge);
+      -webkit-backdrop-filter: var(--glass-blur-strong);
+      backdrop-filter: var(--glass-blur-strong);
+    }
+    .cw-glass-warn {
+      background-color: var(--glass-warn);
+      -webkit-backdrop-filter: var(--glass-blur);
+      backdrop-filter: var(--glass-blur);
+    }
+    .cw-bar {
+      /* Bars sit over scrolling content: the strong tint keeps it legible even where the blur is not painted. */
+      background-color: var(--glass-strong);
+      border-color: var(--edge);
+      -webkit-backdrop-filter: var(--glass-blur-strong);
+      backdrop-filter: var(--glass-blur-strong);
+    }
+  }
+
+  /* The white Crewly mark on dark themes (the svg is black); as-is on light */
+  .cw-logo {
+    -webkit-filter: invert(1);
+    filter: invert(1);
+  }
+  [data-theme='light'] .cw-logo {
+    -webkit-filter: none;
+    filter: none;
+  }
+
+  /* A dotted work surface (the canvas floor) */
+  .cw-dots {
+    background-image: radial-gradient(var(--dot-grid) 1px, rgba(0, 0, 0, 0) 1.4px);
+    background-size: 28px 28px;
+  }
+
+  /* Step-kind chips: colour + icon, so the kind never relies on colour alone */
+  .cw-kind {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    flex: none;
+  }
+  .cw-kind-read { background-color: var(--kind-read-bg); color: var(--kind-read); }
+  .cw-kind-edit { background-color: var(--kind-edit-bg); color: var(--kind-edit); }
+  .cw-kind-run { background-color: var(--kind-run-bg); color: var(--kind-run); }
+  .cw-kind-find { background-color: var(--kind-find-bg); color: var(--kind-find); }
+  .cw-kind-browse { background-color: var(--kind-browse-bg); color: var(--kind-browse); }
+  .cw-kind-delegate { background-color: var(--kind-delegate-bg); color: var(--kind-delegate); }
+  .cw-kind-think { background-color: var(--kind-think-bg); color: var(--kind-think); }
+}

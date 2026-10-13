@@ -8,6 +8,7 @@ import * as path from 'path';
 import {
   TicketIntakeService,
   suppressTrivialOrShort,
+  chaseTopic,
   suppressFileOnly,
   weightedTextLength,
   isDismissText,
@@ -1073,5 +1074,100 @@ describe('intake — follow-ups instead of new tickets (2026-09-28)', () => {
     const again = await svc.intakeWithOutcome(msg({ ts: '100.2', thread: '100.1', text: '我只是想着和orca对比而已' }));
     expect(again.action).toBe('duplicate');
     expect((await store.getById(t.id))?.discussion).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2026-10-13 — replies in a thread the owner started (AZ star video incident)
+// ---------------------------------------------------------------------------
+
+describe('intake — replies in an owner-rooted thread without a ticket', () => {
+  const reply = (text: string, over: Partial<IntakeMessage> & { ts?: string; thread?: string } = {}): IntakeMessage =>
+    msg({ ts: '200.2', thread: '200.1', text, isThreadReply: true, ...over });
+
+  it('an ask or correction opens a ticket when the thread root is the owner\'s own message', async () => {
+    const asks = [
+      '你之前没有存下来吗？要不你根据现在AZ星球最新的情况 去做一个新的解说吧',
+      '这个连Az星球的录屏都没加',
+    ];
+    for (const [i, text] of asks.entries()) {
+      const outcome = await svc.intakeWithOutcome(reply(text, { ts: `20${i}.2`, thread: `20${i}.1`, threadRootIsOwner: true }));
+      expect(outcome.action).toBe('created');
+    }
+  });
+
+  it('the same replies stay ignored in a thread an agent started', async () => {
+    const outcome = await svc.intakeWithOutcome(reply('这个连Az星球的录屏都没加'));
+    expect(outcome).toEqual({ action: 'ignored', reason: 'thread_reply' });
+  });
+
+  it('a bare acknowledgement in an owner-rooted thread still opens nothing', async () => {
+    const ack = await svc.intakeWithOutcome(reply('好的', { ts: '200.3', threadRootIsOwner: true }));
+    expect(ack.action).toBe('ignored');
+    const approval = await svc.intakeWithOutcome(reply('好的 可以', { ts: '200.4', threadRootIsOwner: true }));
+    expect(approval.action).toBe('ignored');
+    expect(store.items.size).toBe(0);
+  });
+
+  it('once the thread has a ticket, replies follow the normal thread rules', async () => {
+    const root = await svc.intake(msg({ ts: '200.1' }));
+    const outcome = await svc.intakeWithOutcome(reply('这个连Az星球的录屏都没加', { threadRootIsOwner: true }));
+    expect(outcome.action).toBe('appended');
+    expect(store.items.size).toBe(1);
+    expect(root).not.toBeNull();
+  });
+});
+
+describe('recordSkipped', () => {
+  it('logs an owner message the caller never handed to intake, and nothing for others', async () => {
+    const log = new MemoryIntakeOutcomeLog('2026-09-01T00:00:00Z');
+    svc = new TicketIntakeService({ requests: store, outcomeLog: log });
+    await svc.recordSkipped(msg({ ts: '300.1' }), 'room_owned_elsewhere');
+    await svc.recordSkipped(msg({ ts: '300.2', isOwner: false }), 'room_owned_elsewhere');
+    expect(log.events).toEqual([
+      expect.objectContaining({ ref: 'slackch-C1-300.1', action: 'ignored', reason: 'room_owned_elsewhere' }),
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Owner chases ("之前说的X现在什么情况了？")
+// ---------------------------------------------------------------------------
+
+describe('chaseTopic', () => {
+  it('finds the topic of a chase and none in a bare ping', () => {
+    expect(chaseTopic('之前说那个AZ星球的视频 现在什么情况了？')).toEqual({ latin: ['az'], cjk: expect.arrayContaining(['星球', '视频']) });
+    expect(chaseTopic('之前说的那个AZ星球的视频剪辑是不是又给忘了？')?.latin).toEqual(['az']);
+    for (const bare of ['进度呢', '在吗', 'status?', '现在什么情况了？', 'any update', 'what is the status of the deploy?', '之前说的那个现在什么情况了？']) expect(chaseTopic(bare)).toBeNull();
+  });
+});
+
+describe('intake — chases', () => {
+  it('appends to a recent open ticket that matches the topic and nudges its assignee', async () => {
+    const nudge = jest.fn(async () => undefined);
+    svc.setChaseNudge(nudge);
+    const ticket = await svc.intake(msg({ ts: '400.1', text: '请做一个AZ星球的视频剪辑，素材已上传', targetAgent: 'pia' }));
+    const outcome = await svc.intakeWithOutcome(msg({ ts: '400.2', text: '之前说那个AZ星球的视频 现在什么情况了？' }));
+    expect(outcome.action).toBe('appended');
+    expect(outcome.action === 'appended' && outcome.ticket.id).toBe(ticket!.id);
+    expect(store.items.size).toBe(1);
+    expect(nudge).toHaveBeenCalledWith('pia', expect.stringContaining('TKT-'));
+  });
+
+  it('opens a lightweight question ticket when nothing matches, assigned to the responder', async () => {
+    const outcome = await svc.intakeWithOutcome(msg({ ts: '410.1', text: '之前说的那个AZ星球的视频剪辑是不是又给忘了？', targetAgent: 'ella' }));
+    expect(outcome.action).toBe('created');
+    const t = outcome.action === 'created' ? outcome.ticket : null;
+    expect(t).toMatchObject({ kind: 'question', assignee: 'ella', requiresConfirmation: false });
+    expect(t?.tags).toContain('chase');
+  });
+
+  it('does not match a finished ticket, and a bare ping stays ignored', async () => {
+    const done = await svc.intake(msg({ ts: '420.1', text: '请做一个AZ星球的视频剪辑' }));
+    await store.update(done!.id, { status: 'done', completedAt: new Date().toISOString() } as UpdateRequestInput);
+    const chase = await svc.intakeWithOutcome(msg({ ts: '420.2', text: '之前说的AZ星球的视频现在什么情况了？' }));
+    expect(chase.action).toBe('created');
+    const bare = await svc.intakeWithOutcome(msg({ ts: '420.3', text: '进度呢？' }));
+    expect(bare.action).toBe('ignored');
   });
 });

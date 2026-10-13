@@ -18,6 +18,7 @@ import { Alert } from '@crewly/ui/Alert';
 import { Badge, type BadgeVariant } from '@crewly/ui/Badge';
 import { Button, IconButton } from '@crewly/ui/Button';
 import { LoadingSpinner } from '@crewly/ui/LoadingSpinner';
+import { setVisibleInterval } from '../../utils/visible-interval';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -303,8 +304,8 @@ export const RelayHealthCard: React.FC = () => {
 
     // Restart polling if the endpoint is now available
     if (!endpointUnavailableRef.current) {
-      if (!pingIntervalRef.current) pingIntervalRef.current = setInterval(pingLatency, PING_INTERVAL_MS);
-      if (!deviceIntervalRef.current) deviceIntervalRef.current = setInterval(fetchData, DEVICE_REFRESH_INTERVAL_MS);
+      if (!pingIntervalRef.current) pingIntervalRef.current = setVisibleInterval(pingLatency, PING_INTERVAL_MS);
+      if (!deviceIntervalRef.current) deviceIntervalRef.current = setVisibleInterval(fetchData, DEVICE_REFRESH_INTERVAL_MS);
     }
     setRefreshing(false);
   }, [fetchData, pingLatency]);
@@ -318,8 +319,8 @@ export const RelayHealthCard: React.FC = () => {
     pingLatency();
 
     // Set up polling intervals
-    pingIntervalRef.current = setInterval(pingLatency, PING_INTERVAL_MS);
-    deviceIntervalRef.current = setInterval(fetchData, DEVICE_REFRESH_INTERVAL_MS);
+    pingIntervalRef.current = setVisibleInterval(pingLatency, PING_INTERVAL_MS);
+    deviceIntervalRef.current = setVisibleInterval(fetchData, DEVICE_REFRESH_INTERVAL_MS);
 
     return () => {
       stopPolling();

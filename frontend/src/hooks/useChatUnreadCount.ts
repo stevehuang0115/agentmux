@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { setVisibleInterval } from '../utils/visible-interval';
 
 /** Channels endpoint (chat-v2). */
 export const CHAT_CHANNELS_API = '/api/chat/channels';
@@ -112,7 +113,7 @@ export function useChatUnreadCount(onChat: boolean, pollMs: number = CHAT_UNREAD
       }
     };
     void load();
-    const timer = setInterval(() => void load(), pollMs);
+    const timer = setVisibleInterval(() => void load(), pollMs);
     return () => {
       cancelled = true;
       clearInterval(timer);

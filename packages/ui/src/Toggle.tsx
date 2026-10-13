@@ -18,9 +18,9 @@ const TRACK_SIZES = {
 
 const TRACK_ON = {
   default: 'peer-checked:bg-primary',
-  success: 'peer-checked:bg-emerald-500',
-  warning: 'peer-checked:bg-yellow-500',
-  danger: 'peer-checked:bg-rose-600',
+  success: 'peer-checked:bg-success',
+  warning: 'peer-checked:bg-attention',
+  danger: 'peer-checked:bg-danger',
 } as const;
 
 export const Toggle: React.FC<ToggleProps> = ({
@@ -40,7 +40,7 @@ export const Toggle: React.FC<ToggleProps> = ({
   const toggleContent = (
     <div className={`toggle-container inline-flex items-center gap-3 ${className}`}>
       {label && labelPosition === 'left' && (
-        <label htmlFor={toggleId} className={`toggle-label toggle-label--left text-sm text-text-primary-dark ${disabled ? 'opacity-50' : 'cursor-pointer'}`}>
+        <label htmlFor={toggleId} className={`toggle-label toggle-label--left text-sm text-text ${disabled ? 'opacity-50' : 'cursor-pointer'}`}>
           {label}
         </label>
       )}
@@ -55,12 +55,12 @@ export const Toggle: React.FC<ToggleProps> = ({
         />
         <span
           aria-hidden="true"
-          className={`toggle-slider block rounded-full bg-border-dark transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-primary after:absolute after:left-0.5 after:top-0.5 after:rounded-full after:bg-white after:transition-transform ${TRACK_SIZES[size]} ${TRACK_ON[variant]}`}
+          className={`toggle-slider block rounded-full bg-border transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-primary after:absolute after:left-0.5 after:top-0.5 after:rounded-full after:bg-white after:transition-transform ${TRACK_SIZES[size]} ${TRACK_ON[variant]}`}
         />
       </label>
       
       {label && labelPosition === 'right' && (
-        <label htmlFor={toggleId} className={`toggle-label toggle-label--right text-sm text-text-primary-dark ${disabled ? 'opacity-50' : 'cursor-pointer'}`}>
+        <label htmlFor={toggleId} className={`toggle-label toggle-label--right text-sm text-text ${disabled ? 'opacity-50' : 'cursor-pointer'}`}>
           {label}
         </label>
       )}
@@ -71,7 +71,7 @@ export const Toggle: React.FC<ToggleProps> = ({
     return (
       <div className="toggle-group">
         {toggleContent}
-        <p className="toggle-description text-xs text-text-secondary-dark mt-1">{description}</p>
+        <p className="toggle-description text-xs text-text-2 mt-1">{description}</p>
       </div>
     );
   }

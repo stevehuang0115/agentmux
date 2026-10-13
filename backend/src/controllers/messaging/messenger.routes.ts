@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
+import { atomicWriteFile } from '../../utils/file-io.utils.js';
 import { CREWLY_CONSTANTS, CHAT_ROUTING_CONSTANTS } from '../../constants.js';
 import { getChatV2Service } from '../../services/chat-v2/chat-v2.singleton.js';
 import {
@@ -129,7 +130,7 @@ export function createMessengerRouter(): Router {
       await adapter.initialize(req.body || {});
       const crewlyDir = path.join(os.homedir(), CREWLY_CONSTANTS.PATHS.CREWLY_HOME);
       await fs.mkdir(crewlyDir, { recursive: true });
-      await fs.writeFile(getCredentialPath(platform), JSON.stringify(req.body || {}, null, 2) + '\n', 'utf8');
+      await atomicWriteFile(getCredentialPath(platform), JSON.stringify(req.body || {}, null, 2) + '\n', { mode: 0o600 });
       res.json({ success: true, data: adapter.getStatus(), message: `${platform} connected` });
     } catch (error) {
       next(error);

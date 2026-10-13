@@ -255,10 +255,15 @@ describe('validateHints — agent ids are hints only', () => {
     expect(v.ignored[0].hint).toBe(`target ${MKT}`);
   });
 
-  it('a conversation the agent is not in is ignored; the resolver then continues', async () => {
+  it('a conversation the agent is not in is an error, never a guessed place (#1136)', async () => {
     const r = await resolveReplyDestination({ session: 'ella', hints: { conversationId: 'room-ce' } }, deps({ origin: { ...mktOrigin } }));
     expect(r.ignoredHints[0]).toEqual(expect.objectContaining({ hint: 'conversation room-ce' }));
-    expect(r.destination).toEqual(expect.objectContaining({ conversationId: 'room-mkt', source: 'turn-origin' }));
+    expect(r.destination).toEqual(expect.objectContaining({ kind: 'unresolved', reason: expect.stringContaining('conversation room-ce') }));
+  });
+
+  it('a thread key the agent is not in is an error even with a turn origin (#1136)', async () => {
+    const r = await resolveReplyDestination({ session: 'ella', hints: { thread: `${PRO_CE}:${PRO_CE_TS}` } }, deps({ origin: { ...mktOrigin } }));
+    expect(r.destination.kind).toBe('unresolved');
   });
 
   it('its own conversation with no thread takes the origin thread when the origin is there', async () => {

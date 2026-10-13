@@ -145,7 +145,7 @@ $ crewly start
 Press Ctrl+C to stop.
 ```
 
-> Use `crewly start --no-browser` to skip opening the browser automatically.
+> `crewly start` prints the dashboard URL and does not open a browser (so supervised restarts don't pile up tabs). Use `crewly start --open` or `CREWLY_OPEN_BROWSER=1` to open it; it never opens when non-interactive.
 
 ### Step 2: Create a Team
 
@@ -450,7 +450,7 @@ Usage: crewly <command> [options]
 
 Commands:
   onboard              Interactive setup wizard (run this first)
-  start                Start backend server and open dashboard
+  start                Start backend server (prints dashboard URL; --open to open it)
   stop                 Stop all services and agent sessions
   status               Show running services and agent sessions
   logs                 View aggregated logs from all services

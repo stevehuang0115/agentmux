@@ -72,7 +72,7 @@ check "other agents refused" "$(printf '%s' "$OUT" | jq -r .reason)" "orchestrat
 
 check "missing harness" "$(run_err)" "Missing required parameter: harness (--harness)"
 check "path injection refused" "$(run_err --harness '../orc')" "Invalid harness: ../orc (use claude, codex or antigravity)"
-check "unknown option" "$(run_err --yes)" "Unknown option: --yes"
+check "unknown option" "$(run_err --yes)" "Unknown argument: --yes"
 check "invalid account" "$(run_err --harness claude --account '../x')" "Invalid account: ../x (lower-case letters, digits, - or _)"
 
 echo "=== Results: $PASS passed, $FAIL failed ==="

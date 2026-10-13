@@ -60,7 +60,15 @@ Where `/tmp/decompose.json` contains:
       "description": "Create a React login form with email/password fields and validation",
       "requiredRole": "frontend-developer",
       "acceptanceCriteria": "- Form renders correctly\n- Client-side validation works\n- Accessible (ARIA labels)",
-      "priority": "high"
+      "priority": "high",
+      "blockedBy": ["Implement JWT token service"]
+    },
+    {
+      "title": "Wire login form to the token service",
+      "description": "Call the token service from the form and store the session; cover the full path with an end-to-end test",
+      "requiredRole": "frontend-developer",
+      "acceptanceCriteria": "- A user can log in end to end\n- E2E test passes",
+      "blockedBy": [0, 1]
     }
   ]
 }
@@ -80,6 +88,8 @@ Where `/tmp/decompose.json` contains:
 | `tasks[].requiredRole` | No | Role best suited for this task (default: `developer`) |
 | `tasks[].acceptanceCriteria` | No | Criteria for task verification |
 | `tasks[].priority` | No | Task priority: `low`, `normal`, `high` (default: `normal`) |
+| `tasks[].blockedBy` | No | Tasks of this same call that must finish first: 0-based indexes or exact titles. Becomes the WorkItem `dependsOn`; the task stays `blocked` and is not dispatched until every blocker is done. Unknown/ambiguous references and cycles are rejected and nothing is created |
+| `--dry-run` | No | Print the breakdown (title / blockedBy / delivers) in creation order and create nothing. Use it to review a large decomposition first |
 
 ## Output
 
@@ -98,11 +108,15 @@ Where `/tmp/decompose.json` contains:
 
 ## Best Practices
 
-1. **Be specific**: Each sub-task should be completable by a single worker in one session
-2. **Include acceptance criteria**: Workers need clear success metrics
-3. **Match roles**: Set `requiredRole` to help with delegation
-4. **Order matters**: List tasks in dependency order when possible
-5. **Don't over-split**: 2-5 sub-tasks per objective is typical
+1. **Cut vertical slices**: each task is a narrow but COMPLETE path through every layer (schema, API, UI, tests), not a horizontal slice of one layer.
+2. **Demoable alone**: a finished slice can be demoed or verified on its own.
+3. **Fresh-context size**: size each slice to fit a single fresh context window (the test for "completable by one worker in one session").
+4. **Prefactor first**: any prefactoring is its own first task that the slices depend on.
+5. **Wide refactors**: expand (add the new path), migrate in batches, contract (remove the old path). Each batch is its own task with `blockedBy` the expand task.
+6. **Name the blockers**: put every real prerequisite in `blockedBy`. A task with no blockers can start now; work the frontier (tasks whose blockers are all done).
+7. **Include acceptance criteria**: Workers need clear success metrics.
+8. **Match roles**: Set `requiredRole` to help with delegation.
+9. **Don't over-split**: 2-5 sub-tasks per objective is typical.
 
 ## Related Skills
 

@@ -496,6 +496,82 @@ describe('HttpChatApiClient — WebSocket subscription', () => {
     }
   });
 
+  describe('reconnect backoff', () => {
+    const setHidden = (hidden: boolean) =>
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      setHidden(false);
+      vi.useRealTimers();
+    });
+
+    it('doubles the delay on every failed attempt, up to a ceiling, and resets after an open', () => {
+      const client = new HttpChatApiClient({
+        backendURL: 'http://localhost:8787',
+        websocketImpl: FakeSocket as unknown as typeof WebSocket,
+        reconnectDelayMs: 1_000,
+      });
+      const sub = client.subscribeToChannel('c1', () => undefined);
+      const closeLast = () => FakeSocket.instances[FakeSocket.instances.length - 1].close();
+
+      closeLast();
+      vi.advanceTimersByTime(999);
+      expect(FakeSocket.instances.length).toBe(1);
+      vi.advanceTimersByTime(1); // 1s
+      expect(FakeSocket.instances.length).toBe(2);
+
+      closeLast();
+      vi.advanceTimersByTime(1_999);
+      expect(FakeSocket.instances.length).toBe(2);
+      vi.advanceTimersByTime(1); // 2s
+      expect(FakeSocket.instances.length).toBe(3);
+
+      closeLast();
+      vi.advanceTimersByTime(3_999); // 4s, plus up to 20% jitter
+      expect(FakeSocket.instances.length).toBe(3);
+      vi.advanceTimersByTime(1_000);
+      expect(FakeSocket.instances.length).toBe(4);
+
+      // A successful open resets the backoff to the configured delay.
+      FakeSocket.instances[3].open();
+      closeLast();
+      vi.advanceTimersByTime(1_000);
+      expect(FakeSocket.instances.length).toBe(5);
+
+      // Never beyond the ceiling.
+      for (let i = 0; i < 12; i++) {
+        closeLast();
+        vi.advanceTimersByTime(36_000);
+      }
+      const before = FakeSocket.instances.length;
+      closeLast();
+      vi.advanceTimersByTime(36_000);
+      expect(FakeSocket.instances.length).toBe(before + 1);
+      sub.unsubscribe();
+    });
+
+    it('does not retry while the tab is hidden, and reconnects once it is visible', () => {
+      const client = new HttpChatApiClient({
+        backendURL: 'http://localhost:8787',
+        websocketImpl: FakeSocket as unknown as typeof WebSocket,
+        reconnectDelayMs: 1_000,
+      });
+      const sub = client.subscribeToChannel('c1', () => undefined);
+      setHidden(true);
+      FakeSocket.instances[0].close();
+      vi.advanceTimersByTime(120_000);
+      expect(FakeSocket.instances.length).toBe(1);
+
+      setHidden(false);
+      document.dispatchEvent(new Event('visibilitychange'));
+      expect(FakeSocket.instances.length).toBe(2);
+      sub.unsubscribe();
+    });
+  });
+
   it('subscribeToChannel survives WS constructor throwing — schedules backoff', () => {
     class BrokenSocket {
       constructor() {

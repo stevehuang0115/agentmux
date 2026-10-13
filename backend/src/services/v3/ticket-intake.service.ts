@@ -39,7 +39,7 @@ import { modifyJsonFile } from '../../utils/file-io.utils.js';
 import { TICKET_CONSTANTS } from '../../constants.js';
 import { isApproval } from '../open-items/open-items.service.js';
 import { askText, classifyOwnerMessage, weightedTextLength, type AskClassification } from './ticket-ask-classifier.js';
-import { ticketLastActivity } from './ticket-hygiene.js';
+import { ticketLastActivity, RESEND_OR_WHERE } from './ticket-hygiene.js';
 import type { IntakeLogEvent, IntakeOutcomeRecorder } from './ticket-intake-log.js';
 import { redactSensitive } from '../wiki/wiki-redaction.js';
 import {
@@ -180,6 +180,60 @@ export function isGenuinelyNewAsk(text: string, ask: AskClassification): boolean
 }
 
 // ---------------------------------------------------------------------------
+// Chases ("之前说的X现在什么情况了？")
+// ---------------------------------------------------------------------------
+
+/**
+ * Wording that marks a chase: the owner points at EARLIER work or says it was
+ * forgotten. A bare status question ("what is the status of the deploy?") is
+ * not a chase and stays a ping.
+ */
+const CHASE_PATTERN = /(之前(说|讲|提|聊)过?的?|上次(说|讲|提)的?|忘了|忘记|还没(有)?(做|弄|好|出|看到|发|剪)|\bforgot(ten)?\b|\bearlier\b|\blast time\b)/i;
+/** CJK words that carry no topic once the chase wording is taken out. */
+const CHASE_FILLER_CJK =
+  /(之前|上次|说过?的?|讲过?的?|提过?的?|那个|这个|我们|你们|大家|现在|目前|是不是|是否|有没有|又|给|都|还|已经|什么|情况|怎么样了?|进度|进展|到哪了|忘了|忘记|了|吗|呢|吧|啊|的|是|在|把|被|和|跟|与)/g;
+/** Latin words that carry no topic. */
+const CHASE_FILLER_LATIN = /\b(forgot(ten)?|earlier|last|time|status|update|the|a|an|of|on|about|is|are|what|how|did|you|we|i)\b/gi;
+
+/**
+ * The topic words of a chase message, or null for a bare ping ("进度呢",
+ * "在吗", "status?") that names nothing.
+ *
+ * @param text - The owner's message
+ * @returns Latin tokens (lowercase) and CJK bigrams, or null when no topic
+ */
+export function chaseTopic(text: string): { latin: string[]; cjk: string[] } | null {
+  const body = askText(text).replace(/https?:\/\/\S+/g, ' ');
+  if (!CHASE_PATTERN.test(body)) return null;
+  const rest = body.replace(CHASE_FILLER_LATIN, ' ').replace(CHASE_FILLER_CJK, ' ');
+  const latin = [...new Set((rest.match(/[A-Za-z][A-Za-z0-9]{1,}/g) ?? []).map((w) => w.toLowerCase()))];
+  const cjkRuns = rest.match(/[一-鿿]+/g) ?? [];
+  const cjk: string[] = [];
+  for (const run of cjkRuns) {
+    if (run.length === 1) continue;
+    for (let i = 0; i < run.length - 1; i++) cjk.push(run.slice(i, i + 2));
+  }
+  if (latin.length === 0 && cjk.length === 0) return null;
+  return { latin, cjk: [...new Set(cjk)] };
+}
+
+/**
+ * How well a ticket matches a chase topic: Latin word hits count double
+ * (a name like "AZ" is far more specific than a CJK bigram).
+ *
+ * @param topic - From {@link chaseTopic}
+ * @param ticket - Candidate ticket
+ * @returns Score; a match needs at least 2
+ */
+export function chaseMatchScore(topic: { latin: string[]; cjk: string[] }, ticket: Pick<Request, 'title' | 'description'>): number {
+  const hay = `${ticket.title ?? ''}\n${ticket.description ?? ''}`.toLowerCase();
+  let score = 0;
+  for (const w of topic.latin) if (hay.includes(w)) score += 2;
+  for (const b of topic.cjk) if (hay.includes(b)) score += 1;
+  return score;
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -238,6 +292,13 @@ export interface IntakeMessage {
    * in a thread with no ticket answers whoever started it — an agent.
    */
   isThreadReply?: boolean;
+  /**
+   * With `isThreadReply`: the thread's root is the OWNER's own message (not an
+   * agent's brief). If that root opened no ticket (intake missed it, or it
+   * read as a pure question), the owner's replies are still asks — they must
+   * not be dropped as answers to an agent.
+   */
+  threadRootIsOwner?: boolean;
   /** Where to post the receipt; omitted = no receipt */
   receipt?: ReceiptTarget;
 }
@@ -274,7 +335,7 @@ export interface TicketReceiptSink {
    */
   post(ticket: Request, target: ReceiptTarget): Promise<TicketReceipt | null>;
   /**
-   * Change an existing receipt to "已取消记录".
+   * Change an existing receipt to "no longer tracked".
    *
    * @param ticket - The dismissed ticket
    * @param receipt - The receipt to edit
@@ -410,6 +471,8 @@ export class TicketIntakeService {
   private chain: Promise<unknown> = Promise.resolve();
   /** 验过了 / 打回 handler (Phase 2); absent = those words are plain follow-ups */
   private review: IntakeReviewHandler | null = null;
+  /** Tells a ticket's assignee the owner chased it; absent = the discussion entry only */
+  private chaseNudge: ((agentSession: string, text: string) => Promise<void>) | null = null;
 
   /**
    * @param deps - Request store and optional WorkItem lookup
@@ -430,6 +493,15 @@ export class TicketIntakeService {
   }
 
   /**
+   * Wire the nudge sent to an assignee when the owner chases its ticket.
+   *
+   * @param nudge - Sends text to an agent session, or null to remove
+   */
+  setChaseNudge(nudge: ((agentSession: string, text: string) => Promise<void>) | null): void {
+    this.chaseNudge = nudge;
+  }
+
+  /**
    * Wire the review handler (Phase 2).
    *
    * @param handler - The handler, or null to remove
@@ -439,7 +511,7 @@ export class TicketIntakeService {
   }
 
   /**
-   * Mark a ticket's receipt done (🎫 → ✅ on Slack, 「已完成」 in chat-v2).
+   * Mark a ticket's receipt done (🎫 → ✅ on Slack, "is done" in chat-v2).
    *
    * @param ticket - The done ticket
    */
@@ -490,6 +562,19 @@ export class TicketIntakeService {
         await this.recordOutcome(message, outcome);
         return outcome;
       });
+  }
+
+  /**
+   * Log that an owner message never reached {@link intake} because the caller
+   * skipped it (e.g. another machine owns a shared room's message). Without
+   * this, a dropped ask leaves no trace in the intake log. Never throws.
+   *
+   * @param message - The message
+   * @param reason - Why the caller skipped intake
+   */
+  async recordSkipped(message: IntakeMessage, reason: string): Promise<void> {
+    if (!message.isOwner) return;
+    await this.recordOutcome(message, { action: 'ignored', reason });
   }
 
   /**
@@ -618,15 +703,32 @@ export class TicketIntakeService {
       }
     }
 
+    // A chase about earlier work ("之前说的X现在什么情况了？") is tracked, not
+    // ignored as a status ping: it goes to the ticket it is about, or opens a
+    // lightweight one so the agent's promises in reply are followed up.
+    if (!threadTicket && !message.isThreadReply && text) {
+      const chase = await this.handleChase(all, message, text);
+      if (chase) return chase;
+    }
+
     const trivial = suppressTrivialOrShort(text);
     if (trivial) return this.ignored(message, trivial);
     const fileOnly = suppressFileOnly(text, (message.attachments?.length ?? 0) > 0);
     if (fileOnly) return this.ignored(message, fileOnly);
 
+    // A reply in a thread the OWNER started that holds no ticket (intake missed
+    // the root, or read it as a question): the replies are his asks and
+    // corrections, not answers to an agent (2026-10-13, AZ star video).
+    const ownerRooted = !threadTicket && !!message.isThreadReply && !!message.threadRootIsOwner;
     if (!threadTicket) {
-      // A reply in a thread an agent started (a brief, a question): the owner
-      // is answering it. Only a genuinely new ask becomes a ticket.
-      if (message.isThreadReply && !isGenuinelyNewAsk(text, classifyOwnerMessage(text, { inThread: true }))) {
+      const threadAsk = classifyOwnerMessage(text, { inThread: true });
+      if (ownerRooted) {
+        // Only pure acknowledgements, approvals and status pings stay quiet.
+        const quiet = threadAsk.signals.some((s) => s === 'ack_only' || s === 'approval' || s === 'status_ping');
+        if (quiet && !isGenuinelyNewAsk(text, threadAsk)) return this.ignored(message, 'thread_reply');
+      } else if (message.isThreadReply && !isGenuinelyNewAsk(text, threadAsk)) {
+        // A reply in a thread an agent started (a brief, a question): the
+        // owner is answering it. Only a genuinely new ask becomes a ticket.
         return this.ignored(message, 'thread_reply');
       }
     }
@@ -642,9 +744,11 @@ export class TicketIntakeService {
     const rescued = ask.verdict === 'new_ask' || ask.verdict === 'question';
     // "Is Nova online yet?" is a ping, not an ask — even when the intent
     // classifier calls it actionable.
-    if (!rescued && ask.signals.includes('status_ping') && ask.ask === 0) return this.ignored(message, 'status_ping');
-    if (intent.intentCategory === 'query' && !rescued) return this.ignored(message, 'query');
-    if (intent.intentLevel === 'L0' && !rescued) return this.ignored(message, 'not_actionable');
+    if (!ownerRooted) {
+      if (!rescued && ask.signals.includes('status_ping') && ask.ask === 0) return this.ignored(message, 'status_ping');
+      if (intent.intentCategory === 'query' && !rescued) return this.ignored(message, 'query');
+      if (intent.intentLevel === 'L0' && !rescued) return this.ignored(message, 'not_actionable');
+    }
 
     // A finished ticket's thread: the new ticket still records where it came from.
     const ticket = await this.createTicket(all, message, text, {
@@ -658,6 +762,46 @@ export class TicketIntakeService {
       assignee: message.targetAgent,
       ...(rescued && (intent.intentCategory === 'query' || intent.intentLevel === 'L0') ? { rescuedBy: ask.signals } : {}),
     });
+    if (message.receipt) void this.postReceipt(ticket, message.receipt);
+    return { action: 'created', ticket };
+  }
+
+  /**
+   * Handle a top-level chase. Bare pings ("进度呢", "在吗") name no topic and
+   * return null (they stay ignored further down).
+   *
+   * @param all - Every Request
+   * @param message - The owner's message
+   * @param text - Trimmed text
+   * @returns The outcome, or null when the message is not a chase with a topic
+   */
+  private async handleChase(all: readonly Request[], message: IntakeMessage, text: string): Promise<IntakeOutcome | null> {
+    const topic = chaseTopic(text);
+    if (!topic) return null;
+    const horizon = this.now().getTime() - TICKET_CONSTANTS.FOLLOW_UP.CHASE_MATCH_WINDOW_MS;
+    let best: { ticket: Request; score: number } | null = null;
+    for (const r of all) {
+      if (typeof r.ticketNumber !== 'number' || TERMINAL_REQUEST_STATUSES.has(r.status)) continue;
+      if (r.tags.includes(TICKET_CONSTANTS.DISMISSED_TAG)) continue;
+      if (ticketLastActivity(r) < horizon) continue;
+      const score = chaseMatchScore(topic, r);
+      if (score >= 2 && (!best || score > best.score)) best = { ticket: r, score };
+    }
+    if (best) {
+      const outcome = await this.appendToTicket(best.ticket, message, text);
+      const target = outcome.action === 'appended' ? outcome.ticket : best.ticket;
+      if (target.assignee && this.chaseNudge) {
+        const tkt = formatTicketNumber(target.ticketNumber as number);
+        void this.chaseNudge(
+          target.assignee,
+          `The owner is asking where ${tkt} stands: "${text.slice(0, 300)}". Answer in the thread; if you owe anything, say what and when.`,
+        ).catch(() => undefined);
+      }
+      this.logger.info('Chase appended to its ticket', { id: target.id, score: best.score });
+      return outcome;
+    }
+    const ticket = await this.createTicket(all, message, text, { question: true, extraTags: ['chase'] });
+    this.logger.info('Chase opened a lightweight ticket', { tkt: formatTicketNumber(ticket.ticketNumber as number), id: ticket.id });
     if (message.receipt) void this.postReceipt(ticket, message.receipt);
     return { action: 'created', ticket };
   }
@@ -1296,9 +1440,6 @@ export function setTicketIntakeService(service: TicketIntakeService | null): voi
 export function getTicketIntakeService(): TicketIntakeService | null {
   return instance;
 }
-
-/** The owner asks where it is / to send it again — never an approval. */
-const RESEND_OR_WHERE = /(再发|重新发|重发|再给我|发一下|发我一下|在哪|哪里|哪儿|没看到|没收到|看不到|找不到|收不到|链接呢|发到哪|where|resend|send (?:it |the \w+ )?again|didn'?t (?:get|see|receive)|can'?t (?:find|see)|no link)/i;
 
 /** Extra approval words beyond {@link isApproval} and the review aliases. */
 const SHIP_IT = /^\s*(?:ship it|ship|looks great|perfect|nice|great)[\s。.!！~～👍✅]*$/i;

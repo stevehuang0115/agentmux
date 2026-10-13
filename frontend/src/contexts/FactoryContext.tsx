@@ -37,6 +37,7 @@ import {
   createInitialCameraState,
 } from '../utils/factory.utils';
 import { buildEntityPositionMap } from '../utils/factoryCollision';
+import { setVisibleInterval } from '../utils/visible-interval';
 
 // ====== PROXIMITY CONVERSATION CONSTANTS ======
 
@@ -1083,7 +1084,7 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
 
   // Poll for updates
   useEffect(() => {
-    const interval = setInterval(refreshData, FACTORY_CONSTANTS.API.POLL_INTERVAL);
+    const interval = setVisibleInterval(refreshData, FACTORY_CONSTANTS.API.POLL_INTERVAL);
     return () => clearInterval(interval);
   }, [refreshData]);
 

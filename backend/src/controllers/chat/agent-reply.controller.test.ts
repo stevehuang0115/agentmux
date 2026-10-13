@@ -13,8 +13,9 @@ import {
 } from '../../services/messaging/owner-message-watchdog.service.js';
 import { createAgentReplyHandler, type AgentReplyDeps } from './agent-reply.controller.js';
 import type { WorkDestinationDeps } from '../../services/orc/work-item-destination.wiring.js';
-import { deliverReply, type ReplyDeliveryDeps } from '../../services/orc/reply-destination.wiring.js';
+import { deliverReply, resetReplyDeliveryGuardForTesting, type ReplyDeliveryDeps } from '../../services/orc/reply-destination.wiring.js';
 import { AgentPromptReferenceService } from '../../services/orc/agent-prompt-reference.service.js';
+import { setOwnerCompletionReport } from '../../services/orc/owner-completion-report.service.js';
 import type { WorkItem } from '../../types/v2/work-item.types.js';
 
 /** In-memory work-destination collaborators (spec 2026-10-01 §6). */
@@ -112,6 +113,7 @@ const next: NextFunction = jest.fn();
 
 describe('POST /api/chat/reply', () => {
   beforeEach(() => {
+    resetReplyDeliveryGuardForTesting();
     OrcReplyRouteService.resetInstance();
     setOwnerMessageWatchdog(null);
     OrcReplyRouteService.getInstance().noteDelivery('ella', '[CHAT:dm-ella] <steve@Ella>\n[SLACK-THREAD:D0DM:1790000000.000100]\n\nupdate the sheet');
@@ -148,12 +150,12 @@ describe('POST /api/chat/reply', () => {
     expect(driveReply).toHaveBeenCalledWith('ella', 'drv_abcdefghijkl', { text: 'On it.', interim: true, recap: false, ack: true });
   });
 
-  it('wrong / legacy conversation id → the origin', async () => {
+  it('wrong / legacy conversation id → a loud error, not the origin (#1136)', async () => {
     const { deps, deliver } = makeDeps();
     const res = mockRes();
     await createAgentReplyHandler(deps)(req({ content: 'answer', conversationId: 'conv-legacy' }), res, next);
-    expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'dm-ella' }));
-    expect(res.statusCode).toBe(201);
+    expect(deliver).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(409);
   });
 
   it('explicit correct ids win', async () => {
@@ -164,12 +166,12 @@ describe('POST /api/chat/reply', () => {
     expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'room-1', thread: 'root-3' }));
   });
 
-  it('explicit ids that cannot be delivered fall back to the origin', async () => {
+  it('explicit ids that cannot be delivered are an error, not a fall back to the origin (#1136)', async () => {
     const { deps, deliver } = makeDeps();
     const res = mockRes();
     await createAgentReplyHandler(deps)(req({ content: 'answer', conversationId: 'broken' }), res, next);
-    expect(deliver).toHaveBeenLastCalledWith(expect.objectContaining({ conversationId: 'dm-ella' }));
-    expect(res.statusCode).toBe(201);
+    expect(deliver).not.toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'dm-ella' }));
+    expect(res.statusCode).toBe(409);
   });
 
   it('status markers → the orchestrator status path', async () => {
@@ -272,6 +274,7 @@ describe('POST /api/chat/reply — work-item destinations (spec 2026-10-01 §6)'
   }
 
   beforeEach(() => {
+    resetReplyDeliveryGuardForTesting();
     OrcReplyRouteService.resetInstance();
     setOwnerMessageWatchdog(null);
   });
@@ -297,6 +300,23 @@ describe('POST /api/chat/reply — work-item destinations (spec 2026-10-01 §6)'
     expect(work.post.mock.calls[0][0]).not.toHaveProperty('threadTs');
     expect(res.statusCode).toBe(201);
     expect((res.body as { data: { destination: string } }).data.destination).toBe('new-top-level');
+  });
+
+  it('reply --work-item tells the owner-report service about that item (CREW-503); an interim post does not', async () => {
+    const noteWorkItemReply = jest.fn();
+    setOwnerCompletionReport({ noteWorkItemReply } as never);
+    try {
+      const work = makeWorkDeps({ items: [wi({ id: 'wi-fu', triggerId: 'trig-1' })] });
+      const { deps } = makeDeps({ workDestination: async () => work.wd });
+      await createAgentReplyHandler(deps)(req({ content: 'Cover is done.', workItemId: 'wi-fu' }, 'atlas'), mockRes(), next);
+      expect(noteWorkItemReply).toHaveBeenCalledWith('wi-fu');
+
+      noteWorkItemReply.mockClear();
+      await createAgentReplyHandler(deps)(req({ content: 'Working on it.', workItemId: 'wi-fu', interim: true }, 'atlas'), mockRes(), next);
+      expect(noteWorkItemReply).not.toHaveBeenCalled();
+    } finally {
+      setOwnerCompletionReport(null);
+    }
   });
 
   it('a fresh owner message newer than the work item → that same thread (existing path)', async () => {
@@ -442,6 +462,7 @@ describe('POST /api/chat/reply — references (2026-10-02)', () => {
   } as WorkItem;
 
   beforeEach(() => {
+    resetReplyDeliveryGuardForTesting();
     OrcReplyRouteService.resetInstance();
     AgentPromptReferenceService.resetInstance();
     setOwnerMessageWatchdog(null);

@@ -129,6 +129,12 @@ export interface AgentTabBinding {
 	boundAt: Date;
 	/** Wall-clock time of the last command that touched this binding. Reset on activity. */
 	lastActivityAt: Date;
+	/**
+	 * Set when the owning agent's turn ended (it went idle). The sweep closes a
+	 * tab left untouched this long after; cleared when the agent works again
+	 * or sends another browser command.
+	 */
+	turnEndedAt?: Date;
 }
 
 /**
@@ -153,7 +159,17 @@ export type AgentTabBindingRemovalReason =
 	| 'tab_removed'
 	| 'ttl_expired'
 	| 'reconcile_extension_missing'
-	| 'shutdown';
+	| 'shutdown'
+	| 'agent_done'
+	| 'idle_after_turn'
+	| 'agent_stopped';
+
+/**
+ * Why a tab must stay open right now, or null when it may be closed. Wired by
+ * the host so the bridge need not know about browser sessions: the owner has
+ * taken control, is watching the live view, or an action is held for approval.
+ */
+export type TabCloseGuard = (agentSession: string, binding: AgentTabBinding) => string | null;
 
 /**
  * BrowserBridgeService manages WebSocket connections from the Crewly Chrome
@@ -198,6 +214,9 @@ export class BrowserBridgeService {
 
 	/** This backend's device id, sent as `clientId` with every command. Cached once resolved. */
 	private clientId: string | null = null;
+
+	/** Veto over automatic tab closes (idle / agent stopped). Explicit `done` ignores it only for the agent's own call. */
+	private closeGuard: TabCloseGuard | null = null;
 
 	/** Periodic timer that evicts idle bindings (§4.2). Only running while attached. */
 	private sweepTimer: ReturnType<typeof setInterval> | null = null;
@@ -668,10 +687,21 @@ export class BrowserBridgeService {
 		agentSession: string,
 		opts: { closeTab?: boolean; reason?: AgentTabBindingRemovalReason; timeoutMs?: number } = {}
 	): Promise<{ released: boolean; tabClosed: boolean }> {
-		const closeTab = opts.closeTab !== false;
 		const binding = this.agentTabBindings.get(agentSession);
 		if (!binding) {
 			return { released: false, tabClosed: false };
+		}
+		// Only a tab this backend created may be closed. A binding to anything
+		// else (the owner's own tab) is released and the tab left alone.
+		const ownedByUs = this.ownedTabIds.has(binding.tabId);
+		const keepReason = opts.closeTab !== false ? (this.closeGuard?.(agentSession, binding) ?? null) : null;
+		const closeTab = opts.closeTab !== false && ownedByUs && !keepReason;
+		if (opts.closeTab !== false && !closeTab) {
+			this.logger.info('Releasing binding without closing the tab', {
+				agentSession,
+				tabId: binding.tabId,
+				why: keepReason ?? 'not created by this backend',
+			});
 		}
 
 		this.agentTabBindings.delete(agentSession);
@@ -756,9 +786,77 @@ export class BrowserBridgeService {
 		}
 
 		binding.lastActivityAt = new Date();
+		delete binding.turnEndedAt;
 
 		const merged: Record<string, unknown> = { ...(params ?? {}), tabId: binding.tabId };
 		return this.sendCommand(tool, merged, timeoutMs, agentName, agentGoal);
+	}
+
+	/**
+	 * Install the veto consulted before an automatic close.
+	 *
+	 * @param guard - Returns a reason to keep the tab open, or null to allow
+	 */
+	setCloseGuard(guard: TabCloseGuard | null): void {
+		this.closeGuard = guard;
+	}
+
+	/**
+	 * Record that a command ran on the agent's tab over a path that does not go
+	 * through {@link sendCommandForAgent} (the relay). Resets the idle clock.
+	 *
+	 * @param agentSession - Owning agent
+	 */
+	touchBinding(agentSession: string): void {
+		const binding = this.agentTabBindings.get(agentSession);
+		if (!binding) return;
+		binding.lastActivityAt = new Date();
+		delete binding.turnEndedAt;
+	}
+
+	/**
+	 * The agent's turn ended. Its tab stays open for the idle window (the agent
+	 * often comes straight back to it) and is closed by the sweep afterwards.
+	 *
+	 * @param agentSession - Agent that went idle
+	 */
+	noteAgentTurnEnded(agentSession: string): void {
+		const binding = this.agentTabBindings.get(agentSession);
+		if (binding && !binding.turnEndedAt) binding.turnEndedAt = new Date();
+	}
+
+	/**
+	 * The agent started working again: cancel any pending idle close.
+	 *
+	 * @param agentSession - Agent that became busy
+	 */
+	noteAgentBusy(agentSession: string): void {
+		const binding = this.agentTabBindings.get(agentSession);
+		if (binding) delete binding.turnEndedAt;
+	}
+
+	/**
+	 * The agent stopped or its runtime exited: close the tab it opened, unless
+	 * the owner is using it.
+	 *
+	 * @param agentSession - Agent that stopped
+	 * @returns True when the tab was closed
+	 */
+	async closeTabForStoppedAgent(agentSession: string): Promise<boolean> {
+		const binding = this.agentTabBindings.get(agentSession);
+		if (!binding) return false;
+		// The close guard (owner took control / is watching) is applied inside
+		// unbindAgentTab: the binding is released and the tab left open.
+		const result = await this.unbindAgentTab(agentSession, { closeTab: true, reason: 'agent_stopped' });
+		return result.tabClosed;
+	}
+
+	/** Effective idle-close window in ms (0 = disabled); env `CREWLY_TAB_IDLE_CLOSE_MINUTES`. */
+	private getTabIdleCloseMs(): number {
+		const raw = process.env['CREWLY_TAB_IDLE_CLOSE_MINUTES'];
+		const parsed = raw !== undefined && raw !== '' ? Number.parseFloat(raw) : NaN;
+		const minutes = Number.isFinite(parsed) && parsed >= 0 ? parsed : BROWSER_BRIDGE_CONSTANTS.TAB_IDLE_CLOSE_MINUTES;
+		return minutes * 60 * 1000;
 	}
 
 	/**
@@ -920,17 +1018,35 @@ export class BrowserBridgeService {
 	async runSweepOnce(): Promise<number> {
 		const ttlMs = this.getTabBindingTtlMs();
 		const now = Date.now();
-		const expired: Array<{ agentSession: string; tabId: number }> = [];
+		const idleCloseMs = this.getTabIdleCloseMs();
+		const expired: Array<{ agentSession: string; tabId: number; reason: AgentTabBindingRemovalReason }> = [];
 		for (const [agentSession, binding] of this.agentTabBindings) {
-			if (now - binding.lastActivityAt.getTime() > ttlMs) {
-				expired.push({ agentSession, tabId: binding.tabId });
+			const untouchedMs = now - binding.lastActivityAt.getTime();
+			const idleAfterTurn =
+				idleCloseMs > 0 &&
+				binding.turnEndedAt !== undefined &&
+				untouchedMs > idleCloseMs &&
+				now - binding.turnEndedAt.getTime() > idleCloseMs;
+			if (untouchedMs > ttlMs) {
+				expired.push({ agentSession, tabId: binding.tabId, reason: 'ttl_expired' });
+			} else if (idleAfterTurn) {
+				expired.push({ agentSession, tabId: binding.tabId, reason: 'idle_after_turn' });
 			}
 		}
 
-		for (const { agentSession } of expired) {
+		let closed = 0;
+		for (const { agentSession, reason } of expired) {
+			const binding = this.agentTabBindings.get(agentSession);
+			const keep = binding ? this.closeGuard?.(agentSession, binding) ?? null : null;
+			if (keep) {
+				// Owner is on this tab: leave it open and look again next sweep.
+				this.logger.debug('Sweep left a tab open', { agentSession, why: keep });
+				continue;
+			}
+			closed++;
 			await this.unbindAgentTab(agentSession, {
 				closeTab: true,
-				reason: 'ttl_expired',
+				reason,
 			}).catch((err: unknown) => {
 				this.logger.warn('Sweep unbind failed (binding still removed)', {
 					agentSession,
@@ -939,7 +1055,7 @@ export class BrowserBridgeService {
 			});
 		}
 
-		return expired.length;
+		return closed;
 	}
 
 	private startSweepTimer(): void {

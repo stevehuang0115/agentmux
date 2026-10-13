@@ -28,7 +28,7 @@ Materialize: execute.sh --materialize '<plan JSON from the plan step>'
 HELP
       exit 0
       ;;
-    *) error_exit "Unknown argument: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 

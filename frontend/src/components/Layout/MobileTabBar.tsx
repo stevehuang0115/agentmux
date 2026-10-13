@@ -110,7 +110,7 @@ export const MoreSheet: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
 				aria-modal="true"
 				data-more-sheet=""
 				aria-label="More"
-				className="absolute inset-x-0 bottom-0 max-h-[85vh] overflow-y-auto rounded-t-3xl bg-bg border-t border-border px-4 pt-4"
+				className="absolute inset-x-0 bottom-0 max-h-[85vh] overflow-y-auto rounded-t-3xl cw-glass-strong px-4 pt-4"
 				style={{ paddingBottom: `calc(${MOBILE_TAB_BAR_HEIGHT + 16}px + env(safe-area-inset-bottom))` }}
 			>
 				<header className="flex items-center justify-between gap-3 mb-4">
@@ -136,7 +136,7 @@ export const MoreSheet: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
 				</header>
 
 				{pinnedItems.length > 0 && (
-					<section className="mb-4 rounded-2xl bg-surface py-2">
+					<section className="mb-4 rounded-2xl cw-glass py-2">
 						<PinnedFavoritesSection pinnedItems={pinnedItems} isCollapsed={false} onClick={onClose} />
 					</section>
 				)}
@@ -144,7 +144,7 @@ export const MoreSheet: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
 				{MORE_GROUPS.map((group) => (
 					<section key={group.label} className="mb-4">
 						<h3 className="mb-1.5 px-1 text-[11px] font-extrabold uppercase tracking-wider text-text-3">{group.label}</h3>
-						<ul className="rounded-2xl bg-surface overflow-hidden">
+						<ul className="rounded-2xl cw-glass overflow-hidden">
 							{group.items.map((item, i) => {
 								const count = item.badge ? badges[item.badge] : null;
 								return (
@@ -171,7 +171,7 @@ export const MoreSheet: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
 					</section>
 				))}
 
-				<section className="rounded-2xl bg-surface p-1 space-y-1">
+				<section className="rounded-2xl cw-glass p-1 space-y-1">
 					<QRCodeDisplay isCollapsed={false} />
 					<AuthStatusIndicator isCollapsed={false} />
 				</section>
@@ -205,7 +205,7 @@ export const MobileTabBar: React.FC = () => {
 			<nav
 				aria-label="Main tabs"
 				className={clsx(
-					'md:hidden fixed inset-x-0 bottom-0 z-40 grid grid-cols-4 bg-surface border-t border-border px-2 pt-1.5',
+					'md:hidden fixed inset-x-0 bottom-0 z-40 grid grid-cols-4 cw-bar border-t px-2 pt-1.5',
 					otherDialogOpen && 'hidden',
 				)}
 				aria-hidden={otherDialogOpen || undefined}

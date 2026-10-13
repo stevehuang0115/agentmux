@@ -10,6 +10,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { ApiResponse } from '../types';
+import { setVisibleInterval } from '../utils/visible-interval';
 
 const API_BASE = '/api';
 
@@ -128,7 +129,7 @@ export function usePtyStatus(): UsePtyStatusResult {
 
     init();
 
-    const intervalId = setInterval(fetchSessions, POLL_INTERVAL_MS);
+    const intervalId = setVisibleInterval(fetchSessions, POLL_INTERVAL_MS);
 
     return () => {
       isMountedRef.current = false;

@@ -527,6 +527,11 @@ export interface SlackIncomingMessage {
   linkedFiles?: SlackFileInfo[];
   /** Linked Slack files that could not be fetched, with the reason (shown to the agent). */
   linkedFileFailures?: Array<{ link: string; reason: string }>;
+  /**
+   * Attachments that could not be downloaded, with the reason. Shown to the
+   * agent only (never posted into the Slack thread): the agent explains in its own words.
+   */
+  fileFailures?: Array<{ name: string; reason: string }>;
   /** Whether the message has any file attachments (images or other) */
   hasFiles?: boolean;
   /** Transport that delivered the event (`socket` when omitted) */

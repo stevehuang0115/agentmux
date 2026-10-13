@@ -37,7 +37,7 @@ while [[ $# -gt 0 ]]; do
     --name)     [ $# -ge 2 ] || error_exit "--name requires a value"; NAME="$2"; shift 2 ;;
     --app)      [ $# -ge 2 ] || error_exit "--app requires a value"; APP="$2"; shift 2 ;;
     --help|-h)  print_usage; exit 0 ;;
-    *) if [ -z "$TEMPLATE" ] && [ "${1:0:1}" != "-" ]; then TEMPLATE="$1"; shift; else error_exit "Unknown option: $1"; fi ;;
+    *) if [ -z "$TEMPLATE" ] && [ "${1:0:1}" != "-" ]; then TEMPLATE="$1"; shift; else unknown_arg_exit "$1"; fi ;;
   esac
 done
 

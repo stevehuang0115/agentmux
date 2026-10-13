@@ -21,6 +21,9 @@ export class TeamModel implements Team {
   archived?: boolean;
   archivedAt?: string;
   mission?: string;
+  charter?: string;
+  charterUpdatedAt?: string;
+  charterUpdatedBy?: string;
   budget?: Team['budget'];
   qualityGate?: Team['qualityGate'];
   recoveryPolicy?: Team['recoveryPolicy'];

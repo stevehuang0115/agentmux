@@ -411,6 +411,29 @@ describe('CloudDisconnectNoticeService', () => {
 	});
 	// 2026-10-02: the relay refused the Mac a queue (429 quota_exceeded) while
 	// heartbeats kept succeeding; nobody was told for half an hour.
+	describe('saved sign-in unreadable (damaged config)', () => {
+		it('tells the owner it is a local problem (not unreachable), with a login link, once', async () => {
+			const service = makeService({ getConfigProblem: async () => 'invalid JSON (900 bytes)' });
+			await service.tick();
+			await service.tick();
+
+			expect(dm!.sent).toHaveLength(1);
+			expect(dm!.sent[0]).toContain('damaged');
+			expect(dm!.sent[0]).not.toContain('unreachable');
+			expect(dm!.sent[0]).toContain(LINK);
+			expect(startLogin).toHaveBeenCalledTimes(1);
+			expect(readNoticeState(stateFile)?.reason).toBe('local_config');
+			service.stop();
+		});
+
+		it('stays quiet when the problem check reports nothing', async () => {
+			const service = makeService({ getConfigProblem: async () => null });
+			await service.tick();
+			expect(dm!.sent).toEqual([]);
+			service.stop();
+		});
+	});
+
 	describe('relay queue registration failing', () => {
 		const QUOTA_ERROR = 'Queue registration failed: 429 {"success":false,"error":"quota_exceeded","limit":8,"current":8}';
 		let relayQueueNoticeFile: string;

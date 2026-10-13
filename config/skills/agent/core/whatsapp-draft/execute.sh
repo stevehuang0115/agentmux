@@ -46,7 +46,7 @@ while [[ $# -gt 0 ]]; do
     --text)      [ $# -ge 2 ] || error_exit "--text requires a value";      TEXT="$2";      shift 2 ;;
     --text-file) [ $# -ge 2 ] || error_exit "--text-file requires a value"; TEXT_FILE="$2"; shift 2 ;;
     --help|-h)   print_usage; exit 0 ;;
-    *) error_exit "Unknown option: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 

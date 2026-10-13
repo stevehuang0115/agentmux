@@ -64,7 +64,7 @@ check "404: reason" "$(printf '%s' "$OUT" | jq -r .reason)" "chat_not_found"
 check "missing chat" "$(run_err --text hi)" "Missing required parameter: chat (--chat)"
 check "missing text" "$(run_err --chat 491@s.whatsapp.net)" "Missing required parameter: text (--text or --text-file)"
 check "missing text file" "$(run_err --chat x --text-file /nonexistent/file)" "text file not found: /nonexistent/file"
-check "unknown option errors" "$(run_err --send)" "Unknown option: --send"
+check "unknown option errors" "$(run_err --send)" "Unknown argument: --send"
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

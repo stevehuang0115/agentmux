@@ -123,7 +123,10 @@ import { parseSlackThreadKey } from './services/slack/slack-thread-key.js';
 import { LIVENESS_MONITOR_CONSTANTS, INPUT_CIRCUIT_CONSTANTS, INPUT_BLOCKED_RETRY_CONSTANTS } from './constants.js';
 import { InputBlockedRetryService } from './services/messaging/input-blocked-retry.service.js';
 import { driveCapabilities } from './services/drive/drive-agent.service.js';
-import { SUB_AGENT_QUEUE_CONSTANTS, CHAT_CONTEXT_CONSTANTS, SAFE_RESTART, AUTO_UPDATE_CONSTANTS, PROCESS_EXIT_CODES, CLAUDE_STARTUP_CONSTANTS, WEB_CONSTANTS, TICKET_CONSTANTS, UNASSIGNED_ROUTE_CONSTANTS, CLOUD_TALK_CONSTANTS, STANDING_ANSWERS_CONSTANTS, TICKET_AUTOPILOT_CONSTANTS, EXPERIMENT_CONSTANTS, WORK_ITEM_DESTINATION_CONSTANTS, CODEX_USAGE_SYNC_CONSTANTS, ANTIGRAVITY_USAGE_SYNC_CONSTANTS, OWNER_AUTH_CONSTANTS, CREWLY_APPS_CONSTANTS, SLACK_AGENT_DM_CONSTANTS, BRIEFING_CONSTANTS, DRIVE_CONSTANTS } from './constants.js';
+import { canvasCapabilities } from './services/board/canvas/canvas-inbound.service.js';
+import { isBoardPushDisabled } from './services/board/board-push.service.js';
+import { teamMoveCapabilities } from './services/team-move/team-move-driver.service.js';
+import { SUB_AGENT_QUEUE_CONSTANTS, CHAT_CONTEXT_CONSTANTS, SAFE_RESTART, AUTO_UPDATE_CONSTANTS, PROCESS_EXIT_CODES, CLAUDE_STARTUP_CONSTANTS, WEB_CONSTANTS, TICKET_CONSTANTS, UNASSIGNED_ROUTE_CONSTANTS, CLOUD_TALK_CONSTANTS, STANDING_ANSWERS_CONSTANTS, TICKET_AUTOPILOT_CONSTANTS, TICKET_HYGIENE_CONSTANTS, EXPERIMENT_CONSTANTS, WORK_ITEM_DESTINATION_CONSTANTS, CODEX_USAGE_SYNC_CONSTANTS, ANTIGRAVITY_USAGE_SYNC_CONSTANTS, OWNER_AUTH_CONSTANTS, CREWLY_APPS_CONSTANTS, SLACK_AGENT_DM_CONSTANTS, BRIEFING_CONSTANTS, DRIVE_CONSTANTS, POOL_PRUNE_CONSTANTS } from './constants.js';
 import { randomUUID } from 'crypto';
 import { PtyActivityTrackerService } from './services/agent/pty-activity-tracker.service.js';
 import { InFlightTurnTracker } from './services/restart/in-flight-turn-tracker.service.js';
@@ -140,6 +143,7 @@ import type { RequestPriority } from './types/v2/request.types.js';
 import { createWorkItem, TERMINAL_WORK_ITEM_STATUSES } from './types/v2/work-item.types.js';
 import type { ChatMessageDTO } from './services/chat-v2/types.js';
 import { runPoolArchiveMigration } from './services/task-pool/pool-archive-migration.js';
+import { runPoolPrune } from './services/task-pool/pool-prune.js';
 import { createPtyTurnProbe } from './services/restart/turn-probe.js';
 import {
 	RestartDrainService,
@@ -177,6 +181,8 @@ import { createMessagingRouter } from './controllers/messaging/messaging.routes.
 import { SystemResourceAlertService } from './services/monitoring/system-resource-alert.service.js';
 import { TokenUsageService } from './services/monitoring/token-usage.service.js';
 import { agentHeartbeatMiddleware } from './middleware/agent-heartbeat.middleware.js';
+import { recordTerminalWrites } from './services/board/board-interaction-hooks.js';
+import { resolveMemberSessionName } from './utils/member-session-name.utils.js';
 import { agentOriginMiddleware, liveSessionPids } from './middleware/agent-origin.middleware.js';
 import { createCallerIdentityMiddleware } from './middleware/caller-identity.middleware.js';
 import { bodyParserExcept } from './middleware/body-parser-except.js';
@@ -214,6 +220,10 @@ import { getRuntimeFallbackService } from './services/runtime-fallback/runtime-f
 import { getSlackAgentIdentityService } from './services/slack/slack-agent-identity.service.js';
 import { getChatV2Service } from './services/chat-v2/chat-v2.singleton.js';
 import { isOwnerStopped } from './services/agent/owner-stopped.registry.js';
+import { pausedTeamOfSession } from './services/team/team-pause.registry.js';
+import { getFollowThrough } from './services/agent/follow-through.service.js';
+import { BackgroundWorkWatchdog } from './services/monitoring/background-work-watchdog.js';
+import { createFollowThrough, settleFollowThrough, idlePendingWorkCheck, releaseWorkForStop, restoreStoppedOwingWork, owedWorkReminder, OWED_REMINDER_MARKER } from './services/agent/follow-through.wiring.js';
 import { isSessionPaused } from './services/team/team-pause.registry.js';
 import { findPackageRoot } from './utils/package-root.js';
 import { getLocalApiBaseUrl, setLocalApiPort } from './utils/local-api-url.utils.js';
@@ -248,7 +258,8 @@ import { FissionGuardService, type FissionDataProvider, type BudgetChecker, crea
 import { BudgetService } from './services/autonomous/budget.service.js';
 import { setFissionGuardService } from './controllers/fission/fission.controller.js';
 import { TaskPoolService } from './services/task-pool/task-pool.service.js';
-import { PENDING_WORK_STATUSES } from './services/agent/idle-detection.service.js';
+import { createProtectedReason } from './services/agent/resource-mode-protection.js';
+import { ProjectTicketWorkflowService } from './services/project-tickets/project-ticket-workflow.service.js';
 import { WorkItemWorktreeService } from './services/worktree/workitem-worktree.service.js';
 import { WorkItemWorktreeSubscriber, createTerminalNotifier } from './services/worktree/workitem-worktree.subscriber.js';
 import { ResourceModeService, RESOURCE_MODE_CONSTANTS, type RunningAgent } from './services/agent/resource-mode.service.js';
@@ -266,8 +277,10 @@ import {
 	type AlertDecision,
 } from './services/team-health/index.js';
 import { createTeamHealthRouter } from './controllers/team-health/team-health.routes.js';
+import { getUsageLedger } from './services/usage-ledger/usage-ledger.runtime.js';
 import { traceHarness, traceTurnActivity } from './services/trace/trace-recorder.js';
 import { inputCircuitStats, setInputCircuitOpenListener } from './services/session/input-circuit-breaker.js';
+import { looksLikeShellPrompt } from './utils/screen-excerpt.js';
 import { harnessPastesSinceOutsideInput, shownMarkers } from './services/session/input-ledger.js';
 
 // ESM __dirname equivalent using import.meta.url
@@ -423,6 +436,11 @@ export class CrewlyServer {
 	/** Gaps in this backend's life are told to the owner (crewly#1015 §12) */
 	private livenessMonitor: LivenessMonitorService | null = null;
 	private waitingItemsSync: import('./services/cloud/waiting-items-sync.service.js').WaitingItemsSyncService | null = null;
+	private ownerBoard: import('./services/board/board.service.js').BoardService | null = null;
+	/** Canvas: follows the agents' transcripts for their own text lines (crewly#1247 v2) */
+	private canvasTail: import('./services/board/canvas/canvas-transcript.tail.js').TranscriptTailService | null = null;
+	/** Canvas: masked terminal streams the owner opened in the portal */
+	private canvasTerminal: import('./services/board/canvas/canvas-terminal.service.js').CanvasTerminalService | null = null;
 	/** Epoch ms of the last shutdown signal acted on (dedups process-group delivery) */
 	private lastShutdownSignalAt = 0;
 	/** Interrupted turns loaded at boot, resumed once their agents are back */
@@ -443,6 +461,7 @@ export class CrewlyServer {
 	/** Owner promises past due and never nudged at boot; their agents are restored and reminded once */
 	private openCommitmentsAtBoot: OwedCommitment[] = [];
 	private healthMonitoringInterval: NodeJS.Timeout | null = null;
+	private backgroundWatchdog: BackgroundWorkWatchdog | null = null;
 
 	constructor(config?: Partial<StartupConfig>) {
 		// Resolve ~ to actual home directory
@@ -829,6 +848,9 @@ export class CrewlyServer {
 			});
 			setTicketReviewService(ticketReview);
 			ticketIntake.setReviewHandler(ticketReview);
+			ticketIntake.setChaseNudge(async (agentSession, text) => {
+				await this.apiController.agentRegistrationService.sendMessageToAgent(agentSession, text);
+			});
 
 			// Unassigned work goes to a decider, and one level up when not taken
 			// (owner, 2026-09-24): ticket owner → team lead → creator's lead → orc.
@@ -917,13 +939,26 @@ export class CrewlyServer {
 		// Ticket loop §4: one-time archive of old WorkItems (marker file makes
 		// it run once). Through the pool's own storage cache, so no later
 		// flush can write the archived items back. Never deletes.
+		const poolPruneLogger = LoggerService.getInstance().createComponentLogger('PoolPrune');
+		const pruneOnce = (): Promise<unknown> =>
+			runPoolPrune(TaskPoolService.getInstance().getStorage(), { logger: poolPruneLogger }).catch((pruneErr: unknown) => {
+				this.logger.warn('Task pool prune failed (pool left as is; retried next interval)', {
+					error: pruneErr instanceof Error ? pruneErr.message : String(pruneErr),
+				});
+			});
 		void runPoolArchiveMigration(TaskPoolService.getInstance().getStorage(), {
 			logger: LoggerService.getInstance().createComponentLogger('PoolArchive'),
-		}).catch((archiveErr: unknown) => {
-			this.logger.warn('Task pool one-time archive failed (pool left as is; retried next boot)', {
-				error: archiveErr instanceof Error ? archiveErr.message : String(archiveErr),
-			});
-		});
+		})
+			.catch((archiveErr: unknown) => {
+				this.logger.warn('Task pool one-time archive failed (pool left as is; retried next boot)', {
+					error: archiveErr instanceof Error ? archiveErr.message : String(archiveErr),
+				});
+			})
+			// Then keep it small: finished items and ended claims move to the
+			// archive, once now and every few hours (crewly#1108).
+			.then(pruneOnce);
+		const poolPruneTimer = setInterval(() => void pruneOnce(), POOL_PRUNE_CONSTANTS.INTERVAL_MS);
+		poolPruneTimer.unref?.();
 
 		// Atlas 2026-05-23 fix: wire the agent-liveness gate so claimFromPool /
 		// claimSpecificItem refuse to put a WI into `running` when the requesting
@@ -1493,7 +1528,25 @@ void (async () => {
 
 		// Wire agent:idle events to thread status queue for delegation completion
 		this.eventBusService.on('eventPublished', (event: { type: string; sessionName?: string }) => {
+			if (event.type === 'agent:busy' && event.sessionName) getSlackTypingPlaceholderService()?.releaseHold(event.sessionName);
+			if ((event.type === 'agent:idle' || event.type === 'agent:busy') && event.sessionName) {
+				ResourceModeService.getInstance().noteWorkingStatus(event.sessionName, event.type === 'agent:idle');
+			}
+			// Idle turn end starts the idle-tab clock; working again cancels it.
+			if ((event.type === 'agent:idle' || event.type === 'agent:busy') && event.sessionName) {
+				const sessionName = event.sessionName;
+				const idle = event.type === 'agent:idle';
+				void import('./services/browser/browser-bridge.service.js')
+					.then(({ BrowserBridgeService }) => {
+						const bridge = BrowserBridgeService.getInstance();
+						if (idle) bridge.noteAgentTurnEnded(sessionName);
+						else bridge.noteAgentBusy(sessionName);
+					})
+					.catch(() => undefined);
+			}
 			if (event.type === 'agent:inactive' && event.sessionName) {
+				// A runtime that exited while the agent owed work: same hook as the other stop paths.
+				void this.restoreStoppedOwing(event.sessionName, 'runtime exited');
 				this.wakeIfMessagesQueued(event.sessionName);
 			}
 			// A turn started: the harness's "working on it" watch may be waiting
@@ -1584,6 +1637,7 @@ void (async () => {
 		// 2026-05-16: queued WIs for inactive Atlas could not get woken
 		// because the floor was held by idle product/marketing agents).
 		liveDataProvider.setAgentRegistrationService(this.apiController.agentRegistrationService);
+		liveDataProvider.setAgentStoppedHook((name, why) => { void this.restoreStoppedOwing(name, why); });
 
 		// Initialize Reconciler Service (V2 — system truth recomputation)
 		{
@@ -1866,6 +1920,9 @@ void (async () => {
 
 		// Agent heartbeat middleware - any API call with X-Agent-Session header updates heartbeat
 		this.app.use('/api', agentHeartbeatMiddleware);
+
+		// Canvas: an agent writing to another agent's terminal is a message (sender and receiver only)
+		this.app.use('/api', recordTerminalWrites());
 
 		// The dashboard's owner session + CSRF token (GET /api/auth/session).
 		this.app.use('/api', createOwnerSessionRouter(peerProcesses));
@@ -2183,7 +2240,7 @@ void (async () => {
 
 			// Initialize Redis cache (non-blocking — falls back to memory if Redis is unavailable)
 			try {
-				const redisConnected = await RedisCacheService.getInstance().connect();
+				const redisConnected = await RedisCacheService.getInstance().connect(this.config.crewlyHome);
 				this.logger.info('Redis cache initialized', { connected: redisConnected, backend: redisConnected ? 'redis' : 'memory' });
 			} catch (cacheErr) {
 				this.logger.info('Redis cache not available, using in-memory fallback', {
@@ -2224,14 +2281,31 @@ void (async () => {
 			this.logger.info('Starting idle detection service...');
 			const idleDetection = IdleDetectionService.getInstance();
 			idleDetection.setAgentRegistrationService(this.apiController.agentRegistrationService);
-			// An agent with work queued for it (e.g. a ticket just assigned to a
-			// member that was started for it) is never idle-stopped.
-			idleDetection.setPendingWorkCheck(async (sessionName) => {
-				// Mid-conversation with the owner (an unanswered owner message or a
-				// promise in an owner thread in the last 30 min) counts as work.
-				if (getOwnerThreadSentinel()?.owesRecently(sessionName)) return true;
-				const items = await TaskPoolService.getInstance().getAllItems();
-				return items.some((wi) => wi.target === sessionName && PENDING_WORK_STATUSES.has(wi.status));
+			// Follow-through guard: "I'm doing X now" must be followed by action
+			// (specs/2026-10-10-agent-follow-through.md).
+			createFollowThrough({
+				crewlyHome: this.config.crewlyHome,
+				sendToAgent: (session, text) => this.apiController.agentRegistrationService.sendMessageToAgent(session, text),
+			});
+			// Background subagents / forks that stopped writing are not busy work:
+			// the agent is told and no longer counted busy (2026-10-12, Pia).
+			this.backgroundWatchdog?.stop();
+			this.backgroundWatchdog = new BackgroundWorkWatchdog({
+				turnState: AgentTurnStateService.getInstance(),
+				sendToAgent: (session, text) => this.apiController.agentRegistrationService.sendMessageToAgent(session, text),
+			});
+			this.backgroundWatchdog.start();
+			// An agent that owes work — a WorkItem (queued, accepted or running),
+			// an assigned ticket, a promise to the owner, an unfulfilled "doing X
+			// now" — is never idle-stopped. Under memory pressure it still can
+			// be, but its work goes back to the queue first and is redelivered.
+			idleDetection.setPendingWorkCheck(idlePendingWorkCheck());
+			idleDetection.setWorkReleaser((sessionName, why) => releaseWorkForStop(sessionName, why));
+			// An agent stopped for memory that still owed work is brought back when
+			// a slot frees, with a reminder of what it promised (the work itself is
+			// already queued for it by the releaser).
+			idleDetection.setOwedStopHook((sessionName) => {
+				void this.restoreStoppedOwing(sessionName, 'idle stop under memory pressure');
 			});
 			idleDetection.start();
 
@@ -2264,13 +2338,32 @@ void (async () => {
 					return out;
 				},
 				hasOwnerMessage: (name) => SubAgentMessageQueue.getInstance().peek(name).some((m) => m.meta?.owner === true),
+				// Pending work, open tickets and open delegations keep an agent running.
+				protectedReason: createProtectedReason({
+					getWorkItems: () => TaskPoolService.getInstance().getAllItems(),
+					listTickets: async (name) => {
+						const workflow = ProjectTicketWorkflowService.getInstance();
+						if (!workflow) return [];
+						return (await workflow.listForSession(name)).flatMap((p) => p.tickets);
+					},
+				}),
 				// An agent mid-conversation with the owner is the last one stopped
 				// for a slot, and its owner thread hears when it is
 				// (specs/2026-10-08-owner-thread-sentinel.md).
-				owesOwnerThread: (name) => getOwnerThreadSentinel()?.owesRecently(name) === true,
-				onStoppedForSlot: (name) => reportOwnerThreadBlocking(name, { kind: 'stopped', why: 'slot' }),
+				owesOwnerThread: (name) => getOwnerThreadSentinel()?.owesOwner(name) === true || getFollowThrough()?.holdsIntent(name) === true,
+				onStoppedForSlot: (name) => {
+					reportOwnerThreadBlocking(name, { kind: 'stopped', why: 'slot' });
+					// Same hook as every other stop path: what it owes goes back to the queue and it is brought back.
+					void this.restoreStoppedOwing(name, 'stopped to free a running-agent slot');
+				},
 				onStartDeferred: (name) => reportOwnerThreadBlocking(name, { kind: 'start_deferred' }),
 				stopAgent: async (name, role) => {
+					// Its work survives the stop: back in the queue, redelivered on the next start.
+					await releaseWorkForStop(name, 'stopped to free a running-agent slot');
+					// An agent that still owes the answer keeps its "will pick this up" placeholder:
+					// the turn-end settle the stop triggers must not call the thread answered.
+					const owed = TaskPoolService.getInstance().getAllItems().then((items) => owedWorkReminder(items, name) !== null);
+					if (await owed.catch(() => false)) await getSlackTypingPlaceholderService()?.holdForRestart(name);
 					await agentRegistration.terminateAgentSession(name, role);
 					await StorageService.getInstance().updateAgentStatus(name, CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE as any, 'idle_exit');
 				},
@@ -2576,6 +2669,17 @@ void (async () => {
 				}));
 				browserSessions.start();
 
+				// Automatic tab cleanup never closes a tab the owner is using: they
+				// took control, are watching the live view, or an action is held.
+				browserBridge.setCloseGuard((agentSession) => {
+					const session = browserSessions.getSession(agentSession);
+					if (!session) return null;
+					if (session.control === 'owner') return 'owner has control';
+					if (session.pending) return 'action held for the owner';
+					if (browserSessions.isWatched(agentSession)) return 'owner is watching';
+					return null;
+				});
+
 				// Let the browser controller reach agents, so taking the wheel
 				// and answering a held action actually tell the agent what
 				// happened instead of leaving it retrying into a 409.
@@ -2711,7 +2815,7 @@ void (async () => {
 						chatService.queryRecentTurnsForDispatch(
 							channelId,
 							threadId,
-							Math.max(CHAT_CONTEXT_CONSTANTS.THREAD_MAX, CHAT_CONTEXT_CONSTANTS.CHANNEL_MAX),
+							Math.max(CHAT_CONTEXT_CONSTANTS.THREAD_MAX, CHAT_CONTEXT_CONSTANTS.CHANNEL_MAX, CHAT_CONTEXT_CONSTANTS.TOP_LEVEL_OWNER_MAX),
 						),
 					// A message that addresses nobody goes to the team leader alone
 					// (optional reply); the team is found by the huddle's roster.
@@ -2729,7 +2833,20 @@ void (async () => {
 							'./controllers/team/team.controller.js'
 						);
 						const res = await activateAgentBySession(this.apiController, agentSession);
-						return res.success;
+						// A start waiting for a running-agent slot is deferred, not failed.
+						return res.success ? true : res.deferred ? 'deferred' : false;
+					},
+					// The message waits on the agent's persisted queue for a deferred start.
+					holdForStart: (agentSession, prompt) => {
+						SubAgentMessageQueue.getInstance().enqueue(agentSession, prompt);
+						// Nothing else starts the agent when a slot frees: retry until it does.
+						void import('./services/messaging/deferred-start-retry.js').then(async ({ scheduleDeferredStartRetry }) => {
+							const { activateAgentBySession } = await import('./controllers/team/team.controller.js');
+							await scheduleDeferredStartRetry(agentSession, {
+								activate: (name) => activateAgentBySession(this.apiController, name),
+								hasPending: (name) => SubAgentMessageQueue.getInstance().hasPending(name),
+							});
+						});
 					},
 					// Every owner message that reached an agent is watched until
 					// it is answered (specs/2026-09-30-owner-message-guarantee.md).
@@ -2801,7 +2918,10 @@ void (async () => {
 									(r) => typeof r.ticketNumber === 'number' && r.requiresConfirmation && r.status !== 'done' && r.status !== 'cancelled',
 								);
 								const rows = await Promise.all(candidates.map((r) => intake.toListItem(r)));
-								return rows.filter((row) => row.column === 'to_review');
+								// Only work waiting for the owner's OK. A ticket in awaiting_followup
+								// is held by its own open items (a question or a promise with its own
+								// card) and has no accept deadline, so listing it left it there for days.
+								return rows.filter((row) => row.column === 'to_review' && row.status === 'waiting_confirmation');
 							},
 							review: () => getTicketReviewService(),
 							dismissOpenItem: async (requestId, itemId) => {
@@ -2835,6 +2955,17 @@ void (async () => {
 									.filter((m) => m.channelId === channelId && m.senderType === 'agent' && m.createdAt > sinceMs && (!threadId || m.threadId === threadId || m.id === threadId))
 									.sort((a, b) => a.createdAt - b.createdAt)[0];
 								return reply ? { text: reply.content, at: new Date(reply.createdAt).toISOString() } : null;
+							},
+							// A card whose project ticket is already done / cancelled waits on nothing.
+							isCardTicketClosed: async (ticket) => {
+								const { ProjectTicketService } = await import('./services/project-tickets/project-ticket.service.js');
+								const found = await ProjectTicketService.getInstance().get(ticket.projectPath, ticket.id);
+								return found?.status === 'done' || found?.status === 'cancelled';
+							},
+							// The owner's voice decision goes into the ticket's record at once.
+							noteDecision: async ({ ticket, agentName, summary, answer }) => {
+								const { ProjectTicketService } = await import('./services/project-tickets/project-ticket.service.js');
+								await ProjectTicketService.getInstance().appendLog(ticket.projectPath, ticket.id, 'owner (Drive)', `Owner decided in Drive: "${answer}" (${agentName}: ${summary.slice(0, 160)}). Proceed on this.`);
 							},
 							store: new BriefingStateStore(),
 						}),
@@ -2941,6 +3072,46 @@ void (async () => {
 								error: talkErr instanceof Error ? talkErr.message : String(talkErr),
 							});
 						}
+
+						// Team move (crewly#1189): Cloud tells this machine what to do in a
+						// move of a team to or from another machine. Starting the driver is
+						// what advertises `teamMove:1` to Cloud, and it resumes pending moves.
+						try {
+							const [{ createTeamMoveDriver }, { setTeamMoveDriver }] = await Promise.all([
+								import('./services/team-move/team-move-runtime.js'),
+								import('./services/team-move/team-move-driver.service.js'),
+							]);
+							const moveDriver = createTeamMoveDriver({
+								storage: this.storageService,
+								relay: sync,
+								// "Ask the team to commit and push": a harness message to the team lead, waking it if it is stopped.
+								sendToAgent: async (session, text) => {
+									let exists = false;
+									try {
+										exists = getSessionBackendSync()?.sessionExists(session) ?? false;
+									} catch {
+										exists = false;
+									}
+									if (!exists) {
+										const { activateAgentBySession } = await import('./controllers/team/team.controller.js');
+										await activateAgentBySession(this.apiController, session).catch(() => undefined);
+									}
+									const result = await this.apiController.agentRegistrationService.sendMessageToAgent(session, text);
+									return result.success;
+								},
+							});
+							setTeamMoveDriver(moveDriver);
+							moveDriver.start();
+							void moveDriver.housekeeping().catch(() => undefined);
+						} catch (moveErr) {
+							this.logger.warn('Team move handler wiring skipped', {
+								error: moveErr instanceof Error ? moveErr.message : String(moveErr),
+							});
+						}
+
+						// "Let me check with the teams" (Drive kickoff): set below, once the
+						// status snapshot sync exists, and read by the Drive handler at run time.
+						let driveStatusCheck: { run: () => Promise<unknown> } | null = null;
 
 						// Drive mode (specs/2026-10-08-drive-mode.md §7): Crewly Cloud hosts
 						// the voice session; this machine delivers the owner's words to its
@@ -3050,6 +3221,9 @@ void (async () => {
 								agentExists: async (agentSession) =>
 									buildAgentRoster(await this.storageService.getTeams()).some((a) => a.agentSession === agentSession),
 								store: new DriveConversationStore(),
+								refreshStatus: async () => {
+									await driveStatusCheck?.run();
+								},
 								// Keep-warm (specs/2026-10-09-drive-mode-v3.md §5): an agent the owner
 								// names is started now if stopped; while warm its start goes ahead of
 								// ordinary starts and nothing stops it for being idle.
@@ -3116,6 +3290,8 @@ void (async () => {
 											ownerFeed: (sinceMs, limit) => chatService.getOwnerFeed({ sinceMs, limit }),
 											orchestratorRunning: () => getSessionBackendSync()?.sessionExists(ORCHESTRATOR_SESSION_NAME) ?? false,
 											orchestratorName: CLOUD_TALK_CONSTANTS.ORCHESTRATOR_DISPLAY_NAME,
+											// Charters and chore-free work lists for the high-level overview.
+											roster: async () => (await import('./services/team-roster/team-roster.service.js')).TeamRosterService.getInstance().getRoster(),
 										}),
 									),
 								cloud: {
@@ -3151,6 +3327,28 @@ void (async () => {
 								],
 							});
 							briefingSync.start();
+							// Drive opened: ask the agents holding the owner's open items to
+							// bring them up to date, then rebuild and upload (no caches).
+							{
+								const { DriveStatusCheck } = await import('./services/drive/drive-status-check.js');
+								const checkAgents = this.apiController.agentRegistrationService;
+								driveStatusCheck = new DriveStatusCheck({
+									targets: async () => (await getBriefingService()?.statusCheckTargets()) ?? [],
+									isRunning: (session) => {
+										try {
+											return getSessionBackendSync()?.sessionExists(session) ?? false;
+										} catch {
+											return false;
+										}
+									},
+									nudge: async (session, text) => (await checkAgents.sendMessageToAgent(session, text)).success,
+									rebuild: async () => {
+										sourceCache.invalidatePool();
+										sourceCache.invalidateTickets();
+										await briefingSync.syncNow(true);
+									},
+								});
+							}
 						} catch (briefingSyncErr) {
 							this.logger.warn('Drive mode status briefing wiring skipped', {
 								error: briefingSyncErr instanceof Error ? briefingSyncErr.message : String(briefingSyncErr),
@@ -3190,6 +3388,87 @@ void (async () => {
 						} catch (waitingErr) {
 							this.logger.warn('"Waiting on you" action handler wiring skipped', {
 								error: waitingErr instanceof Error ? waitingErr.message : String(waitingErr),
+							});
+						}
+
+						// Crewly Canvas (crewly#1247 v2): the owner's actions from the portal
+						// canvas (message an agent, stop it, open its masked terminal) arrive as
+						// `canvas_action` pushes; the handler fetches each with this machine's
+						// token and runs it. Starting it advertises `canvas_actions` to Cloud.
+						try {
+							// The board's kill switch also keeps the canvas actions off this machine
+							if (isBoardPushDisabled()) throw new Error('CREWLY_BOARD_PUSH=0');
+							const [
+								{ CanvasInboundService },
+								{ CanvasTerminalService },
+								{ createStopAgent, createSecretsProvider },
+								{ CloudClientService },
+								{ buildAgentRoster },
+								{ intakeChatV2OwnerMessage },
+								{ getTicketIntakeService },
+								{ getBoardService },
+								{ getApiToken },
+								{ internalCredentialHeaders },
+							] = await Promise.all([
+								import('./services/board/canvas/canvas-inbound.service.js'),
+								import('./services/board/canvas/canvas-terminal.service.js'),
+								import('./services/board/canvas/canvas-wiring.js'),
+								import('./services/cloud/cloud-client.service.js'),
+								import('./services/cloud/agent-roster.utils.js'),
+								import('./services/v3/ticket-channel-hooks.js'),
+								import('./services/v3/ticket-intake.service.js'),
+								import('./services/board/board.service.js'),
+								import('./services/core/api-token.service.js'),
+								import('./services/core/owner-auth.service.js'),
+							]);
+							const cloudClient = CloudClientService.getInstance();
+							const cloud = {
+								getToken: () => cloudClient.getToken(),
+								getCloudUrl: () => cloudClient.getCloudUrl(),
+								tryRefreshToken: () => cloudClient.tryRefreshToken(),
+							};
+							const identity = async (): Promise<{ instanceId: string; deviceName: string }> => {
+								const id = await DeviceIdentityService.getInstance().getOrCreateIdentity();
+								return { instanceId: id.deviceId, deviceName: id.deviceName };
+							};
+							const terminal = new CanvasTerminalService({
+								cloud,
+								identity,
+								capture: (session, lines) => getSessionBackendSync()?.captureOutput(session, lines) ?? null,
+								exists: (session) => getSessionBackendSync()?.sessionExists(session) === true,
+								secrets: createSecretsProvider(),
+							});
+							this.canvasTerminal = terminal;
+							new CanvasInboundService({
+								source: sync,
+								cloud,
+								chat: chatService,
+								identity,
+								deliver: async (channel, message) => {
+									const toDispatch = await intakeChatV2OwnerMessage(getTicketIntakeService(), channel, message, CLOUD_TALK_CONSTANTS.INTAKE_ORIGIN);
+									await chatDispatcher.dispatchMessage(channel, toDispatch);
+								},
+								agentExists: async (session) => buildAgentRoster(await this.storageService.getTeams()).some((a) => a.agentSession === session),
+								stopAgent: createStopAgent({
+									webPort: this.config.webPort,
+									teams: () => this.storageService.getTeams(),
+									headers: () => {
+										let token: string | null = null;
+										try {
+											token = getApiToken();
+										} catch {
+											token = null;
+										}
+										return { ...(token ? { [API_SECURITY_CONSTANTS.TOKEN_HEADER]: token } : {}), ...internalCredentialHeaders('relay') };
+									},
+								}),
+								terminal,
+								// Someone is at the canvas: push live for a while
+								onAction: () => getBoardService()?.push.noteViewer(),
+							}).start();
+						} catch (canvasErr) {
+							this.logger.warn('Canvas action handler wiring skipped', {
+								error: canvasErr instanceof Error ? canvasErr.message : String(canvasErr),
 							});
 						}
 
@@ -3802,7 +4081,7 @@ void (async () => {
 					this.storageService.onStorageEvent(async (event) => {
 						if (event.kind === 'team-saved') {
 							await reconciler.reconcile(event.team);
-						} else if (event.kind === 'team-deleted') {
+						} else if (event.kind === 'team-deleted' || event.kind === 'team-moved-away') {
 							await reconciler.unregisterAll(event.teamId);
 						}
 					});
@@ -3936,6 +4215,20 @@ void (async () => {
 				const { projectTicketWorkflow } = await import('./controllers/project-tickets/project-tickets.controller.js');
 				projectTicketWorkflow().start(this.eventBusService);
 				this.logger.info('Project ticket workflow started — tickets follow their WorkItems');
+
+				// Ticket hygiene: an hourly sweep closes tickets whose work is done and
+				// flags orphaned ones (no agent woken), and once a day each team lead
+				// gets ONE batched WorkItem of its stale tickets. Kill switch:
+				// CREWLY_TICKET_HYGIENE=0.
+				if (process.env[TICKET_HYGIENE_CONSTANTS.ENV_SWITCH] !== '0') {
+					const { createDefaultTicketHygiene } = await import('./controllers/project-tickets/project-tickets.controller.js');
+					const { TicketHygieneService } = await import('./services/project-tickets/ticket-hygiene.service.js');
+					TicketHygieneService.getInstance()?.stop();
+					const hygiene = createDefaultTicketHygiene();
+					TicketHygieneService.setInstance(hygiene);
+					hygiene.start();
+					this.logger.info('Ticket hygiene started (hourly sweep, daily lead review)');
+				}
 
 				// Ticket autopilot (specs/2026-09-30-ticket-autopilot.md): per-project
 				// switch, default off. Wakes a project's lead to triage its backlog and
@@ -4140,6 +4433,10 @@ void (async () => {
 			// snapshots, so the portal lists them for every machine.
 			void this.startWaitingItemsSync();
 
+			// Owner board (crewly#1247): outcomes + live activity, pushed to Cloud
+			// every 60 s and on change. CREWLY_BOARD_PUSH=0 turns the push off.
+			void this.startOwnerBoard();
+
 			// V3-only as of spec 2026-05-06-task-management-v1-deprecation.md.
 			// The legacy `TaskTrackingService.startAutoSync()` is gone — V3
 			// task-pool reconciler owns lifecycle cleanup now.
@@ -4149,6 +4446,10 @@ void (async () => {
 				const tokenUsageService = TokenUsageService.getInstance();
 				await tokenUsageService.loadFromDisk();
 				tokenUsageService.startPeriodicFlush();
+
+				// Per-ticket time / token accounting (specs/2026-10-11-usage-ledger.md):
+				// records facts from here on and rebuilds history once, shortly after boot.
+				await getUsageLedger().start();
 
 				// Read Claude Code's own session transcripts on an interval so
 				// the Usage dashboard reflects claude-code agents, and so the
@@ -4329,6 +4630,17 @@ void (async () => {
 			// CREWLY_WORKTREE_JANITOR=0.
 			try {
 				WorktreeJanitorService.getInstance().setLowDiskNotifier(slackOwnerAlertNotifier);
+				// A runaway file in an agent's dir: the agent is told through normal delivery.
+				WorktreeJanitorService.getInstance().setAgentNotifier(async (session, message) => {
+					const r = await this.apiController.agentRegistrationService.sendMessageToAgent(session, message);
+					return r.success;
+				});
+				// Finished work cleans up after itself: a WorkItem / ticket reaching
+				// done or verified schedules one debounced janitor pass (safe rules
+				// unchanged — only landed, clean, unattended worktrees go).
+				this.eventBusService.onInProcess(['task:done', 'task:verified'], () => {
+					WorktreeJanitorService.getInstance().requestTidy();
+				});
 				if (WorktreeJanitorService.getInstance().start()) {
 					this.logger.info('WorktreeJanitorService scheduled');
 				} else {
@@ -5336,10 +5648,12 @@ void (async () => {
 		void getSlackAgentDmService()
 			?.settleOpenThreads(sessionName)
 			.catch(() => undefined);
+		// Follow-through: nudge a stated intent nothing followed, and give an
+		// owner ticket with no WorkItem one — before the review looks at it.
 		// Ticket loop Phase 2: an agent that finished its turn has answered
 		// the tickets it replied in — submit them (待验收 or done).
-		void getTicketReviewService()
-			?.onAgentIdle(sessionName)
+		void settleFollowThrough(sessionName)
+			.then(() => getTicketReviewService()?.onAgentIdle(sessionName))
 			.catch(() => undefined);
 	}
 
@@ -5709,7 +6023,7 @@ void (async () => {
 				// whether this machine takes `talk_message` — also for machines
 				// without Slack, which never send the registry heartbeat.
 				roster: async () => buildAgentRoster(await this.storageService.getTeams()),
-				capabilities: () => [...cloudTalkCapabilities(), ...waitingActionCapabilities(), ...talkTranscribeCapabilities(), ...driveCapabilities()],
+				capabilities: () => [...cloudTalkCapabilities(), ...waitingActionCapabilities(), ...canvasCapabilities(), ...talkTranscribeCapabilities(), ...driveCapabilities(), ...teamMoveCapabilities()],
 				onNewMessage: (listener) => {
 					chat.on('chat_message', listener);
 					return () => chat.off('chat_message', listener);
@@ -5795,7 +6109,7 @@ void (async () => {
 							.filter((a) => a.displayName)
 							.map((a) => [a.agentSession, a.displayName as string]),
 					),
-				capabilities: () => [...cloudTalkCapabilities(), ...waitingActionCapabilities(), ...talkTranscribeCapabilities(), ...driveCapabilities()],
+				capabilities: () => [...cloudTalkCapabilities(), ...waitingActionCapabilities(), ...canvasCapabilities(), ...talkTranscribeCapabilities(), ...driveCapabilities(), ...teamMoveCapabilities()],
 				onTicketChange: (listener) => RequestService.getInstance().onChange(() => listener()),
 			});
 			setWaitingItemsSyncService(service);
@@ -5807,6 +6121,117 @@ void (async () => {
 			});
 		}
 	}
+	/**
+	 * Start the owner board: the local `GET /api/board` always works; the push
+	 * to Crewly Cloud runs while the machine is signed in. Never throws.
+	 */
+	private async startOwnerBoard(): Promise<void> {
+		try {
+			const [{ BoardService, setBoardService }, { createProductionBoardSources }, { CloudClientService }, { getBoardActivity }] = await Promise.all([
+				import('./services/board/board.service.js'),
+				import('./services/board/board.sources.js'),
+				import('./services/cloud/cloud-client.service.js'),
+				import('./services/board/board-activity.tracker.js'),
+			]);
+			const cloud = CloudClientService.getInstance();
+			// Project roots turn file paths into repo-relative ones
+			getBoardActivity().setRootsResolver((session) => this.boardProjectRoots(session));
+			const service = new BoardService({
+				sources: createProductionBoardSources({ storage: this.storageService }),
+				cloud: { getToken: () => cloud.getToken(), getCloudUrl: () => cloud.getCloudUrl(), tryRefreshToken: () => cloud.tryRefreshToken() },
+			});
+			setBoardService(service);
+			service.start();
+			this.ownerBoard = service;
+			// Canvas messaging links: agent chat messages that @mention another agent
+			try {
+				const { recordChatMentions } = await import('./services/board/board-interaction-hooks.js');
+				let ids: { at: number; map: Map<string, string> } = { at: 0, map: new Map() };
+				const refresh = (): void => {
+					void this.storageService.getTeams().then((teams) => {
+						const map = new Map<string, string>();
+						for (const team of teams) for (const m of team.members ?? []) {
+							if (!m?.id) continue;
+							const session = resolveMemberSessionName(team.name, m);
+							map.set(m.id, session);
+							map.set(session, session);
+						}
+						map.set(ORCHESTRATOR_SESSION_NAME, ORCHESTRATOR_SESSION_NAME);
+						ids = { at: Date.now(), map };
+					}).catch(() => undefined);
+				};
+				refresh();
+				getChatV2Service().on('chat_message', (dto: import('./services/chat-v2/types.js').ChatMessageDTO) => {
+					if (dto.senderType !== 'agent' || !dto.mentions?.length) return;
+					if (Date.now() - ids.at > 30_000) refresh();
+					recordChatMentions(dto, (id) => ids.map.get(id));
+				});
+			} catch {
+				/* messaging links are optional */
+			}
+			await this.startCanvasTail(service);
+		} catch (error) {
+			this.logger.warn('Owner board not started (non-fatal)', { error: error instanceof Error ? error.message : String(error) });
+		}
+	}
+
+	/**
+	 * Canvas (crewly#1247 v2): follow the agents' transcripts for their own
+	 * short text lines (and Codex's tool calls). Off with the board push.
+	 */
+	private async startCanvasTail(service: import('./services/board/board.service.js').BoardService): Promise<void> {
+		try {
+			if (service.push.disabled) return;
+			const [{ TranscriptTailService }, { createTranscriptLocator, createSecretsProvider }, recovery] = await Promise.all([
+				import('./services/board/canvas/canvas-transcript.tail.js'),
+				import('./services/board/canvas/canvas-wiring.js'),
+				import('./services/agent/runtime-session-recovery.js'),
+				]);
+			const { findCodexRollout } = await import('./services/monitoring/codex-rollout-sync.service.js');
+			const persistence = getSessionStatePersistence();
+			const locate = createTranscriptLocator({
+				meta: (session) => {
+					try {
+						return persistence.getSessionMetadata(session);
+					} catch {
+						return undefined;
+					}
+				},
+				claudeHomes: (meta) => [meta.env?.CLAUDE_CONFIG_DIR, recovery.defaultClaudeHome()].filter((h): h is string => typeof h === 'string' && h.length > 0),
+				findClaude: recovery.findClaudeTranscript,
+				codexHome: recovery.defaultCodexHome,
+				findCodex: findCodexRollout,
+			});
+			this.canvasTail = new TranscriptTailService({
+				steps: service.tracker.steps,
+				sessions: () => service.builder.knownSessions(),
+				locate,
+				roots: (session) => this.boardProjectRoots(session),
+				secrets: createSecretsProvider(),
+				isLive: () => service.push.isLive(),
+			});
+			this.canvasTail.start();
+		} catch (error) {
+			this.logger.warn('Canvas transcript tail not started (non-fatal)', { error: error instanceof Error ? error.message : String(error) });
+		}
+	}
+
+	/** Cached project paths for the board's relative file paths. */
+	private boardRootsCache: { at: number; roots: string[] } = { at: 0, roots: [] };
+
+	private boardProjectRoots(_session: string): string[] {
+		if (Date.now() - this.boardRootsCache.at > 60_000) {
+			this.boardRootsCache.at = Date.now();
+			void this.storageService
+				.getProjects()
+				.then((projects) => {
+					this.boardRootsCache.roots = projects.map((p) => p.path).filter(Boolean);
+				})
+				.catch(() => undefined);
+		}
+		return this.boardRootsCache.roots;
+	}
+
 	/**
 	 * Load interrupted turns left by the previous shutdown (fresh ones only).
 	 */
@@ -6622,6 +7047,54 @@ void (async () => {
 	}
 
 	/**
+	 * Close the Chrome tab a stopped agent opened. Best-effort and silent: no
+	 * binding, no browser, or the owner using the tab all end in "nothing to do".
+	 *
+	 * @param sessionName - The agent that stopped
+	 */
+	private async closeBrowserTabForStoppedAgent(sessionName: string): Promise<void> {
+		try {
+			const { BrowserBridgeService } = await import('./services/browser/browser-bridge.service.js');
+			await BrowserBridgeService.getInstance().closeTabForStoppedAgent(sessionName);
+		} catch (error) {
+			this.logger.debug('Could not close the stopped agent\'s browser tab', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+
+	/**
+	 * The one hook every stop path runs: what the stopped agent owes goes back
+	 * in the queue and the agent is brought back with a reminder.
+	 *
+	 * @param sessionName - The agent that stopped
+	 * @param why - Reason text
+	 * @returns True when the agent is being brought back
+	 */
+	private restoreStoppedOwing(sessionName: string, why: string): Promise<boolean> {
+		// A stopped agent's Chrome tab goes with it (the owner's own tabs never do).
+		void this.closeBrowserTabForStoppedAgent(sessionName);
+		if (sessionName === ORCHESTRATOR_SESSION_NAME) return Promise.resolve(false);
+		return restoreStoppedOwingWork(sessionName, why, {
+			listWorkItems: () => TaskPoolService.getInstance().getAllItems(),
+			isHeldBack: (name) => isOwnerStopped(name) || !!pausedTeamOfSession(name),
+			hasReminder: (name) => SubAgentMessageQueue.getInstance().peek(name).some((m) => m.data.startsWith(OWED_REMINDER_MARKER)),
+			enqueue: (name, text) => SubAgentMessageQueue.getInstance().enqueue(name, text),
+			holdPlaceholders: (name) => getSlackTypingPlaceholderService()?.holdForRestart(name) ?? Promise.resolve(0),
+			restart: async (name) => {
+				const { scheduleDeferredStartRetry } = await import('./services/messaging/deferred-start-retry.js');
+				const { activateAgentBySession } = await import('./controllers/team/team.controller.js');
+				void scheduleDeferredStartRetry(name, {
+					activate: (n) => activateAgentBySession(this.apiController, n),
+					hasPending: (n) => SubAgentMessageQueue.getInstance().hasPending(n),
+					firstPauseMs: 60_000,
+				});
+			},
+		});
+	}
+
+	/**
 	 * An agent went down with messages still queued for it: start it again so
 	 * they are delivered (registration drains the queue). Without this the
 	 * messages waited for the next message someone happened to send — four
@@ -6817,6 +7290,15 @@ void (async () => {
 			};
 			// Every delivery refused for a while: automatic redelivery is slowed
 			// to a probe now and then, and the owner told once (crewly#1028).
+			// What the unreadable screen shows (redacted rows), so the owner can
+			// tell a dialog from a bare shell without opening the terminal.
+			const screenNote = (sessionName: string, state: string | undefined): string => {
+				if (state !== 'unknown') return '';
+				const excerpt = SessionCommandHelper.unreadableExcerpt(sessionName);
+				if (!excerpt) return '';
+				const hint = looksLikeShellPrompt(excerpt) ? ' It looks like the runtime exited to a shell prompt.' : '';
+				return `${hint}\nScreen (secrets masked):\n${excerpt.split('\n').map((l) => `> ${l}`).join('\n')}`;
+			};
 			setInputCircuitOpenListener((info) => {
 				traceHarness('guard.block', {
 					session: info.sessionName,
@@ -6875,7 +7357,7 @@ void (async () => {
 						const maxMin = Math.round(INPUT_CIRCUIT_CONSTANTS.PROBE_MAX_MS / 60000);
 						tell(
 							notice.sessionName,
-							`Needs you: ${notice.sessionName} has not received any message for ${minutes} min: ${what}, so Crewly refused to type over it (${notice.refusals} attempts). Crewly has stopped retrying every few seconds and now tries again only every few minutes (at most every ${maxMin} min). To fix it, open ${notice.sessionName}'s terminal and clear the input box (Ctrl+U), or press Enter if that text is yours. Delivery resumes on its own after that.`,
+							`Needs you: ${notice.sessionName} has not received any message for ${minutes} min: ${what}, so Crewly refused to type over it (${notice.refusals} attempts). Crewly has stopped retrying every few seconds and now tries again only every few minutes (at most every ${maxMin} min). To fix it, open ${notice.sessionName}'s terminal and clear the input box (Ctrl+U), or press Enter if that text is yours. Delivery resumes on its own after that.${screenNote(notice.sessionName, notice.blockedState)}`,
 							notice.message || undefined,
 						);
 						return;
@@ -6894,7 +7376,7 @@ void (async () => {
 						: `its input box holds ${notice.inputLength} characters of text not written by Crewly`;
 					tell(
 						notice.sessionName,
-						`Needs you: messages to ${notice.sessionName} are waiting because ${what}. Crewly will not type over it. Tried ${notice.refusals} times over ${minutes} min; it keeps retrying. Clear the agent's input (or answer its screen) to let them through.`,
+						`Needs you: messages to ${notice.sessionName} are waiting because ${what}. Crewly will not type over it. Tried ${notice.refusals} times over ${minutes} min; it keeps retrying. Clear the agent's input (or answer its screen) to let them through.${screenNote(notice.sessionName, notice.state)}`,
 						notice.message,
 					);
 				},
@@ -7101,6 +7583,9 @@ void (async () => {
 		this.cloudDisconnectNotice?.stop();
 		this.conversationCloudSync?.stop();
 		this.waitingItemsSync?.stop();
+		this.ownerBoard?.stop();
+		this.canvasTail?.stop();
+		this.canvasTerminal?.closeAll();
 
 		// Safe restart: stop delivering, wait for agents mid-turn, persist the rest.
 		// Runs before the force-exit timer below, which only bounds the teardown.
@@ -7118,6 +7603,7 @@ void (async () => {
 
 		try {
 			// Clear health monitoring interval first
+			this.backgroundWatchdog?.stop();
 			if (this.healthMonitoringInterval) {
 				clearInterval(this.healthMonitoringInterval);
 				this.healthMonitoringInterval = null;
@@ -7368,6 +7854,15 @@ void (async () => {
 			// Stop auditor scheduler
 			AuditorSchedulerService.getInstance().stop();
 
+			// Write the usage ledger's buffered buckets
+			try {
+				await getUsageLedger().stop();
+			} catch (ledgerErr) {
+				this.logger.warn('Usage ledger flush on shutdown failed (non-fatal)', {
+					error: ledgerErr instanceof Error ? ledgerErr.message : String(ledgerErr),
+				});
+			}
+
 			// Persist the token ledger: it flushes every 5 minutes, so a restart
 			// used to drop everything recorded since the last tick (2026-09-18).
 			try {
@@ -7467,14 +7962,36 @@ if (isMainModule) {
 	// A stale build throws here and stops startup — that is the point. Every
 	// other outcome (unstamped build, no repository, skip flag set) only
 	// warns, so this can never block a legitimate container deploy.
+	let wrongBranchAlert: string | null = null;
 	try {
 		assertBuildProvenance({
 			log: (message) => logger.info(message),
 			warn: (message) => logger.warn(message),
+			// Stale build because the live checkout sits on a non-main branch
+			// with no local changes (an agent switched it): still refuse to
+			// start, but tell the owner how to fix it instead of going quiet.
+			onWrongBranch: (_state, line) => {
+				wrongBranchAlert = line;
+			},
 		});
 	} catch (error) {
 		logger.error(error instanceof Error ? error.message : String(error));
-		process.exit(1);
+		const alertLine = wrongBranchAlert as string | null;
+		if (!alertLine) process.exit(1);
+		void (async () => {
+			try {
+				const { loadSlackCredentials } = await import('./services/slack/slack-credentials.service.js');
+				const { postBootOwnerAlert } = await import('./utils/boot-owner-alert.js');
+				await postBootOwnerAlert(alertLine, getCrewlyHomePath(), async () => {
+					const creds = await loadSlackCredentials();
+					const channel = creds?.allowedUserIds?.[0] ?? creds?.defaultChannelId;
+					return creds && channel ? { botToken: creds.botToken, channel } : null;
+				});
+			} catch {
+				/* best effort */
+			}
+			process.exit(1);
+		})();
 	}
 
 	server.start().catch((error) => {

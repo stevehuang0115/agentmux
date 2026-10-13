@@ -12,6 +12,8 @@ describe('parseDriveRelayData', () => {
     expect(parseDriveRelayData({ v: 1, kind: 'drive', op: 'end', sessionId: SID, instanceId: 'mac' })?.op).toBe('end');
     expect(parseDriveRelayData({ v: 1, kind: 'drive', op: 'warm', sessionId: SID, instanceId: 'mac' })?.op).toBe('warm');
     expect(parseDriveRelayData({ v: 1, kind: 'drive', op: 'recall', sessionId: SID, instanceId: 'mac' })).toBeNull();
+    expect(parseDriveRelayData({ v: 1, kind: 'drive', op: 'refresh', sessionId: SID, id: 'r1', instanceId: 'mac' })?.op).toBe('refresh');
+    expect(parseDriveRelayData({ v: 1, kind: 'drive', op: 'refresh', sessionId: SID, instanceId: 'mac' })).toBeNull();
   });
 
   it('refuses Talk payloads, bad ops, bad ids', () => {
@@ -46,5 +48,11 @@ describe('fetch answers', () => {
       warm: ['ella'],
       warmUntil: Date.parse('2026-10-09T10:20:00.000Z'),
     });
+  });
+});
+
+describe('op:log', () => {
+  it('a log push needs no id', () => {
+    expect(parseDriveRelayData({ v: 1, kind: 'drive', op: 'log', sessionId: 'drv_abcdefghijkl', instanceId: 'mac' })).toEqual({ v: 1, kind: 'drive', op: 'log', sessionId: 'drv_abcdefghijkl', instanceId: 'mac' });
   });
 });

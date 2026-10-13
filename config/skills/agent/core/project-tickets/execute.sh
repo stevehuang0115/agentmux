@@ -217,7 +217,7 @@ while [[ $# -gt 0 ]]; do
     --skip-labels)   [ $# -ge 2 ] || error_exit "--skip-labels requires a comma-separated list or default"; AP_SKIP="$2"; shift 2 ;;
     --full)          shift ;;
     --help|-h)       print_usage; exit 0 ;;
-    *) error_exit "Unknown option: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 

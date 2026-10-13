@@ -28,6 +28,7 @@ import {
   archiveTeam,
   setTeamLeadHandler
 } from './team.controller.js';
+import { setTeamCharter } from './team-charter.controller.js';
 import { exportTeam, importTeam } from './team-export.controller.js';
 import { getTeamLeadShare, recordLeadSelfWork } from './team-lead-share.controller.js';
 import { getTeamModelTiers, proposeTierChange, startTeamModelTierReview, updateTeamModelTiers } from './team-model-tiers.controller.js';
@@ -63,6 +64,8 @@ export function createTeamRouter(context: ApiContext): Router {
   router.post('/:id/resume', invalidateCache(teamsCacheKeys), resumeTeamHandler.bind(context));
   // Who leads the team (owner / orchestrator) — specs/2026-09-30-team-lead-rule.md
   router.post('/:id/lead', invalidateCache(teamsCacheKeys), setTeamLeadHandler.bind(context));
+  // What the team is responsible for, written by its lead (specs/2026-10-10-team-roster.md)
+  router.put('/:id/charter', invalidateCache(teamsCacheKeys), setTeamCharter);
   router.get('/:id/workload', getTeamWorkload.bind(context));
   // Lead share of team tokens + "no member fits" records (crewly#1083)
   router.get('/:id/lead-share', getTeamLeadShare);

@@ -73,7 +73,22 @@ export interface RecordInput {
 	refs?: TraceRefs;
 	data?: Record<string, unknown>;
 	at?: Date;
+	/**
+	 * Fraction (0..1] of the underlying fact this trace carries when the same
+	 * fact is recorded in several traces (a busy period shared by two tickets).
+	 * Not written to the trace; only the listeners see it. Default 1.
+	 */
+	share?: number;
 }
+
+/** What a {@link TraceListener} is told about a recorded event. */
+export interface TraceListenerMeta {
+	/** See {@link RecordInput.share} */
+	share: number;
+}
+
+/** Called for every event recorded through {@link TraceContext.record}. Must not throw. */
+export type TraceListener = (event: TraceEvent, meta: TraceListenerMeta) => void;
 
 /** An owner message waiting to become a trace root. */
 interface PendingRoot {
@@ -85,6 +100,12 @@ interface PendingRoot {
 interface Span {
 	since: number;
 	traceId: string | null;
+	/**
+	 * Other traces the same delivery named (one message about two tickets).
+	 * Usage and busy time of the span are split evenly between `traceId` and
+	 * these (usage ledger, specs/2026-10-11-usage-ledger.md).
+	 */
+	co?: string[];
 	/** Last sign of the session working in this span (delivery, API call) */
 	lastActive: number;
 }
@@ -134,6 +155,7 @@ export class TraceContext {
 	private readonly idleClearMs: number;
 	/** Projects (ids) the teams of a session work on; null when unknown. Set by the wiring. */
 	private sessionProjects: (session: string) => string[] | null = () => null;
+	private readonly listeners = new Set<TraceListener>();
 
 	/**
 	 * @param storeOf - Store accessor (default: the process-wide store)
@@ -184,6 +206,21 @@ export class TraceContext {
 	}
 
 	/**
+	 * Be told about every recorded event (the usage ledger folds them into its
+	 * facts). Listeners run even when the trace file refused the event (size
+	 * cap), and a throwing listener is ignored.
+	 *
+	 * @param listener - Callback
+	 * @returns Function that removes the listener
+	 */
+	addListener(listener: TraceListener): () => void {
+		this.listeners.add(listener);
+		return () => {
+			this.listeners.delete(listener);
+		};
+	}
+
+	/**
 	 * Append an event (summary cleaned, data trimmed). Never throws.
 	 *
 	 * @param input - The event
@@ -207,10 +244,28 @@ export class TraceContext {
 				outcome: input.outcome ?? 'info',
 				...(data ? { data } : {}),
 			};
-			return this.store.append(event);
+			const queued = this.store.append(event);
+			this.notify(event, input.share ?? 1);
+			return queued;
 		} catch (err) {
 			this.logger.debug('Trace event dropped', { type: input.type, error: errText(err) });
 			return false;
+		}
+	}
+
+	/**
+	 * Tell the listeners about an event.
+	 *
+	 * @param event - The recorded event
+	 * @param share - See {@link RecordInput.share}
+	 */
+	private notify(event: TraceEvent, share: number): void {
+		for (const listener of this.listeners) {
+			try {
+				listener(event, { share });
+			} catch {
+				// a listener must never break a trace
+			}
 		}
 	}
 
@@ -301,20 +356,45 @@ export class TraceContext {
 	}
 
 	/**
+	 * Every trace the session was working on at a given time: the one
+	 * {@link traceAt} returns first, then the others its delivery named.
+	 *
+	 * @param session - Agent session
+	 * @param at - Time (ms); default now
+	 * @returns Trace ids (empty when none)
+	 */
+	tracesAt(session: string | null | undefined, at?: number): string[] {
+		const primary = this.traceAt(session, at);
+		if (!primary || !session) return [];
+		const t = at ?? this.now();
+		const spans = this.spans.get(session) ?? [];
+		for (let i = spans.length - 1; i >= 0; i--) {
+			if (spans[i].since <= t) {
+				const co = (spans[i].co ?? []).filter((id) => id !== primary && this.store.has(id));
+				return [primary, ...co];
+			}
+		}
+		return [primary];
+	}
+
+	/**
 	 * Set (or clear) the session's current trace.
 	 *
 	 * @param session - Agent session
 	 * @param traceId - Trace, or null for none
 	 * @param at - Since when (ms)
+	 * @param co - Other traces named by the same delivery (shared span)
 	 */
-	setCurrent(session: string, traceId: string | null, at: number = this.now()): void {
+	setCurrent(session: string, traceId: string | null, at: number = this.now(), co?: string[]): void {
 		const spans = this.spans.get(session) ?? [];
 		const last = spans[spans.length - 1];
 		if (last && last.traceId === traceId) {
 			if (at > last.lastActive) last.lastActive = at;
+			// A later delivery redefines which tickets the turn is about.
+			if (co !== undefined) last.co = co.length > 0 ? co : undefined;
 			return;
 		}
-		spans.push({ since: at, traceId, lastActive: at });
+		spans.push({ since: at, traceId, lastActive: at, ...(co && co.length > 0 ? { co } : {}) });
 		while (spans.length > TRACE_CONSTANTS.SESSION_HISTORY_SPANS) spans.shift();
 		this.spans.set(session, spans);
 	}
@@ -440,7 +520,7 @@ export class TraceContext {
 			}
 			const current = this.currentTrace(session);
 			const next = current && traces.includes(current) ? current : traces[0];
-			this.setCurrent(session, next, now);
+			this.setCurrent(session, next, now, traces.filter((id) => id !== next));
 			this.pending.delete(session);
 			const actor: TraceActor = kind === 'owner_message' ? { kind: 'owner' } : { kind: 'system' };
 			for (const traceId of traces) {
@@ -488,13 +568,15 @@ export class TraceContext {
 			this.busy.delete(session);
 			const busyMs = now - started.since;
 			if (busyMs < PTY_CONSTANTS.MIN_BUSY_DURATION_MS) return false;
-			const targets = [started.traceId, this.currentTrace(session)].filter(
+			const current = this.currentTrace(session);
+			const targets = [started.traceId, current, ...(current ? this.tracesAt(session).slice(1) : [])].filter(
 				(id, i, all): id is string => !!id && all.indexOf(id) === i && this.store.has(id),
 			);
 			let recorded = false;
 			for (const traceId of targets) {
 				recorded =
 					this.record({
+						share: 1 / targets.length,
 						traceId,
 						type: 'turn.ended',
 						actor: { kind: 'agent', session },

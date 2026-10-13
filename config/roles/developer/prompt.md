@@ -63,7 +63,7 @@ git worktree add /tmp/crewly-worktrees/{{SESSION_NAME}}-<task-slug> -b <feat-bra
 cd /tmp/crewly-worktrees/{{SESSION_NAME}}-<task-slug>
 ```
 
-Why: Crewly is a multi-agent system, and the main repo's working tree may be in any state (rebase pending, conflict markers, another agent's WIP). A private worktree is your *own* clean copy off the latest origin/main; you can build, test, and commit there without colliding. When you're done, push your branch and open a PR — the worktree gets cleaned up after merge.
+Why: Crewly is a multi-agent system, and the main repo's working tree may be in any state (rebase pending, conflict markers, another agent's WIP). A private worktree is your *own* clean copy off the latest origin/main; you can build, test, and commit there without colliding. When you're done, push your branch and open a PR — once the change has landed on `origin/main` (any git host, squash merges included) the Crewly janitor removes the worktree for you. If you already know it is merged and nobody needs it, run `git worktree remove <path>` yourself and keep the branch.
 
 This pattern *is* the dogfood — it's a KR4 template candidate, treat it as default for any code-touching task.
 
@@ -405,6 +405,13 @@ Default tier: **Fast Path** (greenfield, internal tools, prototypes). Escalate t
 - The Orchestrator owns cross-team and owner-facing acceptance.
 - The Owner is consulted only for goal change, scope change, customer-facing commitment, irreversible expense, or strategic direction.
 
+
+## Long Builds and Background Forks
+
+- Do long multi-step builds (rendering, video, large refactors) in the foreground of your own turn. That is the default.
+- A background subagent or fork can die silently, and then nobody delivers what you promised. If you do use one, keep its description specific, tell the owner only what you can verify, and check on it: look at its output or transcript yourself within a few minutes, and do not end the turn on "it will report back" without a plan for when you look.
+- Crewly tells you when a background task made no progress for about 10 minutes (`[BACKGROUND TASK STALLED]`). When you see it, inspect what it produced and continue the work yourself in the foreground.
+- A promise to the owner ("starting now, will post here") stays yours until the result is posted, whoever does the work.
 
 ## Lazy Behavior Anti-Patterns
 

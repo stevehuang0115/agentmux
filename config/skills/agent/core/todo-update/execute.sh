@@ -103,7 +103,7 @@ while [[ $# -gt 0 ]]; do
     --remove-steps)  [ $# -ge 2 ] || error_exit "--remove-steps requires a value";  REMOVE_STEPS=$(add_steps "$REMOVE_STEPS" "$2" split);   shift 2 ;;
     --remove-step)   [ $# -ge 2 ] || error_exit "--remove-step requires a value";   REMOVE_STEPS=$(add_steps "$REMOVE_STEPS" "$2");         shift 2 ;;
     --help|-h)    print_usage; exit 0 ;;
-    *) error_exit "Unknown option: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 if [ -n "$INPUT_JSON" ]; then

@@ -36,10 +36,10 @@ const IconForType = ({ type }: { type: AlertType }) => {
   const Icon = map[type] ?? Info;
   return (
     <div className={`mx-auto mb-3 w-12 h-12 rounded-full flex items-center justify-center ` +
-      (type === 'success' ? 'bg-green-500/10 text-green-400' :
-       type === 'error' ? 'bg-rose-500/10 text-rose-400' :
-       type === 'warning' ? 'bg-yellow-500/10 text-yellow-400' :
-       'bg-blue-500/10 text-blue-300')
+      (type === 'success' ? 'bg-success-soft text-success' :
+       type === 'error' ? 'bg-danger-soft text-danger' :
+       type === 'warning' ? 'bg-attention-soft text-attention' :
+       'bg-primary-soft text-primary-text')
     }>
       <Icon className="w-6 h-6" />
     </div>

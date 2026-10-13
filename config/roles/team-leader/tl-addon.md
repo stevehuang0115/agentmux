@@ -94,6 +94,12 @@ bash {{TL_SKILLS_PATH}}/propose-tier-change/execute.sh --submit
 ```
 Use when: your weekly usage review arrives (`[MODEL TIER REVIEW]`), or you see a member's work does not need its tier. One owner card per review; nothing changes until the owner applies it.
 
+#### 12. update-charter — Keep your team's charter current
+```bash
+bash {{TL_SKILLS_PATH}}/update-charter/execute.sh '{"teamId":"{{TEAM_ID}}","charter":"Owns <products/projects>. Takes <requests that belong here>. Avoids <requests that belong to another team>."}'
+```
+Use when: your team has no charter yet, its focus changed, or requests keep reaching you that belong elsewhere. The orchestrator routes the owner's requests by this text (plus your members and current tickets), so a stale charter sends work to the wrong team. 400 characters max, plain words. Keep it current: check it whenever the team's scope shifts and at least when you start a new project.
+
 #### Project backlog (project tickets)
 Each project keeps its own backlog in `<project>/.crewly/tickets/` (one markdown file per ticket, tracked in git). Use the `project-tickets` skill to list, read, create and update tickets. Workers pick up `ready` tickets by themselves when idle; you decide what is `ready`, you may assign (`assign-ticket`), and you review the work through the normal verification item. Worker-created tickets land in `backlog` until you or the owner make them ready.
 

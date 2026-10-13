@@ -16,6 +16,7 @@ describe('Crewly Apps routes', () => {
       ['get', '/:appId/data/:collection'],
       ['post', '/:appId/data/:collection'],
       ['get', '/:appId/data/:collection/:docId'],
+      ['get', '/:appId/data/:collection/:docId/field'],
       ['put', '/:appId/data/:collection/:docId'],
       ['patch', '/:appId/data/:collection/:docId'],
       ['delete', '/:appId/data/:collection/:docId'],
@@ -27,6 +28,8 @@ describe('Crewly Apps routes', () => {
       ['delete', '/:appId/links'],
       ['post', '/:appId/visibility-request'],
       ['delete', '/:appId/visibility-request'],
+      ['post', '/:appId/capability-request'],
+      ['delete', '/:appId/capability-request'],
       ['post', '/:appId/make-private'],
       ['get', '/:appId/comments'],
       ['get', '/:appId/comments/:commentId'],
@@ -48,10 +51,19 @@ describe('Crewly Apps routes', () => {
       ['post', '/templates/:templateId/unlist'],
       ['post', '/:appId/template-request'],
       ['post', '/:appId/template-files'],
+      ['post', '/handoffs'],
+      ['get', '/handoffs'],
+      ['get', '/handoffs/:handoffId'],
+      ['post', '/handoffs/:handoffId/complete'],
+      ['post', '/handoffs/:handoffId/ack'],
+      ['delete', '/handoffs/:handoffId'],
+      ['post', '/upload-requests'],
+      ['get', '/upload-requests/:requestId'],
+      ['delete', '/upload-requests/:requestId'],
     ] as const) {
       expect(has(m, p)).toBe(true);
     }
-    expect((router.stack as Layer[]).filter((l) => l.route)).toHaveLength(40);
+    expect((router.stack as Layer[]).filter((l) => l.route)).toHaveLength(52);
     // The GET template routes come before any GET /:appId route, so "templates" is never taken for an app id.
     const gets = (router.stack as Layer[]).filter((l) => l.route?.methods['get']).map((l) => l.route!.path);
     expect(gets.indexOf('/templates/mine')).toBeLessThan(gets.findIndex((p) => p.startsWith('/:appId')));

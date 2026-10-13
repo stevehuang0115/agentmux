@@ -44,7 +44,7 @@ while [[ $# -gt 0 ]]; do
     --result)              [ $# -ge 2 ] || error_exit "--result requires a value";   RESULT="$2";   shift 2 ;;
     --evidence)            [ $# -ge 2 ] || error_exit "--evidence requires a value"; EVIDENCE="$2"; shift 2 ;;
     --help|-h)             print_usage; exit 0 ;;
-    *) error_exit "Unknown option: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 

@@ -1,6 +1,8 @@
 import { promises as fs } from 'fs';
 import * as path from 'path';
-import { CONTROL_PLANE_GUARD_CONSTANTS, AGENT_STATUS_HOOK_CONSTANTS, SUBAGENT_GUARD_CONSTANTS, RUNTIME_INPUT_SAFETY } from '../../constants.js';
+import { prepareLiveCheckoutGuard, type LiveCheckoutGuard } from './live-checkout-guard.service.js';
+import { prepareDestructiveGitGuard, type DestructiveGitGuard } from './destructive-git-guard.service.js';
+import { CONTROL_PLANE_GUARD_CONSTANTS, AGENT_STATUS_HOOK_CONSTANTS, SUBAGENT_GUARD_CONSTANTS, RUNTIME_INPUT_SAFETY, claudeAutoCompactWindow } from '../../constants.js';
 
 /**
  * List the team directories that exist under `<crewlyHome>/teams` right now.
@@ -78,6 +80,8 @@ export interface ControlPlaneSettings {
 	 * session (2026-10-03 phantom owner input). Mirrors the env var set at launch.
 	 */
 	promptSuggestionEnabled: false;
+	/** Tokens at which Claude Code auto-compacts (absent: Claude Code's default). */
+	autoCompactWindow?: number;
 	hooks: {
 		/** The control-plane guard's Bash hook first; the agent-status hook (all tools) after it, when given. */
 		PreToolUse: Array<HookGroup & { matcher: string }>;
@@ -198,6 +202,10 @@ export function toRuleSpecifier(absPath: string, isDirectory: boolean): string {
  * @param credentialGuard - The credential guard (specs/2026-10-04-agent-credential-isolation.md):
  *   its hook command (a PreToolUse group on Bash/Read/Grep/Glob, right after the
  *   control-plane group) and its `Read(...)` deny rules; omit to leave it out
+ * @param liveCheckoutGuard - The live-checkout guard hook (a PreToolUse group on
+ *   Bash and the file-editing tools); omit to leave it out
+ * @param destructiveGitGuard - The destructive-git guard hook (a PreToolUse group on
+ *   Bash); omit to leave it out
  * @returns Settings object ready to serialise
  */
 export function buildControlPlaneSettings(
@@ -206,6 +214,8 @@ export function buildControlPlaneSettings(
 	statusHookCommand?: string,
 	subagentHookCommand?: string,
 	credentialGuard?: { hookCommand: string; matcher: string; denyRules: string[] },
+	liveCheckoutGuard?: Pick<LiveCheckoutGuard, 'hookCommand' | 'matcher'> | null,
+	destructiveGitGuard?: Pick<DestructiveGitGuard, 'hookCommand' | 'matcher'> | null,
 ): ControlPlaneSettings {
 	const deny: string[] = [];
 	for (const { path: p, isDirectory } of paths.writeDenied) {
@@ -217,9 +227,11 @@ export function buildControlPlaneSettings(
 		for (const rule of credentialGuard.denyRules) if (!deny.includes(rule)) deny.push(rule);
 	}
 
+	const autoCompactWindow = claudeAutoCompactWindow();
 	const settings: ControlPlaneSettings = {
 		permissions: { deny },
 		promptSuggestionEnabled: RUNTIME_INPUT_SAFETY.CLAUDE_CODE_SETTINGS.promptSuggestionEnabled,
+		...(autoCompactWindow !== null ? { autoCompactWindow } : {}),
 		hooks: {
 			PreToolUse: [
 				{
@@ -233,6 +245,18 @@ export function buildControlPlaneSettings(
 		settings.hooks.PreToolUse.push({
 			matcher: credentialGuard.matcher,
 			hooks: [{ type: 'command', command: credentialGuard.hookCommand }],
+		});
+	}
+	if (liveCheckoutGuard) {
+		settings.hooks.PreToolUse.push({
+			matcher: liveCheckoutGuard.matcher,
+			hooks: [{ type: 'command', command: liveCheckoutGuard.hookCommand }],
+		});
+	}
+	if (destructiveGitGuard) {
+		settings.hooks.PreToolUse.push({
+			matcher: destructiveGitGuard.matcher,
+			hooks: [{ type: 'command', command: destructiveGitGuard.hookCommand }],
 		});
 	}
 	const append = (event: string, group: HookGroup): void => {
@@ -327,7 +351,7 @@ export async function prepareControlPlaneGuard(
 	await fs.writeFile(pathsPath, pathsBody, 'utf-8');
 	await fs.writeFile(
 		settingsPath,
-		`${JSON.stringify(buildControlPlaneSettings(paths, hookCommand, statusHookCommand, subagentHookCommand, credentialGuard), null, 2)}\n`,
+		`${JSON.stringify(buildControlPlaneSettings(paths, hookCommand, statusHookCommand, subagentHookCommand, credentialGuard, prepareLiveCheckoutGuard(roots.installRoot, env), prepareDestructiveGitGuard(roots.installRoot, env)), null, 2)}\n`,
 		'utf-8',
 	);
 

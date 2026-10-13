@@ -10,6 +10,7 @@
  * @module controllers/chat/agent-reply.controller
  */
 
+import { getOwnerCompletionReport } from '../../services/orc/owner-completion-report.service.js';
 import type { Request, Response, NextFunction } from 'express';
 import { ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
 import { readAgentSessionHeader } from '../../utils/agent-caller.utils.js';
@@ -26,6 +27,7 @@ import { parseSlackThreadKey } from '../../services/slack/slack-thread-key.js';
 import { getOwnerMessageWatchdog } from '../../services/messaging/owner-message-watchdog.service.js';
 import { AgentPostLog } from '../../services/messaging/queue-priority.js';
 import { reportOwnerThreadAgentPost } from '../../services/messaging/owner-thread-sentinel.service.js';
+import { reportAgentPostForFollowThrough } from '../../services/agent/follow-through.service.js';
 import { LoggerService, type ComponentLogger } from '../../services/core/logger.service.js';
 import { agentResponse, deliverAgentReplyToConversation, isAgentsOwnConversation } from './chat.controller.js';
 
@@ -194,6 +196,12 @@ export function createAgentReplyHandler(deps: AgentReplyDeps = defaultDeps) {
         if (!interim && delivery.slackChannelId && delivery.threadTs) {
           AgentPostLog.getInstance().note(session, { slackChannelId: delivery.slackChannelId, threadTs: delivery.threadTs });
         }
+        // A report named by work item tells the owner for that item's chain,
+        // wherever it landed: stop the report-due reminder (CREW-503).
+        if (!interim && reference?.workItemId) getOwnerCompletionReport()?.noteWorkItemReply(reference.workItemId);
+        // A chat-only answer never reaches the sentinel; the follow-through
+        // guard still needs to see what the agent told the owner.
+        if (!delivery.slackChannelId) reportAgentPostForFollowThrough({ agent: session, text: content, interim });
         // A promise ("~15 min") in an owner thread is timed by the sentinel.
         if (delivery.slackChannelId) {
           reportOwnerThreadAgentPost({

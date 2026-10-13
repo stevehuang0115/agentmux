@@ -47,6 +47,30 @@ const mockWriteFile = fs.writeFile as jest.MockedFunction<typeof fs.writeFile>;
 const mockMkdir = fs.mkdir as jest.MockedFunction<typeof fs.mkdir>;
 const mockUnlink = fs.unlink as jest.MockedFunction<typeof fs.unlink>;
 
+// Config reads are synchronous and writes atomic in cloud-config-file.ts; route them to the
+// fs/promises mocks below / a controllable read result so these tests stay about the service.
+jest.mock('./cloud-config-file.js', () => {
+  const actual = jest.requireActual('./cloud-config-file.js');
+  const nodePath = jest.requireActual('path');
+  return {
+    ...actual,
+    readCloudConfigFile: jest.fn(() => ({ status: 'missing' })),
+    writeCloudConfigFile: jest.fn(async (config: unknown) => {
+      const fsp = jest.requireMock('fs/promises');
+      const file = actual.getCloudConfigPath();
+      await fsp.mkdir(nodePath.dirname(file), { recursive: true });
+      await fsp.writeFile(file, JSON.stringify(config, null, 2), 'utf-8');
+    }),
+  };
+});
+import { readCloudConfigFile, validateCloudConfig } from './cloud-config-file.js';
+const mockReadConfig = jest.mocked(readCloudConfigFile);
+/** What readCloudConfigFile returns for a config object the test "put on disk". */
+const cfgRead = (c: unknown) =>
+  validateCloudConfig(c)
+    ? ({ status: 'damaged', reason: String(validateCloudConfig(c)), quarantinedTo: null } as const)
+    : ({ status: 'ok', config: c as never, repaired: false } as const);
+
 // ---------------------------------------------------------------------------
 // Mock fetch
 // ---------------------------------------------------------------------------
@@ -597,7 +621,7 @@ describe('CloudClientService', () => {
           connectedAt: '2026-01-01T00:00:00.000Z',
           refreshToken: 'stored-refresh-token',
         };
-        mockReadFile.mockResolvedValueOnce(JSON.stringify(config));
+        mockReadConfig.mockReturnValueOnce(cfgRead(config));
 
         const result = await service.loadPersistedConfig();
 
@@ -612,7 +636,7 @@ describe('CloudClientService', () => {
           tier: 'free',
           connectedAt: '2026-01-01T00:00:00.000Z',
         };
-        mockReadFile.mockResolvedValueOnce(JSON.stringify(config));
+        mockReadConfig.mockReturnValueOnce(cfgRead(config));
 
         const result = await service.loadPersistedConfig();
 
@@ -621,7 +645,7 @@ describe('CloudClientService', () => {
       });
 
       it('should return null for missing config file', async () => {
-        mockReadFile.mockRejectedValueOnce(new Error('ENOENT'));
+        mockReadConfig.mockReturnValueOnce({ status: 'missing' });
 
         const result = await service.loadPersistedConfig();
 
@@ -629,7 +653,7 @@ describe('CloudClientService', () => {
       });
 
       it('should return null for invalid JSON', async () => {
-        mockReadFile.mockResolvedValueOnce('not valid json');
+        mockReadConfig.mockReturnValueOnce({ status: 'damaged', reason: 'bad json', quarantinedTo: null });
 
         const result = await service.loadPersistedConfig();
 
@@ -637,7 +661,7 @@ describe('CloudClientService', () => {
       });
 
       it('should return null for config missing required fields', async () => {
-        mockReadFile.mockResolvedValueOnce(JSON.stringify({ cloudUrl: CLOUD_URL }));
+        mockReadConfig.mockReturnValueOnce(cfgRead({ cloudUrl: CLOUD_URL }));
 
         const result = await service.loadPersistedConfig();
 
@@ -899,7 +923,7 @@ describe('CloudClientService', () => {
         connectedAt: new Date().toISOString(),
         relayToken: makeJwt(Math.floor(Date.now() / 1000) + 3600),
       };
-      mockReadFile.mockResolvedValueOnce(JSON.stringify(cfg) as never);
+      mockReadConfig.mockReturnValueOnce(cfgRead(cfg));
 
       const loaded = await service.loadPersistedConfig();
 

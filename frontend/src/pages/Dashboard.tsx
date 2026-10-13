@@ -33,6 +33,7 @@ import { CrewNowSection } from '@/components/Dashboard/CrewNowSection';
 import { buildAgentDirectory, buildCrewSnapshot, type RunningItem } from '@/components/Dashboard/dashboard.utils';
 import { ROUTES } from '@/constants/routes.constants';
 import { logSilentError } from '@/utils/error-handling';
+import { setVisibleInterval } from '../utils/visible-interval';
 
 /** How often the crew list is refreshed (ms). */
 export const CREW_POLL_MS = 30_000;
@@ -91,7 +92,7 @@ export const Dashboard: React.FC = () => {
 
   useEffect(() => {
     void load();
-    const timer = setInterval(() => void load(), CREW_POLL_MS);
+    const timer = setVisibleInterval(() => void load(), CREW_POLL_MS);
     return () => clearInterval(timer);
   }, [load]);
 

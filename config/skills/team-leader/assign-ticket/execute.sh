@@ -45,7 +45,7 @@ while [[ $# -gt 0 ]]; do
     --to|--assignee) [ $# -ge 2 ] || error_exit "--to requires a value"; TO="$2"; shift 2 ;;
     --no-start) START="false"; shift ;;
     --help|-h) print_usage; exit 0 ;;
-    *) error_exit "Unknown option: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 

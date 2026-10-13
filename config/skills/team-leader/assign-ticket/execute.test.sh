@@ -58,7 +58,7 @@ check "flag no-start" "$(jq -c .body.start "$STUB_LOG")" "false"
 
 check "403 surfaces" "$(run_err --project p1 --id APP-1 --to outsider | grep -c '403')" "1"
 check "missing to" "$(run_err --project p1 --id APP-1 | grep -c 'to')" "1"
-check "unknown option" "$(run_err --bogus | grep -c 'Unknown option')" "1"
+check "unknown option" "$(run_err --bogus | grep -c 'Unknown argument')" "1"
 
 echo "assign-ticket: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
