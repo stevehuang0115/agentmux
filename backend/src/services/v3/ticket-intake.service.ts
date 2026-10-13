@@ -180,6 +180,60 @@ export function isGenuinelyNewAsk(text: string, ask: AskClassification): boolean
 }
 
 // ---------------------------------------------------------------------------
+// Chases ("之前说的X现在什么情况了？")
+// ---------------------------------------------------------------------------
+
+/**
+ * Wording that marks a chase: the owner points at EARLIER work or says it was
+ * forgotten. A bare status question ("what is the status of the deploy?") is
+ * not a chase and stays a ping.
+ */
+const CHASE_PATTERN = /(之前(说|讲|提|聊)过?的?|上次(说|讲|提)的?|忘了|忘记|还没(有)?(做|弄|好|出|看到|发|剪)|\bforgot(ten)?\b|\bearlier\b|\blast time\b)/i;
+/** CJK words that carry no topic once the chase wording is taken out. */
+const CHASE_FILLER_CJK =
+  /(之前|上次|说过?的?|讲过?的?|提过?的?|那个|这个|我们|你们|大家|现在|目前|是不是|是否|有没有|又|给|都|还|已经|什么|情况|怎么样了?|进度|进展|到哪了|忘了|忘记|了|吗|呢|吧|啊|的|是|在|把|被|和|跟|与)/g;
+/** Latin words that carry no topic. */
+const CHASE_FILLER_LATIN = /\b(forgot(ten)?|earlier|last|time|status|update|the|a|an|of|on|about|is|are|what|how|did|you|we|i)\b/gi;
+
+/**
+ * The topic words of a chase message, or null for a bare ping ("进度呢",
+ * "在吗", "status?") that names nothing.
+ *
+ * @param text - The owner's message
+ * @returns Latin tokens (lowercase) and CJK bigrams, or null when no topic
+ */
+export function chaseTopic(text: string): { latin: string[]; cjk: string[] } | null {
+  const body = askText(text).replace(/https?:\/\/\S+/g, ' ');
+  if (!CHASE_PATTERN.test(body)) return null;
+  const rest = body.replace(CHASE_FILLER_LATIN, ' ').replace(CHASE_FILLER_CJK, ' ');
+  const latin = [...new Set((rest.match(/[A-Za-z][A-Za-z0-9]{1,}/g) ?? []).map((w) => w.toLowerCase()))];
+  const cjkRuns = rest.match(/[一-鿿]+/g) ?? [];
+  const cjk: string[] = [];
+  for (const run of cjkRuns) {
+    if (run.length === 1) continue;
+    for (let i = 0; i < run.length - 1; i++) cjk.push(run.slice(i, i + 2));
+  }
+  if (latin.length === 0 && cjk.length === 0) return null;
+  return { latin, cjk: [...new Set(cjk)] };
+}
+
+/**
+ * How well a ticket matches a chase topic: Latin word hits count double
+ * (a name like "AZ" is far more specific than a CJK bigram).
+ *
+ * @param topic - From {@link chaseTopic}
+ * @param ticket - Candidate ticket
+ * @returns Score; a match needs at least 2
+ */
+export function chaseMatchScore(topic: { latin: string[]; cjk: string[] }, ticket: Pick<Request, 'title' | 'description'>): number {
+  const hay = `${ticket.title ?? ''}\n${ticket.description ?? ''}`.toLowerCase();
+  let score = 0;
+  for (const w of topic.latin) if (hay.includes(w)) score += 2;
+  for (const b of topic.cjk) if (hay.includes(b)) score += 1;
+  return score;
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -417,6 +471,8 @@ export class TicketIntakeService {
   private chain: Promise<unknown> = Promise.resolve();
   /** 验过了 / 打回 handler (Phase 2); absent = those words are plain follow-ups */
   private review: IntakeReviewHandler | null = null;
+  /** Tells a ticket's assignee the owner chased it; absent = the discussion entry only */
+  private chaseNudge: ((agentSession: string, text: string) => Promise<void>) | null = null;
 
   /**
    * @param deps - Request store and optional WorkItem lookup
@@ -434,6 +490,15 @@ export class TicketIntakeService {
   setReceiptSink(kind: ReceiptTarget['kind'], sink: TicketReceiptSink | null): void {
     if (sink) this.sinks[kind] = sink;
     else delete this.sinks[kind];
+  }
+
+  /**
+   * Wire the nudge sent to an assignee when the owner chases its ticket.
+   *
+   * @param nudge - Sends text to an agent session, or null to remove
+   */
+  setChaseNudge(nudge: ((agentSession: string, text: string) => Promise<void>) | null): void {
+    this.chaseNudge = nudge;
   }
 
   /**
@@ -638,6 +703,14 @@ export class TicketIntakeService {
       }
     }
 
+    // A chase about earlier work ("之前说的X现在什么情况了？") is tracked, not
+    // ignored as a status ping: it goes to the ticket it is about, or opens a
+    // lightweight one so the agent's promises in reply are followed up.
+    if (!threadTicket && !message.isThreadReply && text) {
+      const chase = await this.handleChase(all, message, text);
+      if (chase) return chase;
+    }
+
     const trivial = suppressTrivialOrShort(text);
     if (trivial) return this.ignored(message, trivial);
     const fileOnly = suppressFileOnly(text, (message.attachments?.length ?? 0) > 0);
@@ -689,6 +762,46 @@ export class TicketIntakeService {
       assignee: message.targetAgent,
       ...(rescued && (intent.intentCategory === 'query' || intent.intentLevel === 'L0') ? { rescuedBy: ask.signals } : {}),
     });
+    if (message.receipt) void this.postReceipt(ticket, message.receipt);
+    return { action: 'created', ticket };
+  }
+
+  /**
+   * Handle a top-level chase. Bare pings ("进度呢", "在吗") name no topic and
+   * return null (they stay ignored further down).
+   *
+   * @param all - Every Request
+   * @param message - The owner's message
+   * @param text - Trimmed text
+   * @returns The outcome, or null when the message is not a chase with a topic
+   */
+  private async handleChase(all: readonly Request[], message: IntakeMessage, text: string): Promise<IntakeOutcome | null> {
+    const topic = chaseTopic(text);
+    if (!topic) return null;
+    const horizon = this.now().getTime() - TICKET_CONSTANTS.FOLLOW_UP.CHASE_MATCH_WINDOW_MS;
+    let best: { ticket: Request; score: number } | null = null;
+    for (const r of all) {
+      if (typeof r.ticketNumber !== 'number' || TERMINAL_REQUEST_STATUSES.has(r.status)) continue;
+      if (r.tags.includes(TICKET_CONSTANTS.DISMISSED_TAG)) continue;
+      if (ticketLastActivity(r) < horizon) continue;
+      const score = chaseMatchScore(topic, r);
+      if (score >= 2 && (!best || score > best.score)) best = { ticket: r, score };
+    }
+    if (best) {
+      const outcome = await this.appendToTicket(best.ticket, message, text);
+      const target = outcome.action === 'appended' ? outcome.ticket : best.ticket;
+      if (target.assignee && this.chaseNudge) {
+        const tkt = formatTicketNumber(target.ticketNumber as number);
+        void this.chaseNudge(
+          target.assignee,
+          `The owner is asking where ${tkt} stands: "${text.slice(0, 300)}". Answer in the thread; if you owe anything, say what and when.`,
+        ).catch(() => undefined);
+      }
+      this.logger.info('Chase appended to its ticket', { id: target.id, score: best.score });
+      return outcome;
+    }
+    const ticket = await this.createTicket(all, message, text, { question: true, extraTags: ['chase'] });
+    this.logger.info('Chase opened a lightweight ticket', { tkt: formatTicketNumber(ticket.ticketNumber as number), id: ticket.id });
     if (message.receipt) void this.postReceipt(ticket, message.receipt);
     return { action: 'created', ticket };
   }

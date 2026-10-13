@@ -848,6 +848,9 @@ export class CrewlyServer {
 			});
 			setTicketReviewService(ticketReview);
 			ticketIntake.setReviewHandler(ticketReview);
+			ticketIntake.setChaseNudge(async (agentSession, text) => {
+				await this.apiController.agentRegistrationService.sendMessageToAgent(agentSession, text);
+			});
 
 			// Unassigned work goes to a decider, and one level up when not taken
 			// (owner, 2026-09-24): ticket owner → team lead → creator's lead → orc.
