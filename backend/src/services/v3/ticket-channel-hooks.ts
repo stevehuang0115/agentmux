@@ -568,6 +568,8 @@ export interface SlackIntakeInput {
   /** Set when a bot (one of the account's agents) wrote it */
   authorAgentSession?: string;
   hasFiles?: boolean;
+  /** The thread's root message is the owner's own (see IntakeMessage.threadRootIsOwner) */
+  threadRootIsOwner?: boolean;
   /**
    * Slack user id of the owner (the Cloud app's installer), when known. Then
    * only that user's messages file tickets; other people in the workspace do
@@ -614,7 +616,13 @@ export function slackIntakeMessage(
       ...(input.userName ? { authorName: input.userName } : {}),
     },
     conversationRef: slackConversationRef(input.slackChannelId),
-    ...(isReply ? { legacyThreadParentRef: `${prefix}-${input.slackChannelId}-${root}`, isThreadReply: true } : {}),
+    ...(isReply
+      ? {
+          legacyThreadParentRef: `${prefix}-${input.slackChannelId}-${root}`,
+          isThreadReply: true,
+          ...(input.threadRootIsOwner ? { threadRootIsOwner: true } : {}),
+        }
+      : {}),
     ...(input.hasFiles ? { attachments: [{}] } : {}),
     ...(options.targetAgent ? { targetAgent: options.targetAgent } : {}),
     // `slack` makes the SLA subscriber put a respond-to-user WorkItem on the

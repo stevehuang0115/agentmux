@@ -1775,10 +1775,10 @@ describe('one pair of eyes per agent that receives it', () => {
 
 describe('ticket loop intake (specs/ticket-loop.md §2)', () => {
   const TICKET = { id: '11111111-2222-3333-4444-555555555555', ticketNumber: 12 };
-  let intake: { intakeWithOutcome: jest.Mock };
+  let intake: { intakeWithOutcome: jest.Mock; recordSkipped: jest.Mock };
 
   beforeEach(async () => {
-    intake = { intakeWithOutcome: jest.fn(async () => ({ action: 'created', ticket: TICKET })) };
+    intake = { intakeWithOutcome: jest.fn(async () => ({ action: 'created', ticket: TICKET })), recordSkipped: jest.fn(async () => undefined) };
     setTicketIntakeService(intake as unknown as TicketIntakeService);
     await service.ensureTeamChannel(team());
   });
@@ -1813,21 +1813,36 @@ describe('ticket loop intake (specs/ticket-loop.md §2)', () => {
     expect(dispatcher!.dispatchMessage.mock.calls[0][1].metadata?.ticketMarker).toBeUndefined();
   });
 
-  it('in an ad-hoc room, only the machine whose agent must answer files the ticket', async () => {
+  it('in an ad-hoc room, only the machine that hears the message files the ticket; a skip is logged', async () => {
     identities = new FakeIdentities();
     isLocal = (s) => s === 'crewly-alpha-leo';
     service = makeService();
     await service.ensureTeamChannel(team());
     identities.install('crewly-alpha-leo', 'ULEO', 'xoxb-leo');
-    // Seen here only because Leo's app is in the room; nobody here must answer.
-    dispatcher = { ...dispatcher!, planHuddleTargets: jest.fn().mockResolvedValue(new Map([['crewly-alpha-leo', 'optional']])) };
-    await service.routeInbound(inbound({ channelId: 'C-room', text: 'please fix the export', userId: 'UOWNER', ts: '800.1', receivedVia: 'crewly-alpha-leo' }));
+    // Nobody here hears it (another machine owns the un-@'d message): not filed here, but logged.
+    dispatcher = { ...dispatcher!, planHuddleTargets: jest.fn().mockResolvedValue(new Map()) };
+    await service.routeInbound(inbound({ channelId: 'C-room', text: 'please fix the export', userId: 'UOWNER', ts: '800.1', receivedVia: 'crewly-alpha-leo', room: { members: [{ agentSession: 'crewly-alpha-leo', displayName: 'Leo', instanceId: 'mac', deviceName: 'mac', awake: true }] } }));
     expect(intake.intakeWithOutcome).not.toHaveBeenCalled();
+    expect(intake.recordSkipped).toHaveBeenCalledWith(expect.objectContaining({ origin: expect.objectContaining({ ref: 'slackch-C-room-800.1' }) }), 'room_owned_elsewhere');
     // Addressed to Leo: this machine owns it, and the receipt goes out as Leo's bot.
     dispatcher.planHuddleTargets = jest.fn().mockResolvedValue(new Map([['crewly-alpha-leo', 'required']]));
     await service.routeInbound(inbound({ channelId: 'C-room', text: 'please fix the export', userId: 'UOWNER', ts: '800.2', receivedVia: 'crewly-alpha-leo' }));
     expect(intake.intakeWithOutcome).toHaveBeenCalledTimes(1);
     expect(intake.intakeWithOutcome.mock.calls[0][0]).toMatchObject({ targetAgent: 'crewly-alpha-leo', receipt: { postAs: 'crewly-alpha-leo' } });
+    isLocal = () => false;
+  });
+
+  it('an un-@\'d owner ask whose only recipient is an optional responder still files a ticket (AZ star incident)', async () => {
+    identities = new FakeIdentities();
+    isLocal = (s) => s === 'crewly-alpha-leo';
+    service = makeService();
+    await service.ensureTeamChannel(team());
+    identities.install('crewly-alpha-leo', 'ULEO', 'xoxb-leo');
+    // The room's single responder is picked as `optional` when nobody was @'d.
+    dispatcher = { ...dispatcher!, planHuddleTargets: jest.fn().mockResolvedValue(new Map([['crewly-alpha-leo', 'optional']])) };
+    await service.routeInbound(inbound({ channelId: 'C-room', text: '之前说那个AZ星球的视频 现在什么情况了？', userId: 'UOWNER', ts: '810.1', receivedVia: 'crewly-alpha-leo', room: { members: [{ agentSession: 'crewly-alpha-leo', displayName: 'Leo', instanceId: 'mac', deviceName: 'mac', awake: true }] } }));
+    expect(intake.intakeWithOutcome).toHaveBeenCalledTimes(1);
+    expect(intake.recordSkipped).not.toHaveBeenCalled();
     isLocal = () => false;
   });
 

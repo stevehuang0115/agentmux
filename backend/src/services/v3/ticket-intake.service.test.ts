@@ -1075,3 +1075,56 @@ describe('intake — follow-ups instead of new tickets (2026-09-28)', () => {
     expect((await store.getById(t.id))?.discussion).toHaveLength(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 2026-10-13 — replies in a thread the owner started (AZ star video incident)
+// ---------------------------------------------------------------------------
+
+describe('intake — replies in an owner-rooted thread without a ticket', () => {
+  const reply = (text: string, over: Partial<IntakeMessage> & { ts?: string; thread?: string } = {}): IntakeMessage =>
+    msg({ ts: '200.2', thread: '200.1', text, isThreadReply: true, ...over });
+
+  it('an ask or correction opens a ticket when the thread root is the owner\'s own message', async () => {
+    const asks = [
+      '你之前没有存下来吗？要不你根据现在AZ星球最新的情况 去做一个新的解说吧',
+      '这个连Az星球的录屏都没加',
+    ];
+    for (const [i, text] of asks.entries()) {
+      const outcome = await svc.intakeWithOutcome(reply(text, { ts: `20${i}.2`, thread: `20${i}.1`, threadRootIsOwner: true }));
+      expect(outcome.action).toBe('created');
+    }
+  });
+
+  it('the same replies stay ignored in a thread an agent started', async () => {
+    const outcome = await svc.intakeWithOutcome(reply('这个连Az星球的录屏都没加'));
+    expect(outcome).toEqual({ action: 'ignored', reason: 'thread_reply' });
+  });
+
+  it('a bare acknowledgement in an owner-rooted thread still opens nothing', async () => {
+    const ack = await svc.intakeWithOutcome(reply('好的', { ts: '200.3', threadRootIsOwner: true }));
+    expect(ack.action).toBe('ignored');
+    const approval = await svc.intakeWithOutcome(reply('好的 可以', { ts: '200.4', threadRootIsOwner: true }));
+    expect(approval.action).toBe('ignored');
+    expect(store.items.size).toBe(0);
+  });
+
+  it('once the thread has a ticket, replies follow the normal thread rules', async () => {
+    const root = await svc.intake(msg({ ts: '200.1' }));
+    const outcome = await svc.intakeWithOutcome(reply('这个连Az星球的录屏都没加', { threadRootIsOwner: true }));
+    expect(outcome.action).toBe('appended');
+    expect(store.items.size).toBe(1);
+    expect(root).not.toBeNull();
+  });
+});
+
+describe('recordSkipped', () => {
+  it('logs an owner message the caller never handed to intake, and nothing for others', async () => {
+    const log = new MemoryIntakeOutcomeLog('2026-09-01T00:00:00Z');
+    svc = new TicketIntakeService({ requests: store, outcomeLog: log });
+    await svc.recordSkipped(msg({ ts: '300.1' }), 'room_owned_elsewhere');
+    await svc.recordSkipped(msg({ ts: '300.2', isOwner: false }), 'room_owned_elsewhere');
+    expect(log.events).toEqual([
+      expect.objectContaining({ ref: 'slackch-C1-300.1', action: 'ignored', reason: 'room_owned_elsewhere' }),
+    ]);
+  });
+});
