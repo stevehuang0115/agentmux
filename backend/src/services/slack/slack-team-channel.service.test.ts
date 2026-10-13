@@ -3366,6 +3366,28 @@ describe('ensureAgentChannel', () => {
     expect(await service.listMappings()).toEqual(expect.arrayContaining([expect.objectContaining({ teamId: 'adhoc:C1' })]));
   });
 
+  it('posts an agent into the ad-hoc room under its display name, not its session name', async () => {
+    // 2026-10-13: an ad-hoc room belongs to no team, so the member lookup
+    // found nobody and the Lead posted as "王律师增长团队-lead-4c55a743";
+    // Cloud matches roster display names, so nobody else in the room heard it.
+    const mapping = await service.ensureAgentChannel({ name: 'room', purpose: '', memberSessions: ['crewly-alpha-leo'] });
+    slack.sent = [];
+    await service.mirrorOutbound({
+      id: 'reply-adhoc',
+      channelId: mapping.chatChannelId,
+      seq: 1,
+      senderType: 'agent',
+      senderId: 'crewly-alpha-leo',
+      content: 'Sam, can you check this?',
+      contentType: 'markdown',
+      createdAt: 1,
+      attachments: [],
+      mentions: [],
+      metadata: { source: 'reply-tool' },
+    } as ChatMessageDTO);
+    expect(slack.sent[0]).toEqual(expect.objectContaining({ channelId: 'C1', username: 'Leo', iconEmoji: ':mag:' }));
+  });
+
   it('is idempotent by name or known channel id, and adds new agents to the roster', async () => {
     const first = await service.ensureAgentChannel({ name: 'approvals', purpose: '', memberSessions: ['crewly-alpha-sam'] });
     const again = await service.ensureAgentChannel({ name: 'approvals', purpose: '', memberSessions: ['crewly-alpha-leo'] });

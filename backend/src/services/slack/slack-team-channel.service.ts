@@ -3790,8 +3790,7 @@ export class SlackTeamChannelService {
       if (resolvedTs === null) return skip('thread-key-names-another-channel');
       const threadTs = resolvedTs;
       if (!threadTs) return await this.postTopLevel(mapping, dto);
-      const team = (await this.deps.storage.getTeams()).find((t) => t.id === mapping.teamId);
-      const member = team?.members.find((m) => m.sessionName === dto.senderId);
+      const member = await this.findPostingMember(mapping, dto.senderId);
       // A real bot user (Cloud-provisioned identity) beats the cosmetic
       // username/icon override.
       const installed = this.deps.identities?.getInstalled(dto.senderId) ?? null;
@@ -3943,8 +3942,7 @@ export class SlackTeamChannelService {
     let done: () => void = () => undefined;
     this.rootPosts.set(dto.id, new Promise<void>((resolve) => (done = resolve)));
     try {
-      const team = (await this.deps.storage.getTeams()).find((t) => t.id === mapping.teamId);
-      const member = team?.members.find((m) => m.sessionName === dto.senderId);
+      const member = await this.findPostingMember(mapping, dto.senderId);
       const installed = this.deps.identities?.getInstalled(dto.senderId) ?? null;
       const identity = installed ? { botToken: installed.botToken } : slackIdentityFor(member, dto.senderId);
       const text = await this.linkAgentMentions(toSlackMrkdwn(dto.content), mapping.slackChannelId);
@@ -3988,6 +3986,29 @@ export class SlackTeamChannelService {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  /**
+   * The team member an agent posts as in a channel.
+   *
+   * A team channel looks in its own team. An ad-hoc room (`adhoc:<channel>`)
+   * belongs to no team, so the agent is looked up across every local team:
+   * without that it posted under its session name, which Cloud could not
+   * match to a roster display name, so other agents never heard it.
+   *
+   * @param mapping - Channel mapping the post goes to
+   * @param sessionName - Posting agent's session
+   * @returns The member, or undefined when the session is not on a local team
+   */
+  private async findPostingMember(mapping: SlackTeamChannelMapping, sessionName: string): Promise<TeamMember | undefined> {
+    const teams = await this.deps.storage.getTeams();
+    const own = teams.find((t) => t.id === mapping.teamId)?.members.find((m) => m.sessionName === sessionName);
+    if (own) return own;
+    for (const team of teams) {
+      const member = team.members.find((m) => m.sessionName === sessionName);
+      if (member) return member;
+    }
+    return undefined;
   }
 
   /**
@@ -4492,8 +4513,7 @@ export class SlackTeamChannelService {
     // No bot of its own: an image still goes out under the agent's name.
     let persona: { username: string; iconEmoji?: string; iconUrl?: string } | undefined;
     if (!installed) {
-      const team = (await this.deps.storage.getTeams().catch(() => [])).find((t) => t.id === mapping.teamId);
-      const id = slackIdentityFor(team?.members.find((m) => m.sessionName === input.agentSession), input.agentSession);
+      const id = slackIdentityFor(await this.findPostingMember(mapping, input.agentSession).catch(() => undefined), input.agentSession);
       persona = { username: id.username ?? input.agentSession, ...(id.iconEmoji ? { iconEmoji: id.iconEmoji } : {}), ...(id.iconUrl ? { iconUrl: id.iconUrl } : {}) };
     }
 
