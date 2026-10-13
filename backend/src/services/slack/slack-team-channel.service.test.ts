@@ -246,10 +246,6 @@ class FakeChat extends EventEmitter {
   members = new Map<string, Set<string>>();
   messages: ChatMessageDTO[] = [];
   metadataPatches: Array<{ id: string; patch: Record<string, unknown> }> = [];
-  updateMessageMetadata(id: string, patch: Record<string, unknown>): null {
-    this.metadataPatches.push({ id, patch });
-    return null;
-  }
   private seq = 0;
 
   createHuddle(args: { name: string; purpose?: string; memberSessions: string[] }): ChatChannelDTO {
@@ -337,6 +333,7 @@ class FakeChat extends EventEmitter {
     );
   }
   updateMessageMetadata(id: string, patch: Record<string, unknown>) {
+    this.metadataPatches.push({ id, patch });
     const m = this.messages.find((x) => x.id === id);
     if (!m) return null;
     m.metadata = { ...(m.metadata ?? {}), ...patch };
@@ -1455,9 +1452,12 @@ describe('mirrorOutbound', () => {
       service = makeService();
       await service.ensureTeamChannel(team());
       await service.start();
-      const r = await service.mirrorOutboundDetailed(agentMessage());
-      expect(r.delivery).toMatchObject({ delivered: true, slackChannelId: 'C1', ts: '555.123' });
-      expect(chat.metadataPatches[0].patch).toEqual({ slackDelivery: { slackChannelId: 'C1', ts: '555.123', threadTs: null } });
+      // A reply in a thread goes through the placeholder (a top-level post never does).
+      const root = await service.routeInbound(inbound({ ts: '100.1', text: '@sam go' }));
+      chat.metadataPatches = [];
+      const r = await service.mirrorOutboundDetailed(agentMessage({ threadId: root!.message.id }));
+      expect(r.delivery).toMatchObject({ delivered: true, slackChannelId: 'C1', ts: '555.123', threadTs: '100.1' });
+      expect(chat.metadataPatches[0].patch).toEqual({ slackDelivery: { slackChannelId: 'C1', ts: '555.123', threadTs: '100.1' } });
     });
 
     it('reports Slack\'s error and stores no ts when the post fails for a Slack-mapped room', async () => {
@@ -1618,7 +1618,18 @@ describe('top-level posts stay top level (scheduled reports)', () => {
       { agentSession: 'crewly-alpha-leo', slackChannelId: 'C1', threadTs: '310.1' },
       '12 signups this week',
       { botToken: 'xoxb-leo', displayName: 'Leo' },
+      { onMessageTs: expect.any(Function) },
     );
+  });
+
+  it('reports the delivery of a top-level post (ts stored, Slack failure surfaced)', async () => {
+    await service.routeInbound(inbound({ ts: '321.1' }));
+    slack.sent = [];
+    const summary = post({ content: 'summary' });
+    chat.messages.push(summary);
+    const r = await service.mirrorOutboundDetailed(summary);
+    expect(r.delivery).toMatchObject({ delivered: true, slackChannelId: 'C1', ts: expect.any(String) });
+    expect(chat.metadataPatches.some((p) => p.id === summary.id && 'slackDelivery' in p.patch)).toBe(true);
   });
 
   it('records the Slack ts on the posted row, so its detail reply goes under it', async () => {
@@ -1635,6 +1646,7 @@ describe('top-level posts stay top level (scheduled reports)', () => {
       { agentSession: 'crewly-alpha-leo', slackChannelId: 'C1', threadTs: rootTs },
       'detail',
       expect.anything(),
+      { onMessageTs: expect.any(Function) },
     );
   });
 
@@ -1664,6 +1676,7 @@ describe('top-level posts stay top level (scheduled reports)', () => {
       { agentSession: 'crewly-alpha-leo', slackChannelId: 'C1', threadTs: '900.5' },
       'detail',
       expect.anything(),
+      { onMessageTs: expect.any(Function) },
     );
   });
 
