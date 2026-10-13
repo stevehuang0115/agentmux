@@ -1,0 +1,4 @@
+{
+ "listings-pr-watch": "listings-pr-watch listings-pr-watch: check the open listing PRs with gh pr view for new maintainer comments, requested changes, merge or close. Draft any reply for the owner to review, never post as the owner without a yes. Message the team lead one line ONLY if something changed.",
+ "owner-weekly-review": "owner-weekly-review Owner weekly review (weekly, Sunday evening). Post ONE top-level short text message in the channel: (1) 这周的总结: list this week's entries and recommend the strongest one for next week, then ask which to take; (2) 趋势: paste the weekly trend vs last week; (3) 时间安排: one line on any big change in how time was spent; (4) 推荐: suggest one line and which item to pair, or skip. Skip items with nothing new. 建议 each item stays short: 内容 视频 团队 日期 发布 交付 排期 成片 格式 信息 判断 are the usual topics; reply in the thread with the answer in words."
+}
