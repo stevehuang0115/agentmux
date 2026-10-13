@@ -962,6 +962,23 @@ describe('CloudSyncService', () => {
         .toEqual([30_000, 60_000, 120_000, 300_000, 300_000, 300_000, 300_000]);
     });
 
+    it.each([
+      ['the Retry-After header', { 'retry-after': '90' }, { error: 'rate_limited' }, 90_000],
+      ['the body retryAfter', {}, { error: 'rate_limited', retryAfter: 120 }, 120_000],
+      ['a cap on very long waits (daily limit)', { 'retry-after': '40000' }, { error: 'daily_limit' }, CLOUD_SYNC_CONSTANTS.RETRY_AFTER_MAX_MS],
+    ])('honours the relay 429 retry hint: %s', async (_name, headers, body, expectedMs) => {
+      mockFetch.mockImplementation(async () => {
+        const res = mockResponse({ success: false, ...body }, 429) as unknown as { headers: unknown };
+        res.headers = { get: (k: string) => (headers as Record<string, string>)[k.toLowerCase()] ?? null };
+        return res as unknown as Response;
+      });
+      service.start(configWithJwt);
+      await settle();
+      const health = service.getHealth().relayQueue!;
+      expect(health.queueId).toBeNull();
+      expect(health.nextAttemptAt! - Date.now()).toBe(expectedMs);
+    });
+
     it('retries a 429 on the backoff schedule, reports it in health, then starts polling once accepted', async () => {
       let refuse = true;
       mockFetch.mockImplementation(async (url, init) => {
