@@ -74,6 +74,7 @@ export class SkillsReferenceModule implements PromptModule {
 			`- \`${p}/drive-upload\` — put a file or text into Drive`,
 			`- \`${p}/send-file\` / \`receive-file\` — hand a LARGE file (video, archive, up to 2 GB) to another agent of this account, on this or another machine, via a temporary Crewly Cloud relay (needs Cloud sign-in). **For big files prefer these over Drive or Slack**; the receiver deletes it, unclaimed files vanish after 24 h`,
 			`- \`${p}/request-file\` — ask the OWNER for a big file (video, archive; or a Slack attachment that "could not be downloaded") with a private upload link they open on their phone; you are told to \`receive-file\` when it lands. **Never ask the owner to compress a file or put it in Drive**`,
+			`- \`${p}/share-file\` — give the OWNER a LARGE file you made (an HD video, up to 4 GB) as a private link: they open it on their phone, watch it in the page and download it. **Use it when the owner should get a big deliverable; post the url in your own words, do not email, Slack-upload or Drive it**`,
 			`- \`${p}/docs-read\` / \`docs-write\` — read a Google Doc as text; create one or append to it`,
 			`- \`${p}/docs-comment\` — list comments in a Google Doc (the owner's feedback); reply/resolve/add are queued and posted as a batch after the owner's 「发 C<n>」`,
 			`- \`${p}/sheets-read\` / \`sheets-write\` — read a range as rows; create a sheet or append rows`,

@@ -256,6 +256,13 @@ describe('SkillsReferenceModule', () => {
 			expect(out).toContain('Never ask the owner to compress a file or put it in Drive');
 		});
 
+		it('points agents at share-file to give the owner a big deliverable as a private link', async () => {
+			const out = await module.build(baseConfig);
+
+			expect(out).toContain('core/share-file');
+			expect(out).toContain('watch it in the page and download it');
+		});
+
 		it('names every connector family, not just Drive', async () => {
 			const out = await module.build(baseConfig);
 
