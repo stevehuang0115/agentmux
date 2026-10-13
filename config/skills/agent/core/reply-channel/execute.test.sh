@@ -180,6 +180,24 @@ else
 fi
 assert_contains "unknown name points at list-channels" "$OUT" 'list-channels'
 
+# --- Test 8: --file is repeatable and sent with the project path ---
+echo "test 8: --file"
+: > "$STUB_LOG"
+OUT=$(run_skill --channel chan-xyz --content "report attached" --file ./a.pdf --file /tmp/b.csv 2>&1 </dev/null || true)
+LOG=$(cat "$STUB_LOG" 2>/dev/null || echo '{}')
+assert_contains "success echoed (with files)" "$OUT" '"success":true'
+assert_contains "first file in body" "$LOG" 'a.pdf'
+assert_contains "second file in body" "$LOG" 'b.csv'
+assert_contains "project path in body" "$LOG" 'projectPath'
+: > "$STUB_LOG"
+OUT=$(run_skill --channel chan-xyz --content "no files" 2>&1 </dev/null || true)
+LOG=$(cat "$STUB_LOG" 2>/dev/null || echo '{}')
+if printf '%s' "$LOG" | grep -q '\\"files\\"'; then
+  FAIL=$((FAIL + 1)); echo "  ✗ a plain reply must not carry a files list"
+else
+  PASS=$((PASS + 1)); echo "  ✓ a plain reply carries no files list"
+fi
+
 echo
 echo "========================================"
 echo "reply-channel skill: PASS=$PASS  FAIL=$FAIL"

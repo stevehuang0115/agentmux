@@ -50,6 +50,18 @@ jest.mock('../../services/orc/reply-destination.wiring.js', () => ({
   deliverReply: (input: unknown) => mockDeliverReply(input),
 }));
 
+// Automatic file hand-off: the Cloud-facing service is swapped per test.
+const mockHandoff = {
+  attachToMessage: jest.fn(),
+  projectDirFor: jest.fn(),
+  crossMachine: jest.fn(),
+};
+jest.mock('../../services/file-handoff/file-handoff.wiring.js', () => ({
+  getFileHandoffService: () => ({ attachToMessage: (i: unknown) => mockHandoff.attachToMessage(i) }),
+  projectDirForAgent: (...a: unknown[]) => mockHandoff.projectDirFor(...a),
+  roomHasRemoteColleague: (...a: unknown[]) => mockHandoff.crossMachine(...a),
+}));
+
 /** Build a test app with the chat router mounted under /api/chat. */
 function buildApp() {
   const db = openChatDatabase({ dbPath: ':memory:', inMemory: true, skipIntegrityCheck: true });
@@ -1223,5 +1235,92 @@ describe('chat-v2 writes: sender comes from credentials, not a header (#1012)', 
     expect((await request(app).post('/api/chat/channels/dm/ensure').set(agentAuthHeaders(SAM)).send({ agentSession: SAM })).status).toBe(200);
     expect((await request(app).get('/api/chat/channels')).status).toBe(200);
     expect((await request(app).get(`/api/chat/channels/${orcDm.id}/messages`)).status).toBe(200);
+  });
+});
+
+describe('chat-v2 agent messages with files (automatic cross-machine hand-off)', () => {
+  const marker = '📎 report.pdf (2.1 MB) · crewly-file:hf_AAAAAAAAAAAAAAAAAAAAAA';
+
+  beforeEach(() => {
+    mockHandoff.attachToMessage.mockReset();
+    mockHandoff.projectDirFor.mockReset().mockResolvedValue('/proj');
+    mockHandoff.crossMachine.mockReset().mockResolvedValue(true);
+  });
+
+  async function setup() {
+    const { app, service } = buildApp();
+    const created = await request(app).post('/api/chat/channels').send({ agentSession: 'sess-a', name: 'Ch' });
+    return { app, service, chId: created.body.data.id as string };
+  }
+
+  it('stores the message with the marker line and reports the upload to the agent', async () => {
+    const { app, service, chId } = await setup();
+    try {
+      mockHandoff.attachToMessage.mockResolvedValue({
+        content: `Report ready\n${marker}`,
+        attached: [{ fileName: 'report.pdf', sizeBytes: 2202009, handoffId: 'hf_AAAAAAAAAAAAAAAAAAAAAA' }],
+        failed: [],
+      });
+      const res = await request(app)
+        .post(`/api/chat/channels/${chId}/messages`)
+        .set('X-Agent-Session', 'sess-a')
+        .send({ content: 'Report ready', files: ['./out/report.pdf'], projectPath: '/proj' });
+      expect(res.status).toBe(201);
+      expect(res.body.data.content).toBe(`Report ready\n${marker}`);
+      expect(res.body.fileHandoff.attached).toHaveLength(1);
+      expect(mockHandoff.attachToMessage).toHaveBeenCalledWith(expect.objectContaining({ explicit: ['./out/report.pdf'], projectDir: '/proj', agent: 'sess-a' }));
+    } finally {
+      service.close();
+    }
+  });
+
+  it('still posts the message when the upload fails, and says which file did not go', async () => {
+    const { app, service, chId } = await setup();
+    try {
+      mockHandoff.attachToMessage.mockResolvedValue({
+        content: 'Report ready',
+        attached: [],
+        failed: [{ file: './out/report.pdf', reason: 'This machine is not signed in to Crewly Cloud.' }],
+      });
+      const res = await request(app)
+        .post(`/api/chat/channels/${chId}/messages`)
+        .set('X-Agent-Session', 'sess-a')
+        .send({ content: 'Report ready', files: ['./out/report.pdf'] });
+      expect(res.status).toBe(201);
+      expect(res.body.data.content).toBe('Report ready');
+      expect(res.body.fileHandoff.failed[0].reason).toMatch(/not signed in/);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('a path in the text is attached only when the room reaches another machine', async () => {
+    const { app, service, chId } = await setup();
+    try {
+      mockHandoff.attachToMessage.mockResolvedValue({ content: `see /proj/a.pdf\n${marker}`, attached: [{ fileName: 'a.pdf', sizeBytes: 1, handoffId: 'hf_AAAAAAAAAAAAAAAAAAAAAA' }], failed: [] });
+      const yes = await request(app).post(`/api/chat/channels/${chId}/messages`).set('X-Agent-Session', 'sess-a').send({ content: 'see /proj/a.pdf' });
+      expect(yes.body.data.content).toContain('crewly-file:');
+      expect(mockHandoff.attachToMessage).toHaveBeenCalledWith(expect.objectContaining({ auto: true }));
+
+      mockHandoff.attachToMessage.mockClear();
+      mockHandoff.crossMachine.mockResolvedValue(false);
+      const no = await request(app).post(`/api/chat/channels/${chId}/messages`).set('X-Agent-Session', 'sess-a').send({ content: 'see /proj/b.pdf' });
+      expect(no.body.data.content).toBe('see /proj/b.pdf');
+      expect(mockHandoff.attachToMessage).not.toHaveBeenCalled();
+    } finally {
+      service.close();
+    }
+  });
+
+  it('never touches the owner\'s own messages', async () => {
+    const { app, service, chId } = await setup();
+    try {
+      const res = await request(app).post(`/api/chat/channels/${chId}/messages`).send({ content: 'look at /Users/me/a.pdf', files: ['/Users/me/a.pdf'] });
+      expect(res.status).toBe(201);
+      expect(res.body.data.content).toBe('look at /Users/me/a.pdf');
+      expect(mockHandoff.attachToMessage).not.toHaveBeenCalled();
+    } finally {
+      service.close();
+    }
   });
 });

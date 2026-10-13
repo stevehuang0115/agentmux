@@ -2782,6 +2782,23 @@ void (async () => {
 					// front of its queue (2026-10-05, D-270: behind 6 reminders).
 					isOwnerMessage: (message) => isOwnerChatTurn(message, getSlackService().getOwnerUserId?.() ?? null),
 					mentionResolver: chatMentionResolver,
+					// Files a colleague on another machine sent land in the
+					// recipient's project inbox before the message is delivered.
+					prepareInbound: async (channel, message) => {
+						const [{ expandInboundFiles }, wiring] = await Promise.all([
+							import('./services/file-handoff/file-handoff.inbound.js'),
+							import('./services/file-handoff/file-handoff.wiring.js'),
+						]);
+						return expandInboundFiles(channel, message, {
+							service: wiring.getFileHandoffService(),
+							isLocalAgent: (session) => getSlackService().isLocalAgent?.(session) ?? false,
+							recipientFor: (ch) => ch.agentSession ?? chatService.queryHuddleMembersForDispatch(ch.id)[0],
+							inboxRootFor: async (session) => {
+								const dir = await wiring.projectDirForAgent(session, process.env.CREWLY_PROJECT_PATH || process.cwd());
+								return dir ? wiring.inboxRootFor(dir) : null;
+							},
+						});
+					},
 					// Issue #968: an agent dedicated to one person never gets (or
 					// is woken by) anyone else's Slack message.
 					// A post another agent wrote (colleague's Slack post, or a

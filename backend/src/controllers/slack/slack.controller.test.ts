@@ -15,6 +15,11 @@ const mockChatV2RecordTurn = jest.fn().mockReturnValue({
 // The orchestrator bridge imports pdf-parse, whose pdfjs build needs DOM
 // globals (DOMMatrix) that some Node versions lack at load time. Nothing
 // here parses a PDF.
+jest.mock('../../services/file-handoff/file-handoff.wiring.js', () => ({
+  getFileHandoffService: jest.fn(),
+  projectDirForAgent: jest.fn(),
+  roomHasRemoteColleague: jest.fn(),
+}));
 jest.mock('pdf-parse', () => ({ PDFParse: jest.fn() }));
 
 // `POST /disconnect` deletes the saved Slack credentials and `/connect`
@@ -1412,6 +1417,23 @@ describe('Slack Controller', () => {
       expect(res.status).toBe(400);
       expect(res.body.code).toBe('agent_session_required');
       expect(mockAgentPost.current.post).not.toHaveBeenCalled();
+    });
+
+    it('--file: the files travel as handoffs, their marker lines join the text, and a failure is reported while the post still goes', async () => {
+      const post = jest.fn().mockResolvedValue({ channelId: 'C1', messageTs: '1.1', kind: 'channel', postedAs: 'agent', identity: 'Owen' });
+      mockAgentPost.current = { post };
+      const wiring = jest.requireMock('../../services/file-handoff/file-handoff.wiring.js') as { getFileHandoffService: jest.Mock; projectDirForAgent: jest.Mock };
+      const attachToMessage = jest.fn().mockResolvedValue({
+        content: 'the report\n📎 r.pdf (1 KB) · crewly-file:hf_AAAAAAAAAAAAAAAAAAAAAA',
+        attached: [{ fileName: 'r.pdf', sizeBytes: 1024, handoffId: 'hf_AAAAAAAAAAAAAAAAAAAAAA' }],
+        failed: [{ file: './x.env', reason: 'looks like a secret' }],
+      });
+      wiring.getFileHandoffService.mockReturnValue({ attachToMessage });
+      wiring.projectDirForAgent.mockResolvedValue('/proj');
+      const res = await request(app).post('/api/slack/post').set('X-Agent-Session', 'owen').send({ target: '#room', text: 'the report', files: ['./r.pdf', './x.env'] });
+      expect(res.status).toBe(200);
+      expect(post).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('crewly-file:hf_AAAAAAAAAAAAAAAAAAAAAA') }));
+      expect(res.body.fileHandoff.failed[0].file).toBe('./x.env');
     });
 
     it('a --thread from another channel than --target goes where the resolver puts it, never top level here (2026-10-02)', async () => {

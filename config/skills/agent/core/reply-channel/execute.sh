@@ -44,6 +44,10 @@ Options:
                      already replied in this thread -- when you have something
                      new, or when you were asked (without it such a post is
                      held and you are shown the existing answer).
+  --file      | -f   Attach a file for a colleague on another machine (repeatable,
+                     up to 5, inside your project). It reaches their inbox
+                     automatically. A path you write in the text of a message
+                     to a room with another machine's agent goes the same way.
   --handoff NAME     Pass the message to another agent to answer, wherever it
                      runs — for a room's router (an orchestrator woken because
                      nobody in a private channel was awake). Posts nothing.
@@ -62,6 +66,7 @@ WORKING=""
 HANDOFF=""
 MESSAGE_REF=""
 ADDS_NEW=""
+FILES_JSON="[]"
 
 # Detect legacy JSON argument as $1
 if [[ $# -gt 0 && ${1:0:1} == '{' ]]; then
@@ -93,6 +98,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --message)
       MESSAGE_REF="$2"
+      shift 2
+      ;;
+    --file|-f)
+      [ $# -ge 2 ] || { echo '{"success":false,"error":"--file requires a path"}' >&2; exit 2; }
+      FILES_JSON=$(FILES_JSON="$FILES_JSON" NEW_FILE="$2" python3 -c 'import json, os; a = json.loads(os.environ["FILES_JSON"]); a.append(os.environ["NEW_FILE"]); print(json.dumps(a))')
       shift 2
       ;;
     --content|-m)
@@ -242,9 +252,14 @@ fi
 # Build JSON body. Export CONTENT/CMID so python can read them safely without
 # quoting the values through the shell (avoids escaping hell for multi-line
 # content with quotes, backslashes, backticks, etc.).
-BODY=$(CONTENT="$CONTENT" CMID="$CMID" THREAD_ID="$THREAD_ID" INTERIM="${INTERIM:-}" ADDS_NEW="$ADDS_NEW" python3 -c '
+BODY=$(CONTENT="$CONTENT" CMID="$CMID" THREAD_ID="$THREAD_ID" INTERIM="${INTERIM:-}" ADDS_NEW="$ADDS_NEW" FILES_JSON="$FILES_JSON" PROJECT_PATH="${CREWLY_PROJECT_PATH:-$PWD}" python3 -c '
 import os, json
 p = {"content": os.environ["CONTENT"], "contentType": "markdown"}
+files = json.loads(os.environ.get("FILES_JSON", "[]"))
+if files:
+    p["files"] = files
+# Where relative paths in the text resolve and the file guard is anchored.
+p["projectPath"] = os.environ.get("PROJECT_PATH", "")
 if os.environ.get("INTERIM"):
     p["interim"] = True
 if os.environ.get("ADDS_NEW"):
@@ -261,21 +276,30 @@ print(json.dumps(p))
 ENDPOINT="/chat/channels/${CHANNEL_ID}/messages"
 
 if RESPONSE=$(api_call POST "$ENDPOINT" "$BODY" 2>&1); then
-  # Successful 2xx — surface the message id
-  MESSAGE_ID=$(echo "$RESPONSE" | python3 -c '
-import json,sys
+  # Successful 2xx — surface the message id, plus what happened to any files
+  echo "$RESPONSE" | CHANNEL_ID="$CHANNEL_ID" python3 -c '
+import json, os, sys
+raw = sys.stdin.read()
 try:
-    d=json.load(sys.stdin)
-    print((d.get("data") or {}).get("id",""))
+    d = json.loads(raw)
 except Exception:
-    pass
-' 2>/dev/null || echo "")
-  if [ -n "$MESSAGE_ID" ]; then
-    echo "{\"success\":true,\"messageId\":\"$MESSAGE_ID\",\"channelId\":\"$CHANNEL_ID\"}"
-  else
-    # Success code but unexpected body — still return success with raw response
-    echo "{\"success\":true,\"channelId\":\"$CHANNEL_ID\",\"raw\":$(echo "$RESPONSE" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')}"
-  fi
+    print(json.dumps({"success": True, "channelId": os.environ["CHANNEL_ID"], "raw": raw}, separators=(",", ":")))
+    raise SystemExit(0)
+mid = (d.get("data") or {}).get("id", "")
+out = {"success": True}
+if mid:
+    out["messageId"] = mid
+else:
+    out["raw"] = raw
+out["channelId"] = os.environ["CHANNEL_ID"]
+fh = d.get("fileHandoff") or {}
+if fh.get("attached"):
+    out["filesSent"] = [a.get("fileName") for a in fh["attached"]]
+if fh.get("failed"):
+    out["filesNotSent"] = fh["failed"]
+    out["warning"] = "The message was posted, but these files did not go (" + "; ".join(str(f.get("file")) + ": " + str(f.get("reason")) for f in fh["failed"]) + "). Tell your colleague, or fix it and send the file again with --file."
+print(json.dumps(out, separators=(",", ":"), ensure_ascii=False))
+'
   exit 0
 else
   echo "{\"success\":false,\"error\":$(echo "$RESPONSE" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')}"

@@ -293,6 +293,12 @@ export interface ChatV2DispatcherOptions {
    * would rather not spend the tokens simply leaves it out.
    */
   recentTurnsFor?: (channelId: string, threadId?: string) => readonly ChatContextTurn[];
+  /**
+   * Last step before a message reaches an agent: files a colleague on another
+   * machine sent (`crewly-file:` markers) are downloaded and the text is
+   * rewritten with their local paths. Must not throw; omitted = text as is.
+   */
+  prepareInbound?: (channel: ChatChannelDTO, message: ChatMessageDTO) => Promise<ChatMessageDTO>;
   /** Context-only queue (one-responder rooms); a private one when omitted */
   contextBacklog?: RoomContextBacklog;
 }
@@ -716,7 +722,7 @@ export function defaultFormatPrompt(args: FormatPromptArgs): string {
         ? `Dispatching this channel's message: the message @-ed nobody and no agent in the channel is awake right now, so you (the channel lead) were woken to decide who should answer. If it should be you: **first** run \`${workingCmd}\`, then reply with the \`reply-channel\` skill (${cmd}). If another member should answer: use reply-channel to post one short line @-ing them (e.g. "@name this one is yours"); they will be woken and take over; do not answer for them. If it is not for anyone, do nothing.`
         : mode === 'optional'
       ? `Reply to this channel: this message did not @ you; it was forwarded so you can decide whether to reply${args.soleResponder ? '' : ' (every awake agent in the channel receives it and decides for itself)'}. If you are the channel lead (team leader), you answer questions about the team itself (who is responsible, who the members are, what they are working on), based on the member list below and your team context — do not say "no record". If it relates to your work and you have the context or knowledge, and decide to reply: run \`${workingCmd}\` **first** so they see you have picked it up, then reply with the \`reply-channel\` skill (${cmd}). If it is people in the channel talking among themselves, or has nothing to do with you, do nothing — do not reply, do not send --working, and do not start an investigation over it.${args.roomPresence ? wakeColleague : ''}`
-      : `Reply to this channel: use the \`reply-channel\` skill (${cmd}) — run the command as given${identity ? ', and keep the leading CREWLY_SESSION_NAME=… — it tells the system it is you replying' : ''}; if reply-channel errors, run the same command again, or fall back to \`reply\` above; do not use any other way to reply (other ways do not reach this thread and the sender will not see them). Your reply is posted to the same Slack thread under your name; later follow-ups in this thread are forwarded straight to you, with no need to be @-ed again. To hand off to a colleague (an agent on this or another machine), write @name in your reply (e.g. "@Owen can you check this?"), or start the reply with their name — it reaches them even when Slack shows it as plain text because they have no Slack app of their own; a name only mentioned mid-sentence does not. Discussions among several agents must converge: each person speaks at most two rounds in the same thread; the team leader (or the first speaker if there is none) summarizes after two rounds and clearly writes "Conclusion"; once the conclusion is posted, nobody else replies unless they clearly disagree and say why. Do not thank each other or restate each other's points out of politeness.`;
+      : `Reply to this channel: use the \`reply-channel\` skill (${cmd}) — run the command as given${identity ? ', and keep the leading CREWLY_SESSION_NAME=… — it tells the system it is you replying' : ''}; if reply-channel errors, run the same command again, or fall back to \`reply\` above; do not use any other way to reply (other ways do not reach this thread and the sender will not see them). Your reply is posted to the same Slack thread under your name; later follow-ups in this thread are forwarded straight to you, with no need to be @-ed again. To hand off to a colleague (an agent on this or another machine), write @name in your reply (e.g. "@Owen can you check this?"), or start the reply with their name — it reaches them even when Slack shows it as plain text because they have no Slack app of their own; a name only mentioned mid-sentence does not. Discussions among several agents must converge: each person speaks at most two rounds in the same thread; the team leader (or the first speaker if there is none) summarizes after two rounds and clearly writes "Conclusion"; once the conclusion is posted, nobody else replies unless they clearly disagree and say why. Do not thank each other or restate each other's points out of politeness. To give a colleague on another machine a file, write its path in your reply or add \`--file <path>\` to the command (up to 5 files, inside your project); it arrives in their project inbox automatically, so never ask them to open a path on your machine. A file a colleague sends you shows as \`File from <name>: <path>\` — read it from there.`;
   } else if (args.slackDmChannelId && mode === 'required') {
     const threadKey = parseSlackThreadKey(args.slackThreadKey) ? args.slackThreadKey : undefined;
     const threadArg = threadKey ? ` --thread ${threadKey}` : '';
@@ -823,6 +829,7 @@ export class ChatV2DispatcherService {
   private readonly holdForStart?: (agentSession: string, prompt: string) => void;
   private readonly activateRetryDelayMs: number;
   private readonly recentTurnsFor?: (channelId: string, threadId?: string) => readonly ChatContextTurn[];
+  private readonly prepareInbound?: ChatV2DispatcherOptions['prepareInbound'];
   private readonly onDispatched?: ChatV2DispatcherOptions['onDispatched'];
   private readonly refuseDelivery?: ChatV2DispatcherOptions['refuseDelivery'];
   private readonly isOwnerMessage?: ChatV2DispatcherOptions['isOwnerMessage'];
@@ -842,6 +849,7 @@ export class ChatV2DispatcherService {
     this.holdForStart = options.holdForStart;
     this.activateRetryDelayMs = options.activateRetryDelayMs ?? ACTIVATE_RETRY_DELAY_MS;
     this.recentTurnsFor = options.recentTurnsFor;
+    this.prepareInbound = options.prepareInbound;
     this.onDispatched = options.onDispatched;
     this.refuseDelivery = options.refuseDelivery;
     this.isOwnerMessage = options.isOwnerMessage;
@@ -1050,7 +1058,15 @@ export class ChatV2DispatcherService {
     message: ChatMessageDTO,
     options: DispatchMessageOptions = {},
   ): Promise<DispatchMessageResult> {
-    const result = await this.route(channel, message, options);
+    let deliverable = message;
+    if (this.prepareInbound) {
+      try {
+        deliverable = await this.prepareInbound(channel, message);
+      } catch {
+        deliverable = message;
+      }
+    }
+    const result = await this.route(channel, deliverable, options);
     if (this.onDispatched && message.senderType === 'user') {
       try {
         await this.onDispatched(channel, message, result);
