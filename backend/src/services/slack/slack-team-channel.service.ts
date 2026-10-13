@@ -719,6 +719,8 @@ export class SlackTeamChannelService {
   private unsubscribeIdentity: (() => void) | null = null;
   /** Slack `channel:ts` of messages already routed → the persisted turn. */
   private readonly seenInbound = new Map<string, ChatMessageDTO>();
+  /** Room messages already handed back to the orchestrator. */
+  private readonly orcHandedBack = new Set<string>();
   /** The last room presence Cloud sent per Slack channel — names for a hand-off. */
   private readonly lastRooms = new Map<string, SlackRoomPresence>();
   /** People (not agents) by lower-cased name → Slack user id, for `@Name` in agent replies. */
@@ -1789,8 +1791,44 @@ export class SlackTeamChannelService {
     const declinedAll = [...declinedDedicated, ...declinedPaused];
     const declinedOnly = declinedAll.length > 0 && resolved.mentions.every((sess) => declinedAll.includes(sess));
     for (const sess of declinedAll) resolved.mentions.splice(resolved.mentions.indexOf(sess), 1);
-    const agentsMentionedViaCloud = [...new Set([...(message.mentionedAgentSessions ?? []), ...namedElsewhere])];
+    // This machine's orchestrator @'d in a room (2026-10-13, #pro-crewly-marketing:
+    // Ella's "<@orc> Steve approved a new team on your machine…" reached the
+    // Air, Cloud routed it by `agent-author`, and nobody acted). The orc is
+    // deliberately not a room member (leads, rosters and wake-when-all-asleep
+    // rely on that), so the resolver never saw it, and the message counted as
+    // addressed to nobody here. It is either Cloud's mention list (mapped to
+    // the local session name) or the orc's own bot id in the text. The orc is
+    // taken out of the agent lists below: it is neither "elsewhere" nor a
+    // dispatch target of the huddle.
+    const orcSession = CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
+    const orcBotId = this.deps.identities?.getInstalled(orcSession)?.botUserId;
+    const orcAddressed =
+      !handoffTo &&
+      (!!message.mentionedAgentSessions?.some((sess) => localAgentSession(sess) === orcSession) ||
+        (!!orcBotId && (message.text ?? '').includes(`<@${orcBotId}>`)));
+    const agentsMentionedViaCloud = [...new Set([...(message.mentionedAgentSessions ?? []), ...namedElsewhere])].filter(
+      (sess) => localAgentSession(sess) !== orcSession,
+    );
     const mentionedElsewhere = agentsMentionedViaCloud.filter((sess) => !isLocal(sess));
+    // Nobody else here is addressed: the orchestrator's own pipeline takes it
+    // (it replies in the same Slack thread). Returning null hands the message
+    // back to the bridge, the way an unmapped channel message is. Members
+    // @'d alongside the orc keep the room path (they answer in the thread).
+    if (orcAddressed && resolved.mentions.length === 0 && declinedAll.length === 0 && mentionedElsewhere.length === 0) {
+      const orcKey = `${message.channelId}:${message.ts}`;
+      // The same message can arrive as two event types; hand it back once.
+      if (this.orcHandedBack.has(orcKey)) return { mapping, message: seen ?? ({} as ChatMessageDTO), mentions: [], dispatch: null, duplicate: true };
+      this.orcHandedBack.add(orcKey);
+      if (this.orcHandedBack.size > SLACK_TEAM_CHANNEL_CONSTANTS.SEEN_INBOUND_MAX) {
+        const oldest = this.orcHandedBack.values().next().value;
+        if (oldest !== undefined) this.orcHandedBack.delete(oldest);
+      }
+      this.logger.info("Room message @'s this machine's orchestrator - handed to it", {
+        slackChannel: `#${mapping.slackChannelName}`,
+        ts: message.ts,
+      });
+      return null;
+    }
     const addressedElsewhereOnly = !handoffTo && resolved.mentions.length === 0 && mentionedElsewhere.length > 0;
     // @-mentions of people: the owner asking a
     // colleague is not a question for the agents (2026-10-01,
