@@ -39,7 +39,7 @@ while [ $# -gt 0 ]; do
     --account) ACCOUNT="${2:-}"; shift 2 ;;
     --resend) shift ;;
     -h|--help) print_usage; exit 0 ;;
-    *) echo "Unknown option: $1" >&2; print_usage >&2; exit 2 ;;
+    *) print_usage >&2; unknown_arg_exit "$1" ;;
   esac
 done
 

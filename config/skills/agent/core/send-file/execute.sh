@@ -99,7 +99,7 @@ while [[ $# -gt 0 ]]; do
     --content-type) [ $# -ge 2 ] || error_exit "--content-type requires a value"; CTYPE="$2"; shift 2 ;;
     --cancel)       [ $# -ge 2 ] || error_exit "--cancel requires a handoff id"; CANCEL="$2"; shift 2 ;;
     --help|-h)      print_usage; exit 0 ;;
-    *) error_exit "Unknown option: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 

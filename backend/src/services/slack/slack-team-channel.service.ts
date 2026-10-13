@@ -3647,6 +3647,8 @@ export class SlackTeamChannelService {
       }
       if (dto.senderType !== 'agent') return skip(`senderType=${dto.senderType}`);
       if (dto.metadata?.source === 'slack') return skip('inbound-from-slack');
+      // attach-file: the upload already is the Slack post; this row is history only.
+      if (dto.metadata?.slackAlreadyPosted === true) return skip('already-posted-to-slack');
       // Drive mode is a voice conversation on the phone, not a Slack one: its
       // replies (and anything answered under a Drive mode thread) stay off
       // Slack. Its recap is posted by Drive mode itself.

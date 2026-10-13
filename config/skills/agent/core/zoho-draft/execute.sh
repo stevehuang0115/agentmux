@@ -25,7 +25,7 @@ while [[ $# -gt 0 ]]; do
     --references)  [ $# -ge 2 ] || error_exit "--references requires a value"; REFS="$2"; shift 2 ;;
     --account-id)  [ $# -ge 2 ] || error_exit "--account-id requires a value"; ACCT="$2"; shift 2 ;;
     --help|-h)     sed -n 2,6p "$0"; exit 0 ;;
-    *) error_exit "Unknown option: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 if [ -n "$INPUT_JSON" ]; then

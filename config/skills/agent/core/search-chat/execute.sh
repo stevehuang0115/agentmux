@@ -31,7 +31,7 @@ while [[ $# -gt 0 ]]; do
       echo "   or: bash execute.sh '{\"query\":\"keywords\",\"channel\":\"#name\",\"from\":\"YYYY-MM-DD\",\"to\":\"YYYY-MM-DD\",\"limit\":10}'"
       echo "  Searches chat messages you can see. All keywords must appear. Newest first."
       exit 0 ;;
-    *) echo "Unknown argument: $1" >&2; exit 2 ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 

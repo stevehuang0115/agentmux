@@ -78,7 +78,7 @@ check "404: exit code" "$RC" "1"
 check "404: reason" "$OUT" '{"success":false,"reason":"chat_not_found","message":"Unknown chat: nobody@s.whatsapp.net"}'
 
 check "needs a mode" "$(run_err)" "Pass --chat <jid>, --q <text>, or --chats"
-check "unknown option errors" "$(run_err --bogus)" "Unknown option: --bogus"
+check "unknown option errors" "$(run_err --bogus)" "Unknown argument: --bogus"
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

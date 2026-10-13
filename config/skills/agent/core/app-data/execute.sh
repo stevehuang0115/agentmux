@@ -169,7 +169,7 @@ while [[ $# -gt 0 ]]; do
     --scope)     [ $# -ge 2 ] || error_exit "--scope requires a value";     SCOPE="$2"; shift 2 ;;
     --reason)    [ $# -ge 2 ] || error_exit "--reason requires a value";    REASON="$2"; shift 2 ;;
     --help|-h)   print_usage; exit 0 ;;
-    *) error_exit "Unknown option: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 

@@ -45,7 +45,7 @@ while [[ $# -gt 0 ]]; do
     --dir)     [ $# -ge 2 ] || error_exit "--dir requires a value"; DIR="$2"; shift 2 ;;
     --no-ack)  ACK=0; shift ;;
     --help|-h) print_usage; exit 0 ;;
-    *) error_exit "Unknown option: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 [ -n "$ID" ] || error_exit "--id is required"

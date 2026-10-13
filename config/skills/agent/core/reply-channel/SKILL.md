@@ -40,6 +40,14 @@ bash config/skills/agent/core/reply-channel/execute.sh \
   [--cmid <clientMessageId>]
 ```
 
+**Quotes in your text:** a double quote inside `--content "..."` ends the
+string and splits your text into extra arguments, and nothing is sent. For
+text with double quotes, quotes of any kind, or several lines, write it to a
+file and use `--content-file <path>` (or pipe it on stdin). Do not hide the
+output behind `| tail -1`: a failure prints `{"success":false,...}`, and
+success prints `{"success":true,...}` -- read that line before you tell
+anyone it was sent.
+
 `--thread` replies inside an existing thread. When the prompt you received
 came from a **Slack team channel** it names the thread id
 (`--thread <id>`); pass it through so your reply shows up in the same Slack

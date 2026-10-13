@@ -74,7 +74,7 @@ check "missing summary errors" "$(run_err --start 2026-10-01 --end 2026-10-02)" 
 check "missing start errors" "$(run_err --summary x --end 2026-10-02)" "Missing required parameter: start (--start)"
 check "missing end errors" "$(run_err --summary x --start 2026-10-01)" "Missing required parameter: end (--end)"
 check "validation: no request made" "$(cat "$STUB_LOG")" ""
-check "unknown option errors" "$(run_err --bogus 1)" "Unknown option: --bogus"
+check "unknown option errors" "$(run_err --bogus 1)" "Unknown argument: --bogus"
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

@@ -1834,6 +1834,29 @@ router.post('/attach', async (req: Request, res: Response, next: NextFunction) =
       return;
     }
 
+    // The file is in Slack; put it in the local chat history too, or anyone
+    // reading the thread from there sees the agent as silent. Best effort, and
+    // flagged so the outbound mirrors do not post it a second time.
+    try {
+      const { getChatV2Service } = await import('../../services/chat-v2/chat-v2.singleton.js');
+      const { recordAttachedFileInChat } = await import('../../services/slack/attach-file-chat-record.js');
+      const size = await fs.stat(String(filePath)).then((st) => st.size).catch(() => undefined);
+      recordAttachedFileInChat(getChatV2Service(), {
+        chatChannelId,
+        agentSession,
+        filePath: String(filePath),
+        ...(filename ? { filename: String(filename) } : {}),
+        ...(title ? { title: String(title) } : {}),
+        ...(comment ? { comment: String(comment) } : {}),
+        slackChannelId: result.slackChannelId,
+        ...(result.threadTs ? { threadTs: result.threadTs } : {}),
+        ...(result.fileId ? { fileId: result.fileId } : {}),
+        ...(size !== undefined ? { sizeBytes: size } : {}),
+      });
+    } catch {
+      /* history is best effort — the upload already succeeded */
+    }
+
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);

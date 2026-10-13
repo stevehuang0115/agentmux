@@ -58,7 +58,7 @@ while [[ $# -gt 0 ]]; do
     --cron)       [ $# -ge 2 ] || error_exit "--cron requires a value";     CRON="$2";     shift 2 ;;
     --timezone)   [ $# -ge 2 ] || error_exit "--timezone requires a value"; TIMEZONE="$2"; shift 2 ;;
     --help|-h)    print_usage; exit 0 ;;
-    *) error_exit "Unknown option: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 [ -n "$COMMAND" ] || { print_usage; exit 1; }

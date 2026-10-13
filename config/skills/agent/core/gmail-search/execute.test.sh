@@ -61,7 +61,7 @@ check "409: reason + hint" "$OUT" '{"success":false,"reason":"not_connected","hi
 
 # --- validation ---
 check "missing query errors" "$(run_err --max 3)" "Missing required parameter: query (--query)"
-check "unknown option errors" "$(run_err --bogus 1)" "Unknown option: --bogus"
+check "unknown option errors" "$(run_err --bogus 1)" "Unknown argument: --bogus"
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

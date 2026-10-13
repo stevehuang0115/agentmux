@@ -24,7 +24,7 @@ Usage: execute.sh --vault <vault> --old <old page> --new <new page> --reason "<w
        execute.sh --json '{"vaultPath":"...","oldPath":"...","newPath":"...","reason":"..."}'
 HELP
       exit 0 ;;
-    *) error_exit "Unknown argument: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 if [ -n "$INPUT_JSON" ]; then
