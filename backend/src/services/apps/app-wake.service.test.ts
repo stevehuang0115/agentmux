@@ -455,6 +455,38 @@ describe('AppWakeService', () => {
   });
 });
 
+describe('AppWakeService — owner decisions (crewly#1228)', () => {
+  const decision = (outcome: string, actor = { kind: 'owner', id: 'u1' }) => ({
+    kind: 'decision',
+    decision: { id: 'dec_x1', action: 'Publish the post', outcome },
+    actor,
+    at: '2026-10-11T03:03:00.000Z',
+  });
+
+  it('wakes (and may start) the publisher with an [APP DECISION] line', async () => {
+    registry.add(ID);
+    cloud.push(ID, decision('approved') as unknown as AppChange);
+    await svc.tick();
+    await jest.advanceTimersByTimeAsync(2 * MIN);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    const [session, text, opts] = deliver.mock.calls[0];
+    expect(session).toBe('dev-ella');
+    expect(opts).toMatchObject({ activate: true });
+    expect(text).toContain('[APP DECISION] The owner APPROVED "Publish the post"');
+  });
+
+  it('ignores decisions not from the owner and unknown outcomes', async () => {
+    registry.add(ID);
+    cloud.push(ID, decision('approved', { kind: 'agent', id: 'dev-ella' }) as unknown as AppChange);
+    cloud.push(ID, decision('approved', { kind: 'visitor', id: 'anonymous' }) as unknown as AppChange);
+    cloud.push(ID, decision('maybe') as unknown as AppChange);
+    await svc.tick();
+    await jest.advanceTimersByTimeAsync(10 * MIN);
+    expect(deliver).not.toHaveBeenCalled();
+    expect(svc.pendingKeys()).toEqual([]);
+  });
+});
+
 describe('AppWakeService — anonymous visitor submissions (P3)', () => {
   const visitorData = (docId: string, collection = 'votes') => ({
     kind: 'data',

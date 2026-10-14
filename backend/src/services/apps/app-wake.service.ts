@@ -173,6 +173,8 @@ interface Batch {
   events: AppChange[];
   visitorChanges: AppChange[];
   comments: AppChange[];
+  /** The owner's answers to Crewly's decision prompt (crewly#1228) */
+  decisions: AppChange[];
   dataTotal: number;
   eventsTotal: number;
   visitorTotal: number;
@@ -525,6 +527,7 @@ export class AppWakeService {
       events: [],
       visitorChanges: [],
       comments: [],
+      decisions: [],
       dataTotal: 0,
       eventsTotal: 0,
       visitorTotal: 0,
@@ -789,6 +792,9 @@ export class AppWakeService {
       if (op !== 'add' && op !== 'reply' && op !== 'reopen') return;
       // The app has an explicit owner: Cloud sent this to it through the inbox.
       if (change.ownerRouted) return;
+    } else if (change.kind === 'decision') {
+      // Only the shell's prompt writes these (crewly-services apps/SPEC.md §21).
+      if (change.decision?.outcome !== 'approved' && change.decision?.outcome !== 'declined') return;
     } else if (change.kind !== 'data') {
       return;
     }
@@ -833,6 +839,9 @@ export class AppWakeService {
       batch.commentsTotal++;
       batch.comments.push(change);
       if (batch.comments.length > C.COMMENTS.MAX_PER_WAKE) batch.comments.shift();
+    } else if (change.kind === 'decision') {
+      batch.decisions.push(change);
+      if (batch.decisions.length > C.MAX_EVENTS_PER_WAKE) batch.decisions.shift();
     } else if (change.kind === 'event') {
       batch.eventsTotal++;
       batch.events.push(change);
@@ -856,7 +865,7 @@ export class AppWakeService {
 
   /** Whether a batch holds only visitor submissions (or only a skipped-submissions notice). */
   private static visitorOnly(batch: Batch): boolean {
-    return batch.dataTotal === 0 && batch.eventsTotal === 0 && batch.commentsTotal === 0;
+    return batch.dataTotal === 0 && batch.eventsTotal === 0 && batch.commentsTotal === 0 && batch.decisions.length === 0;
   }
 
   /** Fold `from` (newer) into `into` (older): one message covers both. */
@@ -867,6 +876,7 @@ export class AppWakeService {
     into.events = keep([...into.events, ...from.events], C.MAX_EVENTS_PER_WAKE);
     into.visitorChanges = keep([...into.visitorChanges, ...from.visitorChanges], C.MAX_BATCH_DATA_CHANGES);
     into.comments = keep([...into.comments, ...from.comments], C.COMMENTS.MAX_PER_WAKE);
+    into.decisions = keep([...into.decisions, ...from.decisions], C.MAX_EVENTS_PER_WAKE);
     into.dataTotal += from.dataTotal;
     into.eventsTotal += from.eventsTotal;
     into.visitorTotal += from.visitorTotal;
@@ -983,6 +993,7 @@ export class AppWakeService {
       eventsTotal: batch.eventsTotal,
       comments: batch.comments,
       commentsTotal: batch.commentsTotal,
+      decisions: batch.decisions,
       visitorChanges: batch.visitorChanges,
       visitorTotal: batch.visitorTotal,
       visitorSkipped: skipped,
@@ -1090,6 +1101,7 @@ export class AppWakeService {
       dataChanges: batch.dataTotal,
       events: batch.eventsTotal,
       comments: batch.commentsTotal,
+      ...(batch.decisions.length > 0 ? { decisions: batch.decisions.length } : {}),
       visitorSubmissions: batch.visitorTotal,
       ...(batch.mentioned ? { mentioned: true } : {}),
       ...(skipped > 0 ? { visitorSkippedReported: skipped } : {}),
