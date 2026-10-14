@@ -90,6 +90,11 @@ Output:
   bash execute.sh --app <appId> --download <fileId>
   ```
 - `--list` pages with `--after <next>` until `next` is null.
+- A page whose answer is over the skill output cap (60,000 bytes: long drafts,
+  big text fields) is never shown as an empty list. `--list`/`--get` fail with
+  `reason: "page_too_large"` and a hint: ask for a smaller `--limit` (e.g. 10)
+  and keep paging with `--after`, or pass `--full` to print the whole page.
+  (Before this, such a page printed `docs: []` with `success: true`.)
 - `--update` is a shallow merge; `--set` replaces the whole document.
 - `--if-rev` makes an update conditional: if the owner changed the doc since
   you read it, you get `reason: "conflict"` — read it again, then decide.
