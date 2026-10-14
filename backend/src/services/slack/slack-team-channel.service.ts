@@ -1176,6 +1176,21 @@ export class SlackTeamChannelService {
   }
 
   /**
+   * Mapping for a Slack channel name (sync, cached store).
+   *
+   * @param name - Channel name without `#`, case-insensitive
+   * @returns The mapping, or null
+   */
+  findBySlackChannelName(name: string): SlackTeamChannelMapping | null {
+    const wanted = name.replace(/^#/, '').toLowerCase();
+    return (
+      this.store?.mappings.find((m) => (m.slackChannelName ?? '').toLowerCase() === wanted) ??
+      this.store?.mappings.find((m) => (m.derivedName ?? '').toLowerCase() === wanted) ??
+      null
+    );
+  }
+
+  /**
    * Mapping for a chat-v2 huddle, if any (sync, cached store).
    *
    * @param chatChannelId - chat-v2 channel id
