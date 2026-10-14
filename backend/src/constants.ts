@@ -2125,6 +2125,16 @@ export const SLACK_TEAM_CHANNEL_CONSTANTS = {
 	 */
 	ROOM_UNANSWERED_FALLBACK_MS: 90 * 1000,
 	/**
+	 * How long the one backup machine of a shared room waits, for an owner
+	 * message it deferred to the room's owner machine, before handing it to
+	 * its own best responder. The owner machine's agent normally answers
+	 * (or shows "working on it") well inside this; it only fires when that
+	 * agent never replied (2026-10-14, #ce-x-wang-law: the owner machine's
+	 * runtime was broken and nobody answered). Longer than the 90 s fallback
+	 * on purpose: the owner machine runs its own 90 s fallback first.
+	 */
+	ROOM_TAKEOVER_WATCH_MS: 10 * 60 * 1000,
+	/**
 	 * Pending unanswered-message watches survive a restart in this file
 	 * (under CREWLY_HOME): a watch armed seconds before a restart would
 	 * otherwise vanish with its timer.

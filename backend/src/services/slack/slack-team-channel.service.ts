@@ -283,6 +283,13 @@ interface UnansweredRoomMessage {
   heldBy?: string[];
   /** Tell the owner if nobody answered, never hand it over (this machine is not the sure watcher) */
   noteOnly?: boolean;
+  /**
+   * This machine deferred the message to the room's owner machine and is the
+   * one backup: the watch fires after ROOM_TAKEOVER_WATCH_MS and, if nobody
+   * has answered, hands the message to a local agent. Never posts the
+   * "nobody was awake" note (the owner machine may still hold it).
+   */
+  takeover?: boolean;
   /** The 90 s fallback timer (absent for a rescue that runs at once) */
   timer?: ReturnType<typeof setTimeout>;
   /** The in-thread note when nobody can take it (default: ROOM_UNANSWERED_NOTE) */
@@ -447,6 +454,23 @@ export function roomWatcherInstance(room: SlackRoomPresence): string | null {
   const pool = members.some((m) => live(m) === true) ? members.filter((m) => live(m) === true) : members.filter((m) => live(m) !== false);
   const fromMembers = [...new Set(pool.map((m) => m.instanceId))].sort()[0];
   return fromMembers ?? (Array.isArray(targets) ? [...targets].sort()[0] ?? null : null);
+}
+
+/**
+ * The one machine that takes over an owner message the room's owner machine
+ * never answered: the lowest instance id among the room's machines other
+ * than the owner (one that Cloud reports `live: false` never counts). Every
+ * machine computes the same answer from the same snapshot, so exactly one
+ * arms the takeover watch.
+ *
+ * @param room - Cloud's room presence
+ * @param owner - The room owner machine (it runs its own fallback)
+ * @returns Instance id, or null when no other machine is in the room
+ */
+export function roomTakeoverInstance(room: Pick<SlackRoomPresence, 'members'>, owner: string): string | null {
+  const live = (m: SlackRoomPresence['members'][number]) => (m as { live?: boolean }).live;
+  const ids = [...new Set(room.members.filter((m) => m.instanceId !== owner && live(m) !== false).map((m) => m.instanceId))].sort();
+  return ids[0] ?? null;
 }
 
 /**
@@ -1837,7 +1861,12 @@ export class SlackTeamChannelService {
     const agentsMentionedViaCloud = [...new Set([...(message.mentionedAgentSessions ?? []), ...namedElsewhere])].filter(
       (sess) => localAgentSession(sess) !== orcSession,
     );
-    const mentionedElsewhere = agentsMentionedViaCloud.filter((sess) => !isLocal(sess));
+    // Also an agent of THIS machine that is not on this room's roster (a team
+    // channel resolves @names against its own team only): it hears the @ through
+    // its own bot, and the room's agents must not answer for it (2026-10-14,
+    // #crewly-marketing: "@Pia, was this cut by you?" — Pia is on another team —
+    // was answered by the room's Dana, then by Pia).
+    const mentionedElsewhere = agentsMentionedViaCloud.filter((sess) => !isLocal(sess) || !candidates.some((c) => c.sessionName === sess));
     // Nobody else here is addressed: the orchestrator's own pipeline takes it
     // (it replies in the same Slack thread). Returning null hands the message
     // back to the bridge, the way an unmapped channel message is. Members
@@ -2313,6 +2342,10 @@ export class SlackTeamChannelService {
         const watchable = watchHere || !!cardAsker || (!answeredElsewhere && !presence?.deferredElsewhere && !presence?.fallbackElsewhere);
         if (!handoffTo && watchable && isOwnerAuthored(message, this.deps.getOwnerUserId?.())) {
           this.watchUnanswered(message, mapping, persisted, dispatchOptions.threadId, recipients, heldBy, noteOnly, cardAsker);
+        } else if (!handoffTo && presence?.takeoverBackup && isOwnerAuthored(message, this.deps.getOwnerUserId?.())) {
+          // Deferred to the room's owner machine: if its agent never answers
+          // (broken runtime, asleep), this one backup machine takes over.
+          this.watchUnanswered(message, mapping, persisted, dispatchOptions.threadId, recipients, heldBy, false, null, true);
         }
       }
 
@@ -2624,11 +2657,14 @@ export class SlackTeamChannelService {
     heldBy: string[] = [],
     noteOnly = false,
     decisionAsker: string | null = null,
+    takeover = false,
   ): void {
     const threadTs = message.threadTs || message.ts;
     const key = `${message.channelId}:${threadTs}`;
     this.settleUnanswered(key);
-    const waitMs = noteOnly ? ROOM_RESPONDER_CONSTANTS.NOTE_ONLY_WATCH_MS : SLACK_TEAM_CHANNEL_CONSTANTS.ROOM_UNANSWERED_FALLBACK_MS;
+    const waitMs = takeover
+      ? SLACK_TEAM_CHANNEL_CONSTANTS.ROOM_TAKEOVER_WATCH_MS
+      : noteOnly ? ROOM_RESPONDER_CONSTANTS.NOTE_ONLY_WATCH_MS : SLACK_TEAM_CHANNEL_CONSTANTS.ROOM_UNANSWERED_FALLBACK_MS;
     const timer = setTimeout(() => {
       void this.runUnansweredFallback(key);
     }, waitMs);
@@ -2645,6 +2681,7 @@ export class SlackTeamChannelService {
       ...(heldBy.length > 0 ? { heldBy } : {}),
       ...(noteOnly ? { noteOnly: true } : {}),
       ...(decisionAsker ? { decisionAsker } : {}),
+      ...(takeover ? { takeover: true } : {}),
       armedAt,
       dueAt: armedAt + waitMs,
       timer,
@@ -3071,13 +3108,29 @@ export class SlackTeamChannelService {
       // The thread could not be read even now: hand it to the lead anyway.
       // A possible second answer beats telling the owner "nobody was awake"
       // while agents here are (2026-10-05, #book-publish: 21 such notes).
-      if (this.deps.slackRepliesAfter && after === null && pending.timer) {
+      if (this.deps.slackRepliesAfter && after === null && pending.timer && !pending.takeover) {
         this.logger.warn('Unanswered room message: Slack thread unreadable — handing it to the lead anyway', {
           slackChannel: pending.slackChannelId,
           ts: pending.message.ts,
         });
       }
-      const lead = mapping ? await this.localRoomLead(mapping) : null;
+      // A takeover never guesses: with the thread unreadable the owner
+      // machine's agent may have answered, and a second answer is worse.
+      if (pending.takeover && this.deps.slackRepliesAfter && after === null) {
+        this.logger.warn('Unanswered room message: takeover skipped — Slack thread unreadable', {
+          slackChannel: pending.slackChannelId,
+          ts: pending.message.ts,
+        });
+        return;
+      }
+      const lead = mapping ? await this.localRoomLead(mapping, pending.takeover ? pending.threadId : undefined) : null;
+      if (pending.takeover && !(mapping && lead)) {
+        this.logger.info('Unanswered room message: takeover found no agent of this machine in the room — leaving it', {
+          slackChannel: pending.slackChannelId,
+          ts: pending.message.ts,
+        });
+        return;
+      }
       if (mapping && lead && pending.recipients.includes(lead)) {
         // The lead already holds it (delivered as optional): handing it over
         // again would deliver it twice. The owner-message watchdog nudges.
@@ -3089,7 +3142,7 @@ export class SlackTeamChannelService {
         return;
       }
       if (mapping && lead) {
-        this.logger.warn('Nobody took an owner room message — waking the room lead here', {
+        this.logger.warn(pending.takeover ? 'Owner room message left to another machine went unanswered — this machine takes over' : 'Nobody took an owner room message — waking the room lead here', {
           slackChannel: `#${mapping.slackChannelName}`,
           ts: pending.message.ts,
           lead,
@@ -3160,7 +3213,7 @@ export class SlackTeamChannelService {
    * @param mapping - The room
    * @returns A local session, or null when none of the room runs here
    */
-  private async localRoomLead(mapping: SlackTeamChannelMapping): Promise<string | null> {
+  private async localRoomLead(mapping: SlackTeamChannelMapping, threadId?: string): Promise<string | null> {
     const teams = await this.deps.storage.getTeams();
     const team = teams.find((t) => t.id === mapping.teamId) ?? null;
     const isLocal = (s: string) => this.deps.isLocalAgent?.(s) ?? true;
@@ -3168,13 +3221,17 @@ export class SlackTeamChannelService {
     // Never a paused team's agent (specs/2026-10-04-team-pause.md).
     const local = (roster ? roster.map((m) => m.sessionName) : (mapping.members ?? [])).filter((s) => isLocal(s) && !isSessionPaused(s));
     if (local.length === 0) return null;
-    const turns = this.deps.chat.queryRecentTurnsForDispatch?.(
-      mapping.chatChannelId,
-      undefined,
-      SLACK_TEAM_CHANNEL_CONSTANTS.ROOM_LAST_SPEAKER_SCAN,
-    ) ?? [];
-    for (let i = turns.length - 1; i >= 0; i--) {
-      if (local.includes(turns[i].senderId)) return turns[i].senderId;
+    // Most recent local speaker in the message's own thread first (the agent
+    // already in that conversation), then in the room.
+    for (const scope of threadId ? [threadId, undefined] : [undefined]) {
+      const turns = this.deps.chat.queryRecentTurnsForDispatch?.(
+        mapping.chatChannelId,
+        scope,
+        SLACK_TEAM_CHANNEL_CONSTANTS.ROOM_LAST_SPEAKER_SCAN,
+      ) ?? [];
+      for (let i = turns.length - 1; i >= 0; i--) {
+        if (local.includes(turns[i].senderId)) return turns[i].senderId;
+      }
     }
     if (team && roster) {
       const leader = teamChannelLeader(team, roster);
@@ -3336,7 +3393,7 @@ export class SlackTeamChannelService {
     message: SlackIncomingMessage,
     mapping: SlackTeamChannelMapping,
     team: Team | null,
-  ): Promise<{ state: HuddleRoomState; line?: string; deferredElsewhere?: boolean; ownsSharedMessage?: boolean; fallbackElsewhere?: boolean } | null> {
+  ): Promise<{ state: HuddleRoomState; line?: string; deferredElsewhere?: boolean; ownsSharedMessage?: boolean; fallbackElsewhere?: boolean; takeoverBackup?: boolean } | null> {
     const teamMembers = team ? teamChannelMembers(team) : null;
     const isAwake = this.deps.isAgentAwake;
     if (!isAwake) return null;
@@ -3382,7 +3439,7 @@ export class SlackTeamChannelService {
         ts: message.ts,
         owner,
       });
-      return { state: { awakeHere: [], awakeElsewhere: true, wakeWhenAllAsleep: null }, line, deferredElsewhere: true, ...(fallbackElsewhere ? { fallbackElsewhere } : {}) };
+      return { state: { awakeHere: [], awakeElsewhere: true, wakeWhenAllAsleep: null }, line, deferredElsewhere: true, ...(fallbackElsewhere ? { fallbackElsewhere } : {}), ...(roomTakeoverInstance(room, owner) === me ? { takeoverBackup: true } : {}) };
     }
     const shared = owner === me && new Set(room.members.filter((m) => m.awake).map((m) => m.instanceId)).size > 1;
     return {
