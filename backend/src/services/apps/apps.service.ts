@@ -555,6 +555,26 @@ export class AppsService {
    * @param agentSession - The publishing agent
    * @returns True when the app is already this agent's
    */
+  /**
+   * Adopt an app whose agent moved here with its team: Cloud names the agent
+   * as owner but this machine's registry has no entry. Cloud's publisher moves
+   * to this machine (its per-machine checks, comments and @mentions follow the
+   * agent) and the app is recorded locally, so publish, rollback and data
+   * calls all work from here.
+   *
+   * @param appId - App
+   * @param agentSession - The agent
+   * @returns True when adopted
+   */
+  private async adoptMovedApp(appId: string, agentSession: string): Promise<boolean> {
+    if (!(await this.ownedByMovedAgent(appId, agentSession))) return false;
+    const { client, registry } = this.deps;
+    await client.request('PUT', `/apps/${appId}/publisher`, { body: { session: agentSession }, agent: agentSession });
+    const app = await client.request<CloudAppView>('GET', `/apps/${appId}`, { agent: agentSession }).catch(() => null);
+    await registry.upsert(appId, { name: app?.name ?? appId, ...(app?.url ? { url: app.url } : {}), agentSession, deleted: false });
+    return true;
+  }
+
   private async ownedByMovedAgent(appId: string, agentSession: string): Promise<boolean> {
     try {
       const res = await this.deps.client.request<{ owner?: CloudOwnerView | null }>('GET', `/apps/${appId}/owner`, { agent: agentSession });
@@ -581,10 +601,8 @@ export class AppsService {
     // An agent publishes only to its own apps; adopting an app made elsewhere is the owner's call —
     // unless Cloud says it already is this agent's (its team moved here from another machine).
     if (explicitId && agentSession && (!entry || entry.agentSession !== agentSession)) {
-      if (entry || !(await this.ownedByMovedAgent(explicitId, agentSession))) throw notYourApp();
-      // Cloud's publisher moves to this machine before the upload, so its
-      // per-machine checks, comments and @mentions follow the agent here.
-      await client.request('PUT', `/apps/${explicitId}/publisher`, { body: { session: agentSession }, agent: agentSession });
+      if (entry || !(await this.adoptMovedApp(explicitId, agentSession))) throw notYourApp();
+      entry = await registry.get(explicitId);
     }
     let app: CloudAppView | null = null;
     let created = false;
@@ -1082,6 +1100,8 @@ export class AppsService {
     if (!me) return true;
     const entry = await this.deps.registry.get(appId);
     const publisher = entry?.agentSession;
+    // No local record: the agent's team may have moved here (adopts it when Cloud agrees).
+    if (!entry) return this.adoptMovedApp(appId, me);
     if (!publisher) return false;
     if (publisher === me) return true;
     return !!this.deps.sameTeam && (await this.deps.sameTeam(me, publisher).catch(() => false));

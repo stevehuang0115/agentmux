@@ -1005,6 +1005,18 @@ describe('AppsService collaborators (the owner let another team work in an app)'
     expect(request.mock.calls.filter((c) => c[0] === 'POST')).toHaveLength(0);
   });
 
+  it('a team moved from another machine: data access adopts the app when Cloud names this agent', async () => {
+    const MILO = 'edu-game-milo-13e8d3ca';
+    request.mockImplementation(async (m: string, p: string) => {
+      if (p === `/apps/${ID}/owner`) return { appId: ID, owner: { kind: 'agent', explicit: false, session: MILO, name: 'Milo', instanceId: 'old-mac' } };
+      if (p === `/apps/${ID}` && m === 'GET') return { appId: ID, name: 'AZ', url: 'u' };
+      return {};
+    });
+    await expect(svc.assertDataAccess(ID, { agentSession: MILO })).resolves.toBeUndefined();
+    expect((await registry.get(ID))?.agentSession).toBe(MILO);
+    await expect(svc.assertDataAccess(ID, { agentSession: 'other-agent-12345678' })).rejects.toMatchObject({ code: 'not_your_app' });
+  });
+
   it('a team moved from another machine: Cloud names this agent as owner → it publishes and the publisher moves here', async () => {
     const MILO = 'edu-game-milo-13e8d3ca';
     request.mockImplementation(async (m: string, p: string) => {
@@ -1016,6 +1028,8 @@ describe('AppsService collaborators (the owner let another team work in an app)'
     await svc.publish({ files: FILES, appId: ID }, { agentSession: MILO });
     expect(request.mock.calls.some((c) => c[0] === 'POST' && c[1] === `/apps/${ID}/versions`)).toBe(true);
     expect(request.mock.calls.some((c) => c[0] === 'PUT' && c[1] === `/apps/${ID}/publisher`)).toBe(true);
+    // Recorded locally, so data and rollback work from this machine too.
+    await expect(svc.assertDataAccess(ID, { agentSession: MILO })).resolves.toBeUndefined();
     // An agent Cloud does not name is still refused.
     await registry.markDeleted(ID).catch(() => undefined);
     await expect(svc.publish({ files: FILES, appId: 'zzzzzzzzzz' }, { agentSession: 'someone-else-12345678' })).rejects.toMatchObject({ code: 'not_your_app' });
