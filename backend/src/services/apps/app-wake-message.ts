@@ -533,7 +533,11 @@ export function buildAppWakeMessage(input: WakeMessageInput): string {
       lines.push('The owner @mentioned other agents in some of these comments; they got them too. Coordinate in the thread rather than both doing the same work.');
     }
     lines.push(`Reply in the thread: ${cmd} --reply <comment id> --text "<what you did or a question>"`);
-    lines.push(`Resolve once addressed (often after publishing a fix or updating app data): ${cmd} --resolve <comment id> [--text "<what changed>"]`);
+    lines.push(
+      `Resolve once addressed: a fix published, data updated, or the question answered. ${cmd} --resolve <comment id> --text "<what changed, or your answer>" ` +
+        'posts your reply and resolves in one step. Keep a thread open only while you cannot go on without the owner\'s answer; an optional offer ' +
+        '("say X if you want me to …") is no reason, because an owner reply reopens the thread and wakes you.',
+    );
     if (input.isPublisher || input.owns) {
       lines.push(`Full anchors (outerHTML, position, attributes): ${cmd} --list`);
     } else {
