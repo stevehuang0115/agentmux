@@ -48,6 +48,7 @@ import { getActingFor } from '../../services/people/acting-for.service.js';
 import { getOwnerRequestContext } from '../../services/orc/owner-request-context.js';
 import { readAgentSessionHeader } from '../../utils/agent-caller.utils.js';
 import { getTurnTriggerTracker } from '../../services/trace/turn-trigger.js';
+import { getAgentAskLedger } from '../../services/messaging/agent-ask-ledger.service.js';
 import { getCallerIdentity, isOwnerCaller } from '../../middleware/caller-identity.middleware.js';
 import { pausedRefusalMessage, pausedTeamOfSession } from '../../services/team/team-pause.registry.js';
 import { noteTurnDelivery, withWorkItemTraceMarker } from '../../services/trace/trace-recorder.js';
@@ -1681,6 +1682,12 @@ export function noteAgentToAgent(target: string, req: Pick<Request, 'headers'> &
 		const body = (req.body ?? {}) as Record<string, unknown>;
 		const text = typeof body.message === 'string' ? body.message : body.mode === 'message' && typeof body.data === 'string' ? body.data : null;
 		if (text) getTurnTriggerTracker().noteSender(target, text, sender);
+		// Writing to an agent answers what that agent asked this one.
+		try {
+			getAgentAskLedger()?.noteAnswered(sender, target);
+		} catch {
+			/* best effort */
+		}
 		// A hand-over of the owner's request: work the target creates from it
 		// keeps the owner origin, so its completion is reported to the owner.
 		try {
