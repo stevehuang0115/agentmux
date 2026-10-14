@@ -998,6 +998,54 @@ describe('AppsService collaborators (the owner let another team work in an app)'
     });
   });
 
+  describe('downloadFile (read an owner upload)', () => {
+    const FID = 'abcdefghij012345';
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    let download: jest.Mock;
+    beforeEach(() => {
+      request.mockImplementation(async (m: string, p: string) => {
+        if (m === 'GET' && p === `/apps/${ID}/collaborators`) return { collaborators: list, enforced: true };
+        return {};
+      });
+      download = jest.fn().mockResolvedValue({ data: bytes, contentType: 'image/png', headers: new Headers({ 'content-disposition': 'attachment; filename="subs shot.png"' }) });
+      svc = new AppsService({
+        client: { request, download } as unknown as AppsCloudClient,
+        registry,
+        cards,
+        sameTeam: async () => false,
+        directory: { member: async (s) => ({ session: s, name: s, team: s === ELLA ? 'Marketing' : 'Sales' }), leadsTeamOf: async () => false },
+        instanceId: async () => 'inst-2',
+      });
+    });
+
+    it('a collaborator downloads: Cloud is asked for the file as that agent with the upload size cap; bytes, type and name come back', async () => {
+      const out = await svc.downloadFile(ID, FID, { agentSession: ELLA });
+      expect(out).toEqual({ data: bytes, contentType: 'image/png', name: 'subs shot.png' });
+      expect(download).toHaveBeenCalledWith(`/apps/${ID}/files/${FID}`, { maxBytes: 10 * 1024 * 1024, agent: ELLA });
+    });
+
+    it('NEGATIVE: an agent that is not a collaborator is refused with not_your_app and Cloud is never asked for the file', async () => {
+      await expect(svc.downloadFile(ID, FID, { agentSession: BOB })).rejects.toMatchObject({ status: 403, code: 'not_your_app' });
+      expect(download).not.toHaveBeenCalled();
+    });
+
+    it('NEGATIVE: a malformed file id is refused before anything is sent', async () => {
+      await expect(svc.downloadFile(ID, '../etc/passwd', { agentSession: ELLA })).rejects.toMatchObject({ code: 'validation' });
+      await expect(svc.downloadFile(ID, 'short', { agentSession: ELLA })).rejects.toMatchObject({ code: 'validation' });
+      expect(download).not.toHaveBeenCalled();
+    });
+
+    it('an app of another account (Cloud 404) answers a clear not_found, not a fake success', async () => {
+      download.mockRejectedValue(new AppsCloudError(404, 'not_found', 'File not found.'));
+      await expect(svc.downloadFile(ID, FID, { agentSession: ELLA })).rejects.toMatchObject({ status: 404, code: 'not_found', message: expect.stringContaining('another Crewly account') });
+    });
+
+    it('passes other Cloud failures through (too_large)', async () => {
+      download.mockRejectedValue(new AppsCloudError(413, 'too_large', 'The file is larger than this machine accepts.'));
+      await expect(svc.downloadFile(ID, FID, { agentSession: ELLA })).rejects.toMatchObject({ status: 413, code: 'too_large' });
+    });
+  });
+
   it('data only: a collaborator cannot republish, roll back, or publish with an explicit --app id', async () => {
     await expect(svc.assertPublisher(ID, { agentSession: ELLA })).rejects.toMatchObject({ code: 'not_your_app' });
     await expect(svc.rollback(ID, 1, { agentSession: ELLA })).rejects.toMatchObject({ code: 'not_your_app' });

@@ -222,6 +222,11 @@ api_call() {
   local url="${CREWLY_API_URL}/api${endpoint}"
   _prune_skill_output
   local args=(-s -w '\n%{http_code}' -X "$method")
+  # A binary download (app-data --download): the body goes to CREWLY_API_DOWNLOAD_TO
+  # byte for byte and the response headers to CREWLY_API_DOWNLOAD_TO.hdr; stdout stays empty.
+  if [ -n "${CREWLY_API_DOWNLOAD_TO:-}" ]; then
+    args+=(-o "${CREWLY_API_DOWNLOAD_TO}" -D "${CREWLY_API_DOWNLOAD_TO}.hdr")
+  fi
   # Optional ceiling on the whole request (seconds). A caller that can tell
   # "the server is slow" from "it failed" (poll-tasks' claim) sets it; curl
   # then exits 28 instead of hanging until the skill runner kills the call.
@@ -314,6 +319,12 @@ api_call() {
   http_code=$(echo "$response" | tail -1)
   local body_content
   body_content=$(echo "$response" | sed '$d')
+  # A failed download leaves the error JSON in the target file: report it, then drop the partial file.
+  if [ -n "${CREWLY_API_DOWNLOAD_TO:-}" ] && ! { [ "$http_code" -ge 200 ] 2>/dev/null && [ "$http_code" -lt 300 ] 2>/dev/null; }; then
+    body_content=$(head -c 4000 "${CREWLY_API_DOWNLOAD_TO}" 2>/dev/null | tr -d '\000')
+    rm -f "${CREWLY_API_DOWNLOAD_TO}"
+    printf '%s' "$body_content" | jq -e . >/dev/null 2>&1 || body_content=""
+  fi
 
   if [ "$http_code" -ge 200 ] 2>/dev/null && [ "$http_code" -lt 300 ] 2>/dev/null; then
     _cap_skill_output "$body_content"

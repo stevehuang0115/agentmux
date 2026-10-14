@@ -34,6 +34,7 @@
  * - DELETE /:appId/capability-request             — withdraw it
  * - POST   /:appId/make-private                    — private again (instant)
  * - POST   /:appId/files                           — upload a file (raw body, `X-File-Name`); answers its URL
+ * - GET    /:appId/files/:fileId                   — the bytes of a stored file (an owner upload); app-data --download
  * - GET    /:appId/comments                        — `?status=open|resolved|all` (crewly#1056)
  * - GET    /:appId/comments/:commentId             — one thread
  * - POST   /:appId/comments/:commentId/replies     — reply `{ text }`
@@ -104,6 +105,7 @@ import {
   refreshThumbnail,
   refreshAllThumbnails,
   uploadFile,
+  downloadFile,
   requestTemplate,
   findTemplates,
   myTemplates,
@@ -254,6 +256,7 @@ export function createAppsRouter(): Router {
   router.delete('/:appId/collaborators/:entryId', ownerOnly('Only the owner can remove a collaborator.'), removeCollaborator);
   router.post('/:appId/rollback', rollbackApp);
   router.get('/:appId/versions', listVersions);
+  router.get('/:appId/files/:fileId', downloadFile);
   router.get('/:appId/data/:collection', listDocs);
   router.post('/:appId/data/:collection', addDoc);
   router.get('/:appId/data/:collection/:docId', getDoc);

@@ -233,6 +233,29 @@ export const uploadFile = handle(async (req, caller) => {
   return result;
 }, 201);
 
+/**
+ * GET /api/apps/:appId/files/:fileId — the bytes of a file stored in the app
+ * (an image the owner uploaded in it, say). Same access as the app's data;
+ * answers the raw file with its `Content-Type`, `Content-Disposition` and a
+ * URI-encoded `X-File-Name`. An app of another account answers 404.
+ */
+export async function downloadFile(req: Request, res: Response): Promise<void> {
+  try {
+    const caller = callerOf(req);
+    const file = await getAppsParts().service.downloadFile(req.params.appId, req.params.fileId, caller);
+    const name = (file.name ?? req.params.fileId).replace(/[^\w.\- ]/g, '_');
+    res.status(200);
+    res.setHeader('Content-Type', file.contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    res.setHeader('X-File-Name', encodeURIComponent(file.name ?? req.params.fileId));
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.send(file.data);
+    logger.info('App file downloaded', { appId: req.params.appId, fileId: req.params.fileId, size: file.data.length, agent: caller.agentSession ?? 'owner' });
+  } catch (err) {
+    sendAppsError(res, err);
+  }
+}
+
 /** GET /api/apps/:appId/comments?status=open|resolved|all (crewly#1056) */
 export const listComments = handle((req, caller) => getAppsParts().service.listComments(req.params.appId, req.query.status, caller));
 

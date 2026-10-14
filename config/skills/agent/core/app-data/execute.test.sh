@@ -58,7 +58,19 @@ class H(BaseHTTPRequestHandler):
         if method == 'DELETE':
             return send(200, {'success': True, 'data': {'deleted': True}})
         send(200, {'success': True, 'data': DOC})
-    def do_GET(self): self._reply('GET')
+    def do_GET(self):
+        if '/files/' in self.path:
+            open(LOG, 'w').write(json.dumps({'method': 'GET', 'path': self.path, 'session': self.headers.get('x-agent-session')}))
+            if self.path.endswith('aaaaaaaaaaaaaaaa'):
+                body = b'\x89PNG\r\n\x1a\n\x00\x01'
+                self.send_response(200); self.send_header('Content-Type', 'image/png'); self.send_header('X-File-Name', 'subs%20shot.png'); self.send_header('Content-Length', str(len(body))); self.end_headers()
+                return self.wfile.write(body)
+            self.send_response(404); self.send_header('Content-Type', 'application/json'); self.end_headers()
+            return self.wfile.write(json.dumps({'success': False, 'error': 'not_found', 'message': 'No such file in this app.'}).encode())
+        if self.path.endswith('/withfile'):
+            self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers()
+            return self.wfile.write(json.dumps({'success': True, 'data': {'id': 'withfile', 'data': {'shots': [{'fileId': 'aaaaaaaaaaaaaaaa'}]}, 'rev': 1, 'updatedAt': 't'}}).encode())
+        self._reply('GET')
     def do_DELETE(self): self._reply('DELETE')
     def _body(self, m):
         n = int(self.headers.get('content-length', '0')); body = self.rfile.read(n).decode() if n else ''
@@ -236,6 +248,28 @@ OUT=$(run_err --app $A --get-field items milk --field /n --out "$WORK/proj/n.txt
 check "get-field: non-string field refused" "$(printf '%s' "$OUT" | grep -c 'not a string')" "1"
 OUT=$(run_err --app $A --get-field items milk --out "$WORK/proj/x.txt" || true)
 check "get-field: --field required" "$(printf '%s' "$OUT" | grep -c -- '--field is required')" "1"
+
+# --download: bytes saved into <project>/inbox/app-files/<app>/<name>, receipt printed, same path guard.
+OUT=$(run --app $A --download aaaaaaaaaaaaaaaa)
+check "download: receipt" "$(printf '%s' "$OUT" | jq -c '{success, name, size, contentType}')" '{"success":true,"name":"subs shot.png","size":10,"contentType":"image/png"}'
+check "download: request" "$(jq -c '{method, path, session}' "$STUB_LOG")" "{\"method\":\"GET\",\"path\":\"/api/apps/$A/files/aaaaaaaaaaaaaaaa\",\"session\":\"dev-ella\"}"
+DLP="$(printf '%s' "$OUT" | jq -r .path)"
+check "download: default location" "${DLP#$(cd "$WORK/proj" && pwd -P)/}" "inbox/app-files/$A/subs shot.png"
+check "download: bytes intact" "$(xxd -p "$DLP" | tr -d '\n')" "89504e470d0a1a0a0001"
+check "download: no temp files left" "$(ls -A "$WORK/proj/inbox/app-files/$A" | wc -l | tr -d ' ')" "1"
+OUT=$(run --app $A --download "https://apps.crewlyai.com/_f/sometoken/aaaaaaaaaaaaaaaa?x=1" --out "$WORK/proj/mine.png")
+check "download: url + --out" "$(printf '%s' "$OUT" | jq -r '.path | split("/") | last')" "mine.png"
+OUT=$(run --app $A --download bbbbbbbbbbbbbbbb; true)
+check "download: Cloud 404 passed through" "$(printf '%s' "$OUT" | jq -c '{success, status, reason}')" '{"success":false,"status":404,"reason":"not_found"}'
+check "download: failed download leaves no file" "$(ls -A "$WORK/proj/inbox/app-files/$A" | wc -l | tr -d ' ')" "1"
+OUT=$(run_err --app $A --download "not-an-id" || true)
+check "download: bad id refused" "$(printf '%s' "$OUT" | grep -c '16-character')" "1"
+OUT=$(run_err --app $A --download aaaaaaaaaaaaaaaa --out "$WORK/outside-dl.png" || true)
+check "download: --out outside the project refused" "$(printf '%s' "$OUT" | grep -c 'inside your project')" "1"
+OUT=$(run_err --app $A --download aaaaaaaaaaaaaaaa --out "$WORK/home/.crewly/x.png" || true)
+check "download: --out under ~/.crewly refused" "$(printf '%s' "$OUT" | grep -c "inside")" "1"
+OUT=$(run --app $A --get items withfile)
+check "get: file reference gets the --download hint" "$(printf '%s' "$OUT" | jq -r '.fileHint | test("--download")')" "true"
 
 echo "app-data: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

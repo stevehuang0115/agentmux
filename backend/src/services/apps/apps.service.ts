@@ -309,6 +309,22 @@ function requireDocId(id: unknown): string {
   return id;
 }
 
+/**
+ * The file name in a `Content-Disposition: attachment; filename="…"` header.
+ *
+ * @param header - Header value (may be null)
+ * @returns The name, or undefined when there is none
+ */
+export function fileNameOf(header: string | null | undefined): string | undefined {
+  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(header ?? '');
+  if (!m) return undefined;
+  try {
+    return decodeURIComponent(m[1]!).trim() || undefined;
+  } catch {
+    return m[1]!.trim() || undefined;
+  }
+}
+
 function notYourApp(): AppsCloudError {
   return new AppsCloudError(
     403,
@@ -1453,6 +1469,33 @@ export class AppsService {
         agent: caller.agentSession,
       }),
     );
+  }
+
+  /**
+   * Download a file stored in an app (for example a screenshot the owner
+   * uploaded in the app) as raw bytes. Same access as the app's data. Cloud
+   * serves a file only to the account that owns the app, so an app owned by
+   * another account answers 404 `not_found` here (no cross-account reads).
+   *
+   * @param appId - App id
+   * @param fileId - File id (16 characters, as in the upload answer and the file URL)
+   * @param caller - Agent or owner
+   * @returns Bytes, content type and the original file name (when Cloud sent one)
+   * @throws AppsCloudError validation (bad file id), not_your_app, not_found, too_large
+   */
+  async downloadFile(appId: unknown, fileId: unknown, caller: AppsCaller): Promise<{ data: Buffer; contentType: string; name?: string }> {
+    const id = requireAppId(appId);
+    if (typeof fileId !== 'string' || !/^[a-z0-9]{16}$/.test(fileId)) throw validation('fileId must be the 16-character file id from the app data or the file URL.');
+    await this.assertDataAccess(id, caller);
+    try {
+      const got = await this.deps.client.download(`/apps/${id}/files/${fileId}`, { maxBytes: C.UPLOAD_BODY_MAX_BYTES, agent: caller.agentSession });
+      return { data: got.data, contentType: got.contentType, name: fileNameOf(got.headers.get('content-disposition')) };
+    } catch (err) {
+      if (err instanceof AppsCloudError && err.status === 404) {
+        throw new AppsCloudError(404, 'not_found', 'No such file in this app. If the app belongs to another Crewly account, its files cannot be read from this account.');
+      }
+      throw err;
+    }
   }
 
   /**

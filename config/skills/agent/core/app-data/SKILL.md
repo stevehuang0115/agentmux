@@ -77,6 +77,18 @@ Output:
   bash execute.sh --app <appId> --upload ./cover.png
   bash execute.sh --app <appId> --update posts <docId> --data '{"images":[{"src":"<url from the upload>"}]}'
   ```
+- `--download <fileId|file url> [--out <path>]` fetches a file stored in the app
+  (for example a screenshot the owner uploaded in the app: the data holds its
+  `fileId` or a `/_f/` URL) into your project and prints
+  `{ success, path, name, size, contentType }`. Default location:
+  `<project>/inbox/app-files/<appId>/<name>`; `--out` must be inside your project
+  directory (not a symlink, not under `~/.crewly`). Up to 10 MB. **To read the
+  numbers in an owner screenshot: `--download` it, then open the image file with
+  your normal file-read tool.** Works for the app's owner agents and
+  collaborators; an app owned by another Crewly account answers `not_found`.
+  ```bash
+  bash execute.sh --app <appId> --download <fileId>
+  ```
 - `--list` pages with `--after <next>` until `next` is null.
 - `--update` is a shallow merge; `--set` replaces the whole document.
 - `--if-rev` makes an update conditional: if the owner changed the doc since
