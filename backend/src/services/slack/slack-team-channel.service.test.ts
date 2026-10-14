@@ -112,6 +112,8 @@ class FakeSlack implements TeamChannelSlackApi {
     botToken?: string;
   }> = [];
   uploadError: string | null = null;
+  /** When set, sendMessage rejects with this Slack error. */
+  sendError: string | null = null;
   channels = new Map<string, { id: string; name: string; isArchived: boolean; isPrivate: boolean }>();
   private seq = 0;
   private channelSeq = 0;
@@ -151,6 +153,7 @@ class FakeSlack implements TeamChannelSlackApi {
     this.purposes.push({ id, purpose });
   }
   async sendMessage(m: SlackOutgoingMessage) {
+    if (this.sendError) throw new Error(this.sendError);
     this.sent.push(m);
     return `${++this.seq}.000`;
   }
@@ -242,6 +245,7 @@ class FakeChat extends EventEmitter {
   channels = new Map<string, ChatChannelDTO>();
   members = new Map<string, Set<string>>();
   messages: ChatMessageDTO[] = [];
+  metadataPatches: Array<{ id: string; patch: Record<string, unknown> }> = [];
   private seq = 0;
 
   createHuddle(args: { name: string; purpose?: string; memberSessions: string[] }): ChatChannelDTO {
@@ -329,6 +333,7 @@ class FakeChat extends EventEmitter {
     );
   }
   updateMessageMetadata(id: string, patch: Record<string, unknown>) {
+    this.metadataPatches.push({ id, patch });
     const m = this.messages.find((x) => x.id === id);
     if (!m) return null;
     m.metadata = { ...(m.metadata ?? {}), ...patch };
@@ -1421,6 +1426,83 @@ describe('mirrorOutbound', () => {
     expect(slack.sent).toEqual([]);
   });
 
+  describe('delivery record (CREW-89)', () => {
+    afterEach(() => {
+      typing = null;
+    });
+
+    it('stores the Slack channel + ts + thread on the message after a direct post', async () => {
+      const root = await service.routeInbound(inbound({ ts: '100.1', text: '@sam go' }));
+      slack.sent = [];
+      const r = await service.mirrorOutboundDetailed(agentMessage({ threadId: root!.message.id }));
+      expect(r.delivery).toEqual({ delivered: true, slackChannelId: 'C1', ts: expect.stringMatching(/\.000$/), threadTs: '100.1' });
+      expect(chat.metadataPatches).toEqual([
+        { id: 'reply-1', patch: { slackDelivery: { slackChannelId: 'C1', ts: r.delivery!.ts, threadTs: '100.1' } } },
+      ]);
+      expect(slack.sent[0].senderSession).toBe('crewly-alpha-sam');
+    });
+
+    it('stores the ts of the message that carries the reply when it goes through the typing placeholder', async () => {
+      typing = {
+        begin: jest.fn().mockResolvedValue(null),
+        resolve: jest.fn(async (_k, _t, _i, opts) => { opts?.onMessageTs?.('555.123'); return 'edited'; }),
+        setPhase: jest.fn(),
+        fail: jest.fn(),
+      };
+      service = makeService();
+      await service.ensureTeamChannel(team());
+      await service.start();
+      // A reply in a thread goes through the placeholder (a top-level post never does).
+      const root = await service.routeInbound(inbound({ ts: '100.1', text: '@sam go' }));
+      chat.metadataPatches = [];
+      const r = await service.mirrorOutboundDetailed(agentMessage({ threadId: root!.message.id }));
+      expect(r.delivery).toMatchObject({ delivered: true, slackChannelId: 'C1', ts: '555.123', threadTs: '100.1' });
+      expect(chat.metadataPatches[0].patch).toEqual({ slackDelivery: { slackChannelId: 'C1', ts: '555.123', threadTs: '100.1' } });
+    });
+
+    it('reports Slack\'s error and stores no ts when the post fails for a Slack-mapped room', async () => {
+      slack.sendError = 'channel_not_found';
+      const r = await service.mirrorOutboundDetailed(agentMessage());
+      expect(r.attempted).toBe(true);
+      expect(r.delivery).toEqual({ delivered: false, slackChannelId: 'C1', error: 'channel_not_found' });
+      expect(chat.metadataPatches).toEqual([]);
+    });
+
+    it('registers the attempt for the reply call to await, and a failure reaches it', async () => {
+      const { awaitSlackDelivery, resetSlackDeliveryTracker } = await import('./slack-outbound-delivery.js');
+      resetSlackDeliveryTracker();
+      slack.sendError = 'channel_not_found';
+      chat.emit('chat_message', agentMessage({ id: 'reply-fail' }));
+      expect(await awaitSlackDelivery('reply-fail')).toMatchObject({ delivered: false, error: 'channel_not_found' });
+    });
+
+    it('production order: team-channel mirror, then the DM mirror on the same emitter — a refused team-channel post still reaches the awaiting endpoint', async () => {
+      const { awaitSlackDelivery, resetSlackDeliveryTracker } = await import('./slack-outbound-delivery.js');
+      const { SlackAgentDmService } = await import('./slack-agent-dm.service.js');
+      resetSlackDeliveryTracker();
+      const dm = new SlackAgentDmService({
+        slack: slack as never,
+        chat: chat as never,
+        storage: { getTeams: async () => [] },
+        getDispatcher: () => null,
+        identities: { getInstalled: () => null } as never,
+        storePath: path.join(tmpDir, 'slack-agent-dms.json'),
+      });
+      await dm.start(); // after service.start() in beforeEach: DM's handler runs second, as in slack-initializer
+      slack.sendError = 'channel_not_found';
+      chat.emit('chat_message', agentMessage({ id: 'reply-both' }));
+      const delivery = await awaitSlackDelivery('reply-both');
+      expect(delivery).toMatchObject({ delivered: false, error: 'channel_not_found' });
+      dm.stop();
+    });
+
+    it('leaves a message that is not for Slack alone (unmapped channel: no delivery, nothing stored)', async () => {
+      const r = await service.mirrorOutboundDetailed(agentMessage({ channelId: 'huddle-zzz' }));
+      expect(r).toEqual({ attempted: false, delivery: null });
+      expect(chat.metadataPatches).toEqual([]);
+    });
+  });
+
   it('names the reason in the log whenever a reply is not mirrored', async () => {
     // Until 2026-09-19 every skip was a silent `return false`: an agent could
     // answer, be told the reply was delivered, and leave the owner staring at
@@ -1536,7 +1618,18 @@ describe('top-level posts stay top level (scheduled reports)', () => {
       { agentSession: 'crewly-alpha-leo', slackChannelId: 'C1', threadTs: '310.1' },
       '12 signups this week',
       { botToken: 'xoxb-leo', displayName: 'Leo' },
+      { onMessageTs: expect.any(Function) },
     );
+  });
+
+  it('reports the delivery of a top-level post (ts stored, Slack failure surfaced)', async () => {
+    await service.routeInbound(inbound({ ts: '321.1' }));
+    slack.sent = [];
+    const summary = post({ content: 'summary' });
+    chat.messages.push(summary);
+    const r = await service.mirrorOutboundDetailed(summary);
+    expect(r.delivery).toMatchObject({ delivered: true, slackChannelId: 'C1', ts: expect.any(String) });
+    expect(chat.metadataPatches.some((p) => p.id === summary.id && 'slackDelivery' in p.patch)).toBe(true);
   });
 
   it('records the Slack ts on the posted row, so its detail reply goes under it', async () => {
@@ -1553,6 +1646,7 @@ describe('top-level posts stay top level (scheduled reports)', () => {
       { agentSession: 'crewly-alpha-leo', slackChannelId: 'C1', threadTs: rootTs },
       'detail',
       expect.anything(),
+      { onMessageTs: expect.any(Function) },
     );
   });
 
@@ -1582,6 +1676,7 @@ describe('top-level posts stay top level (scheduled reports)', () => {
       { agentSession: 'crewly-alpha-leo', slackChannelId: 'C1', threadTs: '900.5' },
       'detail',
       expect.anything(),
+      { onMessageTs: expect.any(Function) },
     );
   });
 
@@ -2864,7 +2959,7 @@ describe('beginWorkingForAgent', () => {
       id: 'reply-9', channelId: 'huddle-1', seq: 99, senderType: 'agent', senderId: 'crewly-alpha-leo', content: 'I can take this',
       contentType: 'markdown', createdAt: 1, attachments: [], mentions: [], metadata: { source: 'reply-tool' }, threadId: root.id,
     } as ChatMessageDTO);
-    expect(typing.resolve).toHaveBeenCalledWith(key, 'I can take this', expect.anything());
+    expect(typing.resolve).toHaveBeenCalledWith(key, 'I can take this', expect.anything(), { onMessageTs: expect.any(Function) });
     typing = null;
   });
 
@@ -2882,10 +2977,10 @@ describe('beginWorkingForAgent', () => {
     const key = { agentSession: 'crewly-alpha-leo', slackChannelId: 'C1', threadTs: '710.1' };
     // Re-opened in the same step as the interim note, so a fast final answer
     // cannot slip in between and leave the new placeholder under it (2026-09-28).
-    expect(typing.resolve).toHaveBeenLastCalledWith(key, 'Got it — plan: …', { botToken: 'xoxb-leo', displayName: 'Leo' }, { reopen: 'typing' });
+    expect(typing.resolve).toHaveBeenLastCalledWith(key, 'Got it — plan: …', { botToken: 'xoxb-leo', displayName: 'Leo' }, { reopen: 'typing', onMessageTs: expect.any(Function) });
     typing.resolve.mockClear();
     await service.mirrorOutbound({ ...base, id: 'f-1', content: 'Done', metadata: { source: 'reply-tool' } } as ChatMessageDTO);
-    expect(typing.resolve).toHaveBeenLastCalledWith(key, 'Done', { botToken: 'xoxb-leo', displayName: 'Leo' });
+    expect(typing.resolve).toHaveBeenLastCalledWith(key, 'Done', { botToken: 'xoxb-leo', displayName: 'Leo' }, { onMessageTs: expect.any(Function) });
     expect(typing.begin).not.toHaveBeenCalled();
     typing = null;
   });
@@ -3161,6 +3256,7 @@ describe('agent identities', () => {
       { agentSession: 'crewly-alpha-sam', slackChannelId: 'C1', threadTs: '100.1' },
       'done ✅',
       { botToken: 'xoxb-sam', displayName: 'Sam' },
+      { onMessageTs: expect.any(Function) },
     );
     typing = null;
   });

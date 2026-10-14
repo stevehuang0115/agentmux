@@ -18,6 +18,7 @@
  */
 
 import type { AttachResult } from '../../services/file-handoff/file-handoff.service.js';
+import { awaitSlackDelivery } from '../../services/slack/slack-outbound-delivery.js';
 import type { Request, Response } from 'express';
 import type { AuthenticatedRequest } from '../../middleware/require-auth.middleware.js';
 import type { ChatV2Service } from '../../services/chat-v2/chat-v2.service.js';
@@ -598,6 +599,7 @@ export function createChatV2Controller(
       // without running any post-ack side-effects. On success, the
       // closure populates `persisted` + `channelForDispatch`.
       let persisted: ChatMessageDTO | undefined;
+      let ackDeferred = false;
       let channelForDispatch: Awaited<ReturnType<typeof service.getChannel>> | null = null;
 
       runHandler(res, () => {
@@ -624,7 +626,10 @@ export function createChatV2Controller(
           threadId: body.threadId,
           interim: body.interim === true,
         });
-        res.status(201).json({ success: true, data: message, ...(fileHandoff ? { fileHandoff: { attached: fileHandoff.attached, failed: fileHandoff.failed } } : {}) });
+        // An agent's reply waits for its Slack mirror before it is acked
+        // (below), so a refused Slack post is not reported as delivered.
+        if (message.senderType === 'agent') ackDeferred = true;
+        else res.status(201).json({ success: true, data: message, ...(fileHandoff ? { fileHandoff: { attached: fileHandoff.attached, failed: fileHandoff.failed } } : {}) });
         persisted = message;
         // Look up channel for gateway + dispatcher wiring. `getChannel`
         // requires `principal.userId === channel.owner_user_id` — which
@@ -643,6 +648,20 @@ export function createChatV2Controller(
       // If `persisted` is still undefined, runHandler already serialized an
       // error response — skip the realtime fan-out.
       if (!persisted) return;
+
+      if (ackDeferred) {
+        const delivery = await awaitSlackDelivery(persisted.id);
+        if (delivery && !delivery.delivered) {
+          const error = delivery.error ?? 'Slack post failed';
+          res.status(502).json({
+            success: false,
+            error: `Slack delivery failed: ${error}`,
+            data: { ...persisted, slackDelivered: false },
+          });
+        } else {
+          res.status(201).json({ success: true, data: persisted, ...(fileHandoff ? { fileHandoff: { attached: fileHandoff.attached, failed: fileHandoff.failed } } : {}) });
+        }
+      }
 
       // -------- post-ack realtime side-effects --------
       const { gateway, dispatcher } = resolveDeps();
