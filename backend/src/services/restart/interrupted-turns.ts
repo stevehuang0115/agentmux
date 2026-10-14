@@ -86,6 +86,13 @@ export interface ResumeDeps {
 	isSessionRunning: (sessionName: string) => boolean;
 	/** Enqueue on the persistent message queue */
 	enqueue: (input: ResumeEnqueueInput) => void;
+	/**
+	 * Hold text on the agent's persistent per-session queue. It is written out
+	 * when the agent registers, so it survives the agent not being up yet.
+	 */
+	queueForAgent: (sessionName: string, text: string) => void;
+	/** Whether the session belongs to a known team member; unknown sessions are skipped. Defaults to true. */
+	isKnownSession?: (sessionName: string) => boolean | Promise<boolean>;
 	/** Direct delivery (registration-gated) */
 	sendMessageToAgent: (sessionName: string, text: string) => Promise<{ success: boolean; error?: string; queued?: boolean }>;
 	/** Resolves true once the orchestrator is registered and active */
@@ -422,11 +429,32 @@ export async function resumeInterruptedTurns(entries: readonly InterruptedTurnEn
 				continue;
 			}
 			if (!isOrc && !deps.isSessionRunning(entry.sessionName)) {
-				summary.skipped += 1;
-				deps.logger.warn('Interrupted turn not resumed: agent is not running after restart', {
-					sessionName: entry.sessionName,
-					messagePreview: entry.preview,
-				});
+				// The boot restore brings these agents back one by one, so at this
+				// point they are usually not up yet. Hold the note on the agent's
+				// persistent queue; registration flushes it. Only sessions that are
+				// not team members at all are dropped.
+				const known = deps.isKnownSession ? await deps.isKnownSession(entry.sessionName) : true;
+				if (!known) {
+					summary.skipped += 1;
+					deps.logger.warn('Interrupted turn not resumed: agent is not running after restart', {
+						sessionName: entry.sessionName,
+						messagePreview: entry.preview,
+					});
+				} else {
+					const isWork = entry.kind === 'work';
+					if (isWork) workNoted.add(entry.sessionName);
+					deps.queueForAgent(
+						entry.sessionName,
+						isWork
+							? buildResumeNote(entry.workLabel)
+							: buildResumeMessage(isQueueEntry(entry) ? entry.originalContent : entry.text, entry.workLabel ?? workLabelOf(entry.text)),
+					);
+					summary.redelivered += 1;
+					deps.logger.info('Interrupted turn queued for an agent that is not running yet', {
+						sessionName: entry.sessionName,
+						messagePreview: entry.preview,
+					});
+				}
 			} else if (entry.kind !== 'work' && isQueueEntry(entry)) {
 				deps.enqueue({
 					content: buildResumeMessage(entry.originalContent, entry.workLabel ?? workLabelOf(entry.text)),
