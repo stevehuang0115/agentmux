@@ -1376,6 +1376,19 @@ describe('Tool Registry', () => {
       );
     });
 
+    it('returns a refused completion instead of swallowing it (#1312)', async () => {
+      mockClient.post.mockImplementation(async (endpoint: string) => endpoint.startsWith('/task-pool/complete/')
+        ? { success: false, error: 'complete requires evidence', status: 400 }
+        : { success: true, data: { acknowledged: true }, status: 200 });
+      mockClient.get.mockResolvedValueOnce({ success: true, data: { workItems: [{ id: 'wi-running-3' }] }, status: 200 });
+
+      const result = await (tools.report_status as any).execute({ status: 'done', summary: 'Done' });
+
+      expect(result.acknowledged).toBe(true);
+      expect(result.completionError).toContain('wi-running-3 is still OPEN');
+      expect(result.completionError).toContain('complete requires evidence');
+    });
+
     it('should not auto-complete tasks when status is in_progress', async () => {
       mockClient.post.mockResolvedValue({ success: true, data: { acknowledged: true }, status: 200 });
 

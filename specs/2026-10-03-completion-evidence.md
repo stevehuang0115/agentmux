@@ -74,22 +74,26 @@ result onto `WorkItem.output.evidence`); a top-level `evidence` is a 400
 - **Mode:** `COMPLETION_EVIDENCE_CONSTANTS.EVIDENCE_ENFORCEMENT_MODE`
   (`backend/src/constants.ts`), overridden per process by
   `CREWLY_EVIDENCE_MODE=warn|enforce` (read per request).
-- **This release: `warn`.** Completions without evidence still land; the
-  response carries `warning` and the skills print it on stderr. Everything else
-  (malformed, missing artifact, failing command, blocked) is enforced now — it
-  is new input, so there is no back-compat concern.
-- **Next release: flip the default to `enforce`.** Before flipping, check the
-  backend log for `completed without evidence (warn mode)` to find callers
-  still sending none. Known callers that do not send evidence yet:
-  - `V3DataService.onTaskCompleted` (`v3:task_completed` event) calls
-    `pool.completeItem` directly, bypassing the controller. Nothing emits that
-    event in production today; if it is revived it must pass evidence or be
-    treated as system completion.
-  - `OpenItemsService` follow-up closes (`open-items.wiring.ts`) move items to
-    `done` as `system` without the controller — owner-promise follow-ups, not
-    worker deliverables; left as is.
-  - Free-form callers (direct curl, role prompts that show `report-status`
-    without evidence flags) — they get the warning this release.
+- **Default: `enforce` (#1312, 2026-10-14).** A completion without evidence
+  is refused with 400 `evidence_required` and nothing is written. Set
+  `CREWLY_EVIDENCE_MODE=warn` to go back to accepting it with a `warning`.
+- **Who must send evidence:** WorkItem types in
+  `COMPLETION_EVIDENCE_CONSTANTS.REQUIRED_FOR_TYPES` (`delegate`,
+  `project_task`, `review`) and items with no type (`evidenceRequiredFor`).
+  Bookkeeping types (`ticket_triage`, `goal_replan`, retros, `reconcile`,
+  `notify`, …) complete without it. A review with a string `verdict` is
+  exempt as before.
+- **Before the flip** (pool, 2026-10-10 → 10-14): 304 of 1081 done items had
+  no evidence — 221 delegate, 53 review (34 of them with a verdict, so already
+  exempt), 26 project_task, 4 bookkeeping. They came through `report-status`
+  and `complete-task` without evidence flags; those skills now print the 400
+  and, for report-status, a `next` line naming the flags to add.
+- **Callers outside the controller** are unchanged: `V3DataService.onTaskCompleted`
+  (no production emitter) and the `OpenItemsService` follow-up closes
+  (`open-items.wiring.ts`, system, not worker deliverables).
+- `packages/crewly-agent` `report_status` used to drop a failed
+  auto-complete silently; it now returns `completionError` so the agent
+  sees the WorkItem is still open.
 
 ## Callers updated
 

@@ -13,8 +13,9 @@
 #
 # `evidence` (#873) is sent as result.evidence. The server checks it: missing
 # artifacts and non-zero exit codes are refused, a `blocked` entry records the
-# item as blocked instead of done, and no evidence at all is accepted this
-# release with a `warning` (refused from the next).
+# item as blocked instead of done, and no evidence at all is refused for a
+# deliverable (delegate, project_task, review without a verdict). Bookkeeping
+# types (triage, replans, retros) complete without it (#1312).
 #
 # Backwards-compat: a `taskId` field is accepted as alias for `workItemId`.
 

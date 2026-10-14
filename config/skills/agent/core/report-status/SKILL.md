@@ -74,9 +74,9 @@ For a bug fix, the failing "before" run belongs in the evidence too: put it in t
 
 The server rejects (400) a missing artifact, a non-zero exit code, or a
 malformed entry; the skill then prints `{"warning":"… completing the WorkItem
-FAILED …","error":…}` with the reason. Without any evidence, `done` is accepted
-**this release** with a `warning` on stderr; from the next release it is
-refused. If you could not finish, report `--status blocked` (or `done` with
+FAILED …","error":…}` with the reason. Without any evidence, `done` is
+**refused** (400 `evidence_required`) and the WorkItem stays open; the skill
+prints a `next` line with the flags to add. If you could not finish, report `--status blocked` (or `done` with
 `--blocked-step/--blocked-reason`), never `done`.
 
 ## This skill COMPLETES a WorkItem, not just reports

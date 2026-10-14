@@ -1737,6 +1737,7 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
         // V3-only as of spec 2026-05-06-task-management-v1-deprecation.md:
         // resolve the running claim from the pool, then call
         // `/task-pool/complete/:id`. Replaces v1 `/task-management/complete-by-session`.
+        let completionError: string | undefined;
         if (status === 'done') {
           try {
             const poolResp = await client.get(
@@ -1754,12 +1755,18 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
               // `agentId` here is `sessionName` because that's the runtime
               // identity of the completing agent (the session whose
               // status=done message triggered this auto-complete path).
-              await client
+              // A refused completion (e.g. 400 evidence_required, #1312) is
+              // returned to the agent: swallowing it left the WorkItem open
+              // while the agent believed it was done.
+              const completion = await client
                 .post(`/task-pool/complete/${wiId}`, {
                   agentId: sessionName,
                   result: completionResult(summary as string, evidence as CompletionEvidenceInput | undefined),
                 })
-                .catch(() => {});
+                .catch((err: unknown) => ({ success: false, error: String(err) }));
+              if (!completion.success) {
+                completionError = `Status was sent, but WorkItem ${wiId} is still OPEN: ${completion.error ?? 'completion failed'}`;
+              }
             }
           } catch {
             // Non-fatal: status report still succeeded.
@@ -1777,6 +1784,9 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
           }).catch(() => {});
         }
 
+        if (completionError) {
+          return { ...(result.success ? (result.data as Record<string, unknown>) : { error: result.error }), completionError };
+        }
         return result.success ? result.data : { error: result.error };
       },
     },

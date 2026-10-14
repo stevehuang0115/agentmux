@@ -19,14 +19,15 @@ import {
   decideCompletion,
   describeEvidenceForReviewer,
   resolveEvidenceEnforcementMode,
+  evidenceRequiredFor,
 } from './completion-evidence.service.js';
 
 const CODES = COMPLETION_EVIDENCE_CONSTANTS.CODES;
 
 describe('resolveEvidenceEnforcementMode', () => {
-  it('defaults to the constant (warn this release)', () => {
-    expect(COMPLETION_EVIDENCE_CONSTANTS.EVIDENCE_ENFORCEMENT_MODE).toBe('warn');
-    expect(resolveEvidenceEnforcementMode({})).toBe('warn');
+  it('defaults to the constant (enforce since #1312)', () => {
+    expect(COMPLETION_EVIDENCE_CONSTANTS.EVIDENCE_ENFORCEMENT_MODE).toBe('enforce');
+    expect(resolveEvidenceEnforcementMode({})).toBe('enforce');
   });
 
   it('honours CREWLY_EVIDENCE_MODE, case-insensitively', () => {
@@ -36,7 +37,14 @@ describe('resolveEvidenceEnforcementMode', () => {
   });
 
   it('ignores an unknown value', () => {
-    expect(resolveEvidenceEnforcementMode({ CREWLY_EVIDENCE_MODE: 'strict' })).toBe('warn');
+    expect(resolveEvidenceEnforcementMode({ CREWLY_EVIDENCE_MODE: 'strict' })).toBe('enforce');
+  });
+});
+
+describe('evidenceRequiredFor (#1312)', () => {
+  it('deliverables and untyped items need evidence; bookkeeping types do not', () => {
+    for (const t of ['delegate', 'project_task', 'review', undefined, null, '']) expect(evidenceRequiredFor(t)).toBe(true);
+    for (const t of ['goal_replan', 'ticket_triage', 'autopilot_retro', 'notify', 'reconcile']) expect(evidenceRequiredFor(t)).toBe(false);
   });
 });
 

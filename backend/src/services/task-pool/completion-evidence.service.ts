@@ -58,6 +58,24 @@ export interface EvidenceCheckOptions {
 }
 
 /**
+ * Whether a WorkItem of this type must carry evidence to complete (#1312).
+ * Deliverables (delegate, project_task, review) and items with no type do;
+ * harness bookkeeping types (triage, replans, retros, notifications) do not.
+ *
+ * @param type - The WorkItem's type, if known
+ * @returns True when a completion without evidence is refused in enforce mode
+ *
+ * @example
+ * ```typescript
+ * evidenceRequiredFor('delegate'); // true
+ * evidenceRequiredFor('goal_replan'); // false
+ * ```
+ */
+export function evidenceRequiredFor(type: string | undefined | null): boolean {
+  return !type || C.REQUIRED_FOR_TYPES.includes(type);
+}
+
+/**
  * The rollout mode in effect: `CREWLY_EVIDENCE_MODE` when it is `warn` or
  * `enforce`, else {@link COMPLETION_EVIDENCE_CONSTANTS.EVIDENCE_ENFORCEMENT_MODE}.
  * Read per request so the mode can be flipped without a restart in tests.
@@ -276,12 +294,12 @@ export async function decideCompletion(
         action: 'reject',
         status: 400,
         code: C.CODES.MISSING,
-        error: `complete requires evidence: "done" needs at least one artifact that exists or command with its exit code. ${C.SHAPE_HINT}`,
+        error: `complete requires evidence: "done" needs at least one artifact that exists or command with its exit code. Nothing was completed. ${C.SHAPE_HINT}`,
       };
     }
     return {
       action: 'complete',
-      warning: `Completed WITHOUT evidence. This is accepted for now but will be rejected in the next release. ${C.SHAPE_HINT}`,
+      warning: `Completed WITHOUT evidence. Accepted only because ${C.ENV_MODE}=warn; by default this is rejected. ${C.SHAPE_HINT}`,
     };
   }
 

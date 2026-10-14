@@ -46,7 +46,7 @@ Mark a task as complete with a summary of the work done. If the task has an outp
 | `workItemId` | Preferred | ID of the V3 WorkItem to complete. This is the only input that selects the WorkItem |
 | `sessionName` | Yes | Your agent session name |
 | `summary` | Yes | Summary of the work completed |
-| `evidence` | Yes* | Array of evidence entries — see **Evidence contract** below. *Accepted without it this release (with a warning); required from the next release |
+| `evidence` | Yes* | Array of evidence entries — see **Evidence contract** below. *Required: refused without it (400 `evidence_required`), except a review `verdict` |
 | `absoluteTaskPath` | No | **Legacy (V1).** Still accepted so older callers keep working, but it does NOT identify a WorkItem |
 | `output` | No | Structured output object (required if task has an output schema) |
 | ~~`skipGates`~~ | **Rejected** | **Not supported.** This endpoint runs no quality gates, so there is nothing to skip. Passing it is a hard error. Use the `check-quality-gates` skill for gates. |
@@ -83,8 +83,8 @@ items for one session.
 
 If you could not finish, do **not** report done: send a `blocked` entry (or use
 `report-status --status blocked`). Malformed evidence is rejected with 400
-naming the bad entry. A completion with no evidence is accepted this release
-but the response (and stderr) carries a `warning`; next release it is a 400.
+naming the bad entry. A completion with no evidence is refused with 400
+`evidence_required` and nothing is completed (#1312).
 A review verdict (`verdict` set) needs no evidence.
 
 ## Example

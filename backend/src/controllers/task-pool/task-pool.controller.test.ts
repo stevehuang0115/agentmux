@@ -121,6 +121,16 @@ function mockRes(): any {
 // Tests
 // ---------------------------------------------------------------------------
 
+// Most completion tests here are about other contracts (summary, shape,
+// actors, give-up) and send no evidence; they run in warn mode. The evidence
+// describe clears this and tests the enforce default itself (#1312).
+beforeEach(() => {
+  process.env.CREWLY_EVIDENCE_MODE = 'warn';
+});
+afterAll(() => {
+  delete process.env.CREWLY_EVIDENCE_MODE;
+});
+
 describe('TaskPoolController', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -1041,7 +1051,6 @@ describe('TaskPoolController', () => {
   describe('completeItem (evidence contract #873)', () => {
     let dir: string;
     let artifact: string;
-    const savedMode = process.env.CREWLY_EVIDENCE_MODE;
 
     beforeEach(() => {
       dir = mkdtempSync(join(tmpdir(), 'tp-evidence-'));
@@ -1057,8 +1066,6 @@ describe('TaskPoolController', () => {
 
     afterEach(() => {
       rmSync(dir, { recursive: true, force: true });
-      if (savedMode === undefined) delete process.env.CREWLY_EVIDENCE_MODE;
-      else process.env.CREWLY_EVIDENCE_MODE = savedMode;
     });
 
     /** Run completeItem with the given result and return the response mock. */
@@ -1069,7 +1076,21 @@ describe('TaskPoolController', () => {
       return res;
     }
 
-    it('warn mode (default): no evidence is accepted and the response carries a warning', async () => {
+    it('enforce mode (default): no evidence returns 400 telling the worker what to send', async () => {
+      const res = await complete({ summary: 'Did the thing', evidence: [] });
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        code: 'evidence_required',
+        error: expect.stringContaining('body.result.evidence'),
+      }));
+      expect(mockService.completeItem).not.toHaveBeenCalled();
+      expect(mockService.setOutput).not.toHaveBeenCalled();
+    });
+
+    it('warn mode (CREWLY_EVIDENCE_MODE=warn): no evidence is accepted with a warning', async () => {
+      process.env.CREWLY_EVIDENCE_MODE = 'warn';
       const res = await complete({ summary: 'Did the thing' });
 
       expect(res.status).not.toHaveBeenCalled();
@@ -1081,18 +1102,21 @@ describe('TaskPoolController', () => {
       }));
     });
 
-    it('enforce mode: no evidence returns 400 telling the worker what to send', async () => {
-      process.env.CREWLY_EVIDENCE_MODE = 'enforce';
-      const res = await complete({ summary: 'Did the thing', evidence: [] });
-
-      expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
-        success: false,
-        code: 'evidence_required',
-        error: expect.stringContaining('body.result.evidence'),
-      }));
-      expect(mockService.completeItem).not.toHaveBeenCalled();
-      expect(mockService.setOutput).not.toHaveBeenCalled();
+    it('enforce mode: bookkeeping types complete without evidence; deliverables do not (#1312)', async () => {
+      for (const type of ['goal_replan', 'ticket_triage', 'autopilot_retro']) {
+        mockService.completeItem.mockClear();
+        mockService.findWorkItem.mockResolvedValue({ id: 'wi-ev', type, status: 'running', output: null, metadata: {} });
+        const res = await complete({ summary: 'Replanned' });
+        expect(res.status).not.toHaveBeenCalled();
+        expect(mockService.completeItem).toHaveBeenCalled();
+      }
+      for (const type of ['delegate', 'project_task', 'review']) {
+        mockService.completeItem.mockClear();
+        mockService.findWorkItem.mockResolvedValue({ id: 'wi-ev', type, status: 'running', output: null, metadata: {} });
+        const res = await complete({ summary: 'Did it' });
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(mockService.completeItem).not.toHaveBeenCalled();
+      }
     });
 
     it('enforce mode: a review verdict completion needs no evidence', async () => {
