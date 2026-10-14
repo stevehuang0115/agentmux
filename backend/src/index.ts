@@ -6462,6 +6462,10 @@ void (async () => {
 				enqueue: (input) => {
 					this.messageQueueService.enqueue(input);
 				},
+				queueForAgent: (name, text) => {
+					SubAgentMessageQueue.getInstance().enqueue(name, text);
+				},
+				isKnownSession: async (name) => Boolean((await this.storageService.findMemberBySessionName(name).catch(() => null))?.member),
 				sendMessageToAgent: (name, text) => registration.sendMessageToAgent(name, text),
 				waitForOrchestratorActive: async () => {
 					const deadline = Date.now() + SAFE_RESTART.RESUME_ORC_READY_TIMEOUT_MS;
