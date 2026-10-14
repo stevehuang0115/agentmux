@@ -9,7 +9,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { readAgentSessionHeader } from '../utils/agent-caller.utils.js';
 import { stripTraceMarkers } from '../services/trace/trace-markers.js';
-import { agentMessageRepeatOf } from '../utils/duplicate-creation.utils.js';
+import { agentMessageRepeatOf, forgetAgentMessage } from '../utils/duplicate-creation.utils.js';
 import { LoggerService } from '../services/core/logger.service.js';
 
 const logger = LoggerService.getInstance().createComponentLogger('AgentMessageDedupe');
@@ -39,6 +39,14 @@ export function agentMessageDedupe(req: Request, res: Response, next: NextFuncti
         });
         return;
       }
+      // Only a send that went through counts: a failed one may be retried.
+      const clean = stripTraceMarkers(text);
+      const json = res.json.bind(res);
+      res.json = ((payload: unknown) => {
+        const failed = res.statusCode >= 400 || (payload as { success?: unknown } | null)?.success === false;
+        if (failed) forgetAgentMessage(sender, target, clean);
+        return json(payload);
+      }) as typeof res.json;
     }
   } catch {
     // Dedupe is best-effort: never block a message on its own failure.

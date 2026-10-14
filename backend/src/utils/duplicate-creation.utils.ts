@@ -94,6 +94,18 @@ export function resetAgentMessageDedupeForTesting(): void {
 }
 
 /**
+ * Forget a recorded message, so a resend is not taken for a duplicate. Used
+ * when the first send did not go through.
+ *
+ * @param sender - Sending agent session
+ * @param target - Receiving session
+ * @param text - Message text, as passed to {@link agentMessageRepeatOf}
+ */
+export function forgetAgentMessage(sender: string, target: string, text: string): void {
+  recentMessages.delete(`${sender}\u0000${target}\u0000${normalizeForDedupe(text)}`);
+}
+
+/**
  * Whether an agent already sent this exact message to this target inside the
  * window. Records it otherwise. Short messages and exempt senders never match.
  *

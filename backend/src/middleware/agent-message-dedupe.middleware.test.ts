@@ -17,7 +17,7 @@ function call(sender: string | undefined, body: Record<string, unknown>, target 
   const res = { status: jest.fn().mockReturnThis(), json } as unknown as Response;
   const next = jest.fn() as NextFunction;
   agentMessageDedupe(req, res, next);
-  return { json, next };
+  return { json, next, res };
 }
 
 describe('agentMessageDedupe', () => {
@@ -28,6 +28,17 @@ describe('agentMessageDedupe', () => {
     const second = call('ella', { mode: 'message', data: `${TEXT}\n[TRACE:tr-20261014-abcd1234]` });
     expect(second.next).not.toHaveBeenCalled();
     expect(second.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, duplicate: true, delivered: false }));
+  });
+
+  it('a send that failed does not block the retry', () => {
+    const first = call('ella', { message: TEXT });
+    (first.res as unknown as { statusCode: number }).statusCode = 200;
+    first.res.json({ success: false, error: 'Agent not running' });
+    expect(call('ella', { message: TEXT }).next).toHaveBeenCalled();
+    const failed = call('vera', { message: TEXT });
+    (failed.res as unknown as { statusCode: number }).statusCode = 503;
+    failed.res.json({ success: true });
+    expect(call('vera', { message: TEXT }).next).toHaveBeenCalled();
   });
 
   it('covers the deliver endpoint body too', () => {
