@@ -339,6 +339,9 @@ describe('owner comments in the wake (crewly#1056)', () => {
     expect(text).not.toContain('\u001b');
     expect(text).toContain('bash /s/core/app-comments/execute.sh --app 28au74d9cj --reply <comment id> --text');
     expect(text).toContain('bash /s/core/app-comments/execute.sh --app 28au74d9cj --resolve <comment id>');
+    // An answered question is resolved too; an owner reply reopens it.
+    expect(text).toContain('or the question answered');
+    expect(text).toContain('an owner reply reopens the thread');
   });
 
   it('caps the listed comments and keeps data changes in the same message', () => {

@@ -109,12 +109,18 @@ Give important elements a stable `data-crewly-id="…"` when you write an app
 
 ## What to do with a comment
 
-1. Do what it asks **inside the app**: change the code and republish with
-   `publish-app`, or change the data with `app-data`.
-2. `--resolve <id> --text "<what changed>"` — the owner sees your reply and the
-   thread moves to Resolved. Resolve only what you addressed.
-3. Unclear? `--reply <id> --text "<question>"` and leave it open. The owner's
-   answer wakes you again.
+1. Do what it asks: change the app (republish with `publish-app`, or change
+   the data with `app-data`), or, for a question or a thought, answer it.
+2. `--resolve <id> --text "<what changed, or your answer>"` — the owner sees
+   your reply and the thread moves to Resolved. An answered question counts as
+   addressed. Ending with an optional offer ("reply 存 and I'll save it") is
+   fine: resolve anyway. If the owner replies later, the thread reopens and
+   you are woken.
+3. Blocked on the owner (you cannot do it without their answer)? `--reply <id>
+   --text "<question>"` and leave it open. The owner's answer wakes you again.
+
+An open thread tells the owner something is still waiting on someone. Do not
+leave one open after you answered it.
 
 A reopen means it is not done yet: read the thread again (`--get`).
 
