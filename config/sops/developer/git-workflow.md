@@ -79,6 +79,7 @@ git worktree remove /tmp/crewly-{ticket-name}-{owner}
 
 **Notes:**
 - Step 4 is also done for you: the backend's worktree janitor removes a worktree under `.claude/worktrees/` or `/tmp/crewly-worktrees/` once its branch is merged (or its PR is MERGED), it is clean, and it has been idle for 2 hours. Uncommitted or untracked files keep it.
+- Deploy only from a commit that is on main — merge first; never deploy from a side branch or a worktree. When your ticket is done, remove your worktree. A worktree whose commits never reached main is reported to your team lead by the janitor.
 - `node_modules` is not installed in the worktree by default. For prompt/doc-only PRs that's fine. For backend code PRs that need `npm test` / `npm run build`, run those checks back in the main repo or `npm install` inside the worktree.
 - `.crewly/` is usually gitignored, except `.crewly/tickets/` (project tickets, tracked on purpose). Notes you write elsewhere under `.crewly/` in a worktree won't appear in the diff and other agents won't see them. Put work other agents must pick up in a project ticket (`project-tickets create`), and edit tickets only through that skill, never by hand in a worktree — the live copy is the main checkout's.
 - Do NOT use the main repo `crewly/` directory to develop a feature branch when another agent is also active in the team. The main repo is the orchestrator's coordination surface, not a per-agent dev sandbox.

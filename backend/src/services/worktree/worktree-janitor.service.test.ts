@@ -9,7 +9,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { WorktreeJanitorService, type WorktreeJanitorOptions, type JanitorRunSummary } from './worktree-janitor.service.js';
-import { WORKTREE_JANITOR_CONSTANTS } from '../../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, WORKTREE_JANITOR_CONSTANTS } from '../../constants.js';
 import { TraceStore, setTraceStoreForTesting } from '../trace/trace-store.js';
 
 const HOUR = 60 * 60 * 1000;
@@ -814,6 +814,93 @@ describe('WorktreeJanitorService', () => {
 		it('does nothing when the kill switch is on', async () => {
 			const j = janitor(fx, { env: { CREWLY_WORKTREE_JANITOR: '0' } });
 			expect(await j.checkRunawayFiles()).toEqual([]);
+		});
+	});
+
+	describe('unmerged worktree notice', () => {
+		const DAY = 24 * HOUR;
+		function make(notify: jest.Mock, overrides: WorktreeJanitorOptions = {}): WorktreeJanitorService {
+			const j = janitor(fx, { now: () => Date.now() + 2 * DAY, unmergedNoticePath: null, ...overrides });
+			j.setAgentNotifier(notify);
+			return j;
+		}
+
+		it('tells the team lead once about an old unmerged worktree (path, branch, commits, pushed, size)', async () => {
+			const wt = addWorktree(fx, agentPath(fx, 'old'), 'feat/old');
+			const notify = jest.fn().mockResolvedValue(true);
+			const j = make(notify, { resolveLeadSessions: async () => ['tl-session'] });
+			await j.run();
+			expect(notify).toHaveBeenCalledTimes(1);
+			const [session, message] = notify.mock.calls[0];
+			expect(session).toBe('tl-session');
+			expect(message).toContain(fs.realpathSync(wt));
+			expect(message).toContain('feat/old');
+			expect(message).toContain('1 commit not on origin/main');
+			expect(message).toContain('NOT pushed');
+			expect(message).toContain('1.0 GB');
+			expect(message).toContain('merge it to main');
+		});
+
+		it('says pushed when the branch is on origin', async () => {
+			const wt = addWorktree(fx, agentPath(fx, 'pushed'), 'feat/pushed');
+			git(wt, 'push', '--quiet', 'origin', 'feat/pushed');
+			const notify = jest.fn().mockResolvedValue(true);
+			await make(notify, { resolveLeadSessions: async () => ['tl'] }).run();
+			expect(notify.mock.calls[0][1]).toMatch(/, pushed,/);
+		});
+
+		it('stays quiet for a worktree whose newest commit is recent', async () => {
+			addWorktree(fx, agentPath(fx, 'fresh'), 'feat/fresh');
+			const notify = jest.fn().mockResolvedValue(true);
+			await make(notify, { now: () => Date.now() + THREE_HOURS, resolveLeadSessions: async () => ['tl'] }).run();
+			expect(notify).not.toHaveBeenCalled();
+		});
+
+		it('does not repeat within the window, and repeats after it', async () => {
+			addWorktree(fx, agentPath(fx, 'again'), 'feat/again');
+			const notify = jest.fn().mockResolvedValue(true);
+			let offset = 2 * DAY;
+			const j = make(notify, { now: () => Date.now() + offset, resolveLeadSessions: async () => ['tl'] });
+			await j.run();
+			await j.run();
+			expect(notify).toHaveBeenCalledTimes(1);
+			offset += WORKTREE_JANITOR_CONSTANTS.UNMERGED_NOTICE_INTERVAL_MS + HOUR;
+			await j.run();
+			expect(notify).toHaveBeenCalledTimes(2);
+		});
+
+		it('retries next pass when delivery failed', async () => {
+			addWorktree(fx, agentPath(fx, 'retry'), 'feat/retry');
+			const notify = jest.fn().mockResolvedValueOnce(false).mockResolvedValue(true);
+			const j = make(notify, { resolveLeadSessions: async () => ['tl'] });
+			await j.run();
+			await j.run();
+			expect(notify).toHaveBeenCalledTimes(2);
+		});
+
+		it('falls back to the orchestrator when no team owns the worktree', async () => {
+			addWorktree(fx, agentPath(fx, 'orphan'), 'feat/orphan');
+			const notify = jest.fn().mockResolvedValue(true);
+			await make(notify, { resolveLeadSessions: async () => [] }).run();
+			expect(notify).toHaveBeenCalledTimes(1);
+			expect(notify.mock.calls[0][0]).toBe(ORCHESTRATOR_SESSION_NAME);
+		});
+
+		it('says detached HEAD for a branchless worktree', async () => {
+			const wt = addWorktree(fx, agentPath(fx, 'det'), 'feat/det');
+			git(wt, 'checkout', '--quiet', '--detach');
+			const notify = jest.fn().mockResolvedValue(true);
+			await make(notify, { resolveLeadSessions: async () => ['tl'] }).run();
+			expect(notify.mock.calls[0][1]).toContain('detached HEAD');
+		});
+
+		it('does nothing for a landed worktree or in a dry run', async () => {
+			const wt = addWorktree(fx, agentPath(fx, 'landed'), 'feat/landed');
+			landOnOrigin(wt);
+			addWorktree(fx, agentPath(fx, 'plan'), 'feat/plan');
+			const notify = jest.fn().mockResolvedValue(true);
+			await make(notify, { resolveLeadSessions: async () => ['tl'] }).plan();
+			expect(notify).not.toHaveBeenCalled();
 		});
 	});
 });

@@ -2697,9 +2697,15 @@ export const WORKTREE_JANITOR_CONSTANTS = {
 	RUNAWAY_LSOF_TIMEOUT_MS: 10_000,
 	/** One line added to every agent's start prompt. */
 	PROMPT_HINT:
-		'Disk hygiene: never let a command or script write an unbounded file. When you redirect or concatenate output (`> file`, `>> file`, `cat a b > all.md`), cap it (`| head -c 50M`, `| head -n 100000`) and never build a file from its own output. A file in your scratch dir or worktree that grows past a few GB is stopped by Crewly and the owner is alerted.',
+		'Disk hygiene: never let a command or script write an unbounded file. When you redirect or concatenate output (`> file`, `>> file`, `cat a b > all.md`), cap it (`| head -c 50M`, `| head -n 100000`) and never build a file from its own output. A file in your scratch dir or worktree that grows past a few GB is stopped by Crewly and the owner is alerted. Worktree hygiene: deploy only from a commit that is on main (merge first, never from a side branch); remove your worktree once its ticket is done.',
 	/** State file under CREWLY_HOME remembering when the owner was last told about low disk. */
 	STATE_FILENAME: 'disk-janitor-state.json',
+	/** File (in CREWLY_HOME) remembering which unmerged worktrees their lead was already told about. */
+	UNMERGED_NOTICE_STATE_FILENAME: 'unmerged-worktree-notices.json',
+	/** A kept worktree is only reported when its newest commit is older than this (24 hours) — fresh work is still in flight. */
+	UNMERGED_NOTICE_MIN_AGE_MS: 24 * 60 * 60 * 1000,
+	/** A worktree's lead is told about it at most this often (3 days). */
+	UNMERGED_NOTICE_INTERVAL_MS: 3 * 24 * 60 * 60 * 1000,
 	/**
 	 * Directory, relative to the repo's main worktree, where agent tools
 	 * (Claude Code subagents, Crewly agents) create per-task worktrees.
