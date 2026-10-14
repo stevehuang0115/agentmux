@@ -44,6 +44,8 @@ export interface TypingSlackApi {
     iconUrl?: string;
     skipChatV2Mirror?: boolean;
     notAnAnswer?: boolean;
+    /** Agent session the post is on behalf of (log attribution only). */
+    senderSession?: string;
   }): Promise<string>;
   updateMessage(channelId: string, messageTs: string, text: string, blocks?: undefined, botToken?: string): Promise<void>;
   deleteMessage?(channelId: string, messageTs: string, botToken?: string): Promise<void>;
@@ -51,7 +53,7 @@ export interface TypingSlackApi {
 }
 
 /** What the agent is doing while the reply is owed. */
-export type TypingPhase = 'waking' | 'typing';
+export type TypingPhase = 'waking' | 'queued' | 'typing';
 
 /**
  * Why a placeholder came down without its agent posting the answer:
@@ -151,6 +153,23 @@ export function readableAgentName(name: string): string {
   return m[1].charAt(0).toUpperCase() + m[1].slice(1);
 }
 
+const FAILED_TEXT_PATTERN = new RegExp(
+  '^' + SLACK_TYPING_CONSTANTS.FAILED_TEXT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\\{name\\\}/g, '.+') + '$',
+);
+
+/**
+ * Whether a Slack message is a typing placeholder that was turned into the
+ * "couldn't take this message" notice. The agent never got the message, so
+ * it must not count as the message having been answered. (The other phases —
+ * waking, queued, working, timed out — mean the agent holds it.)
+ *
+ * @param text - Slack message text
+ * @returns True when the text is the failed-placeholder notice
+ */
+export function isFailedPlaceholderText(text: string): boolean {
+  return FAILED_TEXT_PATTERN.test(text.trim());
+}
+
 export class SlackTypingPlaceholderService {
   private readonly logger: ComponentLogger;
   private readonly pending = new Map<string, { placeholder: TypingPlaceholder; timer: ReturnType<typeof setTimeout>; slowTimer?: ReturnType<typeof setTimeout>; startedAt: number }>();
@@ -177,6 +196,12 @@ export class SlackTypingPlaceholderService {
    * one (specs/2026-10-02-harness-owned-routing.md §5).
    */
   private readonly answeredAt = new Map<string, number>();
+  /**
+   * Keys of placeholders whose agent was stopped while it still owed the
+   * answer. They stay up (in the 'queued' phase) through the stop's turn-end
+   * settle, until the answer is posted or the agent runs again.
+   */
+  private readonly heldForRestart = new Set<string>();
   /** Told when a thread gets a placeholder or an answer (see {@link onThreadActivity}). */
   private readonly threadListeners = new Set<(slackChannelId: string, threadTs?: string) => void>();
   /** Told when a thread got its answer (see {@link onThreadAnswered}). */
@@ -325,7 +350,8 @@ export class SlackTypingPlaceholderService {
 
   /**
    * Move a pending placeholder to another phase (e.g. the agent finished
-   * waking and now holds the message → "is working on it…"). No-op when nothing
+   * waking and now holds the message → "is working on it…"; its start is
+   * deferred and the message is held on its queue → "will pick this up shortly…"). No-op when nothing
    * is pending or the phase is unchanged.
    *
    * @param key - Agent + conversation (+ thread)
@@ -359,8 +385,58 @@ export class SlackTypingPlaceholderService {
     for (const other of others) await this.remove(other);
   }
 
+  /**
+   * The agent was stopped (slot eviction, memory, runtime exit) while it owes
+   * the answer: its placeholders must not be taken down as "answered" by the
+   * turn-end settle the stop triggers. They go to the 'queued' phase ("will
+   * pick this up shortly") and stay until the answer is posted or the agent
+   * runs again ({@link releaseHold}). The hold is set before any Slack call so
+   * a settle racing the stop already sees it.
+   *
+   * @param agentSession - The stopped agent
+   * @returns How many placeholders are held
+   */
+  async holdForRestart(agentSession: string): Promise<number> {
+    const prefix = `${agentSession}:`;
+    const held: Array<{ key: TypingKeyParts; pending: boolean }> = [];
+    for (const [k, { placeholder }] of this.pending) {
+      if (!k.startsWith(prefix)) continue;
+      this.heldForRestart.add(k);
+      held.push({ key: { agentSession, slackChannelId: placeholder.slackChannelId, ...(placeholder.threadTs ? { threadTs: placeholder.threadTs } : {}) }, pending: true });
+    }
+    for (const k of this.expired.keys()) {
+      if (k.startsWith(prefix)) this.heldForRestart.add(k);
+    }
+    for (const h of held) {
+      try {
+        await this.setPhase(h.key, 'queued');
+      } catch (err) {
+        this.logger.debug('Could not move a held placeholder to queued', { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    const total = [...this.heldForRestart].filter((k) => k.startsWith(prefix)).length;
+    if (total > 0) this.logger.info('Placeholders kept up: the agent was stopped while it still owes the answer', { agentSession, count: total });
+    return total;
+  }
+
+  /**
+   * The agent runs again: its held placeholders are settled by its own turns.
+   *
+   * @param agentSession - The agent
+   */
+  releaseHold(agentSession: string): void {
+    const prefix = `${agentSession}:`;
+    for (const k of [...this.heldForRestart]) if (k.startsWith(prefix)) this.heldForRestart.delete(k);
+  }
+
   private textFor(phase: TypingPhase, name: string): string {
-    return (phase === 'waking' ? SLACK_TYPING_CONSTANTS.WAKING_TEXT : SLACK_TYPING_CONSTANTS.TYPING_TEXT).replace('{name}', readableAgentName(name));
+    const template =
+      phase === 'waking'
+        ? SLACK_TYPING_CONSTANTS.WAKING_TEXT
+        : phase === 'queued'
+          ? SLACK_TYPING_CONSTANTS.QUEUED_TEXT
+          : SLACK_TYPING_CONSTANTS.TYPING_TEXT;
+    return template.replace('{name}', readableAgentName(name));
   }
 
   private async edit(placeholder: TypingPlaceholder, text: string): Promise<void> {
@@ -461,6 +537,7 @@ export class SlackTypingPlaceholderService {
   private takeAll(key: TypingKeyParts): TypingPlaceholder[] {
     const k = keyOf(key);
     const out: TypingPlaceholder[] = [];
+    this.heldForRestart.delete(k);
     // A timed-out placeholder is always the older one: a pending one is only
     // posted for a key once the previous one has left `pending`.
     const late = this.expired.get(k);
@@ -558,6 +635,7 @@ export class SlackTypingPlaceholderService {
           text,
           ...(key.threadTs ? { threadTs: key.threadTs } : {}),
           ...principalOf(identity),
+          senderSession: key.agentSession,
           skipChatV2Mirror: true,
         });
         if (postedTs) opts.onMessageTs?.(postedTs);
@@ -785,6 +863,7 @@ export class SlackTypingPlaceholderService {
     const clear = this.deps.clearTimer ?? ((t: ReturnType<typeof setTimeout>) => clearTimeout(t));
     for (const [k, entry] of [...this.pending]) {
       if (!k.startsWith(`${agentSession}:`)) continue;
+      if (this.heldForRestart.has(k)) continue;
       if (this.keepAtTurnEnd(agentSession, entry.placeholder, entry.startedAt)) continue;
       if (now - entry.startedAt < minAge) {
         youngest = Math.max(youngest ?? 0, entry.startedAt);
@@ -799,6 +878,7 @@ export class SlackTypingPlaceholderService {
     }
     for (const [k, { placeholder, at }] of [...this.expired]) {
       if (!k.startsWith(`${agentSession}:`)) continue;
+      if (this.heldForRestart.has(k)) continue;
       if (this.keepAtTurnEnd(agentSession, placeholder, placeholder.postedAt ?? at)) continue;
       this.expired.delete(k);
       victims.push(placeholder);
@@ -888,7 +968,13 @@ export class SlackTypingPlaceholderService {
     }
     if (victims.length > 0) {
       this.persist();
-      this.logger.info('Placeholders taken down — the thread was answered or the agent said no answer is needed', { agentSession, count: victims.length });
+      const answered = victims.filter((p) => whyOf(p) === 'answered').length;
+      this.logger.info(
+        answered === victims.length
+          ? 'Placeholders taken down — the thread was answered'
+          : 'Placeholders taken down — no answer is owed (the agent said so, or the message needed none)',
+        { agentSession, count: victims.length, answered },
+      );
     }
   }
 

@@ -45,8 +45,9 @@ import { queueIfSpendCapped } from '../../services/messaging/spend-capped-delive
 import { queueIfRestartDraining } from '../../services/messaging/drain-queued-delivery.js';
 import { getInProcessTurnFailureService } from '../../services/agent/in-process-turn-failure.service.js';
 import { getActingFor } from '../../services/people/acting-for.service.js';
+import { getOwnerRequestContext } from '../../services/orc/owner-request-context.js';
 import { readAgentSessionHeader } from '../../utils/agent-caller.utils.js';
-import { isOwnerCaller } from '../../middleware/caller-identity.middleware.js';
+import { getCallerIdentity, isOwnerCaller } from '../../middleware/caller-identity.middleware.js';
 import { pausedRefusalMessage, pausedTeamOfSession } from '../../services/team/team-pause.registry.js';
 import { noteTurnDelivery, withWorkItemTraceMarker } from '../../services/trace/trace-recorder.js';
 import { noteOutsideInput } from '../../services/session/input-ledger.js';
@@ -369,8 +370,9 @@ export async function prepareWorkItemHandOver(
  * and start the agent instead of answering 404 (#929).
  *
  * Only agent-to-agent messages take this path (the caller's `X-Agent-Session`
- * is the orchestrator or a team member). A write that hands over a WorkItem is
- * left to the pool, which already wakes offline targets for queued work, and
+ * is the orchestrator or a team member). A raw write that hands over a WorkItem is
+ * left to the pool, which already wakes offline targets for queued work (a
+ * `deliver` that hands one over takes this path too, #1135), and
  * internal notifiers (the WorkItem dispatcher, worktree notices, …) keep their
  * 404 — a system notice is not a reason to start an agent.
  *
@@ -512,7 +514,11 @@ export async function writeToSession(this: unknown, req: Request, res: Response)
 
 		// Convert data to string and validate for dangerous control sequences
 		// (before anything below can clear the agent's conversation).
-		const rawDataStr = String(data);
+		// A scheduled command's note says who sent it, `[scheduler:<name>] …`: it
+		// is neither the owner nor an agent, and the recipient must not take it for either.
+		const caller = getCallerIdentity(req);
+		const fromScheduler = caller.kind === 'scheduler';
+		const rawDataStr = fromScheduler ? `[${caller.sender ?? 'scheduler:unknown'}] ${String(data)}` : String(data);
 		const validation = validateTerminalInput(rawDataStr);
 		if (!validation.isValid) {
 			logger.warn('Terminal input validation failed', {
@@ -686,7 +692,7 @@ export async function writeToSession(this: unknown, req: Request, res: Response)
 			// once and the message goes out when the recipient is idle
 			// (2026-10-05). A WorkItem hand-over keeps its own dispatch path.
 			const registration = (this as Partial<ApiContext> | undefined)?.agentRegistrationService;
-			if (registration && !req.body?.workItemId && readAgentSessionHeader(req)) {
+			if (registration && !req.body?.workItemId && (readAgentSessionHeader(req) || fromScheduler)) {
 				const held = await registration.holdIfMidTurn(sessionName, dataStr);
 				if (held) {
 					logger.info('Recipient mid-turn — message queued, sender not kept waiting', { sessionName, ...held });
@@ -904,7 +910,7 @@ export async function sendTerminalKey(req: Request, res: Response): Promise<void
 		const allowedKeys = [
 			'Enter', 'Return', 'Escape', 'Tab', 'Backspace', 'Delete',
 			'Up', 'Down', 'Right', 'Left', 'Home', 'End', 'PageUp', 'PageDown',
-			'C-c', 'C-d', 'C-z', 'C-l'
+			'C-c', 'C-d', 'C-z', 'C-l', 'C-u'
 		];
 		if (!allowedKeys.includes(key)) {
 			res.status(400).json({
@@ -1052,6 +1058,7 @@ function mapKeyToSequence(key: string): string {
 		'C-d': '\x04', // Ctrl+D
 		'C-z': '\x1a', // Ctrl+Z
 		'C-l': '\x0c', // Ctrl+L (clear)
+		'C-u': '\x15', // Ctrl+U (clear the input line)
 	};
 
 	return keyMap[key] ?? key;
@@ -1173,12 +1180,29 @@ export async function deliverMessage(this: ApiContext, req: Request, res: Respon
 			}
 
 			// A team member that is down: queue the message and start the agent.
-			if (!workItemId) {
-				const queued = await queueMessageForOfflineMember(req, sessionName, message);
-				if (queued) {
-					res.status(202).json(offlineQueuedResponse(queued));
-					return;
+			// Also when the delivery hands over a WorkItem (delegate-task): the
+			// brief is queued and the start deferred behind the running-agent
+			// cap is retried when a slot frees, instead of a 404 (#1135).
+			// The queued brief IS this WorkItem's delivery: take the dispatcher's
+			// key so its own push does not deliver the task a second time.
+			let tookKey = false;
+			const handedItem = typeof workItemId === 'string' ? workItemId.trim() : '';
+			if (handedItem) {
+				try {
+					const { WorkItemDispatchSubscriber } = await import('../../services/v3/workitem-dispatch.subscriber.js');
+					tookKey = WorkItemDispatchSubscriber.getInstance().claimDirectDelivery(handedItem, sessionName);
+				} catch {
+					/* best effort: a duplicate push is better than a lost task */
 				}
+			}
+			const queued = await queueMessageForOfflineMember(req, sessionName, message);
+			if (queued) {
+				res.status(202).json(offlineQueuedResponse(queued));
+				return;
+			}
+			if (tookKey) {
+				const { WorkItemDispatchSubscriber } = await import('../../services/v3/workitem-dispatch.subscriber.js');
+				WorkItemDispatchSubscriber.getInstance().releaseDirectDelivery(handedItem, sessionName);
 			}
 
 			// Neither local nor remote — return 404
@@ -1651,6 +1675,13 @@ export function noteAgentToAgent(target: string, req: Pick<Request, 'headers'>):
 	try {
 		const sender = readAgentSessionHeader(req);
 		if (!sender || sender === target) return;
+		// A hand-over of the owner's request: work the target creates from it
+		// keeps the owner origin, so its completion is reported to the owner.
+		try {
+			getOwnerRequestContext().relay(sender, target);
+		} catch {
+			/* best effort */
+		}
 		getActingFor().inherit(target, sender);
 	} catch {
 		/* best effort: never blocks the delivery */

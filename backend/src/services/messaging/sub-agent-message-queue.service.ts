@@ -12,6 +12,7 @@
  */
 
 import * as path from 'path';
+import { randomUUID } from 'crypto';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { OWNER_HOOK_MESSAGE_CONSTANTS, SUB_AGENT_QUEUE_CONSTANTS } from '../../constants.js';
 import { mkdirSync, existsSync } from 'fs';
@@ -35,6 +36,13 @@ export type QueueDropReason = 'aged-out' | 'capacity' | 'undeliverable';
 export type QueueDropListener = (sessionName: string, dropped: QueuedAgentMessage[], reason: QueueDropReason) => void;
 
 export interface QueuedAgentMessage {
+	/**
+	 * Stable identity of this queue entry. Flush matches entries by it, never
+	 * by text: two entries can carry identical text (a re-queue by `send`, a
+	 * reminder repeated later) and must stay distinguishable. Entries stored by
+	 * an older version get one when loaded.
+	 */
+	id?: string;
 	/** The raw data string to write to the agent's terminal */
 	data: string;
 	/** Timestamp (ms since epoch) when the message was enqueued */
@@ -127,7 +135,7 @@ export function withSurfacedNotice(m: QueuedAgentMessage): string {
 }
 
 /** Why a queued message was dropped before delivery as no longer needed. */
-export type QueuePruneReason = 'answered-in-thread' | 'answered-after-surfacing' | 'duplicate-owner-message' | 'superseded';
+export type QueuePruneReason = 'answered-in-thread' | 'answered-after-surfacing' | 'duplicate-owner-message' | 'superseded' | 'nothing-left-to-announce';
 
 /** A hand-over prepared for a queued WorkItem brief (see {@link SubAgentMessageQueue.setHandOverPreparer}). */
 export interface QueuedHandOver {
@@ -152,6 +160,12 @@ export type QueuedHandOverPreparer = (sessionName: string, workItemId: string, d
 export type StaleMessageCheck = (data: string, sessionName: string) => Promise<boolean> | boolean;
 
 /**
+ * Brings a queued message up to date right before delivery: returns the text
+ * to send, or null to drop it (see {@link SubAgentMessageQueue.setMessageRefresher}).
+ */
+export type QueuedMessageRefresher = (data: string, sessionName: string) => Promise<string | null> | string | null;
+
+/**
  * Singleton service that holds pending messages per agent session.
  *
  * Messages are enqueued when a `mode: 'message'` write arrives at
@@ -162,6 +176,8 @@ export type StaleMessageCheck = (data: string, sessionName: string) => Promise<b
 export class SubAgentMessageQueue {
 	private static instance: SubAgentMessageQueue | null = null;
 	private pendingMessages = new Map<string, QueuedAgentMessage[]>();
+	/** Tail of each agent's flush chain: one flush per agent at a time. */
+	private flushTails = new Map<string, Promise<unknown>>();
 	private logger: ComponentLogger;
 	private readonly storePath: string;
 	/** Set while the store file is bad and could not be copied aside; saves copy it aside first. */
@@ -169,6 +185,7 @@ export class SubAgentMessageQueue {
 	/** The store file could not be read (EMFILE, EIO…); saves re-read it first. */
 	private unread = false;
 	private staleCheck: StaleMessageCheck | null = null;
+	private refresher: QueuedMessageRefresher | null = null;
 	/** Told when undelivered messages are dropped (never silently: crewly#1014) */
 	private dropListener: QueueDropListener | null = null;
 	/** Prepares queued WorkItem briefs (wired by the terminal controller) */
@@ -228,7 +245,9 @@ export class SubAgentMessageQueue {
 		for (const [sessionName, messages] of Object.entries(stored.queues)) {
 			const current = this.pendingMessages.get(sessionName) ?? [];
 			const have = new Set(current.map((m) => `${m.queuedAt}|${m.data}`));
-			const valid = (messages ?? []).filter((m) => m && typeof m.data === 'string' && typeof m.queuedAt === 'number');
+			const valid = (messages ?? [])
+				.filter((m) => m && typeof m.data === 'string' && typeof m.queuedAt === 'number')
+				.map((m) => (typeof m.id === 'string' && m.id ? m : { ...m, id: randomUUID() }));
 			const fresh = valid.filter((m) => Date.now() - m.queuedAt <= SUB_AGENT_QUEUE_CONSTANTS.MAX_AGE_MS);
 			if (fresh.length < valid.length) {
 				this.unreportedDrops.push({ sessionName, dropped: valid.filter((m) => !fresh.includes(m)), reason: 'aged-out' });
@@ -374,6 +393,38 @@ export class SubAgentMessageQueue {
 	 */
 	setStaleMessageCheck(check: StaleMessageCheck | null): void {
 		this.staleCheck = check;
+	}
+
+	/**
+	 * Install what brings a queued message up to date right before it is
+	 * delivered (CREW-266: a batch reminder that waited on the queue listed
+	 * WorkItems the agent had finished meanwhile). A failing refresher
+	 * delivers the message as queued.
+	 *
+	 * @param refresher - The refresher, or null
+	 */
+	setMessageRefresher(refresher: QueuedMessageRefresher | null): void {
+		this.refresher = refresher;
+	}
+
+	/**
+	 * The text to deliver for a queued message, per the installed refresher.
+	 *
+	 * @param data - Queued text
+	 * @param sessionName - Target session
+	 * @returns Text to send, or null to drop it
+	 */
+	private async refreshed(data: string, sessionName: string): Promise<string | null> {
+		if (!this.refresher) return data;
+		try {
+			return await this.refresher(data, sessionName);
+		} catch (err) {
+			this.logger.debug('Queued-message refresh failed; delivering the message as queued', {
+				sessionName,
+				error: err instanceof Error ? err.message : String(err),
+			});
+			return data;
+		}
 	}
 
 	/**
@@ -540,6 +591,7 @@ export class SubAgentMessageQueue {
 		}
 
 		const item: QueuedAgentMessage = {
+			id: randomUUID(),
 			data,
 			queuedAt: Date.now(),
 			sessionName,
@@ -591,17 +643,20 @@ export class SubAgentMessageQueue {
 	}
 
 	/**
-	 * Remove the most recently queued copy of a message (the one a `send`
-	 * inside {@link flush} put back at the end).
+	 * Remove the copy a `send` inside {@link flush} put back on the queue.
+	 * Only entries that were not queued before the send (their ids are not in
+	 * `knownIds`) are candidates, so an identical message queued earlier or by
+	 * someone else is never taken by mistake.
 	 *
 	 * @param sessionName - The agent session
-	 * @param data - The message
+	 * @param data - The message text the send re-queued
+	 * @param knownIds - Ids of the entries queued before the send
 	 */
-	private removeLastCopy(sessionName: string, data: string): void {
+	private removeRequeuedCopy(sessionName: string, data: string, knownIds: ReadonlySet<string | undefined>): void {
 		const queue = this.pendingMessages.get(sessionName);
 		if (!queue) return;
 		for (let i = queue.length - 1; i >= 0; i--) {
-			if (queue[i].data === data) {
+			if (queue[i].data === data && !knownIds.has(queue[i].id)) {
 				queue.splice(i, 1);
 				return;
 			}
@@ -632,6 +687,27 @@ export class SubAgentMessageQueue {
 		send: (data: string) => Promise<{ queued?: boolean; success?: boolean; error?: string }>,
 		gapMs = 0,
 	): Promise<{ delivered: number; deferred: number; failed: number; skippedStale: number }> {
+		// One flush per agent at a time: a second one (idle hook + register +
+		// timer) waits its turn, then sees only what is left. Two overlapping
+		// flushes would both dequeue, deliver out of order and re-queue each
+		// other's messages.
+		const previous = this.flushTails.get(sessionName) ?? Promise.resolve();
+		const run = previous.then(() => this.flushLocked(sessionName, send, gapMs));
+		const tail = run.catch(() => undefined);
+		this.flushTails.set(sessionName, tail);
+		try {
+			return await run;
+		} finally {
+			if (this.flushTails.get(sessionName) === tail) this.flushTails.delete(sessionName);
+		}
+	}
+
+	/** The body of {@link flush}; callers go through the per-agent lock. */
+	private async flushLocked(
+		sessionName: string,
+		send: (data: string) => Promise<{ queued?: boolean; success?: boolean; error?: string }>,
+		gapMs: number,
+	): Promise<{ delivered: number; deferred: number; failed: number; skippedStale: number }> {
 		const out = { delivered: 0, deferred: 0, failed: 0, skippedStale: 0 };
 		const pending = this.pruneNoLongerNeeded(sessionName, this.dequeueAll(sessionName), out);
 		// A send that failed ("Session does not exist", "Runtime has exited")
@@ -657,7 +733,8 @@ export class SubAgentMessageQueue {
 				this.logger.warn('Queued message not delivered — kept for the next attempt', { sessionName, attempts, error });
 			}
 		};
-		for (const [i, queued] of pending.entries()) {
+		for (const [i, original] of pending.entries()) {
+			let queued = original;
 			if (this.answeredInThread(queued)) {
 				out.skippedStale += 1;
 				this.logPrune(sessionName, queued, 'answered-in-thread');
@@ -672,6 +749,14 @@ export class SubAgentMessageQueue {
 				out.skippedStale += 1;
 				continue;
 			}
+			// A batch reminder drops the items finished while it waited (CREW-266).
+			const freshData = await this.refreshed(queued.data, sessionName);
+			if (freshData === null) {
+				out.skippedStale += 1;
+				this.logPrune(sessionName, queued, 'nothing-left-to-announce');
+				continue;
+			}
+			if (freshData !== queued.data) queued = { ...queued, data: freshData };
 			let handOver: QueuedHandOver | null = null;
 			try {
 				// A WorkItem brief gets its hand-over now, as a direct /deliver would.
@@ -690,6 +775,7 @@ export class SubAgentMessageQueue {
 					continue;
 				}
 				const sentText = handOver ? handOver.message : withSurfacedNotice(queued);
+				const knownIds = new Set((this.pendingMessages.get(sessionName) ?? []).map((m) => m.id));
 				const result = await send(sentText);
 				if (handOver) {
 					// Held again or failed: not delivered (the hand-over runs again next time).
@@ -701,7 +787,7 @@ export class SubAgentMessageQueue {
 				} else if (result?.queued) {
 					// `send` re-queued it at the back; take that copy out — it goes
 					// back at its original place, with its original queuedAt.
-					this.removeLastCopy(sessionName, sentText);
+					this.removeRequeuedCopy(sessionName, sentText, knownIds);
 					heldAgain = pending.slice(i);
 					out.deferred += heldAgain.length;
 					this.logger.info('Queued message deferred again — agent still busy; it and the messages after it keep their order', {
@@ -731,7 +817,7 @@ export class SubAgentMessageQueue {
 			// Back at the front, in their original order, ahead of anything
 			// queued meanwhile (failed ones came before the held one).
 			const queue = (this.pendingMessages.get(sessionName) ?? []).filter(
-				(m) => !heldAgain.some((h) => h.data === m.data) && !failedAgain.some((f) => f.data === m.data),
+				(m) => m.id === undefined || (!heldAgain.some((h) => h.id === m.id) && !failedAgain.some((f) => f.id === m.id)),
 			);
 			this.pendingMessages.set(sessionName, ownerFirst([...failedAgain, ...heldAgain, ...queue]));
 			this.save();

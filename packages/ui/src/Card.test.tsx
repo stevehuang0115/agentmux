@@ -19,8 +19,8 @@ describe('Card', () => {
     it('should render with default variant and padding', () => {
       const { container } = render(<Card>Content</Card>);
       const card = container.firstChild as HTMLElement;
-      expect(card).toHaveClass('bg-surface-dark');
-      expect(card).toHaveClass('border');
+      expect(card).toHaveClass('cw-glass');
+      expect(card).toHaveClass('rounded-2xl');
       expect(card).toHaveClass('p-4');
     });
   });
@@ -29,8 +29,8 @@ describe('Card', () => {
     it('should apply default variant classes', () => {
       const { container } = render(<Card variant="default">Content</Card>);
       const card = container.firstChild as HTMLElement;
-      expect(card).toHaveClass('bg-surface-dark');
-      expect(card).toHaveClass('border-border-dark');
+      expect(card).toHaveClass('cw-glass');
+      expect(card).not.toHaveClass('cw-glass-strong');
     });
 
     it('should apply outlined variant classes', () => {
@@ -43,8 +43,7 @@ describe('Card', () => {
     it('should apply elevated variant classes', () => {
       const { container } = render(<Card variant="elevated">Content</Card>);
       const card = container.firstChild as HTMLElement;
-      expect(card).toHaveClass('bg-surface-dark');
-      expect(card).toHaveClass('shadow-md');
+      expect(card).toHaveClass('cw-glass-strong');
     });
   });
 

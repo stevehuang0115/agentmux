@@ -29,7 +29,7 @@ import {
   RUNTIME_STARTUP_CONSTANTS,
 } from '../../constants.js';
 import type { RuntimeType } from '../../constants.js';
-import { CREWLY_CONSTANTS, AGENT_TIMEOUTS, AGENT_WAKE_ERROR_CODES, TEAM_LEAD_CONSTANTS, TEAM_PAUSE_CONSTANTS } from '../../constants.js';
+import { CREWLY_CONSTANTS, AGENT_TIMEOUTS, AGENT_WAKE_ERROR_CODES, TEAM_LEAD_CONSTANTS, TEAM_PAUSE_CONSTANTS, STALLED_AGENT_RECOVERY_CONSTANTS } from '../../constants.js';
 import { updateAgentHeartbeat } from '../../services/agent/agent-heartbeat.service.js';
 import { getSessionBackendSync, getSessionStatePersistence } from '../../services/session/index.js';
 import { removeCrewlyAgentFile } from '../../services/session/session-binding.js';
@@ -45,6 +45,7 @@ import {
 } from '../../services/agent/agent-registration.service.js';
 import { SubAgentMessageQueue } from '../../services/messaging/sub-agent-message-queue.service.js';
 import { SUB_AGENT_QUEUE_CONSTANTS } from '../../constants.js';
+import { RESOURCE_MODE_CONSTANTS } from '../../services/agent/resource-mode.service.js';
 import type { EventBusService } from '../../services/event-bus/event-bus.service.js';
 import { getCriticalEventTypes } from '../../types/event-bus.types.js';
 import { LoggerService } from '../../services/core/logger.service.js';
@@ -52,9 +53,11 @@ import { getChatV2Service } from '../../services/chat-v2/chat-v2.singleton.js';
 import { OAuthReloginMonitorService } from '../../services/agent/oauth-relogin-monitor.service.js';
 import { normalizeMemberSkills } from '../../services/ai/prompt-builder.service.js';
 import { isSafeModelId, isSafeReasoningEffort } from '../../utils/runtime-model-flags.utils.js';
+import { isModelTier } from '../../utils/model-tier.utils.js';
 import {
   evaluateColdLaunch,
   isDormantTeam,
+  isHarnessParkedResume,
   isPreAuthorizedSchedule,
   COMMITMENT_APPROVAL_LOOKBACK_MS,
 } from '../../services/orchestrator/commitment-approval-guard.js';
@@ -64,6 +67,7 @@ import { effectiveRuntimeType } from '../../services/runtime-fallback/effective-
 import { getRuntimeFallbackService } from '../../services/runtime-fallback/runtime-fallback.service.js';
 import { clearOwnerStopped, markOwnerStopped } from '../../services/agent/owner-stopped.registry.js';
 import { isTeamPausedNow, pausedRefusalMessage } from '../../services/team/team-pause.registry.js';
+import { reportOwnerThreadBlocking } from '../../services/messaging/owner-thread-sentinel.service.js';
 
 const logger = LoggerService.getInstance().createComponentLogger('TeamController');
 
@@ -80,6 +84,27 @@ interface WakeGateResult {
   allowed: boolean;
   /** Human-readable reason. Surfaced in the 400 response when allowed=false. */
   reason: string;
+}
+
+/**
+ * WorkItem statuses in which the target agent holds the work: a STOPPED agent
+ * holding one is exactly who must be started (2026-10-07: Nova held ticket
+ * CE-206 as `running` after her start failed, and nothing restarted her).
+ */
+const WAKE_GATE_HELD_STATUSES: ReadonlySet<string> = new Set(['running', 'accepted', 'proposed']);
+
+/**
+ * Whether a WorkItem justifies starting `sessionName`: queued/blocked work
+ * (any target for an explicit id, see rule 1), or work this member holds.
+ *
+ * @param w - WorkItem
+ * @param sessionName - Member session
+ * @param explicit - The caller named this WorkItem
+ * @returns True when it satisfies the gate
+ */
+function isWakeEvidence(w: { status: string; target?: string | null }, sessionName: string, explicit: boolean): boolean {
+  if (w.status === 'queued' || w.status === 'blocked') return explicit || w.target === sessionName;
+  return WAKE_GATE_HELD_STATUSES.has(w.status) && w.target === sessionName;
 }
 
 /**
@@ -168,7 +193,7 @@ async function checkWakeGate(
   const explicitWorkItemId = typeof bodyObj?.workItemId === 'string' ? bodyObj.workItemId : null;
   if (explicitWorkItemId) {
     const referenced = items.find((w) => w.id === explicitWorkItemId);
-    if (referenced && (referenced.status === 'queued' || referenced.status === 'blocked')) {
+    if (referenced && isWakeEvidence(referenced, sessionName, true)) {
       return {
         allowed: true,
         reason: `caller provided workItemId=${explicitWorkItemId} (status=${referenced.status})`,
@@ -200,10 +225,9 @@ async function checkWakeGate(
   // routes to this caller. Workers spawned via the delegate-task
   // skill flow take path (2) because that flow creates the WI with
   // `target=worker` BEFORE calling start.
-  const eligible = items.filter((w) => {
-    if (w.status !== 'queued' && w.status !== 'blocked') return false;
-    return w.target === sessionName;
-  });
+  // Work this member holds (running / accepted / proposed) counts too: a
+  // stopped holder must be restarted to finish it.
+  const eligible = items.filter((w) => isWakeEvidence(w, sessionName, false));
 
   if (eligible.length > 0) {
     return {
@@ -216,7 +240,7 @@ async function checkWakeGate(
     allowed: false,
     reason:
       `Cannot wake '${sessionName}': pool has no queued/blocked WorkItem ` +
-      `with target=${sessionName} and no caller-provided workItemId. Pool is ` +
+      `(and no work it holds) with target=${sessionName} and no caller-provided workItemId. Pool is ` +
       `the source of truth for what is in flight; either create a WorkItem ` +
       `with target set explicitly to this member, or pass workItemId in the ` +
       `request body to indicate which orphan WI you intend this wake to fulfil.`,
@@ -595,7 +619,7 @@ function resolveAgentStatus(
 export async function activateAgentBySession(
   context: ApiContext,
   sessionName: string,
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; deferred?: boolean }> {
   try {
     const found = await context.storageService.findMemberBySessionName(sessionName);
     if (!found) {
@@ -608,8 +632,24 @@ export async function activateAgentBySession(
       projectPath = projects.find((p) => p.id === team.projectIds[0])?.path;
     }
     const result = await _startTeamMemberCore(context, team, member, projectPath);
-    return { success: result.success, error: result.error };
+    // A start that failed for real (not deferred behind the agent cap — the
+    // slot queue reports that — and not a team the owner paused) is said in
+    // the owner thread that waits on the agent; Nova's start failed silently
+    // on 2026-10-08.
+    if (
+      !result.success &&
+      result.errorCode !== RESOURCE_MODE_CONSTANTS.START_DEFERRED_ERROR_CODE &&
+      result.errorCode !== TEAM_PAUSE_CONSTANTS.ERROR_CODE
+    ) {
+      reportOwnerThreadBlocking(sessionName, { kind: 'start_failed', ...(result.error ? { detail: result.error } : {}) });
+    }
+    return {
+      success: result.success,
+      error: result.error,
+      ...(result.errorCode === RESOURCE_MODE_CONSTANTS.START_DEFERRED_ERROR_CODE ? { deferred: true } : {}),
+    };
   } catch (err) {
+    reportOwnerThreadBlocking(sessionName, { kind: 'start_failed', detail: err instanceof Error ? err.message : String(err) });
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
@@ -862,6 +902,14 @@ async function _startTeamMemberCore(
 
       lastError = createResult.error;
 
+      // Waited for a slot behind the running-agent cap: retrying here only
+      // waits again (CREW-304). It is deferred, not broken — the reconciler and
+      // the stalled-agent recovery start it once a slot frees.
+      if (createResult.errorCode === RESOURCE_MODE_CONSTANTS.START_DEFERRED_ERROR_CODE) {
+        logger.info('Start deferred by the running-agent cap; it is retried when a slot frees', { sessionName });
+        break;
+      }
+
       // Don't retry non-recoverable errors (e.g. missing CLI binary, or a
       // start-up blocked on the user such as Claude Code as root / never set up)
       if (
@@ -966,23 +1014,34 @@ async function _startTeamMemberCore(
       const failureMember = failureTeam?.members.find(m => m.id === member.id) as MutableTeamMember | undefined;
 
       const failureReason = lastError || createResult?.error || `Failed to create team member session after ${MAX_CREATION_RETRIES} attempts`;
+      const deferred = createResult?.errorCode === RESOURCE_MODE_CONSTANTS.START_DEFERRED_ERROR_CODE;
       if (failureTeam && failureMember) {
         // Reset to inactive if session creation failed
         failureMember.agentStatus = CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE;
-        failureMember.sessionName = '';
         failureMember.updatedAt = new Date().toISOString();
-        // O2: keep the reason so the dashboard can show it after a refresh.
-        failureMember.lastStartError = { reason: failureReason, at: failureMember.updatedAt };
+        // A start deferred by the running-agent cap is not broken: it stays
+        // stopped the way an idle stop leaves it (session name kept), so the
+        // reconciler and the stalled-agent recovery still see it and start it
+        // once a slot frees. Clearing the name hid it from both (Nova, 2026-10-07).
+        if (!deferred) {
+          failureMember.sessionName = '';
+          // O2: keep the reason so the dashboard can show it after a refresh.
+          failureMember.lastStartError = { reason: failureReason, at: failureMember.updatedAt };
+        }
         await context.storageService.saveTeam(failureTeam);
       }
 
-      logger.error('All session creation attempts failed', { retries: MAX_CREATION_RETRIES, memberName: member.name, lastError });
+      if (deferred) {
+        logger.info('Session start deferred by the running-agent cap', { memberName: member.name, sessionName });
+      } else {
+        logger.error('All session creation attempts failed', { retries: MAX_CREATION_RETRIES, memberName: member.name, lastError });
+      }
       return {
         success: false,
         memberName: member.name,
         memberId: member.id,
         sessionName: null,
-        status: 'failed',
+        status: deferred ? 'deferred' : 'failed',
         error: failureReason,
         errorCode: createResult?.errorCode,
       };
@@ -1906,12 +1965,18 @@ export async function updateTeamMember(this: ApiContext, req: Request, res: Resp
       if (rejectNonOwner(req, res, { success: false, error: 'Only the owner can dedicate an agent to a person' })) return;
       if (updates.dedicatedTo && !isPersonId(updates.dedicatedTo)) { res.status(400).json({ success: false, error: 'dedicatedTo must be a Slack user id (or owner)' } as ApiResponse); return; }
     }
+    // Model tier (crewly#1173): the owner's call; a lead proposes with propose-tier-change.
+    if ('tier' in updates) {
+      if (rejectNonOwner(req, res, { success: false, error: 'Only the owner sets a member\'s tier. A team lead proposes it with propose-tier-change.' })) return;
+      if (updates.tier && !isModelTier(updates.tier)) { res.status(400).json({ success: false, error: 'tier must be strong, mid or weak (or empty to clear)' } as ApiResponse); return; }
+    }
     // An empty string clears the per-agent model / effort override.
     const modelUpdates = pickModelFields(updates);
     const updatedMember: MutableTeamMember = { ...team.members[memberIndex], ...updates, ...modelUpdates, updatedAt: new Date().toISOString() } as MutableTeamMember;
     if (updates.modelId === '') delete updatedMember.modelId;
     if (updates.reasoningEffort === '') delete updatedMember.reasoningEffort;
     if ('dedicatedTo' in updates && !updates.dedicatedTo) delete updatedMember.dedicatedTo;
+    if ('tier' in updates && !updates.tier) delete updatedMember.tier;
     team.members[memberIndex] = updatedMember;
     team.updatedAt = new Date().toISOString();
     await this.storageService.saveTeam(team);
@@ -2247,7 +2312,38 @@ export async function startTeamMember(this: ApiContext, req: Request, res: Respo
         workItemId: wakeWorkItemId,
       });
     }
-    if (!memberAlreadyActive && !ownerDashboardCall && isDormantTeam(team) && !scheduledPreAuthorized) {
+    // A team the harness parked (idle stop, slot freed, update) is resumed by
+    // the reconciler's wake for its own queued work, not cold-launched
+    // (CREW-303/304: CE sat 4h35m behind this gate on 2026-10-06).
+    let harnessParkedResume = false;
+    if (!memberAlreadyActive && !ownerDashboardCall && !scheduledPreAuthorized && wakeWorkItemId && isDormantTeam(team)) {
+      try {
+        const { TaskPoolService } = await import('../../services/task-pool/task-pool.service.js');
+        const wakeItem = await TaskPoolService.getInstance().findWorkItem(wakeWorkItemId);
+        harnessParkedResume = isHarnessParkedResume({
+          team,
+          sessionName: member.sessionName,
+          workItem: wakeItem,
+          now: Date.now(),
+          parkReasons: STALLED_AGENT_RECOVERY_CONSTANTS.HARNESS_PARK_REASONS,
+          windowMs: STALLED_AGENT_RECOVERY_CONSTANTS.PARKED_RESUME_WINDOW_MS,
+        });
+      } catch (err) {
+        logger.warn('Commitment gate: could not read the wake WorkItem — treating as a cold launch', {
+          workItemId: wakeWorkItemId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      if (harnessParkedResume) {
+        logger.info('Commitment gate: resuming a team the harness parked (its own queued work)', {
+          teamId,
+          memberId,
+          sessionName: member.sessionName,
+          workItemId: wakeWorkItemId,
+        });
+      }
+    }
+    if (!memberAlreadyActive && !ownerDashboardCall && isDormantTeam(team) && !scheduledPreAuthorized && !harnessParkedResume) {
       let ownerMessages: string[] = [];
       let readOk = true;
       try {
@@ -2372,7 +2468,10 @@ export async function startTeamMember(this: ApiContext, req: Request, res: Respo
       } else {
         res.status(500).json({
           success: false,
-          error: result.error || 'Failed to start team member'
+          error: result.error || 'Failed to start team member',
+          // Lets the reconciler tell a deferred start (RESOURCE_PRESSURE_CAP)
+          // from a broken one (CREW-304).
+          ...(result.errorCode ? { code: result.errorCode } : {}),
         } as ApiResponse);
       }
     }

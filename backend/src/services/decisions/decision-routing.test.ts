@@ -51,16 +51,26 @@ describe('trackedClosedReason (specs/2026-10-02-decision-card-thread-answers.md 
 
   it('names why a reply-question card is moot', () => {
     expect(trackedClosedReason(reply, { request: req('awaiting_followup', 'superseded') })).toBe('already handled in this thread');
+    expect(trackedClosedReason(reply, { request: req('awaiting_followup', 'expired') })).toBe('no longer needed');
     expect(trackedClosedReason(reply, { request: req('done', 'resolved') })).toBe('ticket done');
     expect(trackedClosedReason(reply, { request: req('cancelled') })).toBe('ticket cancelled');
     // Not found / unreadable is unknown: the card stays open.
     expect(trackedClosedReason(reply, { request: null })).toBeNull();
   });
 
-  it('a ticket ask is moot once its project ticket is done or cancelled', () => {
+  it('an explicit ask-owner card stays open when its ticket is done (#1241)', () => {
     const ticket = { ticket: { projectId: 'p', projectPath: '/p', id: 'CE-7', title: 't' } };
     expect(trackedClosedReason(ticket, { ticketStatus: 'in_progress' })).toBeNull();
-    expect(trackedClosedReason(ticket, { ticketStatus: 'done' })).toBe('ticket done');
+    expect(trackedClosedReason(ticket, { ticketStatus: 'done' })).toBeNull();
+  });
+
+  it('a cancelled ticket still withdraws its explicit card', () => {
+    const ticket = { ticket: { projectId: 'p', projectPath: '/p', id: 'CE-7', title: 't' } };
     expect(trackedClosedReason(ticket, { ticketStatus: 'cancelled' })).toBe('ticket cancelled');
+  });
+
+  it('a derived card (requestRef) of a ticket whose request is done is still withdrawn', () => {
+    const derived = { ...reply, ticket: { projectId: 'p', projectPath: '/p', id: 'CE-7', title: 't' } };
+    expect(trackedClosedReason(derived, { request: req('done'), ticketStatus: 'done' })).toBe('ticket done');
   });
 });

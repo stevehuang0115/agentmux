@@ -18,7 +18,9 @@ import { DecisionService } from '../decisions/decision.service.js';
 import { defaultDeadline } from '../decisions/decision-contract.js';
 import { formatWhen } from '../decisions/decision-card.js';
 import { LoggerService } from '../core/logger.service.js';
+import { staleCommitmentNotice } from './stale-commitment.js';
 import { OpenItemsService, slackPlaceOf, type FollowUpInput, type QuestionCardInput } from './open-items.service.js';
+import { memberNameFromSession } from '../../utils/member-session-name.utils.js';
 
 /** What the composition root provides. */
 export interface OpenItemsWiringInput {
@@ -57,7 +59,8 @@ export function buildFollowUpWorkItem(input: FollowUpInput, now: Date = new Date
       `You promised the owner in ${tkt}'s thread: "${flat}"` +
       (due ? `\nDue: ${formatWhen(due, now)} (${due.toISOString()}).` : '') +
       `\nCrewly tracks it: post the deliverable in that thread${command}; that closes this item.` +
-      children,
+      children +
+      staleCommitmentNotice(item, now),
     metadata: {
       [OPEN_ITEMS_CONSTANTS.FOLLOW_UP_METADATA_KEY]: { requestId: request.id, itemId: item.id },
       ...(item.due ? { dueAt: item.due } : {}),
@@ -98,7 +101,7 @@ function membersBySession(teams: Team[]): Map<string, { name: string; teamId: st
  */
 export function createOpenItemsService(input: OpenItemsWiringInput): OpenItemsService {
   const pool = (): TaskPoolService => TaskPoolService.getInstance();
-  const nameOf = async (session: string): Promise<string> => membersBySession(await input.getTeams().catch(() => [])).get(session)?.name ?? session;
+  const nameOf = async (session: string): Promise<string> => membersBySession(await input.getTeams().catch(() => [])).get(session)?.name ?? memberNameFromSession(session);
 
   return new OpenItemsService({
     requests: RequestService.getInstance(),

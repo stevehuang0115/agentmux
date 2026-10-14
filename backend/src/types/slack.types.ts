@@ -61,10 +61,33 @@ export interface SlackRawInboundEvent {
   /** Set when a bot posted the message */
   bot_id?: string;
   files?: SlackFile[];
+  /**
+   * Legacy attachments. A message the user SHARED into this one (Slack's
+   * "Share message" / forward) arrives here, not in `text` (`is_share` /
+   * `is_msg_unfurl`, with the original's `text`, author and permalink).
+   */
+  attachments?: SlackRawAttachment[];
   /** `reaction_added`: emoji name (no colons) */
   reaction?: string;
   /** `reaction_added`: what was reacted to */
   item?: { type?: string; channel?: string; ts?: string };
+}
+
+/** The fields of a legacy attachment Crewly reads (a shared message or a link preview). */
+export interface SlackRawAttachment {
+  is_share?: boolean;
+  is_msg_unfurl?: boolean;
+  text?: string;
+  fallback?: string;
+  pretext?: string;
+  title?: string;
+  title_link?: string;
+  author_name?: string;
+  author_subname?: string;
+  from_url?: string;
+  original_url?: string;
+  image_url?: string;
+  footer?: string;
 }
 
 /** Provenance attached to an inbound event by the transport that received it. */
@@ -171,6 +194,15 @@ export interface CloudRoutingDecision {
   createdAt: string;
 }
 
+/** A request to put this machine's agents in an existing Slack channel (Cloud-pushed). */
+export interface SlackRoomJoinRequest {
+  slackChannelId: string;
+  slackChannelName: string;
+  /** Agent sessions on THIS machine to add as members */
+  sessions: string[];
+  requestedByInstanceId: string;
+}
+
 /**
  * `data` of a `slack_event` relay message pushed by Crewly Cloud (contract:
  * Slack v3 events). `event` is the raw Slack event object.
@@ -191,6 +223,12 @@ export interface SlackCloudEventEnvelope {
   room?: SlackRoomPresence;
   /** Set on a hand-off: the message is re-delivered, addressed to this agent */
   handoffTo?: string;
+  /**
+   * Set on a room-join request (`event.type === 'crewly_room_join'`): another
+   * machine's orchestrator put some of this machine's agents in a Slack channel.
+   * Not a message — never routed as one.
+   */
+  roomJoin?: SlackRoomJoinRequest;
   event: SlackRawInboundEvent;
   /**
    * `block_actions` only (Cloud ≥ auth 1.9.0): the full interactive payload
@@ -455,6 +493,8 @@ export interface SlackContextMessage {
   usernameOverride?: boolean;
   /** Message text with `<@U…>` mentions turned into `@name` */
   text: string;
+  /** User / bot ids the message @-mentioned (`<@U…>`), in order */
+  mentionIds?: string[];
 }
 
 /** What {@link SlackThreadContextService.getContext} returns. */
@@ -494,6 +534,19 @@ export interface SlackIncomingMessage {
   hasImages?: boolean;
   /** Downloaded non-image file info with local paths (populated after download) */
   attachments?: SlackFileInfo[];
+  /**
+   * Slack files LINKED in the text (a permalink a colleague pasted), fetched
+   * like attachments so a hand-off carries its file. Kept apart from
+   * `attachments`, which counts against `files` for the "could not be read" note.
+   */
+  linkedFiles?: SlackFileInfo[];
+  /** Linked Slack files that could not be fetched, with the reason (shown to the agent). */
+  linkedFileFailures?: Array<{ link: string; reason: string }>;
+  /**
+   * Attachments that could not be downloaded, with the reason. Shown to the
+   * agent only (never posted into the Slack thread): the agent explains in its own words.
+   */
+  fileFailures?: Array<{ name: string; reason: string }>;
   /** Whether the message has any file attachments (images or other) */
   hasFiles?: boolean;
   /** Transport that delivered the event (`socket` when omitted) */
@@ -572,6 +625,8 @@ export interface SlackOutgoingMessage {
    * same reply is not stored twice.
    */
   skipChatV2Mirror?: boolean;
+  /** The agent session this post is on behalf of — only for log attribution. */
+  senderSession?: string;
   /**
    * The caller is probing candidate channels and expects some to be
    * unreachable (notification fallback). Such failures do not count
@@ -615,6 +670,20 @@ export interface SlackTeamChannelMapping {
   derivedName?: string;
   /** Ad-hoc channels only: the local agents @'d there so far (the huddle roster). */
   members?: string[];
+  /**
+   * Ad-hoc channels only: agents the owner removed in Crewly. They are not
+   * added back automatically (by a copy arriving through their own app, or
+   * by the periodic Slack member read) — only an explicit add or an @-mention
+   * brings them back. Matters when Slack refused to take their bot out.
+   */
+  excluded?: string[];
+  /**
+   * Ad-hoc channels only: when a member agent's bot asked, in the channel,
+   * for the Crewly app to be added. Neither the agent bots (no `*:read`
+   * scopes) nor the workspace bot (not a member of a private channel) can
+   * read its name, so it shows as its id until the app is in it. Asked once.
+   */
+  crewlyAppHintAt?: string;
   /**
    * True once the workspace owner was invited into this channel (or found
    * already in it). A channel Crewly creates is invisible to people until

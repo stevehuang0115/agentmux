@@ -17,6 +17,7 @@
 
 import { EventEmitter } from 'events';
 import { promises as fsp } from 'fs';
+import { atomicWriteJson } from '../../utils/file-io.utils.js';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 import { randomUUID } from 'crypto';
@@ -131,6 +132,46 @@ export function registerRetryDelay(failures: number): number {
 /** The relay refused a queue id because it belongs to another account. */
 class QueueForbiddenError extends Error {}
 
+/** The relay answered 429 with a Retry-After: per-account rate or daily limit. */
+export class RelayRateLimitedError extends Error {
+  /**
+   * @param message - English description including the status and body
+   * @param retryAfterMs - How long the relay asked us to wait (0 when unknown)
+   */
+  constructor(message: string, readonly retryAfterMs: number) {
+    super(message);
+    this.name = 'RelayRateLimitedError';
+  }
+}
+
+/**
+ * Build the error for a failed relay response. A 429 becomes a
+ * {@link RelayRateLimitedError} carrying the relay's `Retry-After` header
+ * (seconds) or, failing that, the body's `retryAfter` / `retry_after`.
+ *
+ * @param response - The non-ok response
+ * @param what - Message prefix, e.g. `Queue registration failed`
+ * @returns The error to throw
+ */
+async function relayFailure(response: Response, what: string): Promise<Error> {
+  const errorText = await response.text().catch(() => '');
+  const message = `${what}: ${response.status} ${errorText}`;
+  if (response.status !== 429) return new Error(message);
+  let seconds = Number.parseInt(response.headers?.get?.('retry-after') ?? '', 10);
+  if (!Number.isFinite(seconds)) {
+    try {
+      const body = JSON.parse(errorText) as { retryAfter?: unknown; retry_after?: unknown };
+      seconds = Number(body.retryAfter ?? body.retry_after);
+    } catch {
+      seconds = NaN;
+    }
+  }
+  const retryAfterMs = Number.isFinite(seconds) && seconds > 0
+    ? Math.min(seconds * 1000, CLOUD_SYNC_CONSTANTS.RETRY_AFTER_MAX_MS)
+    : 0;
+  return new RelayRateLimitedError(message, retryAfterMs);
+}
+
 export class CloudSyncService extends EventEmitter {
   private static instance: CloudSyncService | null = null;
   private readonly logger: ComponentLogger;
@@ -164,6 +205,15 @@ export class CloudSyncService extends EventEmitter {
   private queueFailures = 0;
   /** Epoch ms of the first failure in the current registration failure streak */
   private queueFailingSince: number | null = null;
+  /**
+   * When this machine began having NO queue at all (epoch ms); null while it
+   * has one. Unlike {@link queueFailingSince}, a failed re-registration while
+   * an earlier queue is still being polled does not start a gap — nothing is
+   * missed then.
+   */
+  private inboundGapSince: number | null = null;
+  /** The current inbound gap was already announced (`queue-outage`). */
+  private queueOutageNotified = false;
   /** Epoch ms of the next scheduled registration */
   private nextQueueAttemptAt: number | null = null;
   /**
@@ -272,6 +322,8 @@ export class CloudSyncService extends EventEmitter {
     this.queueError = null;
     this.queueFailures = 0;
     this.queueFailingSince = null;
+    this.inboundGapSince = null;
+    this.queueOutageNotified = false;
     this.lastLoggedPeer = null;
     this.authRejected = false;
     this.heartbeatFailures = 0;
@@ -478,8 +530,7 @@ export class CloudSyncService extends EventEmitter {
     });
 
     if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      throw new Error(`Failed to send message: ${response.status} ${errorText}`);
+      throw await relayFailure(response, 'Failed to send message');
     }
 
     this.logger.info('Message sent via Cloud Sync', { to: toDeviceId, type, peerSessionId: targetDevice.sessionId });
@@ -529,8 +580,7 @@ export class CloudSyncService extends EventEmitter {
       signal: AbortSignal.timeout(CLOUD_SYNC_CONSTANTS.REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      throw new Error(`Failed to send message (queueId path): ${response.status} ${errorText}`);
+      throw await relayFailure(response, 'Failed to send message (queueId path)');
     }
     this.logger.info('Message sent via Cloud Sync (queueId path)', { peerQueueId, type });
   }
@@ -561,12 +611,16 @@ export class CloudSyncService extends EventEmitter {
       }
       this.queueFailures = 0;
       this.queueFailingSince = null;
+      this.noteQueueRecovered();
     } catch (err) {
       if (gen !== this.generation) return;
       this.queueError = err instanceof Error ? err.message : String(err);
       this.queueFailures += 1;
       this.queueFailingSince ??= Date.now();
       delay = registerRetryDelay(this.queueFailures);
+      this.noteQueueFailed();
+      // The relay told us when to come back (per-account limit): never earlier.
+      if (err instanceof RelayRateLimitedError) delay = Math.max(delay, err.retryAfterMs);
       // Not "may not work": without a queue id the Slack instance heartbeat
       // is skipped, so Cloud marks this machine stale and every inbound
       // Slack event is queued instead of delivered (2026-09-21).
@@ -579,6 +633,36 @@ export class CloudSyncService extends EventEmitter {
       );
     }
     this.scheduleRegister(gen, delay);
+  }
+
+  /**
+   * Outage bookkeeping after a failed registration. Only a machine with no
+   * queue at all is deaf (Slack events pile up in Cloud); `queue-outage` fires
+   * once when that outlasts QUEUE_OUTAGE_NOTIFY_AFTER_MS.
+   *
+   * Events: `queue-outage` ({ since, error }), `inbound-gap-recovered` ({ since }).
+   */
+  private noteQueueFailed(): void {
+    if (this.queueId !== null) return;
+    const now = Date.now();
+    this.inboundGapSince ??= now;
+    if (!this.queueOutageNotified && now - this.inboundGapSince >= CLOUD_SYNC_CONSTANTS.QUEUE_OUTAGE_NOTIFY_AFTER_MS) {
+      this.queueOutageNotified = true;
+      this.emit('queue-outage', { since: this.inboundGapSince, error: this.queueError });
+    }
+  }
+
+  /**
+   * The first success after an inbound gap: tell the Slack backfill where the
+   * gap began so it can read what Cloud could not deliver.
+   */
+  private noteQueueRecovered(): void {
+    if (this.inboundGapSince === null || !this.queueId) return;
+    const since = this.inboundGapSince;
+    this.inboundGapSince = null;
+    this.queueOutageNotified = false;
+    this.logger.info('Queue registration recovered after an inbound gap', { since: new Date(since).toISOString() });
+    this.emit('inbound-gap-recovered', { since });
   }
 
   /**
@@ -708,10 +792,9 @@ export class CloudSyncService extends EventEmitter {
     });
 
     if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      const message = `Queue registration failed: ${response.status} ${errorText}`;
-      if (response.status === 403) throw new QueueForbiddenError(message);
-      throw new Error(message);
+      const failure = await relayFailure(response, 'Queue registration failed');
+      if (response.status === 403) throw new QueueForbiddenError(failure.message);
+      throw failure;
     }
 
     const data = await response.json() as { success: boolean; queueId?: string; peerQueueId?: string | null };
@@ -781,7 +864,7 @@ export class CloudSyncService extends EventEmitter {
     const file = this.fallbackQueueFile();
     try {
       await fsp.mkdir(dirname(file), { recursive: true });
-      await fsp.writeFile(file, JSON.stringify({ queueId, takenAt: new Date().toISOString() }, null, 2), 'utf-8');
+      await atomicWriteJson(file, { queueId, takenAt: new Date().toISOString() }, { mode: 0o600 });
     } catch (err) {
       this.logger.warn('Could not persist the fallback queue id — a restart will take another', {
         error: err instanceof Error ? err.message : String(err),

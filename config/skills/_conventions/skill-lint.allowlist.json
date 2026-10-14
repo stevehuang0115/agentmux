@@ -1,0 +1,127 @@
+[
+  {
+    "file": "agent/core/cancel-followup/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "agent/core/list-my-crons/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "agent/core/list-my-followups/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "agent/core/publish-app/SKILL.md",
+    "rule": "description-too-long",
+    "reason": "Pre-existing: description over the limit. Trim when the skill is next edited."
+  },
+  {
+    "file": "agent/core/reply-channel/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "agent/core/schedule-followup/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "agent/core/watch-for-event/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "agent/core/wiki-query/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "agent/screenshot-compare/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "agent/web-search/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "agent/xhs-article-to-image/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "agent/xiaoyuzhoufm-transcript/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "orchestrator/cancel-all-schedules/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "orchestrator/list-devices/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "orchestrator/list-schedules/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "orchestrator/reply-remote/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "orchestrator/send-to-remote/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "orchestrator/update-team-member/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "orchestrator/wiki-bookkeep/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "orchestrator/wiki-cleanup/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "orchestrator/wiki-ingest/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "orchestrator/wiki-lint/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "orchestrator/wiki-migrate/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "orchestrator/wiki-process-queue/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  },
+  {
+    "file": "orchestrator/wiki-queue-add/SKILL.md",
+    "rule": "triggers-missing",
+    "reason": "Pre-existing: no triggers list. Add triggers when the skill is next edited."
+  }
+]

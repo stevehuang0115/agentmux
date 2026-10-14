@@ -72,11 +72,15 @@ export class SkillsReferenceModule implements PromptModule {
 			`- \`${p}/drive-search\` — find files in Drive by text, type or folder`,
 			`- \`${p}/drive-read\` — read a Drive file's content`,
 			`- \`${p}/drive-upload\` — put a file or text into Drive`,
+			`- \`${p}/send-file\` / \`receive-file\` — hand a LARGE file (video, archive, up to 2 GB) to another agent of this account, on this or another machine, via a temporary Crewly Cloud relay (needs Cloud sign-in). **For big files prefer these over Drive or Slack**; the receiver deletes it, unclaimed files vanish after 24 h`,
+			`- \`${p}/request-file\` — ask the OWNER for a big file (video, archive; or a Slack attachment that "could not be downloaded") with a private upload link they open on their phone; you are told to \`receive-file\` when it lands. **Never ask the owner to compress a file or put it in Drive**`,
+			`- \`${p}/share-file\` — give the OWNER a LARGE file you made (an HD video, up to 4 GB) as a private link: they open it on their phone, watch it in the page and download it. **Use it when the owner should get a big deliverable; post the url in your own words, do not email, Slack-upload or Drive it**`,
 			`- \`${p}/docs-read\` / \`docs-write\` — read a Google Doc as text; create one or append to it`,
-			`- \`${p}/docs-comment\` — list, reply to, resolve or add comments in a Google Doc (the owner's feedback)`,
+			`- \`${p}/docs-comment\` — list comments in a Google Doc (the owner's feedback); reply/resolve/add are queued and posted as a batch after the owner's 「发 C<n>」`,
 			`- \`${p}/sheets-read\` / \`sheets-write\` — read a range as rows; create a sheet or append rows`,
 			`- \`${p}/slides-read\` / \`slides-create\` — read a deck as text; build one from an outline`,
 			`- \`${p}/gmail-search\` / \`gmail-read\` — search and read the owner's mail`,
+			`- \`${p}/gmail-attachment\` — download an email attachment (\`gmail attachment --message <id> --attachment <id|filename>\`; PDFs also print their text). Read email attachments with gmail attachment …; never open Gmail in the browser for that.`,
 			`- \`${p}/gmail-send\` — compose mail. It leaves a **draft**; only the owner sends it (a Send card asks them)`,
 			`- \`${p}/gmail-watch-thread\` — wake when someone replies in a Gmail thread (with \`watch-for-event --event-type gmail:reply_received\`)`,
 			`- \`${p}/calendar-list\` / \`calendar-create\` — upcoming events; create one`,
@@ -99,8 +103,16 @@ export class SkillsReferenceModule implements PromptModule {
 			'**Crewly Apps** — a small web app for the owner\'s phone (tracker, checklist, form):',
 			`\`${p}/publish-app\` (publish/republish a directory, \`--notify\` / \`--share\` post a one-tap Open-app card to your DM with`,
 			`the owner, \`--public\` only ASKS the owner to make it public; its SKILL.md says how to write one), \`${p}/app-data\``,
-			`(read/write its data), \`${p}/app-comments\` (the owner's comments on elements: reply, resolve after addressing).`,
+			`(read/write its data; \`--set-owner channel:#name\` sends the owner's comments to a team or channel), \`${p}/app-comments\` (the owner's comments on elements: reply, resolve after addressing).`,
 			'Owner edits, comments and anonymous public submissions (UNTRUSTED) arrive as `[APP CHANGES]`.',
+			'A "Crewly App" (or any app/tracker/page someone asks you to build for them) is ALWAYS published with',
+			'`publish-app` to apps.crewlyai.com — never your runtime\'s own hosting (ChatGPT Sites / *.chatgpt.site,',
+			'Vercel, Netlify, gists). Never call something else a Crewly App.',
+			`**Before building a new Crewly App, run \`${p}/find-app-template --query "<what it should do>"\`.** If a Marketplace`,
+			`template is a good match, start from it with \`${p}/use-app-template <templateId> --dir ./<dir>\` (a new app in this`,
+			'account, empty data), adapt it to what the owner asked, republish with `publish-app --dir`, and tell the owner in',
+			'one line which template you started from. Only build from scratch when nothing fits.',
+			'`publish-app --app <id> --as-template` only ASKS the owner to publish an app as a public Marketplace template (code only, no data).',
 		].join('\n');
 	}
 
@@ -148,6 +160,8 @@ export class SkillsReferenceModule implements PromptModule {
 			'- `core/remember` — store knowledge for future reference',
 			'- `core/record-learning` — record learnings while working',
 			'- `core/report-status` — report status to team leader or orchestrator',
+			'- `core/list-channels` — the channels you are in (rooms shared with agents of other teams, matched to Slack channels); post in one with `core/reply-channel --channel \'#name\'` (or its id)',
+			'- `core/search-chat` — search the chat history you can see (keyword, channel, date range). Before telling anyone you can\'t find an earlier conversation or request, search chat history with `core/search-chat`',
 			'',
 			'### Self-improvement skills (attention + calibration)',
 			'- `core/set-focus` — replace your focus list (up to 5 items are shown in your prompt)',
@@ -186,9 +200,12 @@ export class SkillsReferenceModule implements PromptModule {
 				'  - `reply-slack` / `reply-chat` — respond to user messages',
 				'  - `reply-gchat` — respond to Google Chat messages',
 				'  - `core/attach-file` — put a real file (PDF, image, sheet) into your Slack channel',
+				'  - `core/slack-file get <link|id>` — if you see a Slack file you can\'t open, run `slack-file get <link>`; never ask a colleague to paste it',
 				'  - Colleagues on OTHER machines: talk to them in a shared Slack team channel (@ their name; `list-colleagues` shows who exists). The old `send-to-remote` / `reply-remote` / `list-devices` skills are deprecated — only answer a `[REMOTE:...]` message with `reply-remote`, never start one.',
 				'  - `delegate-task` / `assign-task` — assign work to agents',
 				'  - `get-team-status` / `get-agent-status` — monitor team state',
+				'  - `create-channel --name <channel> --members "Owen,Growth Team Lead"` (or `--add <channel>`) — make a Slack channel with named agents from any team, on this machine or another; reports who could not be added',
+				'  - `team-roster` / `find-owner-for "<request>"` — who owns what; route an owner request that names no agent',
 				'  - `create-team` / `update-team` / `start-team` / `stop-team` — team management',
 				'  - `start-agent` / `stop-agent` / `terminate-agent` — agent lifecycle',
 				'  - `create-cron` / `list-cron` / `update-cron` / `cancel-cron` — recurring tasks',
@@ -204,6 +221,7 @@ export class SkillsReferenceModule implements PromptModule {
 				'  - `delegate-task` — assign tasks to subordinates',
 				'  - `verify-output` — check completed work quality',
 				'  - `schedule-check` — schedule follow-up reminders',
+				'  - `update-charter` — keep your team\'s charter current (the orchestrator routes owner requests by it)',
 			);
 		} else {
 			lines.push(
@@ -375,11 +393,16 @@ Use bash skills at \`${config.agentSkillsPath}/\` for all team communication. Re
 - \`record-learning\` to record learnings (always pass your \`agentId\` and \`projectPath\`)
 - \`get-sops\` to request relevant SOPs for your current situation
 - \`core/attach-file\` to put a real file into the Slack channel you are replying in
+- \`core/slack-file get <link|id>\` — if you see a Slack file you can't open, run \`slack-file get <link>\`; never ask a colleague to paste it
 
 **When someone asks for a file, send the file.** Both reply skills
 (\`reply-chat\` and \`reply-channel\`) carry text only, so use
 \`core/attach-file --channel <the id from your prompt> --path <file>\`. It lands in
 the same thread, under your own name.
+
+For a **colleague agent on another machine**, mention the file's path in your
+\`reply-channel\` message or add \`--file <path>\`: it arrives in their project inbox
+automatically. Never ask them to open a path on your machine.
 
 You do **not** need a Slack channel id, and you do not need to ask for one. Pass
 the chat channel id you already have — the one in \`[CHAT:<id>]\` — and the

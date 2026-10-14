@@ -11,10 +11,14 @@
  * @module services/cloud/cloud-client.service
  */
 
-import * as path from 'path';
-import { readFile, writeFile, mkdir, unlink } from 'fs/promises';
+import { unlink } from 'fs/promises';
+import {
+  getCloudConfigPath,
+  readCloudConfigFile,
+  writeCloudConfigFile,
+  type PersistedCloudConfig,
+} from './cloud-config-file.js';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
-import { getCrewlyHomePath } from '../core/crewly-home.utils.js';
 import {
   CLOUD_CONSTANTS,
   AUTH_CONSTANTS,
@@ -22,25 +26,7 @@ import {
   type CloudConnectionStatus,
 } from '../../constants.js';
 
-/**
- * Persisted cloud config stored at ~/.crewly/cloud/config.json.
- * Enables auto-reconnect on backend restart.
- */
-export interface PersistedCloudConfig {
-  cloudUrl: string;
-  token: string;
-  tier: string;
-  connectedAt: string;
-  /** Refresh token for auto-renewing expired access tokens */
-  refreshToken?: string;
-  /**
-   * Relay-signed access JWT (distinct from the access `token`). Persisted so
-   * the BrowserProxy can re-register on backend restart without waiting for a
-   * fresh validate round-trip. Never the Google/Supabase token — see the
-   * RELAY-TOKEN-TYPE invariant in the long-term browser-relay fix design.
-   */
-  relayToken?: string;
-}
+export type { PersistedCloudConfig };
 
 /**
  * Decode the `exp` (expiry, seconds since epoch) claim from a JWT without
@@ -360,7 +346,7 @@ export class CloudClientService {
    * tests (which isolate CREWLY_HOME) can never overwrite the real login.
    */
   static getConfigPath(): string {
-    return path.join(getCrewlyHomePath(), 'cloud', 'config.json');
+    return getCloudConfigPath();
   }
 
   /**
@@ -369,9 +355,16 @@ export class CloudClientService {
    */
   async loadPersistedConfig(): Promise<PersistedCloudConfig | null> {
     try {
-      const data = await readFile(CloudClientService.getConfigPath(), 'utf-8');
-      const config = JSON.parse(data) as PersistedCloudConfig;
-      if (config.cloudUrl && config.token && config.tier) {
+      const read = readCloudConfigFile(this.logger);
+      if (read.status === 'damaged') {
+        this.logger.error('Cloud sign-in data is damaged and could not be repaired; acting as signed out until the owner signs in again', {
+          reason: read.reason,
+          backup: read.quarantinedTo,
+        });
+        return null;
+      }
+      if (read.status === 'ok') {
+        const config = read.config;
         // Restore the persisted relay token immediately so BrowserProxy can
         // re-register on restart without waiting for a fresh validate
         // round-trip. fetchRelayTokenFromValidate (kicked off by connectLocal)
@@ -405,9 +398,7 @@ export class CloudClientService {
       ...(this.relayToken && { relayToken: this.relayToken }),
     };
 
-    const configPath = CloudClientService.getConfigPath();
-    await mkdir(path.dirname(configPath), { recursive: true });
-    await writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8');
+    await writeCloudConfigFile(config);
     this.logger.debug('Persisted cloud config to disk');
   }
 

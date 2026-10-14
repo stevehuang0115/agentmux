@@ -133,11 +133,32 @@ function defaultIsExecutable(file: string): boolean {
 }
 
 /**
+ * SIGKILL a child and everything in its process group.
+ *
+ * @param child - Child spawned with `detached` (its own group)
+ */
+function killTree(child: ReturnType<typeof spawn>): void {
+	if (child.pid && process.platform !== 'win32') {
+		try {
+			process.kill(-child.pid, 'SIGKILL');
+			return;
+		} catch {
+			// Group already gone: fall through to the direct kill.
+		}
+	}
+	child.kill('SIGKILL');
+}
+
+/**
  * Run a command without a shell and collect its output.
  *
  * Never rejects: a spawn failure (ENOENT) or timeout comes back as
- * `{ code: null, error }`. Secrets must go through `options.stdin`, never
- * through `args`, so they cannot appear in `ps` output.
+ * `{ code: null, error }`. The command runs in its own process group and a
+ * timeout kills the whole group: harness CLIs such as `codex` are Node
+ * wrappers around a native binary, and SIGKILL on the wrapper alone left the
+ * native child running forever (hundreds of hung `codex login status`).
+ * Secrets must go through `options.stdin`, never through `args`, so they
+ * cannot appear in `ps` output.
  *
  * @param command - Executable
  * @param args - Arguments
@@ -167,6 +188,7 @@ export const runCommand: RunCommand = (
 				env: options.env ?? process.env,
 				...(options.cwd ? { cwd: options.cwd } : {}),
 				stdio: ['pipe', 'pipe', 'pipe'],
+				detached: process.platform !== 'win32',
 			});
 		} catch (error) {
 			resolve({ code: null, stdout: '', stderr: '', error: error instanceof Error ? error.message : String(error) });
@@ -175,7 +197,7 @@ export const runCommand: RunCommand = (
 
 		if (options.timeoutMs) {
 			timer = setTimeout(() => {
-				child.kill('SIGKILL');
+				killTree(child);
 				finish({ code: null, stdout, stderr, error: `timed out after ${options.timeoutMs} ms` });
 			}, options.timeoutMs);
 		}

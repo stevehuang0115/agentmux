@@ -33,7 +33,11 @@
 #                         Returns { tabId }. Caches tabId locally.
 #                         Optional flag: --active (foreground new tab; default off)
 #   unbind-tab          — Release this agent's bound tab and (by
-#                         default) close it.
+#                         default) close it. Aliases: done, close, close-tab.
+#                         Run it when the job is finished; the backend also
+#                         closes an untouched tab ~10 min after your turn ends
+#                         and when you stop. It never closes a tab the owner
+#                         is using or one that was open before you.
 #
 # Per-tab flags (apply to any action):
 #   --tab-id <number>   Pin the call to a specific tabId. Skips
@@ -176,7 +180,7 @@ while [[ $# -gt 0 ]]; do
         INPUT_JSON="$1"
         shift
       else
-        error_exit "Unknown argument: $1"
+        unknown_arg_exit "$1"
       fi
       ;;
   esac
@@ -325,6 +329,12 @@ _effective_tab_id() {
 METHOD="POST"
 ENDPOINT=""
 BODY=""
+
+# `done` / `close` / `close-tab` are friendlier names for `unbind-tab`: finish
+# the job and close the tab this agent opened (never the owner's own tabs).
+case "$ACTION" in
+  done|close|close-tab) ACTION="unbind-tab" ;;
+esac
 
 case "$ACTION" in
   status)

@@ -55,7 +55,7 @@ while [[ $# -gt 0 ]]; do
     --assignee)            [ $# -ge 2 ] || error_exit "--assignee requires a value";       ASSIGNEE="$2"; shift 2 ;;
     --question)            QUESTION="true"; shift ;;
     --help|-h)             print_usage; exit 0 ;;
-    *) error_exit "Unknown option: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 

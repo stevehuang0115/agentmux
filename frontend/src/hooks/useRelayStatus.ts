@@ -10,6 +10,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { apiService } from '../services/api.service';
+import { setVisibleInterval } from '../utils/visible-interval';
 
 // ========================= Types =========================
 
@@ -104,7 +105,7 @@ export function useRelayStatus(): UseRelayStatusResult {
 
     init();
 
-    const intervalId = setInterval(fetchStatus, POLL_INTERVAL_MS);
+    const intervalId = setVisibleInterval(fetchStatus, POLL_INTERVAL_MS);
 
     return () => {
       isMountedRef.current = false;

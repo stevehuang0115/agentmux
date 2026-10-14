@@ -58,7 +58,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run)     DRY_RUN=1; shift ;;
     --account)  [ $# -ge 2 ] || error_exit "--account requires a value"; ACCOUNT="$2"; shift 2 ;;
     --help|-h)     print_usage; exit 0 ;;
-    *) error_exit "Unknown option: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 
@@ -112,7 +112,7 @@ BODY=$(jq -cn --arg to "$TO" --arg cc "$CC" --arg subject "$SUBJECT" --arg text 
    + (if $inReplyTo != "" then {inReplyTo: $inReplyTo} else {} end)')
 
 RESPONSE=$(api_call POST "/google/gmail/send" "$BODY" 2>&1) || {
-  printf '%s' "$RESPONSE" | jq -c '{success: false, reason: (.details.error // .details // .error // "unknown"), hint: (.details.hint // ""), message: (.details.message // "")}' 2>/dev/null \
+  printf '%s' "$RESPONSE" | jq -c '{success: false, reason: (.details.error // .details // .error // "unknown"), hint: (.details.hint // ""), message: (.details.message // "")} + (if .details.reconnectLinkSent == true then {reconnectLinkSent: true} else {} end)' 2>/dev/null \
     || jq -n --arg r "$RESPONSE" '{success: false, reason: $r}'
   exit 1
 }

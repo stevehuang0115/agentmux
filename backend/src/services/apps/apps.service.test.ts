@@ -19,6 +19,9 @@ import {
   requireTtlDays,
   threadMentions,
   validatePublicRequest,
+  parseOwnerSpec,
+  isOwnerMember,
+  type OwnerTargets,
 } from './apps.service.js';
 
 const ID = '28au74d9cj';
@@ -126,7 +129,8 @@ describe('AppsService.publish', () => {
     await expect(service.publish({ files: FILES, appId: ID2 }, { agentSession: 'dev-ella' })).rejects.toMatchObject({ status: 403, code: 'not_your_app' });
     await registry.upsert(ID2, { name: 'Bob', agentSession: 'dev-bob' });
     await expect(service.publish({ files: FILES, appId: ID2 }, { agentSession: 'dev-ella' })).rejects.toMatchObject({ status: 403, code: 'not_your_app' });
-    expect(request).not.toHaveBeenCalled();
+    // Only the owner lookup for the unknown app (a team moved here would be named there); nothing published.
+    expect(request.mock.calls.map((c) => `${c[0]} ${c[1]}`)).toEqual([`GET /apps/${ID2}/owner`]);
   });
 
   it('lets the publisher republish by explicit id', async () => {
@@ -442,6 +446,21 @@ describe('P3: public requests', () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it('capability request: validates names, sends them to Cloud, owner approves; cancel; ownership enforced', async () => {
+    await registry.upsert(ID, { name: 'Poll', agentSession: 'dev-ella' });
+    const who = { agentSession: 'dev-ella' };
+    request.mockResolvedValueOnce({ capabilities: [], capabilityRequest: { capabilities: ['microphone'] } });
+    const out = await service.requestCapabilities(ID, { capabilities: 'microphone, microphone', note: ' noise meter ' }, who);
+    expect(request).toHaveBeenLastCalledWith('POST', `/apps/${ID}/capability-request`, { body: { capabilities: ['microphone'], note: 'noise meter' }, agent: 'dev-ella' });
+    expect(out).toMatchObject({ appId: ID, requested: true, message: expect.stringMatching(/^Requested: the owner allows it/) });
+    await expect(service.requestCapabilities(ID, { capabilities: ['laser'] }, who)).rejects.toMatchObject({ status: 400 });
+    await expect(service.requestCapabilities(ID, {}, who)).rejects.toMatchObject({ status: 400 });
+    await expect(service.requestCapabilities(ID, { capabilities: ['microphone'], note: 'x'.repeat(501) }, who)).rejects.toThrow(/note/);
+    await expect(service.cancelCapabilityRequest(ID, who)).resolves.toEqual({ appId: ID, cancelled: true });
+    expect(request).toHaveBeenLastCalledWith('DELETE', `/apps/${ID}/capability-request`, { agent: 'dev-ella' });
+    await expect(service.requestCapabilities(ID, { capabilities: ['microphone'] }, { agentSession: 'dev-bob' })).rejects.toMatchObject({ status: 403 });
+  });
+
   it('cancel and make-private; ownership enforced', async () => {
     await registry.upsert(ID, { name: 'Poll', agentSession: 'dev-ella' });
     const who = { agentSession: 'dev-ella' };
@@ -498,6 +517,43 @@ describe('P3: app data sanitised for the agent (§4)', () => {
     request.mockResolvedValueOnce({ docs: [doc], next: null });
     await expect(service.listDocs(ID, 'items', {}, who)).resolves.toEqual({ docs: [expected], next: null });
     await expect(service.deleteDoc(ID, 'items', 'd1', who)).resolves.toEqual({ deleted: true });
+  });
+});
+
+describe('long strings in app data (crewly#1145)', () => {
+  const LONG = 'A'.repeat(70_000);
+  const who = { agentSession: 'dev-ella' };
+
+  it('flags a cut string on get and list instead of cropping silently', async () => {
+    await registry.upsert(ID, { name: 'G', agentSession: 'dev-ella' });
+    const doc = { id: 'd1', rev: 1, data: { name: 'x', photo: LONG, nested: [{ img: LONG }] } };
+    request.mockResolvedValueOnce(doc);
+    const got = (await service.getDoc(ID, 'items', 'd1', who)) as Record<string, any>;
+    expect(got.truncated).toEqual([
+      { field: '/photo', chars: 70_000 },
+      { field: '/nested/0/img', chars: 70_000 },
+    ]);
+    expect(got.truncatedHint).toMatch(/--get-field/);
+    expect(got.data.photo.length).toBeLessThan(70_000);
+    request.mockResolvedValueOnce({ docs: [doc], next: null });
+    const list = (await service.listDocs(ID, 'items', {}, who)) as Record<string, any>;
+    expect(list.truncated[0]).toEqual({ id: 'd1', field: '/photo', chars: 70_000 });
+  });
+
+  it('adds no flag when nothing was cut', async () => {
+    await registry.upsert(ID, { name: 'G', agentSession: 'dev-ella' });
+    request.mockResolvedValueOnce({ id: 'd1', rev: 1, data: { a: 'short' } });
+    expect(await service.getDoc(ID, 'items', 'd1', who)).not.toHaveProperty('truncated');
+  });
+
+  it('getDocField returns the whole raw string, and refuses bad or missing pointers', async () => {
+    await registry.upsert(ID, { name: 'G', agentSession: 'dev-ella' });
+    request.mockResolvedValue({ id: 'd1', rev: 1, data: { photo: LONG, 'a/b': { 'c~d': ['z'] } } });
+    await expect(service.getDocField(ID, 'items', 'd1', '/photo', who)).resolves.toEqual({ field: '/photo', type: 'string', chars: 70_000, value: LONG });
+    await expect(service.getDocField(ID, 'items', 'd1', '/a~1b/c~0d/0', who)).resolves.toMatchObject({ value: 'z' });
+    await expect(service.getDocField(ID, 'items', 'd1', '/nope', who)).rejects.toMatchObject({ status: 404 });
+    await expect(service.getDocField(ID, 'items', 'd1', 'photo', who)).rejects.toMatchObject({ status: 400 });
+    await expect(service.getDocField(ID, 'items', 'd1', '/photo', { agentSession: 'dev-bob' })).rejects.toMatchObject({ code: 'not_your_app' });
   });
 });
 
@@ -694,6 +750,43 @@ describe('comments (crewly#1056)', () => {
   });
 });
 
+describe('AppsService.deleteApp (crewly#1081)', () => {
+  const who = { agentSession: 'dev-ella' };
+  let svc: AppsService;
+  let calls: Array<[string, string]>;
+  let visibility: string;
+
+  beforeEach(async () => {
+    visibility = 'private';
+    calls = [];
+    const req = jest.fn(async (method: string, p: string) => {
+      calls.push([method, p]);
+      if (method === 'GET') return { appId: ID, name: 'X', visibility };
+      return { deleted: true };
+    });
+    svc = new AppsService({ client: { request: req } as unknown as AppsCloudClient, registry, cards, sameTeam });
+    await registry.upsert(ID, { name: 'X', agentSession: 'dev-ella', source: '/w/x' });
+  });
+
+  it('the publisher deletes a private app: Cloud DELETE, then the registry marks it gone', async () => {
+    await expect(svc.deleteApp(ID, who)).resolves.toEqual({ appId: ID, deleted: true });
+    expect(calls).toContainEqual(['DELETE', `/apps/${ID}`]);
+    expect((await registry.get(ID))!.deleted).toBe(true);
+  });
+
+  it('an agent cannot delete a public app; the owner can', async () => {
+    visibility = 'public';
+    await expect(svc.deleteApp(ID, who)).rejects.toMatchObject({ status: 403, code: 'forbidden' });
+    expect(calls.some(([m]) => m === 'DELETE')).toBe(false);
+    await expect(svc.deleteApp(ID, {})).resolves.toMatchObject({ deleted: true });
+  });
+
+  it('an agent of another team cannot delete it', async () => {
+    await expect(svc.deleteApp(ID, { agentSession: 'dev-bob' })).rejects.toMatchObject({ status: 403, code: 'not_your_app' });
+    expect(calls).toEqual([]);
+  });
+});
+
 describe('AppsService.transfer', () => {
   const MILO = 'edu-game-milo-13e8d3ca';
   const ATLAS = 'think-tank-atlas-b4e166f6';
@@ -729,17 +822,35 @@ describe('AppsService.transfer', () => {
     await expect(svc.assertPublisher(ID, {})).resolves.toBeUndefined();
   });
 
-  it('the current publisher, the lead of its team and the orchestrator may transfer; other agents may not', async () => {
+  it('only the owner and the orchestrator may transfer: not the publisher, not its team lead, not other agents (crewly#1116)', async () => {
     await expect(svc.transfer(ID, MILO, { agentSession: 'edu-game-iva-11111111' })).rejects.toMatchObject({ status: 403, code: 'not_your_app' });
-    await expect(svc.transfer(ID, MILO, { agentSession: 'think-tank-lead-aaaaaaaa' })).resolves.toMatchObject({ changed: true });
-    await registry.setPublisher(ID, ATLAS);
-    await expect(svc.transfer(ID, MILO, { agentSession: ATLAS })).resolves.toMatchObject({ changed: true });
-    await registry.setPublisher(ID, ATLAS);
+    await expect(svc.transfer(ID, MILO, { agentSession: 'think-tank-lead-aaaaaaaa' })).rejects.toMatchObject({ status: 403, code: 'not_your_app' });
+    await expect(svc.transfer(ID, MILO, { agentSession: ATLAS })).rejects.toMatchObject({ status: 403, code: 'not_your_app' });
+    expect((await registry.get(ID))!.agentSession).toBe(ATLAS);
+    expect(request).not.toHaveBeenCalledWith('PUT', expect.anything(), expect.anything());
     await expect(svc.transfer(ID, MILO, { agentSession: 'crewly-orc' })).resolves.toMatchObject({ changed: true });
   });
 
+  it('records every hand-over on the registry entry (audit trail) and never touches Cloud data', async () => {
+    await svc.transfer(ID, MILO, { agentSession: 'crewly-orc' });
+    await svc.transfer(ID, ATLAS, {});
+    const e = (await registry.get(ID))!;
+    expect(e.transfers).toEqual([
+      { at: expect.any(String), from: ATLAS, to: MILO, by: 'crewly-orc' },
+      { at: expect.any(String), from: MILO, to: ATLAS, by: 'owner' },
+    ]);
+    const writes = request.mock.calls.filter(([m]) => m !== 'GET').map(([m, p]) => `${m} ${p}`);
+    expect(writes).toEqual([`PUT /apps/${ID}/publisher`, `PUT /apps/${ID}/publisher`]);
+  });
+
+  it('list shows the owning team of each app', async () => {
+    const rows = await svc.list({});
+    expect(rows).toEqual([expect.objectContaining({ appId: ID, agentSession: ATLAS, team: 'T' })]);
+  });
+
   it('does not tell the agent that made the transfer', async () => {
-    const r = await svc.transfer(ID, MILO, { agentSession: ATLAS });
+    await registry.setPublisher(ID, 'crewly-orc');
+    const r = await svc.transfer(ID, MILO, { agentSession: 'crewly-orc' });
     expect(r.notified).toEqual([MILO]);
   });
 
@@ -775,5 +886,346 @@ describe('AppsService.transfer', () => {
   it('without a directory every transfer is refused', async () => {
     const bare = new AppsService({ client: { request } as unknown as AppsCloudClient, registry, cards });
     await expect(bare.transfer(ID, MILO, {})).rejects.toMatchObject({ code: 'validation' });
+  });
+});
+
+describe('AppsService collaborators (the owner let another team work in an app)', () => {
+  const ELLA = 'crewly-marketing-ella-e6a6b8ea';
+  const BOB = 'crewly-sales-bob-1';
+  let list: Array<{ kind: string; who: string; instanceId: string }>;
+  let svc: AppsService;
+
+  beforeEach(() => {
+    list = [{ kind: 'team', who: 'Marketing', instanceId: 'inst-2' }];
+    request.mockImplementation(async (m: string, p: string) => {
+      if (m === 'GET' && p === `/apps/${ID}/collaborators`) return { collaborators: list, enforced: true };
+      return { docs: [], next: null };
+    });
+    const teamOf: Record<string, string> = { [ELLA]: 'Marketing', [BOB]: 'Sales' };
+    svc = new AppsService({
+      client: { request } as unknown as AppsCloudClient,
+      registry,
+      cards,
+      sameTeam: async () => false,
+      directory: { member: async (s) => (teamOf[s] ? { session: s, name: s, team: teamOf[s] } : null), leadsTeamOf: async () => false },
+      instanceId: async () => 'inst-2',
+    });
+  });
+
+  it('an agent added by name from another machine (entry = its session on THIS instance) uses the data; the same session listed for another instance does not', async () => {
+    expect(await registry.get(ID)).toBeFalsy();
+    list = [{ kind: 'agent', who: BOB, instanceId: 'inst-2' }];
+    await expect(svc.listDocs(ID, 'items', {}, { agentSession: BOB })).resolves.toBeDefined();
+    await expect(svc.listDocs(ID, 'items', {}, { agentSession: ELLA })).rejects.toMatchObject({ code: 'not_your_app' });
+    list = [{ kind: 'agent', who: BOB, instanceId: 'inst-mac' }];
+    await expect(svc.listDocs(ID, 'items', {}, { agentSession: BOB })).rejects.toMatchObject({ code: 'not_your_app' });
+  });
+
+  it('a collaborator team member reads and writes data of an app that is NOT in this machine\'s registry (published elsewhere)', async () => {
+    expect(await registry.get(ID)).toBeFalsy();
+    await expect(svc.listDocs(ID, 'items', {}, { agentSession: ELLA })).resolves.toBeDefined();
+    await expect(svc.addDoc(ID, 'items', { qty: 1 }, { agentSession: ELLA })).resolves.toBeDefined();
+  });
+
+  it('NEGATIVE: a team that is not listed is still refused', async () => {
+    await expect(svc.listDocs(ID, 'items', {}, { agentSession: BOB })).rejects.toMatchObject({ code: 'not_your_app' });
+    await expect(svc.addDoc(ID, 'items', { qty: 1 }, { agentSession: BOB })).rejects.toMatchObject({ code: 'not_your_app' });
+  });
+
+  it('NEGATIVE: an entry for another instance does not match, and a single-agent entry covers only that agent', async () => {
+    list = [{ kind: 'team', who: 'Marketing', instanceId: 'inst-9' }];
+    await expect(svc.listDocs(ID, 'items', {}, { agentSession: ELLA })).rejects.toMatchObject({ code: 'not_your_app' });
+    list = [{ kind: 'agent', who: BOB, instanceId: 'inst-2' }];
+    await expect(svc.listDocs(ID, 'items', {}, { agentSession: BOB })).resolves.toBeDefined();
+    await expect(svc.listDocs(ID, 'items', {}, { agentSession: ELLA })).rejects.toMatchObject({ code: 'not_your_app' });
+  });
+
+  it('removing the collaborator takes effect on the very next call (no cache)', async () => {
+    await expect(svc.listDocs(ID, 'items', {}, { agentSession: ELLA })).resolves.toBeDefined();
+    list = [];
+    await expect(svc.listDocs(ID, 'items', {}, { agentSession: ELLA })).rejects.toMatchObject({ code: 'not_your_app' });
+  });
+
+  it('fails closed when Cloud is down or does not know the app', async () => {
+    request.mockRejectedValue(Object.assign(new Error('x'), { status: 404, code: 'not_found' }));
+    await expect(svc.listDocs(ID, 'items', {}, { agentSession: ELLA })).rejects.toMatchObject({ code: 'not_your_app' });
+    request.mockRejectedValue(Object.assign(new Error('x'), { status: 502, code: 'network' }));
+    await expect(svc.listDocs(ID, 'items', {}, { agentSession: ELLA })).rejects.toMatchObject({ code: 'not_your_app' });
+  });
+
+  describe('uploadFile (an image into an app)', () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    const uploadCalls = () => request.mock.calls.filter((c: unknown[]) => c[0] === 'POST' && String(c[1]).endsWith('/files'));
+
+    it('a collaborator uploads: raw bytes, content type, URI-encoded name and the agent go to Cloud; its answer comes back untouched', async () => {
+      request.mockImplementation(async (m: string, p: string) => {
+        if (m === 'GET' && p === `/apps/${ID}/collaborators`) return { collaborators: list, enforced: true };
+        if (m === 'POST' && p === `/apps/${ID}/files`) return { fileId: 'f1', name: 'a b.png', size: 4, contentType: 'image/png', url: 'https://apps.crewlyai.com/_f/t/f1' };
+        return {};
+      });
+      const out = await svc.uploadFile(ID, { data: png, contentType: 'image/png', name: 'a b.png' }, { agentSession: ELLA });
+      expect(out).toEqual({ fileId: 'f1', name: 'a b.png', size: 4, contentType: 'image/png', url: 'https://apps.crewlyai.com/_f/t/f1' });
+      expect(uploadCalls()).toEqual([['POST', `/apps/${ID}/files`, { raw: { data: png, contentType: 'image/png' }, headers: { 'X-File-Name': 'a%20b.png' }, agent: ELLA }]]);
+    });
+
+    it('NEGATIVE: an agent not on the list is refused with not_your_app and nothing is sent to Cloud', async () => {
+      await expect(svc.uploadFile(ID, { data: png, contentType: 'image/png', name: 'a.png' }, { agentSession: BOB })).rejects.toMatchObject({ status: 403, code: 'not_your_app' });
+      expect(uploadCalls()).toHaveLength(0);
+    });
+
+    it("passes Cloud's own refusal through (too_large) instead of a fake success", async () => {
+      request.mockImplementation(async (m: string, p: string) => {
+        if (m === 'GET' && p === `/apps/${ID}/collaborators`) return { collaborators: list, enforced: true };
+        throw new AppsCloudError(413, 'too_large', 'A file can be at most 5 MB.');
+      });
+      await expect(svc.uploadFile(ID, { data: png, contentType: 'image/png' }, { agentSession: ELLA })).rejects.toMatchObject({ status: 413, code: 'too_large' });
+    });
+
+    it('sanitizes the answer: control characters and [TAGS] in the echoed name do not reach a terminal', async () => {
+      request.mockImplementation(async (m: string, p: string) => {
+        if (m === 'GET' && p === `/apps/${ID}/collaborators`) return { collaborators: list, enforced: true };
+        return { fileId: 'f1', name: '[DONE]\u001b[2Jx.png', url: 'https://apps.crewlyai.com/_f/t/f1' };
+      });
+      const out = (await svc.uploadFile(ID, { data: png, contentType: 'image/png', name: 'x.png' }, { agentSession: ELLA })) as { name: string; url: string };
+      expect(out.name).not.toContain('\u001b');
+      expect(out.name.startsWith('[DONE]')).toBe(false);
+      expect(out.url).toBe('https://apps.crewlyai.com/_f/t/f1');
+    });
+
+    it('refuses an empty file before asking Cloud anything', async () => {
+      await expect(svc.uploadFile(ID, { data: Buffer.alloc(0), contentType: 'image/png' }, { agentSession: ELLA })).rejects.toMatchObject({ code: 'validation' });
+      expect(request).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('downloadFile (read an owner upload)', () => {
+    const FID = 'abcdefghij012345';
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    let download: jest.Mock;
+    beforeEach(() => {
+      request.mockImplementation(async (m: string, p: string) => {
+        if (m === 'GET' && p === `/apps/${ID}/collaborators`) return { collaborators: list, enforced: true };
+        return {};
+      });
+      download = jest.fn().mockResolvedValue({ data: bytes, contentType: 'image/png', headers: new Headers({ 'content-disposition': 'attachment; filename="subs shot.png"' }) });
+      svc = new AppsService({
+        client: { request, download } as unknown as AppsCloudClient,
+        registry,
+        cards,
+        sameTeam: async () => false,
+        directory: { member: async (s) => ({ session: s, name: s, team: s === ELLA ? 'Marketing' : 'Sales' }), leadsTeamOf: async () => false },
+        instanceId: async () => 'inst-2',
+      });
+    });
+
+    it('a collaborator downloads: Cloud is asked for the file as that agent with the upload size cap; bytes, type and name come back', async () => {
+      const out = await svc.downloadFile(ID, FID, { agentSession: ELLA });
+      expect(out).toEqual({ data: bytes, contentType: 'image/png', name: 'subs shot.png' });
+      expect(download).toHaveBeenCalledWith(`/apps/${ID}/files/${FID}`, { maxBytes: 10 * 1024 * 1024, agent: ELLA });
+    });
+
+    it('NEGATIVE: an agent that is not a collaborator is refused with not_your_app and Cloud is never asked for the file', async () => {
+      await expect(svc.downloadFile(ID, FID, { agentSession: BOB })).rejects.toMatchObject({ status: 403, code: 'not_your_app' });
+      expect(download).not.toHaveBeenCalled();
+    });
+
+    it('NEGATIVE: a malformed file id is refused before anything is sent', async () => {
+      await expect(svc.downloadFile(ID, '../etc/passwd', { agentSession: ELLA })).rejects.toMatchObject({ code: 'validation' });
+      await expect(svc.downloadFile(ID, 'short', { agentSession: ELLA })).rejects.toMatchObject({ code: 'validation' });
+      expect(download).not.toHaveBeenCalled();
+    });
+
+    it('an app of another account (Cloud 404) answers a clear not_found, not a fake success', async () => {
+      download.mockRejectedValue(new AppsCloudError(404, 'not_found', 'File not found.'));
+      await expect(svc.downloadFile(ID, FID, { agentSession: ELLA })).rejects.toMatchObject({ status: 404, code: 'not_found', message: expect.stringContaining('another Crewly account') });
+    });
+
+    it('passes other Cloud failures through (too_large)', async () => {
+      download.mockRejectedValue(new AppsCloudError(413, 'too_large', 'The file is larger than this machine accepts.'));
+      await expect(svc.downloadFile(ID, FID, { agentSession: ELLA })).rejects.toMatchObject({ status: 413, code: 'too_large' });
+    });
+  });
+
+  it('data only: a collaborator cannot republish, roll back, or publish with an explicit --app id', async () => {
+    await expect(svc.assertPublisher(ID, { agentSession: ELLA })).rejects.toMatchObject({ code: 'not_your_app' });
+    await expect(svc.rollback(ID, 1, { agentSession: ELLA })).rejects.toMatchObject({ code: 'not_your_app' });
+    await expect(svc.publish({ files: FILES, appId: ID }, { agentSession: ELLA })).rejects.toMatchObject({ status: 403, code: 'not_your_app' });
+    expect(request.mock.calls.filter((c) => c[0] === 'POST')).toHaveLength(0);
+  });
+
+  it('a team moved from another machine: data access adopts the app when Cloud names this agent', async () => {
+    const MILO = 'edu-game-milo-13e8d3ca';
+    request.mockImplementation(async (m: string, p: string) => {
+      if (p === `/apps/${ID}/owner`) return { appId: ID, owner: { kind: 'agent', explicit: false, session: MILO, name: 'Milo', instanceId: 'old-mac' } };
+      if (p === `/apps/${ID}` && m === 'GET') return { appId: ID, name: 'AZ', url: 'u' };
+      return {};
+    });
+    await expect(svc.assertDataAccess(ID, { agentSession: MILO })).resolves.toBeUndefined();
+    expect((await registry.get(ID))?.agentSession).toBe(MILO);
+    await expect(svc.assertDataAccess(ID, { agentSession: 'other-agent-12345678' })).rejects.toMatchObject({ code: 'not_your_app' });
+  });
+
+  it('a team moved from another machine: Cloud names this agent as owner → it publishes and the publisher moves here', async () => {
+    const MILO = 'edu-game-milo-13e8d3ca';
+    request.mockImplementation(async (m: string, p: string) => {
+      if (p === `/apps/${ID}/owner`) return { appId: ID, owner: { kind: 'agent', explicit: false, session: MILO, name: 'Milo', instanceId: 'old-mac' } };
+      if (p === `/apps/${ID}` && m === 'GET') return { appId: ID, name: 'AZ', url: 'u', visibility: 'private' };
+      if (p === `/apps/${ID}/versions`) return { version: 7 };
+      return {};
+    });
+    await svc.publish({ files: FILES, appId: ID }, { agentSession: MILO });
+    expect(request.mock.calls.some((c) => c[0] === 'POST' && c[1] === `/apps/${ID}/versions`)).toBe(true);
+    expect(request.mock.calls.some((c) => c[0] === 'PUT' && c[1] === `/apps/${ID}/publisher`)).toBe(true);
+    // Recorded locally, so data and rollback work from this machine too.
+    await expect(svc.assertDataAccess(ID, { agentSession: MILO })).resolves.toBeUndefined();
+    // An agent Cloud does not name is still refused.
+    await registry.markDeleted(ID).catch(() => undefined);
+    await expect(svc.publish({ files: FILES, appId: 'zzzzzzzzzz' }, { agentSession: 'someone-else-12345678' })).rejects.toMatchObject({ code: 'not_your_app' });
+  });
+
+  it('the owner and the publisher\'s team need no Cloud lookup', async () => {
+    await registry.upsert(ID, { name: 'G', agentSession: 'pub-1' });
+    await svc.assertDataAccess(ID, {});
+    await svc.assertDataAccess(ID, { agentSession: 'pub-1' });
+    expect(request).not.toHaveBeenCalled();
+  });
+});
+
+describe('AppsService owner (crewly-services apps/SPEC.md §15)', () => {
+  const ELLA = 'crewly-info-ella-e6a6b8ea';
+  const KAI = 'crewly-dev-kai-11111111';
+  const targets: OwnerTargets = {
+    agent: async (ref) => (['kai', KAI].includes(ref.toLowerCase()) ? { session: KAI, name: 'Kai' } : null),
+    team: async (ref) => (ref.toLowerCase() === 'dev' ? { id: 't-dev', name: 'Dev' } : null),
+    channel: async (ref) => (['#daily-brief', 'daily-brief', 'huddle-1'].includes(ref) ? { id: 'huddle-1', name: 'daily-brief' } : null),
+  };
+  let pushIfChanged: jest.Mock;
+  let svc: AppsService;
+
+  beforeEach(() => {
+    pushIfChanged = jest.fn().mockResolvedValue(true);
+    request.mockImplementation(async (m: string, p: string, opts?: { body?: Record<string, unknown> }) => {
+      if (p === `/apps/${ID}/owner` && m === 'PUT') return { appId: ID, owner: { kind: opts?.body?.['kind'], explicit: true }, previous: null };
+      if (p === `/apps/${ID}/owner`) return { appId: ID, owner: { kind: 'agent', explicit: false, session: ELLA, name: 'Ella', instanceId: 'inst-1' } };
+      return {};
+    });
+    svc = new AppsService({ client: { request } as unknown as AppsCloudClient, registry, cards, instanceId: async () => 'inst-1', ownerTargets: targets, roster: { pushIfChanged } });
+  });
+
+  it('parseOwnerSpec: agent / team / channel / #name / default; anything else is a validation error', () => {
+    expect(parseOwnerSpec('channel:#daily-brief')).toEqual({ kind: 'channel', ref: '#daily-brief' });
+    expect(parseOwnerSpec('#daily-brief')).toEqual({ kind: 'channel', ref: '#daily-brief' });
+    expect(parseOwnerSpec({ owner: 'Team:Dev' })).toEqual({ kind: 'team', ref: 'Dev' });
+    expect(parseOwnerSpec('agent:Kai')).toEqual({ kind: 'agent', ref: 'Kai' });
+    expect(parseOwnerSpec('DEFAULT')).toEqual({ kind: 'default' });
+    for (const bad of ['', 'room:x', 'channel:', 42, null, { owner: 1 }]) expect(() => parseOwnerSpec(bad)).toThrow(AppsCloudError);
+  });
+
+  it('an agent sets a channel owner: resolved here, bound to this instance, roster pushed first, called as that agent', async () => {
+    await svc.setOwner(ID, { owner: 'channel:#daily-brief' }, { agentSession: ELLA });
+    expect(pushIfChanged).toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith('PUT', `/apps/${ID}/owner`, { body: { kind: 'channel', channelId: 'huddle-1', instanceId: 'inst-1' }, agent: ELLA });
+  });
+
+  it('the owner sets a team; default needs no lookup; unknown names are 400 before Cloud is called', async () => {
+    await svc.setOwner(ID, 'team:dev', {});
+    expect(request).toHaveBeenLastCalledWith('PUT', `/apps/${ID}/owner`, { body: { kind: 'team', teamId: 't-dev', instanceId: 'inst-1' }, asOwner: true });
+    await svc.setOwner(ID, 'default', { agentSession: ELLA });
+    expect(request).toHaveBeenLastCalledWith('PUT', `/apps/${ID}/owner`, { body: { kind: 'default' }, agent: ELLA });
+    request.mockClear();
+    await expect(svc.setOwner(ID, 'channel:#nope', { agentSession: ELLA })).rejects.toMatchObject({ status: 400 });
+    await expect(svc.setOwner(ID, 'agent:nobody', {})).rejects.toMatchObject({ status: 400 });
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('a refusal from Cloud (not an owner agent) reaches the caller unchanged', async () => {
+    request.mockRejectedValueOnce(new AppsCloudError(403, 'forbidden', "Only the app's owner agents can change who owns it."));
+    await expect(svc.setOwner(ID, 'agent:kai', { agentSession: 'someone-else-1' })).rejects.toMatchObject({ status: 403, code: 'forbidden' });
+  });
+
+  it('getOwner asks Cloud as the caller', async () => {
+    expect((await svc.getOwner(ID, { agentSession: KAI })).owner).toMatchObject({ kind: 'agent', session: ELLA });
+    expect(request).toHaveBeenLastCalledWith('GET', `/apps/${ID}/owner`, { agent: KAI });
+  });
+
+  it('an owner agent adds an agent collaborator by name (Cloud decides whether the caller may)', async () => {
+    await svc.addAgentCollaborator(ID, 'Kai', { agentSession: ELLA });
+    expect(request).toHaveBeenLastCalledWith('PUT', `/apps/${ID}/collaborators`, { body: { kind: 'agent', session: KAI, instanceId: 'inst-1' }, agent: ELLA });
+    await expect(svc.addAgentCollaborator(ID, 'ghost', { agentSession: ELLA })).rejects.toMatchObject({ status: 400 });
+  });
+
+  describe('collaborators on another machine of the account (Cloud resolves across rosters)', () => {
+    const REX = 'rednote-rex-1a2b3c4d';
+    const resolveWith = (answer: (ref: string) => unknown) =>
+      request.mockImplementation(async (m: string, p: string, opts?: { query?: Record<string, string>; body?: Record<string, unknown> }) => {
+        if (p === `/apps/${ID}/collaborators/resolve`) return answer(String(opts?.query?.['agent']));
+        if (p === `/apps/${ID}/collaborators` && m === 'PUT') return { collaborators: [{ id: 'c1', kind: 'agent', who: opts?.body?.['session'], name: 'Rex', instanceId: opts?.body?.['instanceId'], addedAt: 'now' }] };
+        return {};
+      });
+
+    it('a bare name unique account-wide: roster pushed first, looked up in Cloud as the caller, stored with the other machine\'s instance', async () => {
+      resolveWith(() => ({ agent: { session: REX, name: 'Rex', team: 'RedNote Team', instanceId: 'inst-air', machine: 'iriss-air.lan' } }));
+      const out = (await svc.addAgentCollaborator(ID, ' Rex ', { agentSession: ELLA })) as { added: { machine: string } };
+      expect(pushIfChanged.mock.invocationCallOrder[0]).toBeLessThan(request.mock.invocationCallOrder[0]!);
+      expect(request).toHaveBeenCalledWith('GET', `/apps/${ID}/collaborators/resolve`, { query: { agent: 'Rex' }, agent: ELLA });
+      expect(request).toHaveBeenLastCalledWith('PUT', `/apps/${ID}/collaborators`, { body: { kind: 'agent', session: REX, instanceId: 'inst-air' }, agent: ELLA });
+      expect(out.added.machine).toBe('iriss-air.lan');
+    });
+
+    it('name@machine is passed through as typed', async () => {
+      resolveWith((ref) => (ref === 'Ella@iriss-air' ? { agent: { session: 'rednote-ella-1', name: 'Ella', instanceId: 'inst-air', machine: 'iriss-air.lan' } } : {}));
+      await svc.addAgentCollaborator(ID, 'Ella@iriss-air', {});
+      expect(request).toHaveBeenLastCalledWith('PUT', `/apps/${ID}/collaborators`, { body: { kind: 'agent', session: 'rednote-ella-1', instanceId: 'inst-air' }, asOwner: true });
+    });
+
+    it('an ambiguous name: Cloud\'s 409 (listing Name@machine choices) reaches the caller; nothing is added, even when this machine has one', async () => {
+      request.mockImplementation(async (_m: string, p: string) => {
+        if (p === `/apps/${ID}/collaborators/resolve`) throw new AppsCloudError(409, 'conflict', '"Kai" matches 2 agents on your machines: Kai@mac (Dev; session a), Kai@iriss-air.lan (RedNote; session b). Say which one as <name>@<machine>.');
+        return {};
+      });
+      await expect(svc.addAgentCollaborator(ID, 'Kai', { agentSession: ELLA })).rejects.toMatchObject({ status: 409, message: expect.stringContaining('Kai@iriss-air.lan') });
+      expect(request.mock.calls.some((c) => c[0] === 'PUT')).toBe(false);
+    });
+
+    it('a Cloud without the lookup (404 Not found) or with no match (400) falls back to this machine, as before', async () => {
+      request.mockImplementation(async (m: string, p: string) => {
+        if (p === `/apps/${ID}/collaborators/resolve`) throw new AppsCloudError(404, 'not_found', 'Not found');
+        return {};
+      });
+      await svc.addAgentCollaborator(ID, 'Kai', { agentSession: ELLA });
+      expect(request).toHaveBeenLastCalledWith('PUT', `/apps/${ID}/collaborators`, { body: { kind: 'agent', session: KAI, instanceId: 'inst-1' }, agent: ELLA });
+      await expect(svc.addAgentCollaborator(ID, 'Rex@iriss-air', { agentSession: ELLA })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('cannot look up your other machines') });
+
+      request.mockImplementation(async (m: string, p: string) => {
+        if (p === `/apps/${ID}/collaborators/resolve`) throw new AppsCloudError(400, 'validation', 'No agent "ghost" on any of your machines.');
+        return {};
+      });
+      await svc.addAgentCollaborator(ID, 'kai', { agentSession: ELLA });
+      expect(request).toHaveBeenLastCalledWith('PUT', `/apps/${ID}/collaborators`, { body: { kind: 'agent', session: KAI, instanceId: 'inst-1' }, agent: ELLA });
+      await expect(svc.addAgentCollaborator(ID, 'ghost', { agentSession: ELLA })).rejects.toMatchObject({ status: 400, message: 'No agent "ghost" on any of your machines.' });
+    });
+
+    it('the app not being this account\'s (404 App not found) is not mistaken for an old Cloud', async () => {
+      request.mockImplementation(async (_m: string, p: string) => {
+        if (p === `/apps/${ID}/collaborators/resolve`) throw new AppsCloudError(404, 'not_found', 'App not found.');
+        return {};
+      });
+      await expect(svc.addAgentCollaborator(ID, 'Kai', { agentSession: ELLA })).rejects.toMatchObject({ status: 404 });
+      expect(request.mock.calls.some((c) => c[0] === 'PUT')).toBe(false);
+    });
+  });
+
+  it('members of the owning team / channel on this instance may use the app\'s data and comments (implicit collaborators)', async () => {
+    let owner: Record<string, unknown> = { kind: 'channel', explicit: true, channelId: 'huddle-1', name: '#daily-brief', instanceId: 'inst-1', members: [KAI] };
+    request.mockImplementation(async (m: string, p: string) => {
+      if (p === `/apps/${ID}/collaborators`) return { collaborators: [], enforced: false, owner };
+      return { docs: [], next: null };
+    });
+    await expect(svc.listDocs(ID, 'items', {}, { agentSession: KAI })).resolves.toBeDefined();
+    await expect(svc.listDocs(ID, 'items', {}, { agentSession: 'crewly-x-other-00000000' })).rejects.toMatchObject({ code: 'not_your_app' });
+    owner = { ...owner, instanceId: 'inst-9' };
+    await expect(svc.listDocs(ID, 'items', {}, { agentSession: KAI })).rejects.toMatchObject({ code: 'not_your_app' });
+    expect(isOwnerMember({ kind: 'agent', explicit: true, session: KAI, name: 'Kai', instanceId: 'inst-1' }, KAI, 'inst-1')).toBe(true);
+    expect(isOwnerMember(null, KAI, 'inst-1')).toBe(false);
   });
 });

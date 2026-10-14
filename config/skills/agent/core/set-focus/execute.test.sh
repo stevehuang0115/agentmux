@@ -61,7 +61,7 @@ check "backend 400: reason" "$(printf '%s' "$OUT" | jq -r .reason)" "items must 
 # --- validation ---
 check "missing items errors" "$(run_err --session s1)" "Missing required parameter: items (--item)"
 check "missing session errors" "$(run_err --item x)" "Missing required parameter: sessionName (--session or CREWLY_SESSION_NAME)"
-check "unknown option errors" "$(run_err --bogus 1)" "Unknown option: --bogus"
+check "unknown option errors" "$(run_err --bogus 1)" "Unknown argument: --bogus"
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

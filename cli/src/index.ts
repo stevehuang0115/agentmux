@@ -27,6 +27,7 @@ import { updateStatusCommand } from './commands/update-status.js';
 import { pairCommand } from './commands/pair.js';
 import { tokenCommand } from './commands/token.js';
 import { ticketsCommand, type TicketsOptions } from './commands/tickets.js';
+import { teamMoveCommand, teamMovesCommand, teamMachinesCommand, teamMoveRollbackCommand, type TeamMoveOptions } from './commands/team-move.js';
 import { loginCommand, statusCommand as cloudStatusCommand, logoutCommand, type LoginOptions } from './commands/cloud.js';
 import { DEFAULT_WEB_PORT } from './constants.js';
 import { getLocalVersion, registerCliModuleDir } from './utils/version-check.js';
@@ -61,9 +62,10 @@ program
 
 program
   .command('start')
-  .description('Start Crewly backend and open dashboard')
+  .description('Start Crewly backend (prints the dashboard URL; use --open to open it)')
   .option('-p, --port <port>', 'Web server port', DEFAULT_WEB_PORT.toString())
-  .option('--no-browser', 'Don\'t open browser automatically')
+  .option('--open', 'Open the dashboard in your browser (or set CREWLY_OPEN_BROWSER=1); never opens when non-interactive')
+  .option('--no-browser', 'Never open the browser (this is already the default; kept for scripts)')
   .option('--headless', 'Start in headless/API-only mode (no frontend, no browser)')
   .option('--auto-upgrade', 'Automatically upgrade before starting if a new version is available')
   .action(startCommand);
@@ -275,6 +277,43 @@ program
   .option('--json', 'Print JSON')
   .action(async (action: string, projectPath: string | undefined, options: TicketsOptions) => {
     process.exitCode = await ticketsCommand(action, projectPath, options);
+  });
+
+const teamCmd = program
+  .command('team')
+  .description('Teams: move a team to another machine of your account');
+
+teamCmd
+  .command('move <team>')
+  .description('Move a team (members, memory, tickets, wiki, schedules, Slack identity) to another machine; code is cloned there. Cloud only carries ciphertext')
+  .requiredOption('--to <machine>', 'Target machine name (see `crewly team machines`)')
+  .option('--allow-dirty', 'Move although a repository has uncommitted or unpushed work')
+  .option('--skip-flagged', 'Leave out notes/project files that hold credentials instead of stopping')
+  .option('--json', 'Print JSON')
+  .action(async (team: string, options: TeamMoveOptions) => {
+    process.exitCode = await teamMoveCommand(team, options);
+  });
+
+teamCmd
+  .command('moves')
+  .description('List team moves and their progress')
+  .option('--json', 'Print JSON')
+  .action(async (options: { json?: boolean }) => {
+    process.exitCode = await teamMovesCommand(options);
+  });
+
+teamCmd
+  .command('machines')
+  .description('List the machines of your account a team can move to')
+  .action(async () => {
+    process.exitCode = await teamMachinesCommand();
+  });
+
+teamCmd
+  .command('move-rollback <moveId>')
+  .description('Roll a finished or failed move back: the team returns to the source machine (within 7 days)')
+  .action(async (moveId: string) => {
+    process.exitCode = await teamMoveRollbackCommand(moveId);
   });
 
 const cloudCmd = program

@@ -27,6 +27,18 @@ import {
   getHeldSend,
   clearHeldSend,
 } from '../../services/google/gmail-send-gate.js';
+import {
+  holdDocComment,
+  getDocCommentBatch,
+  listDocCommentBatches,
+  clearDocCommentBatch,
+  decideBatchSend,
+  buildHoldMessage,
+  buildBatchRefusalMessage,
+  DOC_COMMENT_CONFIRM_SCAN_LIMIT,
+  type HeldDocComment,
+} from '../../services/google/docs-comment-gate.js';
+import { getChatV2Service } from '../../services/chat-v2/chat-v2.singleton.js';
 import { GmailService, buildRfc822, type GmailSendInput } from '../../services/google/gmail.service.js';
 import type { GmailSendApprovalService } from '../../services/google/gmail-send-approval.service.js';
 import type { GmailReplyWatchService } from '../../services/google/gmail-reply-watch.service.js';
@@ -38,6 +50,12 @@ import { SheetsService, type SheetCell } from '../../services/google/sheets.serv
 import { SlidesService, type SlideOutline } from '../../services/google/slides.service.js';
 import { isOwnerCaller } from '../../middleware/caller-identity.middleware.js';
 import { readAgentSessionHeader } from '../../utils/agent-caller.utils.js';
+import {
+  GoogleReauthNotifier,
+  type ReauthNotifyResult,
+  type ReauthTrigger,
+} from '../../services/google/google-reauth-notifier.service.js';
+import { buildPortalConnectUrl, PRODUCT_LABELS } from './google-connect-card.js';
 
 /** Who a held send is attributed to when the caller named no agent session. */
 const UNIDENTIFIED_SENDER = 'unidentified caller';
@@ -108,9 +126,18 @@ function getDeps(): GoogleControllerDeps {
  * @returns The service set to use
  */
 function depsForRequest(req: Request): GoogleControllerDeps {
-  if (override) return override;
   const raw = typeof req.query.account === 'string' ? req.query.account : req.get('X-Google-Account') ?? '';
-  const account = raw.trim();
+  return depsForAccount(raw.trim() || undefined);
+}
+
+/**
+ * The services for one Google account (or the default set when none).
+ *
+ * @param account - Google account email; undefined for the default connection
+ * @returns The service set to use
+ */
+function depsForAccount(account: string | undefined): GoogleControllerDeps {
+  if (override) return override;
   if (!account) return getDeps();
   let set = byAccount.get(account);
   if (!set) {
@@ -202,6 +229,28 @@ function connectUrlOrNull(req: Request): string | null {
 }
 
 /**
+ * The `not_connected` hint. The dashboard owner gets the Cloud consent URL
+ * (it carries their session token and returns to their own dashboard — fine
+ * in their own browser, never for an agent to paste anywhere). An agent gets
+ * the skill that posts a card, and the portal page as the manual fallback:
+ * the owner is usually on a phone and cannot reach the local dashboard.
+ *
+ * @param req - Incoming request
+ * @param err - The failure
+ * @returns Hint text
+ */
+function notConnectedHint(req: Request, err: GoogleWorkspaceError): string {
+  const product = err.details?.product;
+  if (isOwnerCaller(req)) {
+    return connectUrlOrNull(req)
+      ?? 'Sign in to Crewly Cloud (Settings → Cloud & devices), then connect Google Workspace under Connections.';
+  }
+  const products = product ? [product] : [];
+  const flag = product ? ` --product ${product}` : ' --product <gmail|calendar|drive>';
+  return `Google is not connected for this. Ask the owner to connect it: run the google-connect skill with${flag}; it posts a one-tap card in Slack. Never send the owner to Crewly settings or the Connections page. Manual fallback: ${buildPortalConnectUrl(products, err.details?.account ?? accountOf(req))}`;
+}
+
+/**
  * Which products a connect request is for, and which Google account to sign
  * in as.
  *
@@ -243,22 +292,95 @@ function accountOf(req: Request): string | undefined {
 }
 
 /**
+ * The reconnect a failure calls for, if only the owner can fix it: the grant
+ * lacks a scope this call needs (Google 403 insufficient scopes), or Google
+ * no longer honours it (expired / revoked — Cloud said `grant_revoked`).
+ *
+ * @param err - The failure
+ * @param req - Incoming request (agent session, Google account)
+ * @returns The trigger, or null for any other failure
+ */
+export function reauthTriggerFor(err: unknown, req: Request): ReauthTrigger | null {
+  if (!(err instanceof GoogleWorkspaceError)) return null;
+  const CODES = GOOGLE_WORKSPACE_CONSTANTS.ERROR_CODES;
+  const product = err.details?.product;
+  if (!product) return null;
+  let kind: ReauthTrigger['kind'];
+  if (err.code === CODES.REAUTH_REQUIRED) kind = 'missing_scope';
+  else if (err.code === CODES.NOT_CONNECTED && err.details?.reason === 'grant_revoked') kind = 'expired';
+  else return null;
+  const account = err.details?.account ?? accountOf(req);
+  // Only an agent's call: the owner at the dashboard is already looking at
+  // the Connections page, and a card in Slack would be noise.
+  const agentSession = isOwnerCaller(req) ? undefined : readAgentSessionHeader(req);
+  if (!agentSession) return null;
+  return { product, kind, agentSession, ...(account ? { account } : {}) };
+}
+
+/**
+ * Ask the owner to reconnect, without holding the skill call for long.
+ *
+ * @param trigger - The failure
+ * @returns What happened, or null when no notifier is wired or it timed out
+ */
+async function notifyReauth(trigger: ReauthTrigger): Promise<ReauthNotifyResult | null> {
+  const notifier = GoogleReauthNotifier.getInstance();
+  if (!notifier) return null;
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), GOOGLE_WORKSPACE_CONSTANTS.REAUTH.POST_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([notifier.notify(trigger).catch(() => null), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * The agent-facing next step after a reconnect card was (or was not) sent.
+ *
+ * The agent must not send the owner to the dashboard's Connections page: the
+ * owner is usually on a phone and cannot reach it. The card (its link never
+ * expires) is the whole fix; the Cloud portal page is the manual fallback.
+ *
+ * @param trigger - The failure
+ * @param result - What the notifier did
+ * @returns The hint, or null to fall back to the generic one
+ */
+export function reauthHint(trigger: ReauthTrigger, result: ReauthNotifyResult | null): string | null {
+  const label = PRODUCT_LABELS[trigger.product] ?? trigger.product;
+  const portal = buildPortalConnectUrl([trigger.product], trigger.account);
+  if (result?.status === 'posted') {
+    return `A reconnect card was sent to the owner in Slack, in the conversation you are answering them in. Tell them in one line that you need them to tap it; its link does not expire. Never send them to Crewly settings or the Connections page. You will get a message saying ${label} is reconnected — then retry. If they say the card did not work, run the google-connect skill with --product ${trigger.product} for a fresh one, or give them ${portal} to open directly.`;
+  }
+  if (result?.status === 'already_sent') {
+    return `A reconnect card was already sent to the owner in Slack at ${result.sentAt}. Do not ask again unless the owner says it did not work — then run the google-connect skill with --product ${trigger.product} for a fresh one, or give them ${portal} to open directly (never Crewly settings or the Connections page). You will get a message saying ${label} is reconnected, then retry.`;
+  }
+  return null;
+}
+
+/**
  * Answer a failure with the contract's `{ success:false, error, hint }`
  * shape. `not_connected` carries the consent URL as the hint; the other
- * codes get a one-line next step.
+ * codes get a one-line next step. A failure only the owner can fix (missing
+ * scope, expired grant) first posts the owner a one-tap reconnect card in
+ * Slack, and the hint says so.
  *
  * @param req - Incoming request (for the connect URL)
  * @param res - Response
  * @param err - The failure
  */
-export function sendGoogleError(req: Request, res: Response, err: unknown): void {
+export async function sendGoogleError(req: Request, res: Response, err: unknown): Promise<void> {
   const CODES = GOOGLE_WORKSPACE_CONSTANTS.ERROR_CODES;
   if (err instanceof GoogleWorkspaceError) {
+    const trigger = reauthTriggerFor(err, req);
+    const reauth = trigger ? await notifyReauth(trigger) : null;
+    const reauthText = trigger ? reauthHint(trigger, reauth) : null;
     let hint: string;
     switch (err.code) {
       case CODES.NOT_CONNECTED:
-        hint = connectUrlOrNull(req)
-          ?? 'Sign in to Crewly Cloud (Settings → Cloud & devices), then connect Google Workspace under Connections.';
+        hint = reauthText ?? notConnectedHint(req, err);
         break;
       case CODES.NOT_LOGGED_IN:
         hint = 'Sign in to Crewly Cloud first (Settings → Cloud & devices).';
@@ -269,10 +391,13 @@ export function sendGoogleError(req: Request, res: Response, err: unknown): void
       case CODES.VALIDATION:
         hint = 'Fix the request and retry.';
         break;
-      case CODES.REAUTH_REQUIRED:
+      case CODES.REAUTH_REQUIRED: {
         // Owner-away: the only step is one tap on the Slack card.
-        hint = 'Ask the owner to reconnect Google Drive: run the google-connect skill with --product drive. It posts a one-tap card in Slack; nothing to do on this machine.';
+        const product = err.details?.product ?? 'drive';
+        hint = reauthText
+          ?? `Ask the owner to reconnect ${PRODUCT_LABELS[product] ?? product}: run the google-connect skill with --product ${product}. It posts a one-tap card in Slack; nothing to do on this machine. Manual fallback: ${buildPortalConnectUrl([product], err.details?.account ?? accountOf(req))}`;
         break;
+      }
       case PEOPLE_CONSTANTS.NOT_PERMITTED_CODE:
         hint = PEOPLE_CONSTANTS.NOT_PERMITTED_HINT;
         break;
@@ -281,7 +406,13 @@ export function sendGoogleError(req: Request, res: Response, err: unknown): void
           ? 'The Google token was rejected; retry once — the cache has been cleared.'
           : 'Google or Crewly Cloud failed; retry later.';
     }
-    res.status(err.status).json({ success: false, error: err.code, message: err.message, hint });
+    res.status(err.status).json({
+      success: false,
+      error: err.code,
+      message: err.message,
+      hint,
+      ...(reauthText ? { reconnectLinkSent: true } : {}),
+    });
     return;
   }
   const message = err instanceof Error ? err.message : String(err);
@@ -324,7 +455,7 @@ export async function getStatus(req: Request, res: Response): Promise<void> {
     const data = await getDeps().tokens.status();
     res.json({ success: true, data });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
@@ -337,10 +468,15 @@ export async function getStatus(req: Request, res: Response): Promise<void> {
  */
 export async function getConnectUrl(req: Request, res: Response): Promise<void> {
   try {
-    const url = getDeps().tokens.buildConnectUrl(resolveReturnUrl(req), connectOptions(req));
+    // The dashboard URL carries the owner's Cloud session token and returns
+    // to this machine's localhost: fine in the owner's own browser, a
+    // credential an agent could paste into Slack. Agents get the portal page.
+    const url = isOwnerCaller(req)
+      ? getDeps().tokens.buildConnectUrl(resolveReturnUrl(req), connectOptions(req))
+      : buildPortalConnectUrl(connectOptions(req).products ?? [], accountOf(req));
     res.json({ success: true, data: { url } });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
@@ -356,7 +492,7 @@ export async function disconnect(req: Request, res: Response): Promise<void> {
     const data = await getDeps().tokens.disconnect({ ...(account ? { account } : {}) });
     res.json({ success: true, data });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
@@ -378,7 +514,7 @@ export async function setDefaultAccount(req: Request, res: Response): Promise<vo
     const data = await getDeps().tokens.setDefaultAccount(email);
     res.json({ success: true, data });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
@@ -408,7 +544,7 @@ export async function gmailSearch(req: Request, res: Response): Promise<void> {
     const messages = await depsForRequest(req).gmail.search({ query, max: qInt(req, 'max') });
     res.json({ success: true, data: { query, count: messages.length, messages } });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
@@ -423,7 +559,26 @@ export async function gmailRead(req: Request, res: Response): Promise<void> {
     const message = await depsForRequest(req).gmail.read(String(req.params.id ?? ''));
     res.json({ success: true, data: message });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
+  }
+}
+
+/**
+ * GET /api/google/gmail/messages/:id/attachments/:attachmentId — the bytes of
+ * one attachment as `{ messageId, attachmentId, size, dataBase64 }` (25 MB cap).
+ *
+ * @param req - Incoming request
+ * @param res - Response
+ */
+export async function gmailAttachment(req: Request, res: Response): Promise<void> {
+  try {
+    const data = await depsForRequest(req).gmail.getAttachment(
+      String(req.params.id ?? ''),
+      String(req.params.attachmentId ?? ''),
+    );
+    res.json({ success: true, data });
+  } catch (err) {
+    await sendGoogleError(req, res, err);
   }
 }
 
@@ -513,7 +668,7 @@ export async function gmailSend(req: Request, res: Response): Promise<void> {
     logger.info('Gmail message sent', { id: sent.id, threadId: sent.threadId, to: input.to, agentSession });
     res.json({ success: true, data: sent });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
@@ -533,7 +688,7 @@ export async function calendarList(req: Request, res: Response): Promise<void> {
     });
     res.json({ success: true, data: { count: events.length, events } });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
@@ -566,7 +721,7 @@ export async function calendarCreate(req: Request, res: Response): Promise<void>
     });
     res.json({ success: true, data: event });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
@@ -590,7 +745,7 @@ export async function driveSearch(req: Request, res: Response): Promise<void> {
     });
     res.json({ success: true, data: { count: files.length, files } });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
@@ -604,7 +759,7 @@ export async function driveGet(req: Request, res: Response): Promise<void> {
   try {
     res.json({ success: true, data: await depsForRequest(req).drive.get(String(req.params.id ?? '')) });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
@@ -618,7 +773,7 @@ export async function driveContent(req: Request, res: Response): Promise<void> {
   try {
     res.json({ success: true, data: await depsForRequest(req).drive.readContent(String(req.params.id ?? '')) });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
@@ -642,7 +797,7 @@ export async function driveUpload(req: Request, res: Response): Promise<void> {
     logger.info('Drive file uploaded', { id: file.id, name: file.name });
     res.json({ success: true, data: file });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
@@ -660,7 +815,7 @@ export async function docsRead(req: Request, res: Response): Promise<void> {
   try {
     res.json({ success: true, data: await depsForRequest(req).docs.read(String(req.params.id ?? '')) });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
@@ -677,7 +832,7 @@ export async function docsCreate(req: Request, res: Response): Promise<void> {
     logger.info('Google Doc created', { id: doc.id, title: doc.title });
     res.json({ success: true, data: doc });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
@@ -692,7 +847,7 @@ export async function docsAppend(req: Request, res: Response): Promise<void> {
     const body = (req.body ?? {}) as { text?: string };
     res.json({ success: true, data: await depsForRequest(req).docs.append(String(req.params.id ?? ''), String(body.text ?? '')) });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
@@ -708,12 +863,49 @@ export async function docsCommentsList(req: Request, res: Response): Promise<voi
     const includeResolved = flag === '1' || flag === 'true';
     res.json({ success: true, data: await depsForRequest(req).docComments.list(String(req.params.id ?? ''), { includeResolved }) });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
 /**
+ * Hold an agent's Doc comment action instead of posting it.
+ *
+ * A comment on a shared Doc is visible to collaborators under the owner's
+ * name, so it is outbound like `gmail-send`: only the owner credential posts
+ * directly. Anyone else queues it into their open batch, and the owner
+ * authorizes the whole batch with one 「发 C<n>」 (see docs-comment-gate).
+ *
+ * @param req - Incoming request
+ * @param res - Response
+ * @param item - The action to hold
+ * @returns True when the request was held (response sent); false when the caller may post
+ */
+function holdDocCommentUnlessOwner(req: Request, res: Response, item: HeldDocComment): boolean {
+  if (isOwnerCaller(req)) return false;
+  const agentSession = readAgentSessionHeader(req) ?? UNIDENTIFIED_SENDER;
+  const batch = holdDocComment(agentSession, item, readAuthorizationClaim(req));
+  logger.warn('Doc comment held — awaiting the owner', {
+    agentSession,
+    code: batch.code,
+    action: item.action,
+    docId: item.docId,
+    citedAuthorization: readAuthorizationClaim(req) ?? '(none given)',
+  });
+  res.status(202).json({
+    success: true,
+    data: {
+      held: true,
+      batch: batch.code,
+      queued: batch.items.length,
+      message: buildHoldMessage(batch),
+    },
+  });
+  return true;
+}
+
+/**
  * POST /api/google/docs/:id/comments — body `{ text, quote? }`.
+ * An agent's comment is queued for the owner's OK, not posted.
  *
  * @param req - Incoming request
  * @param res - Response
@@ -722,16 +914,23 @@ export async function docsCommentsAdd(req: Request, res: Response): Promise<void
   try {
     const body = (req.body ?? {}) as { text?: unknown; quote?: unknown };
     const quote = typeof body.quote === 'string' ? body.quote : undefined;
-    const data = await depsForRequest(req).docComments.add(String(req.params.id ?? ''), String(body.text ?? ''), quote);
+    const docId = String(req.params.id ?? '');
+    const text = String(body.text ?? '');
+    if (!isOwnerCaller(req)) {
+      if (!text.trim()) throw new GoogleWorkspaceError(400, GOOGLE_WORKSPACE_CONSTANTS.ERROR_CODES.VALIDATION, 'Comment text is required.');
+      if (holdDocCommentUnlessOwner(req, res, { action: 'add', docId, text, ...(quote ? { quote } : {}), ...accountField(req) })) return;
+    }
+    const data = await depsForRequest(req).docComments.add(docId, text, quote);
     logger.info('Google Doc comment added', { docId: data.docId, commentId: data.id });
     res.json({ success: true, data });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
 /**
  * POST /api/google/docs/:id/comments/:commentId/replies — body `{ text }`.
+ * An agent's reply is queued for the owner's OK, not posted.
  *
  * @param req - Incoming request
  * @param res - Response
@@ -739,16 +938,24 @@ export async function docsCommentsAdd(req: Request, res: Response): Promise<void
 export async function docsCommentsReply(req: Request, res: Response): Promise<void> {
   try {
     const body = (req.body ?? {}) as { text?: unknown };
-    const data = await depsForRequest(req).docComments.reply(String(req.params.id ?? ''), String(req.params.commentId ?? ''), String(body.text ?? ''));
+    const docId = String(req.params.id ?? '');
+    const commentId = String(req.params.commentId ?? '');
+    const text = String(body.text ?? '');
+    if (!isOwnerCaller(req)) {
+      if (!text.trim()) throw new GoogleWorkspaceError(400, GOOGLE_WORKSPACE_CONSTANTS.ERROR_CODES.VALIDATION, 'Reply text is required.');
+      if (holdDocCommentUnlessOwner(req, res, { action: 'reply', docId, commentId, text, ...accountField(req) })) return;
+    }
+    const data = await depsForRequest(req).docComments.reply(docId, commentId, text);
     logger.info('Google Doc comment replied', { docId: data.docId, commentId: data.commentId });
     res.json({ success: true, data });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
 /**
  * POST /api/google/docs/:id/comments/:commentId/resolve — body `{ text? }`.
+ * An agent's resolve is queued for the owner's OK, not posted.
  *
  * @param req - Incoming request
  * @param res - Response
@@ -757,12 +964,137 @@ export async function docsCommentsResolve(req: Request, res: Response): Promise<
   try {
     const body = (req.body ?? {}) as { text?: unknown };
     const text = typeof body.text === 'string' ? body.text : undefined;
-    const data = await depsForRequest(req).docComments.resolve(String(req.params.id ?? ''), String(req.params.commentId ?? ''), text);
+    const docId = String(req.params.id ?? '');
+    const commentId = String(req.params.commentId ?? '');
+    if (holdDocCommentUnlessOwner(req, res, { action: 'resolve', docId, commentId, ...(text ? { text } : {}), ...accountField(req) })) return;
+    const data = await depsForRequest(req).docComments.resolve(docId, commentId, text);
     logger.info('Google Doc comment resolved', { docId: data.docId, commentId: data.commentId });
     res.json({ success: true, data });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
+}
+
+/** `{ account }` when the request names a Google account, else nothing. */
+function accountField(req: Request): { account?: string } {
+  const account = accountOf(req);
+  return account ? { account } : {};
+}
+
+/**
+ * GET /api/google/doc-comment-batches — comments agents have queued for the
+ * owner. Each batch carries what the agent cited as authorization.
+ *
+ * @param _req - Incoming request
+ * @param res - Response
+ */
+export function docCommentBatchesList(_req: Request, res: Response): void {
+  res.json({ success: true, data: { batches: listDocCommentBatches() } });
+}
+
+/**
+ * POST /api/google/doc-comment-batches/:code/send — post a whole batch.
+ *
+ * Owner credential: allowed (the click is the confirmation). Agent: only
+ * after the owner's 「发 C<n>」 in chat that post-dates the batch's last
+ * change. Items post in order; the first failure stops the run and the
+ * unposted items stay queued, so a retry never double-posts.
+ *
+ * @param req - Incoming request
+ * @param res - Response
+ */
+export async function docCommentBatchSend(req: Request, res: Response): Promise<void> {
+  const batch = getDocCommentBatch(String(req.params.code ?? ''));
+  if (!batch) {
+    res.status(404).json({ success: false, error: 'not_found', message: `No queued comment batch ${req.params.code}` });
+    return;
+  }
+  if (batch.sending) {
+    res.status(409).json({ success: false, error: 'already_sending', message: `Batch ${batch.code} is already being posted.` });
+    return;
+  }
+  const owner = isOwnerCaller(req);
+  const agentSession = owner ? undefined : (readAgentSessionHeader(req) ?? UNIDENTIFIED_SENDER);
+  const decision = decideBatchSend({
+    batch,
+    agentSession,
+    ownerMessagesSince: (since) => getChatV2Service().getRecentOwnerMessageContents(since, DOC_COMMENT_CONFIRM_SCAN_LIMIT),
+    now: Date.now(),
+  });
+  if (!decision.allowed) {
+    logger.warn('Agent doc comment batch send refused', { code: batch.code, agentSession, reason: decision.reason });
+    res.status(403).json({
+      success: false,
+      error: 'needs_owner_confirmation',
+      reason: decision.reason,
+      message: buildBatchRefusalMessage(batch.code, decision.reason),
+    });
+    return;
+  }
+
+  batch.sending = true;
+  const posted: Array<{ action: string; docId: string; commentId?: string; id?: string }> = [];
+  try {
+    while (batch.items.length > 0) {
+      const item = batch.items[0];
+      const deps = depsForAccount(item.account);
+      try {
+        if (item.action === 'add') {
+          const r = await deps.docComments.add(item.docId, item.text ?? '', item.quote);
+          posted.push({ action: 'add', docId: r.docId, id: r.id });
+        } else if (item.action === 'reply') {
+          const r = await deps.docComments.reply(item.docId, item.commentId ?? '', item.text ?? '');
+          posted.push({ action: 'reply', docId: r.docId, commentId: r.commentId, id: r.id });
+        } else {
+          const r = await deps.docComments.resolve(item.docId, item.commentId ?? '', item.text);
+          posted.push({ action: 'resolve', docId: r.docId, commentId: r.commentId, id: r.id });
+        }
+        batch.items.shift();
+      } catch (err) {
+        logger.warn('Doc comment batch stopped on a failure', { code: batch.code, posted: posted.length, remaining: batch.items.length });
+        if (posted.length === 0) {
+          // Any reconnect card must name the account the item acted as.
+          if (item.account) req.query.account = item.account;
+          await sendGoogleError(req, res, err);
+        } else {
+          res.status(207).json({
+            success: false,
+            error: 'partial',
+            message: `Posted ${posted.length}, stopped on the next one: ${err instanceof Error ? err.message : String(err)}. ${batch.items.length} still queued under ${batch.code}; send again to retry them.`,
+            data: { batch: batch.code, posted: posted.length, remaining: batch.items.length, results: posted },
+          });
+        }
+        return;
+      }
+    }
+    clearDocCommentBatch(batch.code);
+    logger.info('Doc comment batch posted', { code: batch.code, posted: posted.length, via: decision.via });
+    res.json({ success: true, data: { batch: batch.code, posted: posted.length, remaining: 0, results: posted } });
+  } finally {
+    batch.sending = false;
+  }
+}
+
+/**
+ * POST /api/google/doc-comment-batches/:code/discard — drop a queued batch.
+ * Safe for anyone: it only removes comments that would have been posted.
+ *
+ * @param req - Incoming request
+ * @param res - Response
+ */
+export function docCommentBatchDiscard(req: Request, res: Response): void {
+  const batch = getDocCommentBatch(String(req.params.code ?? ''));
+  if (!batch) {
+    res.status(404).json({ success: false, error: 'not_found', message: `No queued comment batch ${req.params.code}` });
+    return;
+  }
+  if (batch.sending) {
+    res.status(409).json({ success: false, error: 'already_sending', message: `Batch ${batch.code} is being posted.` });
+    return;
+  }
+  clearDocCommentBatch(batch.code);
+  logger.info('Doc comment batch discarded', { code: batch.code, dropped: batch.items.length });
+  res.json({ success: true, data: { discarded: true, batch: batch.code, dropped: batch.items.length } });
 }
 
 // ---------------------------------------------------------------------------
@@ -779,7 +1111,7 @@ export async function sheetsInfo(req: Request, res: Response): Promise<void> {
   try {
     res.json({ success: true, data: await depsForRequest(req).sheets.info(String(req.params.id ?? '')) });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
@@ -793,7 +1125,7 @@ export async function sheetsRead(req: Request, res: Response): Promise<void> {
   try {
     res.json({ success: true, data: await depsForRequest(req).sheets.read(String(req.params.id ?? ''), q(req, 'range') || undefined) });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
@@ -810,7 +1142,7 @@ export async function sheetsCreate(req: Request, res: Response): Promise<void> {
     logger.info('Google Sheet created', { id: info.id, title: info.title });
     res.json({ success: true, data: info });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
@@ -828,7 +1160,7 @@ export async function sheetsWrite(req: Request, res: Response): Promise<void> {
     const result = body.mode === 'update' ? await depsForRequest(req).sheets.update(input) : await depsForRequest(req).sheets.append(input);
     res.json({ success: true, data: { mode: body.mode === 'update' ? 'update' : 'append', ...result } });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
@@ -846,7 +1178,7 @@ export async function slidesRead(req: Request, res: Response): Promise<void> {
   try {
     res.json({ success: true, data: await depsForRequest(req).slides.read(String(req.params.id ?? '')) });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
@@ -863,7 +1195,7 @@ export async function slidesCreate(req: Request, res: Response): Promise<void> {
     logger.info('Google Slides deck created', { id: deck.id, title: deck.title, slides: deck.slideCount });
     res.json({ success: true, data: deck });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 
@@ -959,7 +1291,7 @@ export async function gmailResolveHeld(req: Request, res: Response): Promise<voi
     logger.info('Owner approved a held send', { id: entry.id, to: entry.to, messageId: sent.id });
     res.json({ success: true, data: sent });
   } catch (err) {
-    sendGoogleError(req, res, err);
+    await sendGoogleError(req, res, err);
   }
 }
 

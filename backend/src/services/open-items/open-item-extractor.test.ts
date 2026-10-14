@@ -206,6 +206,12 @@ describe('TKT-187 / TKT-140 real messages (false positives and the positive cont
     expect(c[0].waitsOnOwner).toBe(true);
     expect(extractOpenItems('After you approve, I will send the draft tomorrow.', { now }).commitments[0]?.waitsOnOwner).toBe(true);
   });
+
+  it('a promise that waits on something the owner sends first is flagged (Milo, 2026-10-13)', () => {
+    const c = extractOpenItems('孩子换了以后，你用手机录好直接发给我，宠物剪好我再发回给你。', { now }).commitments;
+    expect(c.every((x) => x.waitsOnOwner === true)).toBe(true);
+    expect(extractOpenItems('Once you send the recording, I will cut it and send it back tomorrow.', { now }).commitments[0]?.waitsOnOwner).toBe(true);
+  });
 });
 
 describe('explicit dates win over now + default', () => {
@@ -225,5 +231,85 @@ describe('explicit dates win over now + default', () => {
   });
   it('does not read a ratio or a version as a date', () => {
     expect(parseDue('完成 1/3 以后发你。', now).source).toBe('default');
+  });
+});
+
+describe('only the final question of a message is carded (2026-10-08 card audit)', () => {
+  const qs = (text: string): string[] => extractOpenItems(text, opts).questions.map((q) => q.text);
+
+  /** Atlas, 2026-10-08: client interview questions in the reply (D-442 / D-444 were carded by mistake). */
+  const ATLAS_INTERVIEW = [
+    '*3. 要不要先跟客户聊？* 要，但别问「你想用什么入口」，问了他也只会随口答。问这几件事：',
+    '• 现在增长这块是谁在做，一个月花多少钱？',
+    '• 现在的代运营或外包怎么给你汇报：邮件、微信，还是开会？',
+    '• 上一次你因为对方做得不好想换人，是因为什么？',
+    '他怎么回答第二个问题，我们的入口就照那个来。',
+    '',
+    '这些我会写进周五给你的那页「增长团队」初稿，单独成一节，访谈问题也放进去。这样写可以吗？',
+  ].join('\n');
+
+  it('the listed interview questions and the self-answered heading are skipped; the closing question is kept', () => {
+    expect(qs(ATLAS_INTERVIEW)).toEqual(['这样写可以吗？']);
+  });
+
+  it('a message that ends in a list of questions for a third party has no question for the owner', () => {
+    const text = '*每个人都问这四个*\n1. 外包或员工现在怎么跟你汇报：邮件、微信，还是开会？\n2. 上个月进来多少个咨询，最后成了几个？你自己知道吗？';
+    expect(qs(text)).toEqual([]);
+  });
+
+  it('a question in the middle of a message is not carded', () => {
+    expect(qs('这版要不要先发给 Rex 看？\n\n另外周五的稿子我已经写完一半，明天中午前给你。')).toEqual([]);
+  });
+
+  it('numbered owner decisions get no cards (one ask-owner per decision instead)', () => {
+    expect(qs('两件事：\n1. 价格按上面这样可以吗？\n2. 第一版要不要包括采购入库？')).toEqual([]);
+  });
+
+  it('the final question may be followed by how to answer it, in its paragraph', () => {
+    expect(qs('两篇都改好了。\n\n要发布吗？回「发」我就把这两篇正式上线。')).toEqual(['要发布吗？']);
+    expect(qs('这样行吗？不同意的话我就删掉。')).toEqual(['这样行吗？']);
+  });
+
+  it('only references, links or a sign-off may follow in later paragraphs', () => {
+    expect(qs('要收进库吗？\n\n参考：https://example.com/a')).toEqual(['要收进库吗？']);
+    expect(qs('要收进库吗？\n\n谢谢')).toEqual(['要收进库吗？']);
+    expect(qs('要收进库吗？\n\n我先去改第 3 章。')).toEqual([]);
+  });
+
+  it('a question inside a draft between rule lines is the draft, not the agent asking', () => {
+    const text = '草稿如下：\n———\n如果您觉得他准备好了，能不能给他一些新的工作试试？\n———';
+    expect(qs(text)).toEqual([]);
+    expect(qs(`${text}\n\n这个长度行吗？`)).toEqual(['这个长度行吗？']);
+  });
+
+  it('either/or alternatives that end the message stay one group', () => {
+    expect(qs('页面已经改好。要现在发，还是等图好了再发？')).toEqual(['要现在发，还是等图好了再发？']);
+    expect(qs('要先改现在的版本吗？还是先试新的版本？')).toEqual(['要先改现在的版本吗？', '还是先试新的版本？']);
+  });
+
+  it('a question to a colleague or a script line is not for the owner', () => {
+    expect(qs('Kai，你明天能把四集的摘录整理好吗？')).toEqual([]);
+    expect(qs('> 于是我就想，能不能靠我的 AI 团队，帮我一起管一管？')).toEqual([]);
+  });
+});
+
+
+describe('script lines are not owner questions (#1243)', () => {
+  const qs = (text: string): string[] => extractOpenItems(text, opts).questions.map((q) => q.text);
+
+  it('a tag question inside a script the agent delivers creates no card', () => {
+    expect(qs('口播脚本：\n所以我当时觉得，我这个设计很好，是非常的一石多鸟，对吧？')).toEqual([]);
+  });
+
+  it('first-person narration ending in 对吧？ creates no card even without a frame', () => {
+    expect(qs('所以我当时觉得，我这个设计很好，是非常的一石多鸟，对吧？')).toEqual([]);
+  });
+
+  it('the agent own question after the script paragraph is still carded', () => {
+    expect(qs('Script:\n我们当时只有三个人，对吧？\n\n这版脚本可以吗？')).toEqual(['这版脚本可以吗？']);
+  });
+
+  it('a plain agent question still creates a card', () => {
+    expect(qs('周五的稿子已经写完。这版标题可以吗？')).toEqual(['这版标题可以吗？']);
   });
 });

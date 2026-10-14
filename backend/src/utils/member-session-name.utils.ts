@@ -56,3 +56,20 @@ export function resolveMemberSessionName(
 ): string {
   return member.sessionName || member.agentId || deriveMemberSessionName(teamName, member.name, member.id);
 }
+
+/**
+ * A readable name from a member session name when the member is not on this
+ * machine ('edu-game-milo-13e8d3ca' → 'Milo'): owner-facing text never shows
+ * the raw session id.
+ *
+ * @param session - Session name
+ * @returns The member name, or the session unchanged when it has no member shape
+ *
+ * @example
+ * memberNameFromSession('edu-game-milo-13e8d3ca') // 'Milo'
+ */
+export function memberNameFromSession(session: string): string {
+  const m = /-([a-z][a-z0-9]*)-[0-9a-f]{8}$/i.exec(session ?? '');
+  if (!m) return session;
+  return m[1].charAt(0).toUpperCase() + m[1].slice(1);
+}

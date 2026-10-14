@@ -8,7 +8,7 @@
  * @module components/Toast
  */
 
-import { X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Info, X, type LucideIcon } from 'lucide-react';
 import { IconButton } from '@crewly/ui/Button';
 import type { Toast as ToastItem } from '../hooks/useToast';
 
@@ -20,35 +20,30 @@ interface ToastContainerProps {
   onDismiss: (id: string) => void;
 }
 
-/** CSS classes for toast type indicators */
-const typeStyles: Record<ToastItem['type'], string> = {
-  success: 'border-green-500 bg-green-500/10 text-green-300',
-  error: 'border-red-500 bg-red-500/10 text-red-300',
-  info: 'border-blue-500 bg-blue-500/10 text-blue-300',
+/** Icon chip per type: the state colour says what happened, the icon says it again. */
+const typeChip: Record<ToastItem['type'], { icon: LucideIcon; classes: string }> = {
+  success: { icon: CheckCircle2, classes: 'bg-success-soft text-success' },
+  error: { icon: AlertCircle, classes: 'bg-danger-soft text-danger' },
+  info: { icon: Info, classes: 'bg-primary-soft text-primary-text' },
 };
 
-/**
- * Renders a fixed-position container of toast notifications.
- *
- * Toasts stack vertically in the bottom-right corner of the viewport.
- * Each toast includes a dismiss button and automatically inherits the
- * auto-dismiss behavior from the useToast hook.
- *
- * @param props - The toasts array and dismiss callback
- * @returns The toast container JSX, or null if no toasts are active
- */
 export default function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
   if (toasts.length === 0) return null;
 
   return (
     <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm" role="log" aria-live="polite">
-      {toasts.map((toast) => (
+      {toasts.map((toast) => {
+        const { icon: Icon, classes } = typeChip[toast.type];
+        return (
         <div
           key={toast.id}
           data-testid={`toast-${toast.type}`}
-          className={`flex items-center gap-3 px-4 py-3 rounded-2xl border text-sm shadow-lg backdrop-blur-sm ${typeStyles[toast.type]}`}
+          className="cw-glass-strong flex items-center gap-3 rounded-2xl px-4 py-3 text-sm"
         >
-          <span className="flex-1">{toast.message}</span>
+          <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-[9px] ${classes}`} aria-hidden="true">
+            <Icon className="h-4 w-4" />
+          </span>
+          <span className="flex-1 text-text">{toast.message}</span>
           <IconButton
             icon={X}
             size="xs"
@@ -57,7 +52,8 @@ export default function ToastContainer({ toasts, onDismiss }: ToastContainerProp
             aria-label="Dismiss notification"
           />
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

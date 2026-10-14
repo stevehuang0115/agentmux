@@ -214,17 +214,19 @@ describe('resumeInterruptedTurns', () => {
 	 */
 	function deps(overrides: Partial<ResumeDeps> = {}): ResumeDeps & {
 		enqueue: jest.Mock;
+		queueForAgent: jest.Mock;
 		sendMessageToAgent: jest.Mock;
 	} {
 		return {
 			orchestratorSession: 'crewly-orc',
 			isSessionRunning: () => true,
 			enqueue: jest.fn(),
+			queueForAgent: jest.fn(),
 			sendMessageToAgent: jest.fn(async () => ({ success: true })),
 			waitForOrchestratorActive: jest.fn(async () => true),
 			logger: { info: jest.fn(), warn: jest.fn() },
 			...overrides,
-		} as ResumeDeps & { enqueue: jest.Mock; sendMessageToAgent: jest.Mock };
+		} as ResumeDeps & { enqueue: jest.Mock; queueForAgent: jest.Mock; sendMessageToAgent: jest.Mock };
 	}
 
 	it('re-enqueues a queue-delivered message with its original Slack source and target', async () => {
@@ -263,10 +265,29 @@ describe('resumeInterruptedTurns', () => {
 		expect(d.sendMessageToAgent).not.toHaveBeenCalled();
 	});
 
-	it('skips agents that are not running after the restart', async () => {
+	it('queues a message for an agent that is not running yet instead of dropping it', async () => {
 		const d = deps({ isSessionRunning: () => false });
 		const summary = await resumeInterruptedTurns(toInterruptedEntries([ellaTurn]), d);
+		expect(summary).toEqual({ redelivered: 1, skipped: 0, failed: 0 });
+		expect(d.queueForAgent).toHaveBeenCalledWith('ella', `${NOTE}\n${HEADER}\ncheck what is left in my To Do`);
+		expect(d.enqueue).not.toHaveBeenCalled();
+		expect(d.sendMessageToAgent).not.toHaveBeenCalled();
+	});
+
+	it('queues a work note once for an agent that is not running yet', async () => {
+		const d = deps({ isSessionRunning: () => false });
+		const work: InterruptedTurnEntry = { kind: 'work', sessionName: 'eve', deliveredAt: NOW, text: '', preview: '(working)', workLabel: 'TKT-194' };
+		const summary = await resumeInterruptedTurns([work, { ...work, deliveredAt: NOW + 1 }], d);
+		expect(summary).toEqual({ redelivered: 1, skipped: 1, failed: 0 });
+		expect(d.queueForAgent).toHaveBeenCalledTimes(1);
+		expect(d.queueForAgent).toHaveBeenCalledWith('eve', 'Crewly restarted while you were working on TKT-194. Continue where you left off and deliver.');
+	});
+
+	it('still skips sessions that are not team members', async () => {
+		const d = deps({ isSessionRunning: () => false, isKnownSession: () => false });
+		const summary = await resumeInterruptedTurns(toInterruptedEntries([ellaTurn]), d);
 		expect(summary).toEqual({ redelivered: 0, skipped: 1, failed: 0 });
+		expect(d.queueForAgent).not.toHaveBeenCalled();
 		expect(d.enqueue).not.toHaveBeenCalled();
 	});
 

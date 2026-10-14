@@ -40,6 +40,7 @@ import { CLOUD_DISCONNECT_NOTICE_CONSTANTS } from '../../../../config/constants.
 import { LoggerService } from '../core/logger.service.js';
 import { resolveRunningPackageRoot } from '../system/auto-update.utils.js';
 import type { OwnerDirectDm } from '../slack/slack-owner-direct-dm.js';
+import { readCloudConfigFile } from './cloud-config-file.js';
 import { CloudClientService } from './cloud-client.service.js';
 import { CloudSyncService } from './cloud-sync.service.js';
 import type { CloudSyncHealth } from './cloud-sync.types.js';
@@ -80,6 +81,11 @@ export interface CloudDisconnectNoticeDeps {
 	relayQueueNoticeFile?: string;
 	/** A Cloud config exists (signed in, not logged out) */
 	isSignedIn: () => Promise<boolean>;
+	/**
+	 * Why the saved sign-in cannot be read (damaged file), or null when it is
+	 * readable. Omitted = never a problem.
+	 */
+	getConfigProblem?: () => Promise<string | null>;
 	/** CloudSyncService health */
 	getHealth: () => CloudSyncHealth;
 	/** This machine's name */
@@ -210,6 +216,7 @@ export class CloudDisconnectNoticeService {
 		const now = this.deps.now();
 		const verdict = evaluateDisconnect({
 			signedIn: await this.deps.isSignedIn(),
+			configProblem: (await this.deps.getConfigProblem?.()) ?? null,
 			health: this.deps.getHealth(),
 			monitorStartedAt: this.monitorStartedAt || now,
 			now,
@@ -272,7 +279,7 @@ export class CloudDisconnectNoticeService {
 		}
 		// A new window lifts the block a failed login set.
 		delete state.loginBlockedUntil;
-		const link = reason === 'auth' ? await this.ensureLoginLink() : null;
+		const link = reason === 'auth' || reason === 'local_config' ? await this.ensureLoginLink() : null;
 		const text = composeDisconnectNotice({
 			deviceName: await this.deviceName(),
 			reason,
@@ -311,7 +318,7 @@ export class CloudDisconnectNoticeService {
 	 * @returns True to refresh
 	 */
 	private shouldRefreshLink(state: DisconnectNoticeState, now: number): boolean {
-		if (state.reason !== 'auth' || !state.channelId || !state.messageTs) return false;
+		if ((state.reason !== 'auth' && state.reason !== 'local_config') || !state.channelId || !state.messageTs) return false;
 		if (this.login && !isCloudLoginFinished(this.login.get().state)) return false;
 		if (state.loginBlockedUntil && Date.parse(state.loginBlockedUntil) > now) return false;
 		return now - this.lastLoginAttemptAt >= this.loginRetryMs;
@@ -330,7 +337,7 @@ export class CloudDisconnectNoticeService {
 		if (!link?.url) return;
 		const text = composeDisconnectNotice({
 			deviceName: await this.deviceName(),
-			reason: 'auth',
+			reason: state.reason,
 			since: Date.parse(state.episodeStartedAt),
 			loginUrl: link.url,
 			userCode: link.userCode,
@@ -541,6 +548,10 @@ export function createCloudDisconnectNoticeService(wiring: CloudDisconnectNotice
 		stateFile: path.join(wiring.crewlyHome, C.STATE_FILE),
 		relayQueueNoticeFile: path.join(wiring.crewlyHome, C.RELAY_QUEUE_NOTICE_FILE),
 		isSignedIn: async () => fs.existsSync(CloudClientService.getConfigPath()),
+		getConfigProblem: async () => {
+			const read = readCloudConfigFile(logger);
+			return read.status === 'damaged' ? read.reason : null;
+		},
 		getHealth: () => CloudSyncService.getInstance().getHealth(),
 		getDeviceName: wiring.getDeviceName,
 		getDm: wiring.getDm,

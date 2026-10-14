@@ -19,6 +19,7 @@ import type {
   TaskClaim,
   ReconcileCorrection,
   WakeAction,
+  WakeActionResult,
 } from '../../types/v2/index.js';
 import { isExplicitlyBlocked, isWaitingOnHumanBlocked } from '../../types/v2/work-item.types.js';
 import { TaskPoolService } from '../task-pool/task-pool.service.js';
@@ -29,13 +30,14 @@ import { StorageService } from '../core/storage.service.js';
 import { RequestService } from '../v3/request.service.js';
 import { collectRequestWorkItems } from '../v3/request-completion.js';
 import { AgentSuspendService } from '../agent/agent-suspend.service.js';
-import { WorkItemDispatchSubscriber } from '../v3/workitem-dispatch.subscriber.js';
+import { WorkItemDispatchSubscriber, type DispatchOutcome } from '../v3/workitem-dispatch.subscriber.js';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
 import { TokenUsageService } from '../monitoring/token-usage.service.js';
 import { getWaiting } from '../monitoring/agent-attention-registry.js';
 import { PtyActivityTrackerService } from '../agent/pty-activity-tracker.service.js';
 import { limitToOneProjectTicket } from '../task-pool/ticket-claim-policy.js';
 import { isUnderMemoryPressure, getMemoryStats } from '../core/system-health.util.js';
+import { ResourceModeService, RESOURCE_MODE_CONSTANTS } from '../agent/resource-mode.service.js';
 import type { EventBusService } from '../event-bus/event-bus.service.js';
 import { AGENT_SUSPEND_CONSTANTS, ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
 import { getLocalApiBaseUrl } from '../../utils/local-api-url.utils.js';
@@ -116,6 +118,7 @@ export function wakeBlockedCooldownMs(refusals: number): number {
 
 /** Error code the team-member wake endpoint returns when the commitment-approval gate refuses. */
 const WAKE_BLOCKED_ERROR_CODE = 'commitment_requires_owner_approval';
+
 
 /**
  * Heuristic: detect "storage not yet hydrated" errors so the data
@@ -247,6 +250,9 @@ export class LiveReconcilerDataProvider implements ReconcilerDataProvider {
   // it null, which makes `evictIdleAgent` fall back to "no candidate"
   // and the wake-pressure path skips as before.
   private agentRegistration: IAgentRegistrationServiceLike | null = null;
+  // Told after the reconciler evicts an idle agent, so work it still owes is
+  // put back and the agent restarted (the same hook every stop path runs).
+  private onAgentStopped: ((sessionName: string, why: string) => void) | null = null;
 
   // Memory-pressure broadcast state. Per-instance to keep counters
   // isolated, but the publish throttle ensures we don't flood orc even
@@ -287,6 +293,15 @@ export class LiveReconcilerDataProvider implements ReconcilerDataProvider {
   constructor() {
     this.logger = LoggerService.getInstance().createComponentLogger('ReconcilerDataProvider');
     this.storage = StorageService.getInstance();
+  }
+
+  /**
+   * Inject the hook run after the reconciler stops an agent.
+   *
+   * @param hook - Receives the session and a reason, or null
+   */
+  setAgentStoppedHook(hook: ((sessionName: string, why: string) => void) | null): void {
+    this.onAgentStopped = hook;
   }
 
   /**
@@ -486,6 +501,7 @@ export class LiveReconcilerDataProvider implements ReconcilerDataProvider {
           if (waitingSince) health.waitingOnHumanSince = waitingSince;
           const lastActivityAt = this.getLastActivityAt(member.sessionName);
           if (lastActivityAt) health.lastActivityAt = lastActivityAt;
+          if (member.workingStatus === 'in_progress') health.midTurn = true;
 
           healthMap.set(member.sessionName, health);
         }
@@ -1204,6 +1220,7 @@ export class LiveReconcilerDataProvider implements ReconcilerDataProvider {
         'inactive' as never,
         'idle_exit_pressure',
       );
+      try { this.onAgentStopped?.(victim.sessionName, 'evicted by the reconciler'); } catch { /* best-effort */ }
       return true;
     } catch (err) {
       this.logger.error('evictIdleAgent failed', {
@@ -1212,6 +1229,46 @@ export class LiveReconcilerDataProvider implements ReconcilerDataProvider {
         error: err instanceof Error ? err.message : String(err),
       });
       return false;
+    }
+  }
+
+  /**
+   * Stop a stalled agent's session so the next wake starts it fresh
+   * (CREW-303). Recorded as a harness park (`idle_exit`), so its team is
+   * resumed by that wake rather than treated as a cold launch.
+   *
+   * @param sessionName - The stalled agent
+   * @param role - Its role
+   * @returns True when the session was stopped
+   */
+  async parkStalledAgent(sessionName: string, role: string): Promise<boolean> {
+    if (!this.agentRegistration) {
+      this.logger.warn('parkStalledAgent: AgentRegistrationService not wired — recovery disabled', { sessionName });
+      return false;
+    }
+    try {
+      await this.agentRegistration.terminateAgentSession(sessionName, role);
+      await this.storage.updateAgentStatus(sessionName, 'inactive' as never, 'idle_exit');
+      return true;
+    } catch (err) {
+      this.logger.error('parkStalledAgent failed', {
+        sessionName,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Sessions the claim service reports as hung (claim work, never heartbeat).
+   *
+   * @returns Hung session names; empty when the pool is not ready
+   */
+  getHungAgents(): string[] {
+    try {
+      return TaskPoolService.getInstance().getHungAgents();
+    } catch {
+      return [];
     }
   }
 
@@ -1284,7 +1341,7 @@ export class LiveReconcilerDataProvider implements ReconcilerDataProvider {
     }
   }
 
-  async executeWakeAction(action: WakeAction): Promise<boolean> {
+  async executeWakeAction(action: WakeAction): Promise<boolean | WakeActionResult> {
     const { agentSessionName, strategy } = action;
 
     // Redeliver is a cheap repost to an already-alive agent — no new session
@@ -1312,7 +1369,7 @@ export class LiveReconcilerDataProvider implements ReconcilerDataProvider {
           // WI left the queue (claimed/terminal) — drop its backoff record.
           this.lastRedeliverAt.delete(action.workItemId);
           this.redeliverCount.delete(action.workItemId);
-          return false;
+          return { outcome: 'skipped', reason: 'work item no longer queued' };
         }
         // Per-WI redeliver backoff — the fast loop re-emits this every ~10s
         // while the WI stays queued; without the gate that floods the PTY,
@@ -1323,17 +1380,35 @@ export class LiveReconcilerDataProvider implements ReconcilerDataProvider {
             workItemId: action.workItemId,
             cooldownMs: this.redeliverCooldownMs(action.workItemId),
           });
-          return false;
+          // Nothing was attempted: not a failed wake (CREW-304).
+          return { outcome: 'skipped', reason: 'redelivery backoff' };
         }
         // One reminder per agent, not one per WorkItem: every other queued
         // WI for the same target rides along in the same message, so an
         // agent with N stale items gets one wake-up instead of N.
         const batch = await this.collectRedeliverBatch(wi);
         const subscriber = WorkItemDispatchSubscriber.getInstance();
-        const delivered =
-          batch.length > 1 && typeof subscriber.redispatchMany === 'function'
-            ? await subscriber.redispatchMany(batch)
-            : await subscriber.redispatch(batch[0] ?? wi);
+        let dispatch: DispatchOutcome;
+        if (batch.length > 1 && typeof subscriber.redispatchMany === 'function') {
+          const wrote = await subscriber.redispatchMany(batch);
+          dispatch = wrote
+            ? { status: 'queued', reason: 'combined reminder written' }
+            : { status: 'failed', reason: 'combined reminder not written' };
+        } else if (typeof subscriber.redispatchOutcome === 'function') {
+          dispatch = await subscriber.redispatchOutcome(batch[0] ?? wi);
+        } else {
+          dispatch = (await subscriber.redispatch(batch[0] ?? wi))
+            ? { status: 'delivered', reason: 'written to the agent' }
+            : { status: 'failed', reason: 'redelivery not delivered' };
+        }
+        // The brief is already on the agent's queue (it is mid-turn): nothing
+        // was missed and nothing failed. Space the next look like a push, but
+        // do not grow the backoff or report a failed wake (CREW-394).
+        if (dispatch.status === 'waiting') {
+          this.lastRedeliverAt.set(wi.id, Date.now());
+          return { outcome: 'pending', reason: dispatch.reason };
+        }
+        const delivered = dispatch.status === 'delivered' || dispatch.status === 'queued';
         if (delivered) {
           const now = Date.now();
           // The trigger backs off too, even when the one-ticket rule left it
@@ -1349,9 +1424,22 @@ export class LiveReconcilerDataProvider implements ReconcilerDataProvider {
             batched: marked.length,
             attempt: this.redeliverCount.get(action.workItemId),
             nextCooldownMs: this.redeliverCooldownMs(action.workItemId),
+            status: dispatch.status,
           });
         }
-        return delivered;
+        if (!delivered) {
+          // CREW-438: say why nothing went out — redispatch() has several quiet exits.
+          this.logger.warn('Redelivery of WorkItem brief returned false', {
+            agent: agentSessionName,
+            workItemId: action.workItemId,
+            status: wi.status,
+            target: wi.target,
+            batched: batch.length,
+            hasTarget: Boolean(wi.target),
+            reason: dispatch.reason,
+          });
+        }
+        return delivered ? { outcome: 'ok' } : { outcome: 'failed', reason: dispatch.reason };
       } catch (error) {
         this.logger.error('Redeliver wake action failed', {
           agent: agentSessionName,
@@ -1359,6 +1447,33 @@ export class LiveReconcilerDataProvider implements ReconcilerDataProvider {
           error: error instanceof Error ? error.message : String(error),
         });
         return false;
+      }
+    }
+
+    // A start that cannot happen yet is settled before anything else: the
+    // memory-pressure gate below may evict an idle agent for this wake, and
+    // the wake log ran every 10 s for an agent the approval gate had already
+    // refused (crewly-product-team-sam, 2026-10-13).
+    const blocked = this.lastWakeBlockedAt.get(agentSessionName);
+    if (strategy === 'start') {
+      // Don't re-attempt a wake the approval gate just refused. Its verdict
+      // depends on owner messages, not on anything the reconciler can change
+      // by asking again 10 seconds later.
+      if (blocked !== undefined && Date.now() - blocked.at < wakeBlockedCooldownMs(blocked.refusals)) {
+        this.logger.debug('Skipping wake — approval gate refused recently', {
+          agent: agentSessionName,
+          msSinceRefusal: Date.now() - blocked.at,
+          refusals: blocked.refusals,
+        });
+        // Not attempted: before CREW-304 every tick of this cooldown was
+        // traced as a failed wake (≈8/min for hours).
+        return { outcome: 'skipped', reason: 'approval gate cooldown' };
+      }
+
+      // A start already waiting for a slot behind the running-agent cap is
+      // pending, not failed, and is not requested again (CREW-304).
+      if (ResourceModeService.getInstance().isStartWaiting(agentSessionName)) {
+        return { outcome: 'pending', reason: 'start queued behind the running-agent cap' };
       }
     }
 
@@ -1411,7 +1526,7 @@ export class LiveReconcilerDataProvider implements ReconcilerDataProvider {
             reason: 'no evictable idle agent — all active agents are busy or always-on',
           });
           this.maybeBroadcastMemoryPressure(stats, activeCount);
-          return false;
+          return { outcome: 'failed', reason: 'memory pressure: no slot' };
         }
         this.logger.warn('Evicting idle agent under memory pressure to free wake slot', {
           evictingAgent: victim.sessionName,
@@ -1436,7 +1551,7 @@ export class LiveReconcilerDataProvider implements ReconcilerDataProvider {
             activeAgents: activeCount,
           });
           this.maybeBroadcastMemoryPressure(stats, activeCount);
-          return false;
+          return { outcome: 'failed', reason: 'memory pressure: eviction failed' };
         }
         // Slot freed — proceed with the wake. Net activeCount stays
         // the same (one out, one in), so the floor invariant holds.
@@ -1521,19 +1636,6 @@ export class LiveReconcilerDataProvider implements ReconcilerDataProvider {
           body = { sessionName: agentSessionName, workItemId: action.workItemId };
         }
 
-        // Don't re-attempt a wake the approval gate just refused. Its verdict
-        // depends on owner messages, not on anything the reconciler can change
-        // by asking again 10 seconds later.
-        const blocked = this.lastWakeBlockedAt.get(agentSessionName);
-        if (blocked !== undefined && Date.now() - blocked.at < wakeBlockedCooldownMs(blocked.refusals)) {
-          this.logger.debug('Skipping wake — approval gate refused recently', {
-            agent: agentSessionName,
-            msSinceRefusal: Date.now() - blocked.at,
-            refusals: blocked.refusals,
-          });
-          return false;
-        }
-
         const response = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1554,14 +1656,22 @@ export class LiveReconcilerDataProvider implements ReconcilerDataProvider {
               refusals,
               cooldownMs: wakeBlockedCooldownMs(refusals),
             });
-            return false;
+            return { outcome: 'failed', reason: 'owner approval required' };
+          }
+          if (errorText.includes(RESOURCE_MODE_CONSTANTS.START_DEFERRED_ERROR_CODE)) {
+            // Waited for a slot and none opened in time: deferred, not broken.
+            this.logger.info('Wake deferred — running-agent cap reached; the start stays queued', {
+              agent: agentSessionName,
+              workItemId: action.workItemId,
+            });
+            return { outcome: 'pending', reason: 'running-agent cap reached' };
           }
           this.logger.error('Start agent API failed', {
             agent: agentSessionName,
             status: response.status,
             error: errorText,
           });
-          return false;
+          return { outcome: 'failed', reason: `start API ${response.status}` };
         }
 
         // A successful wake means the gate is no longer refusing this agent —

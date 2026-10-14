@@ -61,7 +61,7 @@ OUT=$(CREWLY_SESSION_NAME=test-agent CREWLY_API_URL="http://127.0.0.1:${PORT}" b
 check "500: exit code" "$RC" "1"
 check "500: reason" "$(printf '%s' "$OUT" | jq -r .reason)" "db locked"
 
-check "unknown option errors" "$(run_err --bogus)" "Unknown option: --bogus"
+check "unknown option errors" "$(run_err --bogus)" "Unknown argument: --bogus"
 check "--limit needs a value" "$(run_err --limit)" "--limit requires a value"
 
 echo "=== Results: $PASS passed, $FAIL failed ==="

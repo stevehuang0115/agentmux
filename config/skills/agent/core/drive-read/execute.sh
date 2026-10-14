@@ -57,7 +57,7 @@ while [[ $# -gt 0 ]]; do
     --out|-o)  [ $# -ge 2 ] || error_exit "--out requires a value"; OUT_PATH="$2"; shift 2 ;;
     --account)  [ $# -ge 2 ] || error_exit "--account requires a value"; ACCOUNT="$2"; shift 2 ;;
     --help|-h) print_usage; exit 0 ;;
-    *) error_exit "Unknown option: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 if [ -n "$INPUT_JSON" ]; then

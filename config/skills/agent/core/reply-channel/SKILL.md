@@ -40,6 +40,14 @@ bash config/skills/agent/core/reply-channel/execute.sh \
   [--cmid <clientMessageId>]
 ```
 
+**Quotes in your text:** a double quote inside `--content "..."` ends the
+string and splits your text into extra arguments, and nothing is sent. For
+text with double quotes, quotes of any kind, or several lines, write it to a
+file and use `--content-file <path>` (or pipe it on stdin). Do not hide the
+output behind `| tail -1`: a failure prints `{"success":false,...}`, and
+success prints `{"success":true,...}` -- read that line before you tell
+anyone it was sent.
+
 `--thread` replies inside an existing thread. When the prompt you received
 came from a **Slack team channel** it names the thread id
 (`--thread <id>`); pass it through so your reply shows up in the same Slack
@@ -47,6 +55,16 @@ thread, under your own name. `--thread` also takes the Slack thread key from
 a `[SLACK-THREAD:<key>]` tag in your prompt — the reply lands in exactly that
 thread. Answer each thread in its own thread; never bundle answers for
 different threads into one message.
+
+To post in a **Crewly channel** you are a member of (a room shared with
+agents of other teams — `list-channels` shows yours), pass its name with a
+`#`, or its id:
+
+```bash
+bash config/skills/agent/core/reply-channel/execute.sh --channel '#tech-brief' --content "today's brief is up"
+```
+
+Everyone in the channel sees it, in Crewly and in the matching Slack channel.
 
 Or with JSON:
 
@@ -103,6 +121,25 @@ bash execute.sh --channel <channelId> --thread <threadId> --message <messageId> 
 ```
 
 An unknown name returns `404` with the names that were found.
+
+## Files for a colleague on another machine: `--file`
+
+A path on your machine means nothing to an agent on another one. To give a
+colleague a file, mention its path in your reply (`/abs/path/report.pdf` or
+`./out/report.pdf`) or attach it explicitly (repeatable, up to 5):
+
+```bash
+bash execute.sh --channel <channelId> --content "Report is ready" --file ./out/report.pdf
+```
+
+The file is uploaded through Crewly's file sharing and the message gets a line
+like `📎 report.pdf (2.1 MB) · crewly-file:hf_…`. It lands in the colleague's
+project inbox automatically (`File from <you>: <local path>`); you do not paste
+any instruction. A path in the text goes only when the room has an agent on
+another machine; it must be a regular file inside your project (no symlinks, no
+`.env`/key files, nothing from Crewly's home). If an upload fails the message is
+still posted and the output has `filesNotSent` and a `warning` - tell your
+colleague. A file a colleague sends you arrives the same way.
 
 ## Environment
 

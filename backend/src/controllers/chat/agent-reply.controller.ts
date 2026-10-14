@@ -10,6 +10,7 @@
  * @module controllers/chat/agent-reply.controller
  */
 
+import { getOwnerCompletionReport } from '../../services/orc/owner-completion-report.service.js';
 import type { Request, Response, NextFunction } from 'express';
 import { ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
 import { readAgentSessionHeader } from '../../utils/agent-caller.utils.js';
@@ -25,6 +26,8 @@ import type { ReplyReference } from '../../services/orc/agent-prompt-reference.s
 import { parseSlackThreadKey } from '../../services/slack/slack-thread-key.js';
 import { getOwnerMessageWatchdog } from '../../services/messaging/owner-message-watchdog.service.js';
 import { AgentPostLog } from '../../services/messaging/queue-priority.js';
+import { reportOwnerThreadAgentPost } from '../../services/messaging/owner-thread-sentinel.service.js';
+import { reportAgentPostForFollowThrough } from '../../services/agent/follow-through.service.js';
 import { LoggerService, type ComponentLogger } from '../../services/core/logger.service.js';
 import { agentResponse, deliverAgentReplyToConversation, isAgentsOwnConversation } from './chat.controller.js';
 
@@ -44,6 +47,8 @@ export interface AgentReplyDeps {
   deliverReply: (input: DeliverReplyInput) => Promise<ReplyDelivery>;
   /** `reply --none`: take down the agent's placeholder in that thread */
   settleNoReply?: (agentSession: string, slackChannelId: string, threadTs: string) => Promise<number>;
+  /** `reply --drive <session>`: the answer goes to the owner's Drive mode session (their phone), not Slack */
+  driveReply?: (agentSession: string, sessionId: string, input: { text: string; interim: boolean; recap: boolean; ack?: boolean }) => Promise<{ conversationId: string; closed: boolean }>;
 }
 
 /**
@@ -57,6 +62,7 @@ async function defaultPostOrcSlack(input: { channelId: string; threadTs?: string
   const slack = getSlackService();
   if (!slack.isConnected()) throw new Error('Slack is not connected');
   const ts = await slack.sendMessage({ channelId: input.channelId, text: input.text, ...(input.threadTs ? { threadTs: input.threadTs } : {}) });
+  reportOwnerThreadAgentPost({ agent: ORCHESTRATOR_SESSION_NAME, slackChannelId: input.channelId, ...(input.threadTs ? { threadTs: input.threadTs } : {}), text: input.text });
   const { recordSlackReplyBookkeeping } = await import('../slack/slack.controller.js');
   await recordSlackReplyBookkeeping({
     channelId: input.channelId,
@@ -75,6 +81,12 @@ const defaultDeps: AgentReplyDeps = {
   postOrcSlack: defaultPostOrcSlack,
   workDestination: defaultWorkDestinationDeps,
   deliverReply: (input) => deliverReply(input),
+  driveReply: async (agentSession, sessionId, input) => {
+    const { getDriveAgentService, DriveAgentError } = await import('../../services/drive/drive-agent.service.js');
+    const drive = getDriveAgentService();
+    if (!drive) throw new DriveAgentError(503, 'Drive mode is not ready on this machine — answer the usual way (reply).');
+    return drive.agentReply(agentSession, sessionId, input);
+  },
   settleNoReply: async (agentSession, slackChannelId, threadTs) => {
     const { getSlackTypingPlaceholderService } = await import('../../services/slack/slack-typing-placeholder.service.js');
     return (await getSlackTypingPlaceholderService()?.settleNoReplyNeeded(agentSession, slackChannelId, threadTs)) ?? 0;
@@ -120,6 +132,23 @@ export function createAgentReplyHandler(deps: AgentReplyDeps = defaultDeps) {
         return;
       }
       const interim = body.interim === true;
+      // Drive mode (specs/2026-10-08-drive-mode.md §7): the owner is listening on the phone.
+      if (typeof body.drive === 'string' && body.drive.trim() && !none) {
+        if (!deps.driveReply) {
+          res.status(503).json({ success: false, error: 'Drive mode is not available here — answer the usual way (reply).' });
+          return;
+        }
+        try {
+          // `--ack`: the quick first phase of a two-phase Drive answer (specs/2026-10-09-drive-mode-v3.md).
+          const ack = body.ack === true && body.recap !== true;
+          const out = await deps.driveReply(session, body.drive.trim(), { text: content, interim: interim || ack, recap: body.recap === true, ...(ack ? { ack: true } : {}) });
+          res.status(201).json({ success: true, data: { destination: 'drive', ...out } });
+        } catch (err) {
+          const status = typeof (err as { status?: unknown }).status === 'number' ? (err as { status: number }).status : 409;
+          res.status(status).json({ success: false, error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
       const requestedConv = typeof body.conversationId === 'string' ? body.conversationId : undefined;
       const requestedThread = typeof body.thread === 'string' ? body.thread : undefined;
       const isOrchestrator = session === ORCHESTRATOR_SESSION_NAME;
@@ -166,6 +195,22 @@ export function createAgentReplyHandler(deps: AgentReplyDeps = defaultDeps) {
         // reminder about that thread still on this agent's queue is stale.
         if (!interim && delivery.slackChannelId && delivery.threadTs) {
           AgentPostLog.getInstance().note(session, { slackChannelId: delivery.slackChannelId, threadTs: delivery.threadTs });
+        }
+        // A report named by work item tells the owner for that item's chain,
+        // wherever it landed: stop the report-due reminder (CREW-503).
+        if (!interim && reference?.workItemId) getOwnerCompletionReport()?.noteWorkItemReply(reference.workItemId);
+        // A chat-only answer never reaches the sentinel; the follow-through
+        // guard still needs to see what the agent told the owner.
+        if (!delivery.slackChannelId) reportAgentPostForFollowThrough({ agent: session, text: content, interim });
+        // A promise ("~15 min") in an owner thread is timed by the sentinel.
+        if (delivery.slackChannelId) {
+          reportOwnerThreadAgentPost({
+            agent: session,
+            slackChannelId: delivery.slackChannelId,
+            ...(delivery.threadTs ? { threadTs: delivery.threadTs } : {}),
+            text: content,
+            interim,
+          });
         }
         const dest = delivery.destination;
         res.status(201).json({

@@ -139,6 +139,12 @@ describe('onChatMessage — answer detection', () => {
     expect((await requests.getById(t.id))?.reply).toBeUndefined();
   });
 
+  it('"I\'m building it now" is a promise, not the answer (2026-10-10)', async () => {
+    const t = await ticket(1, { chatChannelId: 'ch1', messageId: 'm1' });
+    expect(await review.onChatMessage(agentMsg('ch1', 'atlas', "I'm breaking down the shot list now, then building the crab version.", 'm1'))).toBeNull();
+    expect((await requests.getById(t.id))?.reply).toBeUndefined();
+  });
+
   it('caps the excerpt', async () => {
     const t = await ticket(1, { chatChannelId: 'ch1', messageId: 'm1' });
     await review.onChatMessage(agentMsg('ch1', 'atlas', 'x'.repeat(5000), 'm1'));
@@ -235,7 +241,7 @@ describe('owner actions', () => {
     expect(reworks).toHaveLength(0);
     const after = await requests.getById(t.id);
     expect(after?.acceptance?.[0]).toMatchObject({ text: 'the numbers are last month', source: 'reject', check: 'judgment' });
-    expect(after?.discussion?.at(-1)?.text).toBe('打回：the numbers are last month');
+    expect(after?.discussion?.at(-1)?.text).toBe('Sent back: the numbers are last month');
   });
 
   it('reject from the board queues rework for whoever answered', async () => {
@@ -273,6 +279,64 @@ describe('auto-accept', () => {
     expect(after?.tags).toContain(TICKET_CONSTANTS.REVIEW.AUTO_ACCEPTED_TAG);
     // #813: silence is acceptance, never a review.
     expect(after?.acceptedBy).toBe('silence');
+  });
+});
+
+describe('auto-accept: the owner moved on in the thread', () => {
+  /** Put a ticket in 待验收 and return it. */
+  async function submitted(n: number) {
+    const t = await ticket(n, { chatChannelId: `ch${n}`, messageId: `m${n}` });
+    await review.onChatMessage(agentMsg(`ch${n}`, 'atlas', 'answer', `m${n}`));
+    await review.onAgentIdle('atlas');
+    return (await requests.getById(t.id))!;
+  }
+
+  /** The owner said something in the ticket's thread after the answer. */
+  async function ownerSays(id: string, text: string) {
+    const t = (await requests.getById(id))!;
+    const at = new Date(Date.parse(t.submittedAt!) + 60_000).toISOString();
+    await requests.update(id, { discussion: [...(t.discussion ?? []), { at, author: 'U1', text, ref: `r-${Math.random()}` }] });
+  }
+
+  it('settles well before the deadline, silently, with the reason recorded', async () => {
+    const t = await submitted(1);
+    await ownerSays(t.id, '那个房间变大 宠物变小的上线了吗');
+    expect((await review.sweep()).autoAccepted).toBe(1);
+    const after = (await requests.getById(t.id))!;
+    expect(after.status).toBe('done');
+    expect(after.acceptedBy).toBe('silence');
+    expect(after.tags).toContain(TICKET_CONSTANTS.REVIEW.AUTO_ACCEPTED_TAG);
+    expect(after.discussion?.some((d) => d.text === 'auto-accepted: no objection' && d.author === 'crewly')).toBe(true);
+    // The owner is told nothing: no nudge, no extra receipt beyond the done swap.
+  });
+
+  it('a send-back or a "where is it" is an objection and keeps it in review', async () => {
+    const a = await submitted(1);
+    await ownerSays(a.id, '打回 少了截图');
+    const b = await submitted(2);
+    await ownerSays(b.id, '链接发到哪了？没看到');
+    expect((await review.sweep()).autoAccepted).toBe(0);
+    expect((await requests.getById(a.id))?.status).toBe('waiting_confirmation');
+    expect((await requests.getById(b.id))?.status).toBe('waiting_confirmation');
+  });
+
+  it('no later owner message, inside the window: stays; past 24h: settles with the reason', async () => {
+    const t = await submitted(1);
+    expect((await review.sweep()).autoAccepted).toBe(0);
+    clock = Date.now() + TICKET_CONSTANTS.REVIEW.AUTO_ACCEPT_MS + 60_000;
+    expect((await review.sweep()).autoAccepted).toBe(1);
+    expect((await requests.getById(t.id))?.discussion?.some((d) => d.text === 'auto-accepted: no objection')).toBe(true);
+  });
+
+  it('does not settle early while the agent still owes the owner an open item', async () => {
+    const t = await submitted(1);
+    await ownerSays(t.id, '好 那继续吧');
+    const cur = (await requests.getById(t.id))!;
+    await requests.update(t.id, {
+      openItems: [{ id: 'q-1', type: 'question', agent: 'atlas', sourceMessageId: 'x', createdAt: new Date().toISOString(), status: 'open', text: '你同意吗？' }],
+    });
+    expect(cur.status).toBe('waiting_confirmation');
+    expect((await review.sweep()).autoAccepted).toBe(0);
   });
 });
 
@@ -441,7 +505,7 @@ describe('follow-up by the agent (owner, 2026-09-24)', () => {
     const t = await ticket(1, { chatChannelId: 'ch1', messageId: 'm1' });
     const text = nudgeText({ ...t, submittedAt: new Date(clock - 25 * 3_600_000).toISOString() }, clock);
     expect(text).toContain('--channel ch1 --thread m1');
-    expect(text).toContain('不要提工单');
-    expect(text).toContain('约 25 小时');
+    expect(text).toContain('do not mention tickets');
+    expect(text).toContain('about 25 hours');
   });
 });

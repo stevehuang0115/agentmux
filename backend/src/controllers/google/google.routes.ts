@@ -17,6 +17,7 @@ import {
   setDefaultAccount,
   gmailSearch,
   gmailRead,
+  gmailAttachment,
   gmailSend,
   gmailListHeld,
   gmailResolveHeld,
@@ -36,6 +37,9 @@ import {
   docsCommentsAdd,
   docsCommentsReply,
   docsCommentsResolve,
+  docCommentBatchesList,
+  docCommentBatchSend,
+  docCommentBatchDiscard,
   sheetsInfo,
   sheetsRead,
   sheetsCreate,
@@ -71,6 +75,7 @@ const OWNER_ONLY_HELD_MAIL = Object.freeze({
  * - DELETE /disconnect            — revoke + forget the grant (optional ?account=)
  * - GET    /gmail/search          — ?q=&max=
  * - GET    /gmail/messages/:id    — read one message
+ * - GET    /gmail/messages/:id/attachments/:attachmentId — attachment bytes (base64, 25 MB cap)
  * - POST   /gmail/send            — { to, cc?, subject, text, threadId?, inReplyTo?, dryRun? }
  *                                   An agent gets a Gmail draft + a hold, not a send.
  * - GET    /gmail/held             — mail waiting on the owner
@@ -88,6 +93,10 @@ const OWNER_ONLY_HELD_MAIL = Object.freeze({
  * - POST   /docs/:id/comments     — { text, quote? }
  * - POST   /docs/:id/comments/:commentId/replies — { text }
  * - POST   /docs/:id/comments/:commentId/resolve — { text? }
+ *                                   Comment writes are outbound: an agent's are queued (202), not posted.
+ * - GET    /doc-comment-batches   — comments queued for the owner's OK
+ * - POST   /doc-comment-batches/:code/send    — post a batch (owner, or agent after the owner's 「发 C<n>」)
+ * - POST   /doc-comment-batches/:code/discard — drop a batch
  * - GET    /sheets/:id            — title + tabs
  * - GET    /sheets/:id/values     — ?range=
  * - POST   /sheets                — { title, sheetTitle?, rows? }
@@ -114,6 +123,7 @@ export function createGoogleRouter(): Router {
   router.use(requireConnectorAccess('google-workspace'));
   router.get('/gmail/search', gmailSearch);
   router.get('/gmail/messages/:id', gmailRead);
+  router.get('/gmail/messages/:id/attachments/:attachmentId', gmailAttachment);
   router.post('/gmail/send', gmailSend);
   // Mail an agent drafted and is waiting on the owner to send. The owner
   // answers here; the agent cannot.
@@ -136,6 +146,10 @@ export function createGoogleRouter(): Router {
   router.post('/docs/:id/comments', docsCommentsAdd);
   router.post('/docs/:id/comments/:commentId/replies', docsCommentsReply);
   router.post('/docs/:id/comments/:commentId/resolve', docsCommentsResolve);
+  // Comments an agent queued for the owner's OK (posted as a batch).
+  router.get('/doc-comment-batches', docCommentBatchesList);
+  router.post('/doc-comment-batches/:code/send', docCommentBatchSend);
+  router.post('/doc-comment-batches/:code/discard', docCommentBatchDiscard);
   router.get('/sheets/:id', sheetsInfo);
   router.get('/sheets/:id/values', sheetsRead);
   router.post('/sheets', sheetsCreate);

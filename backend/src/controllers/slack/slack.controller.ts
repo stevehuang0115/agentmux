@@ -33,8 +33,10 @@ import { getSlackInstanceRegistryService } from '../../services/slack/slack-inst
 import { CloudClientService } from '../../services/cloud/cloud-client.service.js';
 import { SlackConfig, SlackNotification, SlackNotificationType } from '../../types/slack.types.js';
 import { SLACK_IMAGE_CONSTANTS, SLACK_FILE_UPLOAD_CONSTANTS, SLACK_CLOUD_CONSTANTS, ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
+import { reportOwnerThreadAgentPost } from '../../services/messaging/owner-thread-sentinel.service.js';
 import { OrcReplyRouteService } from '../../services/orc/orc-reply-route.service.js';
 import { readAgentSessionHeader } from '../../utils/agent-caller.utils.js';
+import { getBoardActivity } from '../../services/board/board-activity.tracker.js';
 import { rejectNonOwner } from '../../middleware/caller-identity.middleware.js';
 import { LoggerService } from '../../services/core/logger.service.js';
 import type { SlackCloudWorkspaceSummary } from '../../types/slack.types.js';
@@ -1144,6 +1146,44 @@ router.get('/directory', async (req: Request, res: Response, next: NextFunction)
 });
 
 /**
+ * POST /api/slack/files/fetch
+ *
+ * Get a Slack file by link or id — also one posted in a channel the
+ * caller's own bot is not in, or by an agent on another machine. Local bot
+ * tokens first, then Crewly Cloud (which holds every bot of the account).
+ * Backs the `slack-file` skill.
+ *
+ * @body fileRef - File id (F…), file link, download URL, or message link (required)
+ * @returns `{ success, data: { path, file, preview? } }` — `preview` = the first lines of a text file
+ */
+router.post('/files/fetch', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const fileRef = typeof req.body?.fileRef === 'string' ? req.body.fileRef.trim() : '';
+    if (!fileRef || fileRef.length > 2000) {
+      res.status(400).json({ success: false, code: 'validation', error: 'fileRef (a Slack file id or link) is required' });
+      return;
+    }
+    const { getSlackFileFetchService, previewTextFile, SlackFileGetError, SLACK_FILE_GET_STATUS } = await import(
+      '../../services/slack/slack-file-fetch.service.js'
+    );
+    try {
+      const service = await getSlackFileFetchService();
+      const { meta, localPath } = await service.get(fileRef, { requesterAgent: readAgentSessionHeader(req) });
+      const preview = meta.isText ? await previewTextFile(localPath).catch(() => undefined) : undefined;
+      res.json({ success: true, data: { path: localPath, file: meta, ...(preview !== undefined ? { preview } : {}) } });
+    } catch (err) {
+      if (err instanceof SlackFileGetError) {
+        res.status(SLACK_FILE_GET_STATUS[err.code]).json({ success: false, code: err.code, error: err.message });
+        return;
+      }
+      throw err;
+    }
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * GET /api/slack/cloud/workspaces
  *
  * Every Slack workspace installed on the Cloud account (redacted), plus the
@@ -1589,7 +1629,36 @@ router.post('/post', async (req: Request, res: Response, next: NextFunction) => 
       });
       return;
     }
-    const { target, text, threadTs, newTopLevel } = req.body ?? {};
+    const { target, text: rawPostText, threadTs, newTopLevel } = req.body ?? {};
+    // Files named with `--file` are uploaded into the channel next to the text.
+    // They pass the same guard as the Cloud handoff: inside the agent's project
+    // (realpath, so symlinks cannot escape), not in Crewly's home, no secret
+    // names or contents. Nothing is posted if any file is refused.
+    const requested: string[] = Array.isArray(req.body?.files)
+      ? (req.body.files as unknown[]).filter((f): f is string => typeof f === 'string' && f.length > 0).slice(0, 5)
+      : [];
+    const files: string[] = [];
+    if (requested.length > 0) {
+      const wiring = await import('../../services/file-handoff/file-handoff.wiring.js');
+      const projectDir = await wiring.projectDirForAgent(agentSession, typeof req.body?.projectPath === 'string' ? req.body.projectPath : undefined);
+      if (!projectDir) {
+        res.status(400).json({ success: false, code: 'file_outside_project', error: 'Cannot tell which project directory you work in, so no file can be attached' });
+        return;
+      }
+      const guard = wiring.getFileHandoffService();
+      for (const f of requested) {
+        const vetted = guard.vetFile(f, projectDir);
+        if (!vetted.ok) {
+          const code = vetted.reason === 'file not found' ? 'file_not_found' : 'file_outside_project';
+          res.status(code === 'file_not_found' ? 404 : 400).json({ success: false, code, error: `${f}: ${vetted.reason}` });
+          return;
+        }
+        files.push(vetted.real);
+      }
+    }
+    const text: unknown = rawPostText;
+    // Owner board: the agent is messaging a channel (an id shows as plain "Slack")
+    getBoardActivity().recordMessage(agentSession, typeof target === 'string' && /^[#@]?[A-Za-z][\w.-]{0,38}$/.test(target) ? target.replace(/^@/, '') : 'Slack');
     try {
       const result = await service.post({
         agentSession,
@@ -1598,6 +1667,7 @@ router.post('/post', async (req: Request, res: Response, next: NextFunction) => 
         threadTs: typeof threadTs === 'string' && threadTs ? threadTs : undefined,
         // #808: scheduled output says so, and never lands in an owed thread.
         ...(newTopLevel === true ? { newTopLevel: true } : {}),
+        ...(files.length ? { files } : {}),
       });
       res.json({ success: true, data: result });
       return;
@@ -1715,7 +1785,11 @@ router.post('/attach', async (req: Request, res: Response, next: NextFunction) =
     } catch {
       place = null;
     }
-    if (!place && (threadId || reference || !channelId)) {
+    // The orchestrator's primary owner DM is neither a team channel nor an
+    // agent DM: post there with the workspace bot (#1142).
+    const { orcOwnerDmTarget } = await import('../../services/slack/orc-owner-dm-target.js');
+    const orcDm = orcOwnerDmTarget(agentSession, { channelId, threadId });
+    if (!place && !orcDm && (threadId || reference || !channelId)) {
       res.status(409).json({
         success: false,
         error: `File NOT sent: ${reference ? 'the reference you named does not resolve to a Slack thread' : `thread ${String(threadId)} is not a thread of a conversation you are in`}. Run attach-file again without --thread (the harness picks the thread), or name the ticket / message from your prompt with --ticket / --to.`,
@@ -1755,6 +1829,29 @@ router.post('/attach', async (req: Request, res: Response, next: NextFunction) =
       if (viaDm) result = viaDm;
     }
 
+    if ((!result || (!result.ok && result.reason === 'not_a_slack_channel')) && (orcDm || (place && agentSession === ORCHESTRATOR_SESSION_NAME && place.slackChannelId.startsWith('D')))) {
+      const target = orcDm ?? { slackChannelId: place!.slackChannelId, ...(place!.threadTs ? { threadTs: place!.threadTs } : {}) };
+      try {
+        const uploaded = await getSlackService().uploadFile({
+          channelId: target.slackChannelId,
+          filePath: String(filePath),
+          ...(filename ? { filename: String(filename) } : {}),
+          ...(title ? { title: String(title) } : {}),
+          ...(comment ? { initialComment: String(comment) } : {}),
+          ...(target.threadTs ? { threadTs: target.threadTs } : {}),
+        });
+        result = {
+          ok: true,
+          slackChannelId: target.slackChannelId,
+          ...(target.threadTs ? { threadTs: target.threadTs } : {}),
+          ...(uploaded.fileId ? { fileId: uploaded.fileId } : {}),
+          asAgentBot: false,
+        };
+      } catch (err) {
+        result = { ok: false, reason: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
     if (!result) {
       res.status(503).json({ success: false, error: 'Slack is not running on this instance' });
       return;
@@ -1765,6 +1862,40 @@ router.post('/attach', async (req: Request, res: Response, next: NextFunction) =
       res.status(status).json({ success: false, error: result.reason });
       return;
     }
+
+    // The file is in Slack; put it in the local chat history too, or anyone
+    // reading the thread from there sees the agent as silent. Best effort, and
+    // flagged so the outbound mirrors do not post it a second time.
+    try {
+      const { getChatV2Service } = await import('../../services/chat-v2/chat-v2.singleton.js');
+      const { recordAttachedFileInChat } = await import('../../services/slack/attach-file-chat-record.js');
+      const size = await fs.stat(String(filePath)).then((st) => st.size).catch(() => undefined);
+      recordAttachedFileInChat(getChatV2Service(), {
+        chatChannelId,
+        agentSession,
+        filePath: String(filePath),
+        ...(filename ? { filename: String(filename) } : {}),
+        ...(title ? { title: String(title) } : {}),
+        ...(comment ? { comment: String(comment) } : {}),
+        slackChannelId: result.slackChannelId,
+        ...(result.threadTs ? { threadTs: result.threadTs } : {}),
+        ...(result.fileId ? { fileId: result.fileId } : {}),
+        ...(size !== undefined ? { sizeBytes: size } : {}),
+      });
+    } catch {
+      /* history is best effort — the upload already succeeded */
+    }
+
+    // A file the agent put into a thread is an agent post: the owner-thread
+    // sentinel must see it, or a promise the file kept ("the cover is done",
+    // sent as an image) stays open and a stop or restart re-creates a
+    // "Follow through" WorkItem for it.
+    reportOwnerThreadAgentPost({
+      agent: agentSession,
+      slackChannelId: result.slackChannelId,
+      ...(result.threadTs ? { threadTs: result.threadTs } : {}),
+      text: String(comment || title || filename || filePath),
+    });
 
     res.json({ success: true, data: result });
   } catch (error) {

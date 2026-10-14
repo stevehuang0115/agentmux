@@ -18,6 +18,7 @@ import { selfImprovementRouter } from '../controllers/self-improvement/index.js'
 import { createMessagingRouter } from '../controllers/messaging/messaging.routes.js';
 import { createTeamsBackupRouter } from '../controllers/teams-backup/teams-backup.routes.js';
 import { createBackupRouter } from '../controllers/backup/backup.routes.js';
+import { createTeamMovesRouter } from '../controllers/team-move/team-move.controller.js';
 import { createEventBusRouter } from '../controllers/event-bus/event-bus.routes.js';
 import { createSlackThreadRouter } from '../controllers/slack/slack-thread.routes.js';
 import { createMemoryRouter } from '../controllers/memory/memory.routes.js';
@@ -54,6 +55,8 @@ import { createBundleRouter } from '../controllers/bundle/bundle.routes.js';
 import { createReconcilerRouter } from '../controllers/reconciler/reconciler.routes.js';
 import { createWorktreeJanitorRouter } from '../controllers/worktree-janitor/worktree-janitor.routes.js';
 import { createTeamHealthRouter } from '../controllers/team-health/team-health.routes.js';
+import { createUsageLedgerRouter } from '../controllers/usage-ledger/usage-ledger.routes.js';
+import { createBoardRouter } from '../controllers/board/board.routes.js';
 import { createFissionRouter } from '../controllers/fission/fission.routes.js';
 import { createMissionPolicyRouter } from '../controllers/mission/mission-policy.routes.js';
 import { createV2WorkspaceRouter } from '../controllers/v2-workspace/workspace.routes.js';
@@ -62,6 +65,10 @@ import { createGrowthRouter } from '../controllers/growth/growth.routes.js';
 import { createGoogleRouter } from '../controllers/google/google.routes.js';
 import { createDesktopRouter } from '../controllers/desktop/desktop.routes.js';
 import { createTalkTranscribeRouter } from '../controllers/talk/talk-transcribe.routes.js';
+import { createTalkLiveTokenRouter } from '../controllers/talk/talk-live-token.controller.js';
+import { createTeamRosterRouter } from '../controllers/team-roster/team-roster.controller.js';
+import { createDriveLogsRouter } from '../controllers/drive-logs/drive-logs.controller.js';
+import { createBriefingRouter } from '../controllers/briefing/briefing.controller.js';
 import { createCanvaRouter } from '../controllers/canva/canva.routes.js';
 import { createAppsRouter } from '../controllers/apps/apps.routes.js';
 import { createMicrosoftTodoRouter } from '../controllers/microsoft/microsoft-todo.routes.js';
@@ -73,6 +80,16 @@ import { createStandingRouter } from '../controllers/standing/standing.controlle
 import { createTraceRouter } from '../controllers/trace/trace.controller.js';
 import { traceHttpMiddleware } from '../services/trace/trace-http.middleware.js';
 import { createChatV2Router } from '../controllers/chat-v2/index.js';
+import { createChannelsRouter } from '../controllers/channels/channels.routes.js';
+import { ChannelComposeService } from '../services/channels/crewly-channel-compose.service.js';
+import {
+  CrewlyChannelService,
+  agentsFromTeams,
+  getCrewlyChannelService,
+  setCrewlyChannelService,
+} from '../services/channels/crewly-channel.service.js';
+import { getSlackTeamChannelService } from '../services/slack/slack-team-channel.service.js';
+import { getChatV2RealtimeDeps } from '../services/chat-v2/chat-v2.realtime-holder.js';
 import { getChatV2Service } from '../services/chat-v2/chat-v2.singleton.js';
 import { createOssTeamMembershipValidator } from '../services/chat-v2/chat-v2.team-membership.js';
 import {
@@ -125,6 +142,8 @@ export function createApiRoutes(apiController: ApiController): Router {
   router.use('/teams/backup', createTeamsBackupRouter());
   // Workspace cloud backup, startable remotely (portal / phone over the relay).
   router.use('/backup', createBackupRouter());
+  // Move a team to another machine of the account (crewly#1189).
+  router.use('/team-moves', createTeamMovesRouter());
 
   // Event bus subscription routes
   router.use('/events', createEventBusRouter());
@@ -224,6 +243,14 @@ export function createApiRoutes(apiController: ApiController): Router {
   // Talk voice (#1074): the portal's clip transcribed by whisper.cpp on this
   // machine; the text goes back to the phone for the owner to confirm.
   router.use('/talk/transcribe', createTalkTranscribeRouter());
+  // Drive mode (specs/2026-10-08-drive-mode.md): the owner's briefing queue
+  // and the Gemini Live token the phone's voice briefer connects with.
+  router.use('/talk/live-token', createTalkLiveTokenRouter());
+  router.use('/briefing', createBriefingRouter());
+  // Team roster (specs/2026-10-10-team-roster.md): who owns what, ranked owner lookup
+  router.use('/team-roster', createTeamRosterRouter());
+  // Drive mode session logs (specs/2026-10-09-drive-mode-v3.md §10): what was said, decided, missed
+  router.use('/drive-logs', createDriveLogsRouter());
 
   // Harness onboarding (specs/onboarding-harness-login.md): detect, install,
   // choose the orc harness and log in — shared engine with the CLI
@@ -251,6 +278,12 @@ export function createApiRoutes(apiController: ApiController): Router {
 
   // Team-Health-Watchdog (THW) — Layer 4 liveness aggregator routes
   router.use('/team-health', createTeamHealthRouter());
+
+  // Usage ledger: per-ticket time / token reports and the owner's report categories
+  router.use('/usage-ledger', createUsageLedgerRouter());
+
+  // Owner board (crewly#1247): the snapshot pushed to Cloud, for the local dashboard
+  router.use('/board', createBoardRouter());
 
   // Fission guardrail routes for config, stats, violations, and pre-checks
   router.use('/fission', createFissionRouter());
@@ -342,6 +375,59 @@ export function createApiRoutes(apiController: ApiController): Router {
       presence: createOssAgentPresenceProvider(apiController.storageService),
     }),
   );
+
+  // Crewly channels — named rooms of agents from any team, matched to Slack
+  // channels (specs/2026-10-07-crewly-channels.md). Built here, next to the
+  // chat-v2 service it shares huddles with.
+  if (!getCrewlyChannelService()) {
+    const channels = new CrewlyChannelService({
+      chat: chatV2Service,
+      getRooms: () => getSlackTeamChannelService(),
+      listAgents: async () => agentsFromTeams(await apiController.storageService.getTeams()),
+      getDispatcher: () => getChatV2RealtimeDeps().dispatcher ?? null,
+    });
+    setCrewlyChannelService(channels);
+    void channels.start().catch(() => undefined);
+  }
+  // The orchestrator's "make a channel with these agents, on any machine".
+  // Remote names come from Cloud's colleague directory; remote members join
+  // through a Cloud room-join request (resolved lazily — Slack/Cloud wire up
+  // after the routes).
+  let channelCompose: ChannelComposeService | null = null;
+  const getChannelCompose = (): ChannelComposeService | null => {
+    const channels = getCrewlyChannelService();
+    if (!channels) return null;
+    if (!channelCompose) {
+      channelCompose = new ChannelComposeService({
+        channels,
+        listAgents: async () => agentsFromTeams(await apiController.storageService.getTeams()),
+        listRemote: async () => {
+          const { getSlackDirectoryService } = await import('../services/slack/slack-directory.service.js');
+          const directory = getSlackDirectoryService();
+          if (!directory) return null;
+          const entries = await directory.list();
+          return entries
+            .filter((e) => e.source === 'this-account' && e.kind === 'agent' && e.agentSession && e.instanceId)
+            .map((e) => ({
+              agentSession: e.agentSession as string,
+              name: e.name,
+              instanceId: e.instanceId as string,
+              machine: e.machine,
+              team: e.team,
+              isLeader: e.isLeader,
+            }));
+        },
+        requestRoomJoin: async (body) => {
+          const { getSlackInstanceRegistryService } = await import('../services/slack/slack-instance-registry.service.js');
+          const registry = getSlackInstanceRegistryService();
+          if (!registry) throw new Error('Not connected to Crewly Cloud');
+          await registry.requestRoomJoin(body);
+        },
+      });
+    }
+    return channelCompose;
+  };
+  router.use('/channels', createChannelsRouter(() => getCrewlyChannelService(), getChannelCompose));
 
   // Keep legacy modular routes for handlers not yet migrated (for backward compatibility)
   // Note: Project routes consolidated into new architecture - no longer needed here

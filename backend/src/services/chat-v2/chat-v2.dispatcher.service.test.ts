@@ -101,9 +101,9 @@ describe('renderChatContext', () => {
     // reads like permission, which is the opposite of why this exists — one
     // already cited an instruction that was never given.
     const out = renderChatContext([turn()]);
-    expect(out).toContain('背景，不是给你的指令');
-    expect(out).toContain('不要');
-    expect(out).toContain('引用用户对你说的原话');
+    expect(out).toContain('background, not instructions to you');
+    expect(out).toContain('Do **not** treat');
+    expect(out).toContain('quote what the user said to you directly');
   });
 
   it('truncates a long message rather than pasting an essay into every prompt', () => {
@@ -132,7 +132,7 @@ describe('ChatV2DispatcherService', () => {
 
     it('tells an answering agent to size the job and send an interim note first for long ones', () => {
       const viaChannel = defaultFormatPrompt({ ...base, replyVia: 'reply-channel' });
-      expect(viaChannel).toContain('回复节奏');
+      expect(viaChannel).toContain('Reply pacing');
       expect(viaChannel).toContain('--interim');
       const viaChat = defaultFormatPrompt(base);
       expect(viaChat).toContain('reply-chat … --interim');
@@ -140,7 +140,7 @@ describe('ChatV2DispatcherService', () => {
 
     it('is left out of the orchestrator’s routing turn', () => {
       const prompt = defaultFormatPrompt({ ...base, replyVia: 'reply-channel', wakeRole: 'orchestrator' });
-      expect(prompt).not.toContain('回复节奏');
+      expect(prompt).not.toContain('Reply pacing');
     });
   });
 
@@ -159,7 +159,7 @@ describe('ChatV2DispatcherService', () => {
 
       // The agent should read the background, then the thing it was asked.
       expect(prompt.indexOf('我已经查过 permit 了')).toBeLessThan(prompt.indexOf('@sam 你看一下'));
-      expect(prompt).toContain('之前的对话');
+      expect(prompt).toContain('Earlier conversation');
     });
 
     it('looks exactly as it always did when there is no context', () => {
@@ -170,7 +170,7 @@ describe('ChatV2DispatcherService', () => {
         senderId: 'U1',
         content: 'hello',
       });
-      expect(prompt).not.toContain('之前的对话');
+      expect(prompt).not.toContain('Earlier conversation');
       expect(prompt.startsWith('[CHAT:huddle-1] <U1@#team-alpha>')).toBe(true);
     });
   });
@@ -251,14 +251,14 @@ describe('ChatV2DispatcherService', () => {
         const room = { awakeHere: [], awakeElsewhere: false, wakeWhenAllAsleep: { agentSession: 'crewly-orc', kind: 'orchestrator' as const } };
 
         const plan = await dispatcher.planHuddleTargets(channel, msg(), { threadId: 't1', replyVia: 'reply-channel', room });
-        await dispatcher.dispatchMessage(channel, msg(), { threadId: 't1', replyVia: 'reply-channel', room, roomPresence: 'Sam（在睡，本机）' });
+        await dispatcher.dispatchMessage(channel, msg(), { threadId: 't1', replyVia: 'reply-channel', room, roomPresence: 'Sam (asleep, this machine)' });
 
         expect([...plan]).toEqual([['crewly-orc', 'optional']]);
         // It routes; it does not answer in a room its bot is not in.
         expect(prompts[0]).toContain('--handoff');
         expect(prompts[0]).toContain('--message m1');
-        expect(prompts[0]).toContain('不要**用 reply-channel 回复');
-        expect(prompts[0]).toContain('此刻谁醒着: Sam（在睡，本机）');
+        expect(prompts[0]).toContain('do **not** reply with reply-channel');
+        expect(prompts[0]).toContain('Who is awake right now: Sam (asleep, this machine)');
       });
 
       it('wakes nobody when another machine was named to do it', async () => {
@@ -291,13 +291,13 @@ describe('ChatV2DispatcherService', () => {
         channelId: 'h1', channelName: '#room', agentSession: 'atlas', senderId: 'U1', content: 'x',
         responseMode: 'optional', replyVia: 'reply-channel', wakeRole: 'team-leader',
       });
-      expect(lead).toContain('叫醒了你（本频道负责人）来决定该谁回答');
+      expect(lead).toContain('you (the channel lead) were woken to decide who should answer');
       const reader = defaultFormatPrompt({
         channelId: 'h1', channelName: '#room', agentSession: 'sam', senderId: 'U1', content: 'x',
-        responseMode: 'optional', replyVia: 'reply-channel', roomPresence: 'Ella（在睡，iriss-air）',
+        responseMode: 'optional', replyVia: 'reply-channel', roomPresence: 'Ella (asleep, iriss-air)',
       });
-      expect(reader).toContain('正在睡**的同事');
-      expect(reader).toContain('此刻谁醒着: Ella（在睡，iriss-air）');
+      expect(reader).toContain('colleague who is **asleep**');
+      expect(reader).toContain('Who is awake right now: Ella (asleep, iriss-air)');
     });
 
     it('marks the last speaker as owing a reply on a bare thread follow-up', async () => {
@@ -627,6 +627,72 @@ describe('ChatV2DispatcherService', () => {
       expect(calls[0].message).toContain('just-now');
     });
 
+    describe('top-level owner message in a room (the next-morning follow-up)', () => {
+      const room = () => makeChannel({ id: 'room-1', type: 'huddle', name: '#awesome-videos' });
+      const ownerSink = (sink: never) => ({ agentSink: sink, huddleMembersFor: () => ['pia'], isOwnerMessage: () => true });
+
+      it('shows the last 15 messages of the last 24 h, not the usual 8 of 6 h', async () => {
+        const { calls, sink } = capturingSink();
+        const turns = [
+          ago(60 * 30, 'user-abc', 'older-than-a-day'),
+          ago(60 * 12, 'user-abc', 'yesterday-evening-plan'),
+          ...Array.from({ length: 20 }, (_, i) => ago(60 * 10 - i, 'Pia', `m${i}`)),
+        ];
+        const dispatcher = new ChatV2DispatcherService({ ...ownerSink(sink), recentTurnsFor: () => turns });
+
+        // The Slack team-channel service passes the message's own id as the reply thread.
+        await dispatcher.dispatchMessage(room(), makeMessage({ id: 'msg-top', channelId: 'room-1', mentions: ['pia'] }), { threadId: 'msg-top' });
+
+        const prompt = calls[0].message;
+        expect(prompt).toContain('m19');
+        expect(prompt).toContain('m5');
+        expect(prompt).not.toContain('m4 ');
+        expect(prompt).not.toContain('older-than-a-day');
+      });
+
+      it('drops messages older than 24 h even when fewer than 15 remain', async () => {
+        const { calls, sink } = capturingSink();
+        const dispatcher = new ChatV2DispatcherService({
+          ...ownerSink(sink),
+          recentTurnsFor: () => [ago(60 * 25, 'user-abc', 'two-days-ago-ish'), ago(60 * 20, 'user-abc', 'yesterday-plan')],
+        });
+
+        await dispatcher.dispatchMessage(room(), makeMessage({ id: 'msg-top', channelId: 'room-1', mentions: ['pia'] }), { threadId: 'msg-top' });
+
+        expect(calls[0].message).toContain('yesterday-plan');
+        expect(calls[0].message).not.toContain('two-days-ago-ish');
+      });
+
+      it('caps the block at about 3 KB, keeping the newest', async () => {
+        const { calls, sink } = capturingSink();
+        const big = 'x'.repeat(290);
+        const turns = Array.from({ length: 15 }, (_, i) => ago(60 - i, 'Pia', `n${String(i).padStart(2, '0')} ${big}`));
+        const dispatcher = new ChatV2DispatcherService({ ...ownerSink(sink), recentTurnsFor: () => turns });
+
+        await dispatcher.dispatchMessage(room(), makeMessage({ id: 'msg-top', channelId: 'room-1', mentions: ['pia'] }), { threadId: 'msg-top' });
+
+        const prompt = calls[0].message;
+        expect(prompt).toContain('n14');
+        expect(prompt).not.toContain('n00');
+        const block = prompt.slice(prompt.indexOf('Earlier conversation'), prompt.indexOf('The above only tells you'));
+        expect(block.length).toBeLessThan(3_600);
+      });
+
+      it('keeps the narrow window for a message that is not the owner\'s', async () => {
+        const { calls, sink } = capturingSink();
+        const dispatcher = new ChatV2DispatcherService({
+          ...ownerSink(sink),
+          isOwnerMessage: () => false,
+          recentTurnsFor: () => [ago(60 * 12, 'user-abc', 'half-a-day-ago'), ago(1, 'Pia', 'just-now')],
+        });
+
+        await dispatcher.dispatchMessage(room(), makeMessage({ id: 'msg-top', channelId: 'room-1', mentions: ['pia'] }), { threadId: 'msg-top' });
+
+        expect(calls[0].message).toContain('just-now');
+        expect(calls[0].message).not.toContain('half-a-day-ago');
+      });
+    });
+
     it('still delivers the message when gathering context throws', async () => {
       const { calls, sink } = capturingSink();
       const dispatcher = new ChatV2DispatcherService({
@@ -640,7 +706,7 @@ describe('ChatV2DispatcherService', () => {
 
       expect(result.dispatched).toBe(true);
       expect(calls[0].message).toContain('hello there');
-      expect(calls[0].message).not.toContain('之前的对话');
+      expect(calls[0].message).not.toContain('Earlier conversation');
     });
 
     it('sends no context when the install has not provided a source', async () => {
@@ -649,7 +715,7 @@ describe('ChatV2DispatcherService', () => {
 
       await dispatcher.dispatchToAgent(makeChannel(), makeMessage());
 
-      expect(calls[0].message).not.toContain('之前的对话');
+      expect(calls[0].message).not.toContain('Earlier conversation');
     });
   });
 
@@ -666,6 +732,29 @@ describe('ChatV2DispatcherService', () => {
       expect(prompt).not.toContain('older local turn');
       // Block precedes the ask.
       expect(prompt.indexOf('Ella [bot]: digest')).toBeLessThan(prompt.indexOf('看看上面的这些'));
+    });
+
+    // 2026-10-08, #content-team: a bare "@Ella" read as "nothing to do here".
+    it('a bare-mention note follows the message itself, after the thread block', async () => {
+      const NOTE = 'Steve pinged you in this thread with no text — read the thread above and act on what is pending for you there (oldest unanswered request first). Do not switch to another topic.';
+      const prompt = defaultFormatPrompt({
+        channelId: 'huddle-1', channelName: '#content-team', agentSession: 'ella', senderId: 'Steve', content: '<@U0ELLA>',
+        slackContext: BLOCK,
+        bareMentionNote: NOTE,
+      });
+      expect(prompt.indexOf('Ella [bot]: digest')).toBeLessThan(prompt.indexOf('<@U0ELLA>'));
+      expect(prompt.indexOf('<@U0ELLA>')).toBeLessThan(prompt.indexOf(NOTE));
+      expect(prompt.indexOf(NOTE)).toBeLessThan(prompt.indexOf('---'));
+      const delivered: Array<{ s: string; m: string }> = [];
+      const dispatcher = new ChatV2DispatcherService({
+        agentSink: { sendMessageToAgent: async (s: string, m: string) => { delivered.push({ s, m }); return { success: true }; } },
+        huddleMembersFor: () => ['ella'],
+      });
+      await dispatcher.dispatchMessage(makeChannel({ id: 'h1', type: 'huddle', agentSession: undefined }), makeMessage({ channelId: 'h1', mentions: ['ella'] }), {
+        bareMentionNote: NOTE,
+      });
+      expect(delivered[0]?.m).toContain(NOTE);
+      expect(defaultFormatPrompt({ channelId: 'h', channelName: '#c', agentSession: 'ella', senderId: 'S', content: 'hi' })).not.toContain('pinged you');
     });
 
     it('a huddle renders it per recipient', async () => {
@@ -715,11 +804,11 @@ describe('ChatV2DispatcherService', () => {
       // inherited the orchestrator's CREWLY_SESSION_NAME, so its reply-channel
       // was refused and the answer never reached Slack (2026-09-30).
       expect(prompt).toContain('CREWLY_SESSION_NAME=sess-a bash config/skills/agent/core/reply-channel/execute.sh --channel huddle-1 --thread msg-root');
-      expect(prompt).toContain('不要删');
+      expect(prompt).toContain('keep the leading CREWLY_SESSION_NAME');
       // Multi-agent threads must converge (owner, 2026-09-19): two rounds
       // each, the team leader writes the conclusion, then silence.
-      expect(prompt).toContain('最多发言两轮');
-      expect(prompt).toContain('「结论」');
+      expect(prompt).toContain('speaks at most two rounds');
+      expect(prompt).toContain('"Conclusion"');
     });
 
     it('leaves the identity prefix out when the session name is not shell-safe', () => {
@@ -747,7 +836,7 @@ describe('ChatV2DispatcherService', () => {
       });
       expect(prompt).toContain('reply-channel');
       expect(prompt).not.toContain('--thread');
-      expect(prompt).toContain('没有 @ 你');
+      expect(prompt).toContain('did not @ you');
     });
 
     it('tells an agent that was only told to announce itself before answering', () => {
@@ -766,7 +855,7 @@ describe('ChatV2DispatcherService', () => {
       expect(prompt).toContain('--channel huddle-1 --thread msg-root --working');
       expect(prompt.indexOf('--working')).toBeLessThan(prompt.indexOf('--content'));
       // And to do nothing at all when it is not for them.
-      expect(prompt).toContain('不要发 --working');
+      expect(prompt).toContain('do not send --working');
     });
 
     it('does not tell every optional recipient it leads the channel', () => {
@@ -781,8 +870,8 @@ describe('ChatV2DispatcherService', () => {
         replyVia: 'reply-channel',
         responseMode: 'optional',
       });
-      expect(prompt).not.toContain('你就是本频道的负责人');
-      expect(prompt).toContain('若你是本频道的负责人');
+      expect(prompt).not.toContain('you are the channel lead (team leader; the first member');
+      expect(prompt).toContain('If you are the channel lead');
     });
 
     it('does not ask an agent that must answer to announce itself — it already has a placeholder', () => {
@@ -805,8 +894,8 @@ describe('ChatV2DispatcherService', () => {
         channelId: 'huddle-1', channelName: '#team', agentSession: 's', senderId: 'U1', content: 'hi',
         replyVia: 'reply-channel', responseMode: 'required', channelRoster: 'Atlas (Think Tank, this machine) → @Atlas · Mia (Portal, mac-mini) → @Mia',
       });
-      expect(prompt).toContain('本频道成员（可 @ 的同事）: Atlas (Think Tank, this machine) → @Atlas · Mia (Portal, mac-mini) → @Mia');
-      expect(defaultFormatPrompt({ channelId: 'h', channelName: 'c', agentSession: 's', senderId: 'U', content: 'x' })).not.toContain('本频道成员');
+      expect(prompt).toContain('Channel members (colleagues you can @): Atlas (Think Tank, this machine) → @Atlas · Mia (Portal, mac-mini) → @Mia');
+      expect(defaultFormatPrompt({ channelId: 'h', channelName: 'c', agentSession: 's', senderId: 'U', content: 'x' })).not.toContain('Channel members');
     });
   });
 
@@ -872,10 +961,10 @@ describe('ChatV2DispatcherService', () => {
       );
       const prompt = calls[0].message;
       expect(prompt).toContain('[CHAT:a721f48d]');
-      expect(prompt).toContain('Slack 私信 D0C381XPD3L');
-      expect(prompt).toContain('回复目标: conversationId="a721f48d"');
+      expect(prompt).toContain('Slack DM D0C381XPD3L');
+      expect(prompt).toContain('Reply target: conversationId="a721f48d"');
       expect(prompt).toContain('[BLOCKED]/[DONE]');
-      expect(prompt).toContain('不要改用 reply-slack');
+      expect(prompt).toContain('do not switch to reply-slack');
     });
 
     it('every Slack message carries its [SLACK-THREAD:<key>] and the reply command passes it (2026-09-28)', async () => {
@@ -889,7 +978,7 @@ describe('ChatV2DispatcherService', () => {
       expect(lines[0]).toMatch(/^\[CHAT:a721f48d\]/);
       expect(lines[1]).toBe('[SLACK-THREAD:D0C381XPD3L:1790392986.498639]');
       expect(calls[0].message).toContain('--thread D0C381XPD3L:1790392986.498639');
-      expect(calls[0].message).toContain('不要和这条的回答合在一条消息里');
+      expect(calls[0].message).toContain('do not merge it into the answer to this message');
     });
 
     it('slackThreadKeyOf: Slack turns only', () => {
@@ -911,8 +1000,8 @@ describe('ChatV2DispatcherService', () => {
     it('a web-chat DM keeps the plain hint', async () => {
       const { sink, calls } = makeSink({ success: true });
       await new ChatV2DispatcherService({ agentSink: sink }).dispatchMessage(makeChannel(), makeMessage());
-      expect(calls[0].message).toContain('回复本频道: 用 `reply-chat` skill, 参数 conversationId="chan-1"');
-      expect(calls[0].message).not.toContain('Slack 私信');
+      expect(calls[0].message).toContain('Reply to this channel: use the `reply-chat` skill with conversationId="chan-1"');
+      expect(calls[0].message).not.toContain('Slack DM');
       expect(calls[0].message).not.toContain('SLACK-THREAD');
     });
   });
@@ -1037,10 +1126,67 @@ describe('ChatV2DispatcherService', () => {
       const dispatcher = new ChatV2DispatcherService({
         agentSink: sink,
         activateAgent: async () => false,
+        activateRetryDelayMs: 0,
       });
 
       const result = await dispatcher.dispatchToAgent(makeChannel(), makeMessage());
       expect(result).toEqual({ dispatched: false, error: 'Session does not exist' });
+    });
+
+    it('retries a failed activation once before it counts', async () => {
+      let up = false;
+      const sink: AgentMessageSink = {
+        async sendMessageToAgent() {
+          return up ? { success: true } : { success: false, error: 'Session does not exist' };
+        },
+      };
+      let tries = 0;
+      const dispatcher = new ChatV2DispatcherService({
+        agentSink: sink,
+        activateRetryDelayMs: 0,
+        activateAgent: async () => {
+          tries += 1;
+          if (tries === 1) return false;
+          up = true;
+          return true;
+        },
+      });
+      expect(await dispatcher.dispatchToAgent(makeChannel(), makeMessage())).toEqual({ dispatched: true });
+      expect(tries).toBe(2);
+    });
+
+    it('holds the message on the queue when the start is deferred: delivered later, not failed', async () => {
+      const { sink } = makeSink({ success: false, error: 'Session does not exist' });
+      const held: Array<{ session: string; prompt: string }> = [];
+      const dispatcher = new ChatV2DispatcherService({
+        agentSink: sink,
+        activateAgent: async () => 'deferred',
+        holdForStart: (session, prompt) => held.push({ session, prompt }),
+        activateRetryDelayMs: 0,
+      });
+      const result = await dispatcher.dispatchToAgent(makeChannel(), makeMessage());
+      expect(result).toEqual({ dispatched: true, deferred: true });
+      expect(held).toHaveLength(1);
+      expect(held[0].session).toBe('crewly-product-sam-dd2b46f7');
+    });
+
+    it('holds the message when the start succeeded but the session is not up yet', async () => {
+      const { sink } = makeSink({ success: false, error: "Session 'x' does not exist" });
+      const held: string[] = [];
+      const dispatcher = new ChatV2DispatcherService({
+        agentSink: sink,
+        activateAgent: async () => true,
+        holdForStart: (session) => held.push(session),
+        activateRetryDelayMs: 0,
+      });
+      expect(await dispatcher.dispatchToAgent(makeChannel(), makeMessage())).toEqual({ dispatched: true, deferred: true });
+      expect(held).toEqual(['crewly-product-sam-dd2b46f7']);
+    });
+
+    it('a deferred start with no queue to hold on is still a failure', async () => {
+      const { sink } = makeSink({ success: false, error: 'Session does not exist' });
+      const dispatcher = new ChatV2DispatcherService({ agentSink: sink, activateAgent: async () => 'deferred', activateRetryDelayMs: 0 });
+      expect(await dispatcher.dispatchToAgent(makeChannel(), makeMessage())).toEqual({ dispatched: false, error: 'Session does not exist' });
     });
 
     it('treats thrown errors as a clean, reportable failure', async () => {
@@ -1466,7 +1612,7 @@ describe('ChatV2DispatcherService', () => {
         expect(result.strategy).toBe('huddle-broadcast');
         expect(calls.map((c) => c.sessionName)).toEqual(['sess-b']);
         expect(result.huddleOutcomes).toEqual([{ sessionName: 'sess-b', responseMode: 'required', dispatched: true }]);
-        expect(calls[0].message).not.toMatch(/不要回复/);
+        expect(calls[0].message).not.toMatch(/do not reply/);
       });
 
       it('a message that @s nobody goes to the team leader alone, optional; without a leader resolver it is recorded only', async () => {
@@ -1528,7 +1674,7 @@ describe('ChatV2DispatcherService', () => {
           { sessionName: 'sess-c', responseMode: 'required', dispatched: true },
         ]);
         // Neither was named, so neither may act on it.
-        for (const c of calls) expect(c.message).toContain('不要执行任何变更');
+        for (const c of calls) expect(c.message).toContain('do not make any change');
       });
 
       it('an explicit @ still requires that agent, and carries no action guard', async () => {
@@ -1549,8 +1695,8 @@ describe('ChatV2DispatcherService', () => {
         // @'d wins over last-speaker, and everyone engaged is still required
         // because the message named someone explicitly.
         expect(result.huddleOutcomes?.find((o) => o.sessionName === 'sess-b')).toMatchObject({ responseMode: 'required' });
-        expect(calls.find((c) => c.sessionName === 'sess-b')!.message).not.toContain('不要执行任何变更');
-        expect(calls.find((c) => c.sessionName === 'sess-c')!.message).toContain('不要执行任何变更');
+        expect(calls.find((c) => c.sessionName === 'sess-b')!.message).not.toContain('do not make any change');
+        expect(calls.find((c) => c.sessionName === 'sess-c')!.message).toContain('do not make any change');
       });
 
       it('falls back to requiring every engaged agent when the last speaker is unknown', async () => {
@@ -1594,6 +1740,7 @@ describe('ChatV2DispatcherService', () => {
             up.add(s);
             return true;
           },
+          activateRetryDelayMs: 0,
         });
         // Nobody addressed → only the leader is woken; the researchers stay asleep.
         const leaderOnly = await dispatcher.dispatchMessage(makeHuddle(), makeMessage({ mentions: [] }));
@@ -1601,9 +1748,41 @@ describe('ChatV2DispatcherService', () => {
         expect(leaderOnly.huddleOutcomes).toEqual([{ sessionName: 'tt-atlas', responseMode: 'optional', dispatched: true }]);
         // An @ to an agent that cannot start is reported, not swallowed.
         const kai = await dispatcher.dispatchMessage(makeHuddle(), makeMessage({ mentions: ['tt-kai'] }));
-        expect(activated).toEqual(['tt-atlas', 'tt-kai']);
+        expect(activated).toEqual(['tt-atlas', 'tt-kai', 'tt-kai']); // a failed start is tried twice
         expect(kai.dispatched).toBe(false);
         expect(kai.huddleOutcomes?.[0]).toMatchObject({ sessionName: 'tt-kai', dispatched: false });
+      });
+
+      it('a member whose start is deferred has the prompt held on its queue and reports dispatched + deferred', async () => {
+        const sink: AgentMessageSink = { async sendMessageToAgent() { return { success: false, error: 'Session does not exist' }; } };
+        const held: string[] = [];
+        const dispatcher = new ChatV2DispatcherService({
+          agentSink: sink,
+          huddleMembersFor: () => ['ella'],
+          activateAgent: async () => 'deferred',
+          holdForStart: (session) => held.push(session),
+          activateRetryDelayMs: 0,
+        });
+        const r = await dispatcher.dispatchMessage(makeHuddle(), makeMessage({ mentions: ['ella'] }));
+        expect(held).toEqual(['ella']);
+        expect(r.dispatched).toBe(true);
+        expect(r.huddleOutcomes).toEqual([{ sessionName: 'ella', responseMode: 'required', dispatched: true, queued: true, deferred: true }]);
+      });
+
+      it('a member started but not yet registered has the prompt held and reports dispatched + deferred', async () => {
+        const sink: AgentMessageSink = { async sendMessageToAgent() { return { success: false, error: "Session 'ella' does not exist" }; } };
+        const held: string[] = [];
+        const dispatcher = new ChatV2DispatcherService({
+          agentSink: sink,
+          huddleMembersFor: () => ['ella'],
+          activateAgent: async () => true,
+          holdForStart: (session) => held.push(session),
+          activateRetryDelayMs: 0,
+        });
+        const r = await dispatcher.dispatchMessage(makeHuddle(), makeMessage({ mentions: ['ella'] }));
+        expect(held).toEqual(['ella']);
+        expect(r.dispatched).toBe(true);
+        expect(r.huddleOutcomes).toEqual([{ sessionName: 'ella', responseMode: 'required', dispatched: true, queued: true, deferred: true }]);
       });
 
       it('skips agent-origin messages (no self-loopback)', async () => {
@@ -1875,7 +2054,7 @@ describe('one responder per owner message (specs/2026-10-03-one-responder-per-me
     expect(withLeader.calls.map((c) => c.sessionName)).toEqual(['ops-noah']);
     expect(r1.huddleOutcomes?.[0].responseMode).toBe('optional');
     expect(r1.contextOnly).toEqual(['think-tank-atlas', 'crewly-marketing-ella']);
-    expect(withLeader.calls[0].message).not.toContain('频道里醒着的 agent 都会收到');
+    expect(withLeader.calls[0].message).not.toContain('every awake agent in the channel receives it');
 
     const leaderAsleep = build({
       huddleLeaderFor: async () => 'ops-noah',
@@ -1951,6 +2130,34 @@ describe('owner messages carry queue priority (2026-10-05, D-270)', () => {
     await dispatcher.dispatchMessage(channel, makeMessage({ threadId: 'root-1', metadata: { remoteAgentSession: 'ella' } }));
     await dispatcher.dispatchMessage(channel, makeMessage({ threadId: 'root-1', metadata: { slackUserId: 'USOMEONE' } }));
     expect(seen).toEqual([{ where: { chatChannelId: 'dm-1', chatThreadId: 'root-1' } }, null]);
+  });
+
+  describe('prepareInbound (cross-machine files)', () => {
+    it('delivers the rewritten text, and the original row is what hooks see', async () => {
+      const { sink, calls } = makeSink({ success: true });
+      const prepareInbound = jest.fn(async (_c: ChatChannelDTO, m: ChatMessageDTO) => ({ ...m, content: 'File from Sam: /p/.crewly/inbox/x/r.pdf' }));
+      const onDispatched = jest.fn();
+      const dispatcher = new ChatV2DispatcherService({ agentSink: sink, prepareInbound, onDispatched });
+      const original = makeMessage({ content: '📎 r.pdf (1 KB) · crewly-file:hf_AAAAAAAAAAAAAAAAAAAAAA' });
+      await dispatcher.dispatchMessage(makeChannel(), original);
+      expect(prepareInbound).toHaveBeenCalledTimes(1);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.message).toContain('File from Sam: /p/.crewly/inbox/x/r.pdf');
+      expect(calls[0]!.message).not.toContain('crewly-file:');
+      expect(onDispatched.mock.calls[0]![1]).toBe(original);
+    });
+
+    it('delivers the original text when preparing throws', async () => {
+      const { sink, calls } = makeSink({ success: true });
+      const dispatcher = new ChatV2DispatcherService({
+        agentSink: sink,
+        prepareInbound: async () => {
+          throw new Error('boom');
+        },
+      });
+      await dispatcher.dispatchMessage(makeChannel(), makeMessage({ content: 'plain hello' }));
+      expect(calls[0]!.message).toContain('plain hello');
+    });
   });
 
   it('ownerQueueMeta: a portal message is keyed by its chat id; a huddle names its thread', () => {

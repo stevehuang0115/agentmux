@@ -24,8 +24,10 @@ import type {
   SlackChannelInfo,
   SlackTransport,
   SlackRawInboundEvent,
+  SlackRawAttachment,
   SlackInboundMeta,
   SlackCloudEventEnvelope,
+  SlackRoomJoinRequest,
   SlackInteractionEvent,
   SlackReactionEvent,
 } from '../../types/slack.types.js';
@@ -82,7 +84,7 @@ interface SlackWebClient {
     update: (args: UpdateMessageArgs) => Promise<void>;
     delete: (args: { channel: string; ts: string; token?: string }) => Promise<unknown>;
     /** Visible to one user only; used for the Google authorization card. */
-    postEphemeral?: (args: { channel: string; user: string; text: string; blocks?: unknown[]; token?: string }) => Promise<{ ok?: boolean }>;
+    postEphemeral?: (args: { channel: string; user: string; text: string; blocks?: unknown[]; token?: string; thread_ts?: string }) => Promise<{ ok?: boolean }>;
   };
   /**
    * Conversations API subset used by Slack team channels. Optional on the
@@ -101,6 +103,7 @@ interface SlackWebClient {
     setPurpose: (args: { channel: string; purpose: string }) => Promise<unknown>;
     /** Rename a channel. Optional so older test doubles keep compiling. */
     rename?: (args: { channel: string; name: string }) => Promise<{ channel?: RawSlackChannel }>;
+    kick?: (args: { channel: string; user: string }) => Promise<unknown>;
     /** Open (or reuse) a DM channel. `token` posts as another bot user. */
     open: (args: { users: string; token?: string }) => Promise<{ channel?: { id?: string } }>;
     /** Member ids of a channel (paginated). Optional so older test doubles compile. */
@@ -147,7 +150,8 @@ interface SlackWebClient {
  * Arguments for files.uploadV2 API call
  */
 interface UploadFileArgs {
-  channel_id: string;
+  /** Omitted for a private upload (shared afterwards in a message block). */
+  channel_id?: string;
   file: Buffer | NodeJS.ReadableStream;
   filename: string;
   title?: string;
@@ -163,6 +167,8 @@ interface UploadFileArgs {
  */
 interface FileUploadOptions {
   channelId: string;
+  /** The agent session this upload is on behalf of — only for log attribution. */
+  senderSession?: string;
   filePath: string;
   filename?: string;
   title?: string;
@@ -176,7 +182,17 @@ interface FileUploadOptions {
    * identities in one thread.
    */
   botToken?: string;
+  /**
+   * The agent's cosmetic identity, used when it has no bot of its own. An
+   * image is then uploaded privately and posted in a message under this
+   * name/icon (an image block), instead of arriving from the workspace app
+   * as "Crewly". Other files keep the plain upload.
+   */
+  persona?: { username: string; iconEmoji?: string; iconUrl?: string };
 }
+
+/** Image files that can be shown in a Slack image block. */
+const PERSONA_IMAGE_EXT = /\.(png|jpe?g|gif|webp)$/i;
 
 interface PostMessageArgs {
   channel: string;
@@ -363,6 +379,49 @@ export function hasOutgoingContent(
   return Array.isArray(message.attachments) && message.attachments.length > 0;
 }
 
+/** Longest shared-message text kept per attachment (characters). */
+const SHARED_MESSAGE_MAX_CHARS = 4000;
+
+/**
+ * The content of messages the user shared (forwarded) into a message, as
+ * text an agent can read. Slack puts a shared message in `attachments`
+ * (`is_share` / `is_msg_unfurl`), not in `text`, so without this the agent
+ * sees only the user's comment ("我这边只收到这句话，没看到链接", Milo,
+ * 2026-10-07). Plain link previews are left out: the link is already in
+ * `text`.
+ *
+ * @param attachments - Raw event attachments
+ * @returns One block per shared message, or '' when there is none
+ */
+export function sharedMessageText(attachments: SlackRawAttachment[] | undefined): string {
+  if (!Array.isArray(attachments)) return '';
+  const blocks: string[] = [];
+  for (const a of attachments) {
+    if (!a || !(a.is_share || a.is_msg_unfurl)) continue;
+    const body = (a.text || a.fallback || a.pretext || a.title || '').trim().slice(0, SHARED_MESSAGE_MAX_CHARS);
+    const author = (a.author_name || a.author_subname || '').trim();
+    const link = a.from_url || a.original_url || a.title_link || '';
+    const head = `[Shared message${author ? ` from ${author}` : ''}${link ? ` (${link})` : ''}]`;
+    const lines = [head];
+    if (body) lines.push(body);
+    if (a.image_url) lines.push(`Image: ${a.image_url}`);
+    blocks.push(lines.join('\n'));
+  }
+  return blocks.join('\n\n');
+}
+
+/**
+ * The user's text followed by what they shared.
+ *
+ * @param text - The message's own text
+ * @param shared - {@link sharedMessageText}
+ * @returns Combined text
+ */
+function withSharedText(text: string, shared: string): string {
+  if (!shared) return text;
+  return text ? `${text}\n\n${shared}` : shared;
+}
+
 /**
  * Pull the Slack error code and message out of an error thrown by the Slack
  * SDK (or anything else).
@@ -407,6 +466,21 @@ export interface SlackOutboundPost {
   kind: 'text' | 'file';
 }
 
+/**
+ * The file id from a `files.uploadV2` result. The helper answers
+ * `{ files: [ <files.completeUploadExternal response> ] }`, so the id sits at
+ * `files[0].files[0].id`; a flat `files[0].id` is accepted too. Reading only
+ * the flat shape returned nothing, so every image an agent without its own
+ * bot attached fell back to the workspace app's name (2026-10-10).
+ *
+ * @param result - `files.uploadV2` result
+ * @returns The first file id, if any
+ */
+export function uploadedFileId(result: unknown): string | undefined {
+  const first = (result as { files?: Array<{ id?: string; files?: Array<{ id?: string }> }> } | undefined)?.files?.[0];
+  return first?.files?.[0]?.id ?? first?.id ?? undefined;
+}
+
 export class SlackService extends EventEmitter {
   private logger = LoggerService.getInstance().createComponentLogger('SlackService');
   private app: SlackApp | null = null;
@@ -440,6 +514,9 @@ export class SlackService extends EventEmitter {
   private seenInboundKeys: Map<string, number> = new Map();
   /** Whether an agent session runs on this instance (set by the initializer; agent-to-agent routing). */
   isLocalAgent: ((agentSession: string) => boolean) | null = null;
+
+  /** Handles a Cloud-pushed room-join request (wired to the team-channel service). */
+  roomJoinHandler: ((join: SlackRoomJoinRequest) => Promise<unknown> | unknown) | null = null;
   /** Whether a Slack conversation belongs to an agent's own app (the master bot cannot post there). Set by the initializer. */
   isAgentOwnedConversation: ((channelId: string) => boolean) | null = null;
   /** Slack user id of the person who installed the app (owner notifications go to their DM). Set by the initializer. */
@@ -826,7 +903,7 @@ export class SlackService extends EventEmitter {
       incomingMessage = {
         id: event.ts ?? '',
         type: 'app_mention',
-        text: event.text ?? '',
+        text: withSharedText(event.text ?? '', sharedMessageText(event.attachments)),
         userId: event.user,
         channelId: event.channel,
         threadTs: event.thread_ts,
@@ -836,9 +913,13 @@ export class SlackService extends EventEmitter {
         ...provenance,
       };
     } else if (event.type === 'message') {
-      // Allow messages with text or files (or both)
-      if (!event.text && (!event.files || event.files.length === 0)) return null;
-      if (!event.user || !event.channel) return null;
+      // Allow messages with text, files or a shared message
+      const shared = sharedMessageText(event.attachments);
+      if (!event.text && !shared && (!event.files || event.files.length === 0)) return null;
+      // An app-less agent's post (master app, username override) carries no
+      // `user`; Cloud already named the agent, so its bot id stands in.
+      const userId = event.user ?? (meta.authorAgentSession ? event.bot_id : undefined);
+      if (!userId || !event.channel) return null;
 
       // Bypass user permission check for cross-machine messages —
       // these come from other bots and are authenticated by device ID,
@@ -849,7 +930,7 @@ export class SlackService extends EventEmitter {
       // Check user permissions (skip for cross-machine messages and for
       // messages the account's own agents wrote — those are colleagues, not
       // Slack users on the allow-list)
-      if (!isCrossMachine && !meta.authorAgentSession && !isUserAllowed(event.user, config)) {
+      if (!isCrossMachine && !meta.authorAgentSession && !isUserAllowed(userId, config)) {
         this.logger.info('Unauthorized user', { userId: event.user });
         return null;
       }
@@ -861,8 +942,8 @@ export class SlackService extends EventEmitter {
       incomingMessage = {
         id: event.ts || '',
         type: 'message',
-        text: event.text || '',
-        userId: event.user,
+        text: withSharedText(event.text || '', shared),
+        userId,
         channelId: event.channel,
         threadTs: event.thread_ts,
         ts: event.ts || '',
@@ -959,6 +1040,28 @@ export class SlackService extends EventEmitter {
       this.logger.warn('Malformed slack_event envelope — dropped', { eventId: envelope?.eventId });
       return null;
     }
+    // Room join (2026-10-13): another machine's orchestrator put some of our
+    // agents in a Slack channel. Not a message: link the room, route nothing.
+    if (envelope.roomJoin || (event.type as string) === SLACK_CLOUD_CONSTANTS.ROOM_JOIN_EVENT_TYPE) {
+      const join = envelope.roomJoin;
+      if (!join || !join.slackChannelId || !(join.sessions instanceof Array)) {
+        this.logger.warn('Malformed room-join envelope — dropped', { eventId: envelope.eventId });
+        return null;
+      }
+      this.logger.info('Room-join request from Cloud', {
+        slackChannel: join.slackChannelId,
+        sessions: join.sessions,
+        requestedBy: join.requestedByInstanceId,
+      });
+      if (!this.roomJoinHandler) {
+        this.logger.warn('Room-join request arrived but no handler is wired — dropped', { slackChannel: join.slackChannelId });
+        return null;
+      }
+      void Promise.resolve(this.roomJoinHandler(join)).catch((err: unknown) => {
+        this.logger.warn('Room-join handler failed', { error: err instanceof Error ? err.message : String(err) });
+      });
+      return null;
+    }
     // Decision cards (specs/2026-10-01-decision-cards.md §5): a button click
     // Cloud verified and routed here, and reactions — neither is a message.
     if (event.type === 'block_actions') {
@@ -969,17 +1072,24 @@ export class SlackService extends EventEmitter {
       this.emitReaction(event, 'cloud');
       return null;
     }
+    // Cloud names the author when an agent of this account wrote it. An agent
+    // with no Slack app of its own posts through the master app with a
+    // username override, which Slack delivers as a `bot_message` from the
+    // master bot — the bot filters below would drop every such post, so no
+    // app-less agent's @ ever reached a colleague (2026-10-13).
+    const agentAuthored = !!envelope.authorAgentSession;
     const allowedSubtypes: readonly string[] = SLACK_CLOUD_CONSTANTS.INBOUND_ALLOWED_SUBTYPES;
-    if (event.subtype && !allowedSubtypes.includes(event.subtype)) {
+    const subtypeOk = !event.subtype || allowedSubtypes.includes(event.subtype) || (agentAuthored && event.subtype === 'bot_message');
+    if (!subtypeOk) {
       this.logger.debug('Dropping Slack event subtype', { subtype: event.subtype, eventId: envelope.eventId });
       return null;
     }
     // Bolt's ignoreSelf equivalent: our own bot user's posts (replies the
     // orchestrator just sent) must not come back as inbound.
-    if (this.cachedBotUserId && event.user === this.cachedBotUserId) {
+    if (!agentAuthored && this.cachedBotUserId && event.user === this.cachedBotUserId) {
       return null;
     }
-    if (event.bot_id && !event.user) {
+    if (!agentAuthored && event.bot_id && !event.user) {
       return null;
     }
     // A message written by one of the account's agents: Cloud only forwards
@@ -1651,6 +1761,7 @@ export class SlackService extends EventEmitter {
    * @param text - Fallback text for notifications and screen readers
    * @param blocks - Block Kit payload
    * @param botToken - Post as this agent's bot instead of the workspace bot
+   * @param threadTs - Show it inside this thread instead of the channel's main view
    * @returns True when Slack accepted it
    */
   async sendEphemeral(
@@ -1659,6 +1770,7 @@ export class SlackService extends EventEmitter {
     text: string,
     blocks?: unknown[],
     botToken?: string,
+    threadTs?: string,
   ): Promise<boolean> {
     if (!this.client) throw new Error('Slack client not initialized');
     try {
@@ -1672,6 +1784,7 @@ export class SlackService extends EventEmitter {
         text,
         ...(blocks ? { blocks: blocks as never } : {}),
         ...(botToken ? { token: botToken } : {}),
+        ...(threadTs ? { thread_ts: threadTs } : {}),
       });
       return true;
     } catch (error) {
@@ -1755,7 +1868,12 @@ export class SlackService extends EventEmitter {
 
       return result.ts || '';
     } catch (error) {
-      this.logger.error('Send message error', { error: error instanceof Error ? (error as Error).message : String(error) });
+      this.logger.error('Send message error', {
+        error: error instanceof Error ? (error as Error).message : String(error),
+        channelId: message.channelId,
+        threadTs: message.threadTs,
+        sender: message.senderSession ?? message.username,
+      });
       // Only the connection's own bot says anything about which app is
       // connected; an agent bot missing from a channel is its own problem.
       if (!message.botToken && !message.reachabilityProbe) this.recordDeliveryOutcome(message.channelId, error);
@@ -2360,6 +2478,21 @@ export class SlackService extends EventEmitter {
   }
 
   /**
+   * Remove a user (an agent's bot) from a channel the workspace bot is in.
+   * Requires `channels:manage` / `groups:write`. Throws Slack's error
+   * (`not_in_channel` = the user is not there; `channel_not_found` = the
+   * workspace bot cannot see the channel).
+   *
+   * @param channelId - Slack channel id
+   * @param userId - Slack user id to remove
+   */
+  async kickFromChannel(channelId: string, userId: string): Promise<void> {
+    const conversations = this.requireConversationsApi();
+    if (!conversations.kick) throw new Error('This Slack client cannot remove channel members');
+    await conversations.kick({ channel: channelId, user: userId });
+  }
+
+  /**
    * Set a channel's purpose line. Requires `channels:manage`.
    *
    * @param channelId - Slack channel id
@@ -2526,9 +2659,64 @@ export class SlackService extends EventEmitter {
    * @throws Error if the client is not initialized or upload fails
    */
   async uploadFile(options: FileUploadOptions): Promise<{ fileId?: string }> {
-    const result = await this.uploadWithRetry(options, SLACK_FILE_UPLOAD_CONSTANTS);
+    const asPersona =
+      !options.botToken && options.persona && PERSONA_IMAGE_EXT.test(options.filename || options.filePath)
+        ? await this.uploadImageAsPersona(options).catch((err) => {
+            this.logger.warn('Image post under the agent identity failed — uploading as the workspace app', {
+              error: err instanceof Error ? err.message : String(err),
+            });
+            return null;
+          })
+        : null;
+    const result = asPersona ?? (await this.uploadWithRetry(options, SLACK_FILE_UPLOAD_CONSTANTS));
     this.emitOutbound({ channelId: options.channelId, threadTs: options.threadTs, notAnAnswer: false, kind: 'file' });
     return result;
+  }
+
+  /**
+   * Upload an image privately, then post it in a message (image block)
+   * under the agent's name/icon. Throws on any failure; the caller falls
+   * back to the plain upload.
+   *
+   * @param options - Upload options with `persona`
+   * @returns The uploaded file id
+   */
+  private async uploadImageAsPersona(options: FileUploadOptions): Promise<{ fileId?: string }> {
+    if (!this.client || !options.persona) throw new Error('Slack client not initialized');
+    const filename = options.filename || basename(options.filePath);
+    const uploaded = await this.client.files.uploadV2({
+      file: createReadStream(options.filePath),
+      filename,
+      ...(options.title ? { title: options.title } : {}),
+    });
+    const fileId = uploadedFileId(uploaded);
+    if (!fileId) throw new Error('private upload returned no file id');
+    const { username, iconEmoji, iconUrl } = options.persona;
+    const blocks = [
+      ...(options.initialComment ? [{ type: 'section', text: { type: 'mrkdwn', text: options.initialComment } }] : []),
+      { type: 'image', slack_file: { id: fileId }, alt_text: options.title || filename },
+    ];
+    let lastError: unknown;
+    // A just-uploaded file can take a moment before a block may show it.
+    for (const waitMs of SLACK_FILE_UPLOAD_CONSTANTS.PERSONA_IMAGE_WAITS_MS) {
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      try {
+        await this.client.chat.postMessage({
+          channel: options.channelId,
+          text: options.initialComment || filename,
+          ...(options.threadTs ? { thread_ts: options.threadTs } : {}),
+          blocks,
+          username,
+          ...(iconEmoji ? { icon_emoji: iconEmoji } : iconUrl ? { icon_url: iconUrl } : {}),
+        });
+        this.status.messagesSent++;
+        this.recordDeliveryOutcome(options.channelId, null);
+        return { fileId };
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
   /**
@@ -2597,7 +2785,7 @@ export class SlackService extends EventEmitter {
 
         this.status.messagesSent++;
         if (!options.botToken) this.recordDeliveryOutcome(options.channelId, null);
-        return { fileId: result.files?.[0]?.id };
+        return { fileId: uploadedFileId(result) };
       } catch (error: unknown) {
         fileStream.destroy();
 
@@ -2610,7 +2798,12 @@ export class SlackService extends EventEmitter {
           continue;
         }
 
-        this.logger.error('Upload error', { error: error instanceof Error ? (error as Error).message : String(error) });
+        this.logger.error('Upload error', {
+          error: error instanceof Error ? (error as Error).message : String(error),
+          channelId: options.channelId,
+          threadTs: options.threadTs,
+          sender: options.senderSession,
+        });
         if (!options.botToken) this.recordDeliveryOutcome(options.channelId, error);
         throw error;
       }

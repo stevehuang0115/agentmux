@@ -60,6 +60,15 @@
  *   itself (then the mention is the one message). A mention of an agent that
  *   is gone from this machine goes to the orchestrator. The roster Cloud
  *   offers the owner is pushed first (`AppRosterService`, only when changed).
+ * - App owners (crewly-services apps/SPEC.md §15): a comment change Cloud
+ *   routed to the app's explicit owner (`ownerRouted`) is skipped in the app
+ *   feed; it arrives through the inbox instead (`reason: 'owner'`). An agent
+ *   owner is woken like a mentioned agent ("you own its comments"). A team or
+ *   channel owner's entry is posted into that room (`deliverRoom`, through the
+ *   same batches, retries and cursor; no cooldown); members @mentioned in it
+ *   are addressed there, and @mentioned agents of this machine outside the
+ *   room are woken as mentions. A room that is not on this machine any more
+ *   falls back to its lead (`roomFallback`), else the orchestrator.
  *
  * @module services/apps/app-wake.service
  */
@@ -69,6 +78,9 @@ import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
 import { AppsCloudError } from './apps-cloud.client.js';
 import type { AppsRegistryService, AppRegistryEntry, VisitorWakeState } from './apps-registry.service.js';
 import { buildAppWakeMessage, mentionsOf, safeAppName, type AppChange, type AppCommentThread } from './app-wake-message.js';
+import type { CommentRoomRef } from './app-comments-slack.service.js';
+import type { RoomDelivery } from './app-comment-room.service.js';
+import type { VoiceFiles } from './app-comment-audio.service.js';
 import { ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
 
 const C = CREWLY_APPS_CONSTANTS;
@@ -91,6 +103,14 @@ export interface MentionItem {
   replyId?: string | null;
   at?: string;
   thread: AppCommentThread | null;
+  /** `owner`: the app's owner (agent or room) gets it (SPEC §15); `collaborator`: the agent was added to the app (no thread); default a mention */
+  reason?: 'mention' | 'owner' | 'collaborator' | string;
+  /** Who added a collaborator: an agent session or `owner` */
+  addedBy?: string;
+  /** Team / channel owner of the app (session is '') */
+  room?: CommentRoomRef;
+  /** The owner wrote this reply in Slack */
+  via?: 'slack' | string;
 }
 
 interface MentionsPage {
@@ -123,9 +143,17 @@ export interface AppWakeServiceDeps {
   /** This instance's Cloud id (to tell its mentions from another machine's) */
   instanceId?: () => Promise<string | null>;
   /** The owner's comment changes were delivered to `session` (Slack mirror; never awaited, never fails delivery) */
-  onCommentsDelivered?: (info: { session: string; appId: string; appName: string; comments: AppChange[] }) => void;
+  onCommentsDelivered?: (info: { session: string; appId: string; appName: string; comments: AppChange[]; voiceFiles?: VoiceFiles }) => void;
+  /** Download the voice comment recordings of a batch (SPEC §16); never throws */
+  fetchVoice?: (appId: string, comments: AppChange[]) => Promise<VoiceFiles>;
   /** Pushes this instance's agent roster to Cloud when it changed */
   roster?: { pushIfChanged(): Promise<boolean> };
+  /** Members of a team / channel that owns an app, on this machine (null: the room is not here) */
+  roomMembers?: (room: CommentRoomRef) => Promise<string[] | null>;
+  /** Post a room-owned batch into the room; resolves true when posted */
+  deliverRoom?: (input: RoomDelivery) => Promise<boolean>;
+  /** Who gets a room-owned comment when the room is not here (a team's lead); null = the orchestrator */
+  roomFallback?: (room: CommentRoomRef) => Promise<string | null>;
   /** Agent skills root, for the command named in the message */
   skillsPath: string;
   now?: () => number;
@@ -173,6 +201,12 @@ interface Batch {
   appName?: string;
   /** Mentioned agents that are not on this machine any more (sent to the orchestrator) */
   goneMentions: string[];
+  /** A team / channel owner's batch: posted into that room, not sent to an agent */
+  room?: CommentRoomRef;
+  /** The recipient owns the app's comments (SPEC §15) */
+  owns?: boolean;
+  /** Voice recordings downloaded for this batch (SPEC §16) */
+  voiceFiles?: VoiceFiles;
 }
 
 /** Outcome of one delivery attempt. */
@@ -610,23 +644,99 @@ export class AppWakeService {
   private async handleMention(item: MentionItem): Promise<void> {
     const done = this.mentionDelivered ?? new Set<number>();
     this.mentionDelivered = done;
+    if (item.reason === 'collaborator') {
+      await this.deliverCollaboratorNotice(item);
+      done.add(item.seq);
+      return;
+    }
     // The comment or the app is gone: nothing to say.
     if (!item.thread || typeof item.appId !== 'string' || typeof item.commentId !== 'string') {
       done.add(item.seq);
       return;
     }
-    const isOrc = item.session === ORCHESTRATOR_SESSION_NAME;
-    const here = isOrc || (this.deps.isLocalAgent ? await this.deps.isLocalAgent(item.session).catch(() => false) : true);
-    const session = isOrc || !here ? null : item.session;
-    const recipient = session ?? ORC_RECIPIENT;
-    const key = `${item.appId}\u0000${recipient}`;
     const change: AppChange = {
       seq: item.seq,
       kind: 'comment',
       comment: { id: item.commentId, op: item.op, ...(item.replyId ? { replyId: item.replyId } : {}), thread: item.thread },
-      actor: { kind: 'owner' },
+      actor: { kind: 'owner', ...(item.via === 'slack' ? { via: 'slack' } : {}) } as AppChange['actor'],
       ...(item.at ? { at: item.at } : {}),
     };
+    if (item.reason === 'owner' && item.room) {
+      await this.handleRoomItem(item, item.room, change);
+      return;
+    }
+    await this.addToAgentBatch(item, item.session, change, item.reason === 'owner');
+  }
+
+  /**
+   * "You were added to app X" for an agent of this machine — the added agent
+   * may run on another machine than the app's (crewly-services apps SPEC §14).
+   * One message, never a wake of a stopped agent; an agent that is not here
+   * any more is skipped.
+   */
+  private async deliverCollaboratorNotice(item: MentionItem): Promise<void> {
+    const session = typeof item.session === 'string' ? item.session : '';
+    if (!session || typeof item.appId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(item.appId)) return;
+    const local = session === ORCHESTRATOR_SESSION_NAME || (this.deps.isLocalAgent ? await this.deps.isLocalAgent(session).catch(() => false) : true);
+    if (!local) {
+      this.logger.info('Collaborator notice for an agent not on this machine; skipped', { appId: item.appId, session });
+      return;
+    }
+    const app = safeAppName(item.appName ?? item.appId);
+    const by = typeof item.addedBy === 'string' && /^[A-Za-z0-9_.@:-]{1,128}$/.test(item.addedBy) ? (item.addedBy === 'owner' ? 'The owner' : item.addedBy) : 'The owner';
+    const cmd = `bash ${this.deps.skillsPath}/core/app-data/execute.sh --app ${item.appId}`;
+    const text =
+      `[APP ACCESS] ${by} added you as a collaborator to the app "${app}" (app id ${item.appId}). ` +
+      `You can read and write its data (${cmd} --list <collection>) and its comments (bash ${this.deps.skillsPath}/core/app-comments/execute.sh --app ${item.appId}). ` +
+      `You cannot republish or change the app itself.`;
+    const ok = await this.deps.deliver(session, text, { activate: false }).catch(() => false);
+    this.logger.info('Collaborator notice delivered', { appId: item.appId, session, delivered: ok });
+  }
+
+  /**
+   * A comment for an app owned by a team or channel: into the room's batch
+   * when the room is here, else to its fallback agent.
+   */
+  private async handleRoomItem(item: MentionItem, room: CommentRoomRef, change: AppChange): Promise<void> {
+    const members = this.deps.roomMembers && this.deps.deliverRoom ? await this.deps.roomMembers(room).catch(() => null) : null;
+    if (!members) {
+      const fallback = this.deps.roomFallback ? await this.deps.roomFallback(room).catch(() => null) : null;
+      this.logger.info('App comment owner room is not on this machine; delivering to its fallback', { appId: item.appId, room: room.name, fallback: fallback ?? 'orchestrator' });
+      await this.addToAgentBatch(item, fallback ?? ORCHESTRATOR_SESSION_NAME, { ...change, roomOwned: true }, true);
+      return;
+    }
+    const key = `${item.appId}\u0000\u0001room:${room.kind}:${room.id}`;
+    let batch = this.batches.get(key);
+    if (!batch) {
+      batch = this.newBatch(item.appId, null, false, Number.POSITIVE_INFINITY);
+      batch.room = { ...room };
+      this.batches.set(key, batch);
+      this.arm(key, batch, C.COMMENTS.ROOM_BATCH_WINDOW_MS);
+    }
+    if (typeof item.appName === 'string' && item.appName) batch.appName = item.appName;
+    batch.mentionSeqs.push(item.seq);
+    if (batch.mentionSeqs.length > C.MAX_DELIVERED_SEQS) batch.mentionSeqs.shift();
+    batch.mentionFirstSeq = Math.min(batch.mentionFirstSeq, item.seq);
+    batch.commentsTotal++;
+    batch.comments.push(change);
+    if (batch.comments.length > C.COMMENTS.MAX_PER_WAKE) batch.comments.shift();
+    // @mentioned agents of this machine that are not in the room still get it.
+    const mine = await this.instance();
+    for (const m of mentionsOf(change)) {
+      if (typeof m.session !== 'string' || members.includes(m.session)) continue;
+      if (m.instanceId && mine && m.instanceId !== mine) continue;
+      const local = m.session === ORCHESTRATOR_SESSION_NAME || (this.deps.isLocalAgent ? await this.deps.isLocalAgent(m.session).catch(() => false) : false);
+      if (local) await this.addToAgentBatch(item, m.session, { ...change, roomOwned: true }, false);
+    }
+  }
+
+  /** Add an inbox item to an agent's (or the orchestrator's) batch. */
+  private async addToAgentBatch(item: MentionItem, target: string, change: AppChange, owns: boolean): Promise<void> {
+    const isOrc = target === ORCHESTRATOR_SESSION_NAME;
+    const here = isOrc || (this.deps.isLocalAgent ? await this.deps.isLocalAgent(target).catch(() => false) : true);
+    const session = isOrc || !here ? null : target;
+    const recipient = session ?? ORC_RECIPIENT;
+    const key = `${item.appId}\u0000${recipient}`;
     let batch = this.batches.get(key);
     if (!batch) {
       const app = await this.deps.registry.get(item.appId);
@@ -638,10 +748,11 @@ export class AppWakeService {
     } else if (session !== null) {
       batch.activate = true;
     }
-    batch.mentioned = true;
+    if (owns) batch.owns = true;
+    else batch.mentioned = true;
     if (typeof item.appName === 'string' && item.appName) batch.appName = item.appName;
     if (!here && !isOrc) {
-      const name = typeof item.name === 'string' && item.name ? item.name : item.session;
+      const name = typeof item.name === 'string' && item.name ? item.name : target;
       if (!batch.goneMentions.includes(name)) batch.goneMentions.push(name);
     }
     batch.mentionSeqs.push(item.seq);
@@ -676,6 +787,8 @@ export class AppWakeService {
       // The owner's new comment, reply or reopen; resolving needs no wake.
       const op = change.comment?.op;
       if (op !== 'add' && op !== 'reply' && op !== 'reopen') return;
+      // The app has an explicit owner: Cloud sent this to it through the inbox.
+      if (change.ownerRouted) return;
     } else if (change.kind !== 'data') {
       return;
     }
@@ -767,6 +880,7 @@ export class AppWakeService {
     into.mentionFirstSeq = Math.min(into.mentionFirstSeq, from.mentionFirstSeq);
     into.appName = into.appName ?? from.appName;
     into.goneMentions = [...new Set([...into.goneMentions, ...from.goneMentions])];
+    into.owns = into.owns || from.owns;
   }
 
   /**
@@ -834,6 +948,15 @@ export class AppWakeService {
   private async send(key: string, batch: Batch): Promise<boolean> {
     batch.inFlight = true;
     const app = await this.deps.registry.get(batch.appId).catch(() => null);
+    // Voice comments: download the recordings first so the message can name the local file.
+    if (batch.comments.length > 0 && this.deps.fetchVoice) {
+      const fetchVoice = this.deps.fetchVoice;
+      batch.voiceFiles = await withDeadline(
+        fetchVoice(batch.appId, batch.comments).catch(() => ({}) as VoiceFiles),
+        C.VOICE.DOWNLOAD_TIMEOUT_MS,
+        () => batch.voiceFiles ?? {},
+      );
+    }
 
     // Skipped visitor submissions are reported in the next message to the
     // agent visitors wake (the publisher, else the orchestrator).
@@ -852,6 +975,7 @@ export class AppWakeService {
       appName: app?.name ?? batch.appName ?? batch.appId,
       isPublisher: !!app && !app.deleted && (app.agentSession ?? null) === batch.session,
       mentioned: batch.mentioned,
+      owns: batch.owns === true,
       goneMentions: batch.goneMentions,
       dataChanges: batch.dataChanges,
       events: batch.events,
@@ -863,6 +987,7 @@ export class AppWakeService {
       visitorTotal: batch.visitorTotal,
       visitorSkipped: skipped,
       skillsPath: this.deps.skillsPath,
+      ...(batch.voiceFiles ? { voiceFiles: batch.voiceFiles } : {}),
     });
     const owner = !AppWakeService.visitorOnly(batch);
     const seqs = batch.seqs.filter((n) => Number.isFinite(n));
@@ -875,8 +1000,15 @@ export class AppWakeService {
     const sentSeqs = new Set(batch.seqs);
     const sentMentions = new Set(batch.mentionSeqs);
 
+    const room = batch.room;
     const attempt: Promise<boolean> = Promise.resolve()
-      .then(() => this.deps.deliver(batch.session, text, { activate: batch.activate, ...(owner ? { owner: true } : {}), ...(ref ? { ref } : {}) }))
+      .then(() =>
+        room
+          ? this.deps.deliverRoom
+            ? this.deps.deliverRoom({ appId: batch.appId, appName: app?.name ?? batch.appName ?? batch.appId, room, comments: [...batch.comments], ...(batch.voiceFiles ? { voiceFiles: batch.voiceFiles } : {}) })
+            : false
+          : this.deps.deliver(batch.session, text, { activate: batch.activate, ...(owner ? { owner: true } : {}), ...(ref ? { ref } : {}) }),
+      )
       .catch((err) => {
         this.logger.warn('App change wake failed', { appId: batch.appId, session: batch.session, error: err instanceof Error ? err.message : String(err) });
         return false;
@@ -912,11 +1044,12 @@ export class AppWakeService {
     batch.failures++;
     const retry = Math.min(C.WAKE_RETRY_BASE_MS * 2 ** (batch.failures - 1), C.WAKE_RETRY_MAX_MS);
     this.logger.warn('App change wake was not delivered; will retry', { appId: batch.appId, session: batch.session ?? 'orchestrator', failures: batch.failures, retryInMs: retry });
-    if (batch.failures >= C.WAKE_FAILS_BEFORE_ORC_NOTICE && !batch.orcNotified && batch.session !== null) {
+    if (batch.failures >= C.WAKE_FAILS_BEFORE_ORC_NOTICE && !batch.orcNotified && (batch.session !== null || batch.room)) {
       batch.orcNotified = true;
       this.notifyOrc(
         `[APP CHANGES] Changes in app "${safeAppName(app?.name ?? batch.appId)}" (${batch.appId}) could not be delivered to ` +
-          `${batch.session} after ${batch.failures} tries. Crewly keeps retrying. Check whether that agent is stuck or signed out.`,
+          `${batch.room ? `the ${batch.room.kind} "${safeAppName(batch.room.name)}" that owns it` : batch.session} after ${batch.failures} tries. ` +
+          'Crewly keeps retrying. Check whether that agent or room is stuck or signed out.',
       );
     }
     this.arm(key, batch, retry);
@@ -944,16 +1077,16 @@ export class AppWakeService {
       for (const seq of batch.mentionSeqs) mset.add(seq);
       this.mentionDelivered = mset;
     }
-    if (batch.comments.length > 0 && this.deps.onCommentsDelivered) {
+    if (batch.comments.length > 0 && this.deps.onCommentsDelivered && !batch.room) {
       try {
-        this.deps.onCommentsDelivered({ session: batch.session ?? ORCHESTRATOR_SESSION_NAME, appId: batch.appId, appName: app?.name ?? batch.appName ?? batch.appId, comments: batch.comments });
+        this.deps.onCommentsDelivered({ session: batch.session ?? ORCHESTRATOR_SESSION_NAME, appId: batch.appId, appName: app?.name ?? batch.appName ?? batch.appId, comments: batch.comments, ...(batch.voiceFiles ? { voiceFiles: batch.voiceFiles } : {}) });
       } catch {
         /* a mirror problem never fails delivery */
       }
     }
-    this.logger.info('Woke agent for app changes', {
+    this.logger.info(batch.room ? 'Posted app comments to the room that owns the app' : 'Woke agent for app changes', {
       appId: batch.appId,
-      session: batch.session ?? 'orchestrator',
+      session: batch.room ? `${batch.room.kind}:${batch.room.name}` : (batch.session ?? 'orchestrator'),
       dataChanges: batch.dataTotal,
       events: batch.eventsTotal,
       comments: batch.commentsTotal,
@@ -962,9 +1095,10 @@ export class AppWakeService {
       ...(skipped > 0 ? { visitorSkippedReported: skipped } : {}),
       ...(batch.failures > 0 ? { afterFailures: batch.failures } : {}),
     });
-    // Changes that arrived during the delivery wait for the cooldown it started.
+    // Changes that arrived during the delivery wait for the cooldown it started
+    // (a room has none: each comment is its own thread there).
     const next = this.batches.get(key);
-    if (next) this.arm(key, next, C.COOLDOWN_MS);
+    if (next) this.arm(key, next, batch.room ? C.COMMENTS.ROOM_BATCH_WINDOW_MS : C.COOLDOWN_MS);
     await this.persistProgress(batch.appId).catch(() => undefined);
     if (batch.mentionSeqs.length > 0) await this.persistMentionProgress().catch(() => undefined);
     return true;

@@ -33,21 +33,40 @@
  *    dir's index / HEAD / logs/HEAD) more than 2 hours ago in a known agent
  *    location (`<main>/.claude/worktrees/`, `<tmp>/crewly-worktrees/`, or a
  *    `worktree-agent-*` branch), more than 24 hours ago anywhere else.
- * 6. `git status --porcelain --untracked-files=all` is empty: no tracked
- *    change and no untracked file. Ignored files (node_modules, dist) do not
- *    count. A failing status keeps it.
+ * 6. Nothing but regenerable output is uncommitted: `git status --porcelain`
+ *    shows no tracked change and no untracked file, ignoring untracked
+ *    `node_modules` / `.next` / `dist` / `build` / `.turbo` / `coverage` /
+ *    `.cache` / `logs` directories and `*.log` files (nested packages rarely
+ *    ignore their own). A failing status keeps it.
  * 7. Its work has landed: HEAD is an ancestor of `origin/<default branch>`
  *    after a quiet `git fetch` (fetch errors ignored), OR — when `gh` is
  *    installed and authenticated — a MERGED PR has this branch as head AND
  *    its head commit equals the worktree HEAD (squash merges; commits made
  *    after the merge keep the worktree). A repo without an origin (not on
- *    GitHub) only has the ancestor check, so its worktrees are kept.
+ *    GitHub) only has the ancestor check, so its worktrees are kept — OR, for
+ *    any git host (Bitbucket, GitLab, squash merges), its CONTENT is already in
+ *    `origin/<default>`: merging HEAD into it changes nothing
+ *    (`git merge-tree --write-tree`, falling back to `git cherry`), or the
+ *    branch's combined diff is patch-equivalent to one commit the default
+ *    branch gained since (a squash commit). See worktree-landed.ts. Work in
+ *    none of these is never removed. `gh` is not asked about non-GitHub remotes.
  *
  * ## Removal
  * `git worktree remove <path>` without `--force`. If git refuses although
  * the status is still clean (only ignored output left) and the worktree has
  * no submodules, it is retried once with `--force`. Then the local branch is
  * deleted (never a protected name), and `git worktree prune` runs per repo.
+ *
+ * ## Low disk: kept worktrees
+ * Under low disk, a worktree kept as `dirty` or `not-merged` and idle for
+ * 24 h+ still loses its `node_modules` / `.next` directories (reversible:
+ * reinstall / rebuild); the verdict carries `reclaimed` and the summary
+ * `reclaimedBytes`.
+ *
+ * ## Work completion
+ * A WorkItem reaching done / verified calls `requestTidy()`: one debounced pass
+ * (2 min) with a 10 min idle threshold, so a finished worktree is removed as
+ * soon as its change has landed, not at the next 30-minute tick.
  *
  * ## Scratch sweep
  * After the worktrees, stale Claude Code session dirs
@@ -64,6 +83,23 @@
  * the janitor left and why; below 5 GB the notice is urgent and repeats at
  * most every 6 h.
  *
+ * ## Unmerged work
+ * A worktree kept as `not-merged` whose newest commit is older than 24 h is
+ * reported to the lead of the team that owns it (project path -> team ->
+ * lead; the orchestrator when no team is found), once per worktree per 3
+ * days: path, branch, commits not on the default branch, pushed or not, size,
+ * and the ask to merge, make main match what is live, and remove it. Never
+ * sent to the owner. See {@link module:services/worktree/worktree-unmerged-notice}.
+ *
+ * ## Runaway files
+ * Once a minute a watcher scans agent scratch dirs and worktrees for a single
+ * file that grows without bound (a 40 GB `all.md` filled a disk, crewly#1078):
+ * a file over 5 GB that is still growing, or any file growing over 1 GB/min,
+ * has its writer stopped, is cut to its first 1 MB, the agent working there is
+ * told and the owner is alerted once through the low-disk notifier. A big file
+ * that is not growing is only reported. See
+ * {@link module:services/worktree/runaway-file-watcher}.
+ *
  * Runs every 30 minutes (first run 10 minutes after boot). Kill switch:
  * `CREWLY_WORKTREE_JANITOR=0` (also stops the low-disk guard). Never throws;
  * logs one summary line per sweep.
@@ -74,7 +110,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { WORKTREE_JANITOR_CONSTANTS } from '../../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, WORKTREE_JANITOR_CONSTANTS } from '../../constants.js';
 import { LoggerService } from '../core/logger.service.js';
 import { getCrewlyHomePath } from '../core/crewly-home.utils.js';
 import { safeReadJson, modifyJsonFile } from '../../utils/file-io.utils.js';
@@ -90,6 +126,8 @@ import {
 	type StatFsFn,
 } from './low-disk-guard.js';
 import { defaultScratchRoots, sweepScratch, type ScratchSweepSummary } from './scratch-janitor.js';
+import { reclaimDocker, type DockerReclaimResult } from './docker-reclaim.js';
+import { RunawayFileWatcher, runawayWatchRoots, type RunawayOutcome } from './runaway-file-watcher.js';
 import { getTraceStore, type TraceDiskResult } from '../trace/trace-store.js';
 import {
 	canonicalPath,
@@ -106,6 +144,16 @@ import {
 	type PorcelainWorktree,
 	type RunCommandOptions,
 } from './worktree-janitor.git.js';
+import {
+	buildUnmergedNotice,
+	defaultResolveLeadSessions,
+	pruneUnmergedState,
+	shouldNotifyUnmerged,
+	type UnmergedNoticeState,
+	type UnmergedWorktreeFacts,
+} from './worktree-unmerged-notice.js';
+import { contentLandedSignal, isNonGithubRemote, type LandedRepoState } from './worktree-landed.js';
+import { dirtyStatusLines, reclaimRegenerableDirs } from './worktree-dirty.js';
 
 /** Milliseconds per minute (for the `recent` detail text). */
 const MS_PER_MINUTE = 60 * 1000;
@@ -128,7 +176,8 @@ export type WorktreeReason =
 	| 'status-failed'
 	| 'not-merged'
 	| 'merged'
-	| 'pr-merged';
+	| 'pr-merged'
+	| 'content-landed';
 
 /** Verdict for one worktree (the dry-run output). */
 export interface WorktreeVerdict {
@@ -148,6 +197,8 @@ export interface WorktreeVerdict {
 	detail?: string;
 	/** Ms since last touched, when computed */
 	idleMs?: number;
+	/** Low disk only: regenerable dirs (node_modules, .next) of a kept worktree that were (or, in a dry run, would be) deleted */
+	reclaimed?: { dirs: string[]; freedBytes: number };
 }
 
 /** Outcome of acting on one verdict. */
@@ -180,6 +231,8 @@ export interface JanitorRunSummary {
 	wouldRemove: number;
 	/** Worktrees kept */
 	kept: number;
+	/** Bytes freed by deleting regenerable dirs (node_modules, .next) from kept worktrees under low disk */
+	reclaimedBytes: number;
 	/** Kept worktrees by reason (removal failures under `remove-failed`) */
 	keptReasons: Record<string, number>;
 	/** Per-worktree results */
@@ -255,6 +308,14 @@ export interface WorktreeJanitorOptions {
 	sizeOf?: (p: string) => Promise<number | null>;
 	/** Low-disk notice state file (default `<CREWLY_HOME>/disk-janitor-state.json`); null = in memory */
 	statePath?: string | null;
+	/** Docker reclaim on low disk (default: the real one, except under jest); null = never */
+	reclaimDocker?: (() => Promise<DockerReclaimResult>) | null;
+	/** Who leads the team owning a worktree (session names); empty = tell the orchestrator (default: project -> team -> lead) */
+	resolveLeadSessions?: (repoMain: string, worktreePath: string) => Promise<string[]>;
+	/** Unmerged-worktree notice state file (default `<CREWLY_HOME>/unmerged-worktree-notices.json`); null = in memory */
+	unmergedNoticePath?: string | null;
+	/** Debounce before a completion-triggered pass (default COMPLETION_TIDY_DELAY_MS) */
+	tidyDelayMs?: number;
 	/** Environment for the kill switch (default process.env) */
 	env?: NodeJS.ProcessEnv;
 	/** Logger (default: component logger `WorktreeJanitor`) */
@@ -267,6 +328,10 @@ interface RepoContext {
 	entries: PorcelainWorktree[];
 	fetched: boolean;
 	defaultRef: string | null | undefined;
+	/** Memo of the content-landed checks (default-branch tree, merge-tree support) */
+	landed: LandedRepoState;
+	/** True when origin is clearly not GitHub, so `gh` is never asked about it (resolved once per pass) */
+	nonGithub?: boolean;
 }
 
 /**
@@ -296,6 +361,12 @@ export class WorktreeJanitorService {
 	private lastPassAt: number | null = null;
 	private memoryNoticeState: LowDiskNoticeState = {};
 	private notifier: LowDiskNotifier | null;
+	private agentNotifier: ((sessionName: string, message: string) => Promise<boolean>) | null = null;
+	private runawayTimer: NodeJS.Timeout | null = null;
+	private tidyTimer: NodeJS.Timeout | null = null;
+	private runawayWatcher: RunawayFileWatcher | null = null;
+	private runawayInFlight = false;
+	private memoryUnmergedState: UnmergedNoticeState = {};
 
 	/**
 	 * @param options - Injectable dependencies; defaults use the live backend
@@ -313,6 +384,66 @@ export class WorktreeJanitorService {
 	 */
 	setLowDiskNotifier(notifier: LowDiskNotifier | null): void {
 		this.notifier = notifier;
+	}
+
+	/**
+	 * Set how an agent is told its working dir had a runaway file (the server
+	 * wires the normal agent message delivery here).
+	 *
+	 * @param notifier - Sender (true when delivered), or null to skip agent notices
+	 */
+	setAgentNotifier(notifier: ((sessionName: string, message: string) => Promise<boolean>) | null): void {
+		this.agentNotifier = notifier;
+	}
+
+	/**
+	 * One runaway-file scan now (also what the minute timer runs). Never
+	 * throws; overlapping scans are skipped. Honours the kill switch.
+	 *
+	 * @returns What was flagged and done (empty when nothing is wrong)
+	 */
+	async checkRunawayFiles(): Promise<RunawayOutcome[]> {
+		if (this.isDisabled() || this.runawayInFlight) return [];
+		this.runawayInFlight = true;
+		try {
+			if (!this.runawayWatcher) {
+				this.runawayWatcher = new RunawayFileWatcher({
+					listRoots: async () => {
+						const repos = await (this.opts.listRepoPaths ?? defaultListRepoPaths)().catch(() => [] as string[]);
+						return runawayWatchRoots(this.scratchRoots(), this.tmpRoots(), repos);
+					},
+					notifyOwner: async (notice) => (this.notifier ? this.notifier(notice) : false),
+					notifyAgents: (file, message) => this.notifyAgentsNear(file, message),
+					now: () => this.now(),
+					logger: this.logger,
+				});
+			}
+			return await this.runawayWatcher.scan();
+		} finally {
+			this.runawayInFlight = false;
+		}
+	}
+
+	/** Sessions whose cwd holds `file`, or sits in the same scratch session dir; told via the agent notifier. */
+	private async notifyAgentsNear(file: string, message: string): Promise<string[]> {
+		const notifier = this.agentNotifier;
+		if (!notifier) return [];
+		const told: string[] = [];
+		try {
+			const { getSessionBackendSync } = await import('../session/session-backend.factory.js');
+			const backend = getSessionBackendSync();
+			const unit = /^(.*[\\/]claude-\d+[\\/][^\\/]+[\\/][0-9a-f-]{36})(?:[\\/]|$)/i.exec(file)?.[1];
+			for (const name of backend?.listSessions() ?? []) {
+				const cwd = backend?.getSession(name)?.cwd;
+				if (!cwd) continue;
+				if (isPathInside(file, cwd) || (unit && isPathInside(cwd, unit))) {
+					if (await notifier(name, message).catch(() => false)) told.push(name);
+				}
+			}
+		} catch {
+			// no session backend — the owner alert still goes out
+		}
+		return told;
 	}
 
 	/**
@@ -358,6 +489,8 @@ export class WorktreeJanitorService {
 		this.firstRunTimer.unref?.();
 		this.diskTimer = setInterval(() => void this.checkDisk(), WORKTREE_JANITOR_CONSTANTS.LOW_DISK_CHECK_INTERVAL_MS);
 		this.diskTimer.unref?.();
+		this.runawayTimer = setInterval(() => void this.checkRunawayFiles(), WORKTREE_JANITOR_CONSTANTS.RUNAWAY_CHECK_INTERVAL_MS);
+		this.runawayTimer.unref?.();
 		return true;
 	}
 
@@ -366,6 +499,10 @@ export class WorktreeJanitorService {
 		if (this.firstRunTimer) clearTimeout(this.firstRunTimer);
 		if (this.intervalTimer) clearInterval(this.intervalTimer);
 		if (this.diskTimer) clearInterval(this.diskTimer);
+		if (this.runawayTimer) clearInterval(this.runawayTimer);
+		if (this.tidyTimer) clearTimeout(this.tidyTimer);
+		this.tidyTimer = null;
+		this.runawayTimer = null;
 		this.firstRunTimer = null;
 		this.intervalTimer = null;
 		this.diskTimer = null;
@@ -415,6 +552,38 @@ export class WorktreeJanitorService {
 	 */
 	async plan(): Promise<JanitorRunSummary> {
 		return this.pass(true);
+	}
+
+	/**
+	 * Work just finished (a WorkItem / ticket reached done or verified): run one
+	 * pass soon, so a finished worktree goes away when its PR is merged instead
+	 * of waiting for the next 30-minute tick. Bursts are debounced into one pass
+	 * after COMPLETION_TIDY_DELAY_MS; the idle threshold is COMPLETION_MIN_IDLE_MS.
+	 * Only worktrees that pass every safety rule are removed (landed, clean, nobody
+	 * inside) — unmerged work stays for the next pass. No-op when disabled. Never throws.
+	 */
+	requestTidy(): void {
+		if (this.isDisabled() || this.tidyTimer) return;
+		this.tidyTimer = setTimeout(() => {
+			this.tidyTimer = null;
+			void (async () => {
+				try {
+					if (this.inFlight) await this.inFlight.catch(() => undefined);
+					if (this.isDisabled()) return;
+					this.inFlight = this.pass(false, WORKTREE_JANITOR_CONSTANTS.COMPLETION_MIN_IDLE_MS).finally(() => {
+						this.inFlight = null;
+					});
+					const summary = await this.inFlight;
+					if (!summary.disabled) {
+						this.lastSummary = summary;
+						this.lastPassAt = this.now();
+					}
+				} catch (err) {
+					this.logger.warn('Completion tidy failed (non-fatal)', { error: err instanceof Error ? err.message : String(err) });
+				}
+			})();
+		}, this.opts.tidyDelayMs ?? WORKTREE_JANITOR_CONSTANTS.COMPLETION_TIDY_DELAY_MS);
+		this.tidyTimer.unref?.();
 	}
 
 	/**
@@ -500,6 +669,7 @@ export class WorktreeJanitorService {
 			let summary = this.lastSummary;
 			const gapOk = this.lastPassAt === null || this.now() - this.lastPassAt >= WORKTREE_JANITOR_CONSTANTS.LOW_DISK_PASS_GAP_MS;
 			if (gapOk) {
+				await this.reclaimDockerSpace();
 				summary = await this.run();
 				result.ranPass = true;
 				result.freeBytesAfter = await readFreeBytes(this.diskPath(), this.opts.statfs);
@@ -523,6 +693,26 @@ export class WorktreeJanitorService {
 			this.logger.warn('Low-disk check failed', { error: err instanceof Error ? err.message : String(err) });
 		}
 		return result;
+	}
+
+	/**
+	 * Docker images and build cache that can be pulled or rebuilt again
+	 * (docker-reclaim.ts). Never throws.
+	 */
+	private async reclaimDockerSpace(): Promise<void> {
+		const fn =
+			this.opts.reclaimDocker === undefined
+				? (this.opts.env ?? process.env).JEST_WORKER_ID
+					? null
+					: reclaimDocker
+				: this.opts.reclaimDocker;
+		if (!fn) return;
+		try {
+			const r = await fn();
+			if (r.ran) this.logger.info('Low disk: reclaimed Docker images and build cache', { removedImages: r.removedImages.length });
+		} catch (err) {
+			this.logger.warn('Docker reclaim failed (non-fatal)', { error: err instanceof Error ? err.message : String(err) });
+		}
 	}
 
 	/** Sizes of everything a pass left on disk that the owner could act on. */
@@ -550,7 +740,7 @@ export class WorktreeJanitorService {
 		return runCommand(this.opts.gitBin ?? 'git', args, options);
 	}
 
-	private async pass(dryRun: boolean): Promise<JanitorRunSummary> {
+	private async pass(dryRun: boolean, idleOverrideMs?: number): Promise<JanitorRunSummary> {
 		const started = Date.now();
 		const summary: JanitorRunSummary = {
 			startedAt: new Date(started).toISOString(),
@@ -561,6 +751,7 @@ export class WorktreeJanitorService {
 			removed: 0,
 			wouldRemove: 0,
 			kept: 0,
+			reclaimedBytes: 0,
 			keptReasons: {},
 			worktrees: [],
 			lowDisk: false,
@@ -581,14 +772,23 @@ export class WorktreeJanitorService {
 			const busy = await this.safeBusyCwds();
 			for (const repo of repos) {
 				let removedHere = 0;
+				const unmerged: WorktreeOutcome[] = [];
 				for (const entry of repo.entries) {
-					const verdict = await this.evaluate(repo, entry, busy, summary.lowDisk);
+					const verdict = await this.evaluate(repo, entry, busy, summary.lowDisk, idleOverrideMs);
+					if (summary.lowDisk && verdict.decision === 'keep' && (verdict.reason === 'dirty' || verdict.reason === 'not-merged')) {
+						const rec = await this.reclaimKept(entry.path, verdict.idleMs, dryRun);
+						if (rec) {
+							verdict.reclaimed = rec;
+							summary.reclaimedBytes += rec.freedBytes;
+						}
+					}
 					const outcome: WorktreeOutcome = { ...verdict, removed: false, forced: false, branchDeleted: false };
 					if (verdict.decision === 'remove' && !dryRun) {
 						await this.remove(repo, outcome);
 						if (outcome.removed) removedHere++;
 					}
 					summary.worktrees.push(outcome);
+					if (!dryRun && verdict.decision === 'keep' && verdict.reason === 'not-merged') unmerged.push(outcome);
 					if (outcome.removed) summary.removed++;
 					else if (dryRun && verdict.decision === 'remove') summary.wouldRemove++;
 					else {
@@ -597,6 +797,7 @@ export class WorktreeJanitorService {
 						summary.keptReasons[key] = (summary.keptReasons[key] ?? 0) + 1;
 					}
 				}
+				if (unmerged.length > 0) await this.noticeUnmerged(repo, unmerged);
 				if (!dryRun) {
 					const pr = await this.git(['-C', repo.main, 'worktree', 'prune']);
 					if (pr.code !== 0 && removedHere > 0) {
@@ -624,7 +825,7 @@ export class WorktreeJanitorService {
 				.map(([k, v]) => `${k}: ${v}`)
 				.join(', ');
 			this.logger.info(
-				`Worktree janitor: removed ${summary.removed}, kept ${summary.kept}${reasons ? ` (${reasons})` : ''} across ${summary.repos.length} repo(s) in ${summary.durationMs}ms`,
+				`Worktree janitor: removed ${summary.removed}, kept ${summary.kept}${reasons ? ` (${reasons})` : ''}${summary.reclaimedBytes > 0 ? `, reclaimed ${formatBytes(summary.reclaimedBytes)} of node_modules/.next from kept worktrees` : ''} across ${summary.repos.length} repo(s) in ${summary.durationMs}ms`,
 				{ removed: summary.worktrees.filter((w) => w.removed).map((w) => w.path), lowDisk: summary.lowDisk },
 			);
 			const sc = summary.scratch;
@@ -649,6 +850,83 @@ export class WorktreeJanitorService {
 		return summary;
 	}
 
+	/**
+	 * Tell the owning team's lead (else the orchestrator) about kept worktrees
+	 * with unmerged work, once per worktree per interval. Never throws.
+	 */
+	private async noticeUnmerged(repo: RepoContext, kept: WorktreeOutcome[]): Promise<void> {
+		const notifier = this.agentNotifier;
+		if (!notifier) return;
+		try {
+			const defaultRef = await this.defaultRef(repo);
+			if (!defaultRef) return;
+			const now = this.now();
+			let state = await this.readUnmergedState();
+			let changed = false;
+			for (const w of kept) {
+				if (!w.head) continue;
+				const ts = await this.git(['-C', w.path, 'log', '-1', '--format=%ct', w.head]);
+				const newest = ts.code === 0 && /^\d+$/.test(ts.stdout.trim()) ? Number(ts.stdout.trim()) * 1000 : null;
+				if (!shouldNotifyUnmerged(state, w.path, newest, now)) continue;
+				const count = await this.git(['-C', w.path, 'rev-list', '--count', w.head, `^${defaultRef}`]);
+				const commits = count.code === 0 ? Number(count.stdout.trim()) : NaN;
+				if (!Number.isFinite(commits) || commits <= 0) continue;
+				let pushed = false;
+				if (w.branch) {
+					const ahead = await this.git(['-C', w.path, 'rev-list', '--count', w.head, `^refs/remotes/origin/${w.branch}`]);
+					pushed = ahead.code === 0 && ahead.stdout.trim() === '0';
+				}
+				const facts: UnmergedWorktreeFacts = {
+					path: w.path,
+					branch: w.branch,
+					commitsNotOnMain: commits,
+					defaultRef,
+					pushed,
+					sizeBytes: await (this.opts.sizeOf ?? diskUsageBytes)(w.path).catch(() => null),
+				};
+				const leads = await (this.opts.resolveLeadSessions ?? defaultResolveLeadSessions)(repo.main, w.path).catch(() => [] as string[]);
+				const targets = leads.length > 0 ? leads : [ORCHESTRATOR_SESSION_NAME];
+				const message = buildUnmergedNotice(facts);
+				let delivered = false;
+				for (const session of targets) {
+					if (await notifier(session, message).catch(() => false)) delivered = true;
+				}
+				if (delivered) {
+					state = { ...state, [w.path]: now };
+					changed = true;
+					this.logger.info('Told lead about unmerged worktree', { path: w.path, to: targets, commits });
+				}
+			}
+			if (changed) await this.writeUnmergedState(pruneUnmergedState(state, now));
+		} catch (err) {
+			this.logger.warn('Unmerged worktree notice failed (non-fatal)', { error: err instanceof Error ? err.message : String(err) });
+		}
+	}
+
+	private async readUnmergedState(): Promise<UnmergedNoticeState> {
+		const p = this.opts.unmergedNoticePath === undefined
+			? path.join(getCrewlyHomePath(), WORKTREE_JANITOR_CONSTANTS.UNMERGED_NOTICE_STATE_FILENAME)
+			: this.opts.unmergedNoticePath;
+		if (!p) return this.memoryUnmergedState;
+		const file = (await safeReadJson<UnmergedNoticeState | null>(p, null)) ?? {};
+		const merged: UnmergedNoticeState = { ...file };
+		for (const [k, v] of Object.entries(this.memoryUnmergedState)) merged[k] = Math.max(merged[k] ?? 0, v);
+		return merged;
+	}
+
+	private async writeUnmergedState(state: UnmergedNoticeState): Promise<void> {
+		this.memoryUnmergedState = state;
+		const p = this.opts.unmergedNoticePath === undefined
+			? path.join(getCrewlyHomePath(), WORKTREE_JANITOR_CONSTANTS.UNMERGED_NOTICE_STATE_FILENAME)
+			: this.opts.unmergedNoticePath;
+		if (!p) return;
+		try {
+			await modifyJsonFile<UnmergedNoticeState | null, UnmergedNoticeState>(p, null, () => state);
+		} catch (err) {
+			this.logger.warn('Could not save unmerged worktree notice state', { error: err instanceof Error ? err.message : String(err) });
+		}
+	}
+
 	private async resolveRepos(): Promise<RepoContext[]> {
 		const registered = await (this.opts.listRepoPaths ?? defaultListRepoPaths)().catch(() => [] as string[]);
 		let discovered: string[] = [];
@@ -668,7 +946,7 @@ export class WorktreeJanitorService {
 			if (!main) continue;
 			const key = canonicalPath(main.path);
 			if (seen.has(key)) continue;
-			seen.set(key, { main: main.path, entries, fetched: false, defaultRef: undefined });
+			seen.set(key, { main: main.path, entries, fetched: false, defaultRef: undefined, landed: {} });
 		}
 		return [...seen.values()];
 	}
@@ -699,6 +977,7 @@ export class WorktreeJanitorService {
 		entry: PorcelainWorktree,
 		busy: BusyCwd[] | null,
 		lowDisk: boolean,
+		idleOverrideMs?: number,
 	): Promise<WorktreeVerdict> {
 		const base = { repo: repo.main, path: entry.path, branch: entry.branch, head: entry.head };
 		const keep = (reason: WorktreeReason, detail?: string, idleMs?: number): WorktreeVerdict => ({
@@ -729,14 +1008,16 @@ export class WorktreeJanitorService {
 		const normalIdle = agentLocation
 			? (this.opts.minIdleMs ?? WORKTREE_JANITOR_CONSTANTS.MIN_IDLE_MS)
 			: (this.opts.minIdleOtherMs ?? WORKTREE_JANITOR_CONSTANTS.MIN_IDLE_OTHER_MS);
-		const minIdle = idleThreshold(normalIdle, lowDisk);
+		const minIdle = idleOverrideMs !== undefined ? Math.min(idleOverrideMs, idleThreshold(normalIdle, lowDisk)) : idleThreshold(normalIdle, lowDisk);
 		if (idleMs === undefined || idleMs < minIdle) {
 			return keep('recent', `needs ${Math.round(minIdle / MS_PER_MINUTE)} min idle (${agentLocation ? 'agent location' : 'other location'})`, idleMs);
 		}
 
-		const status = await this.git(['-C', entry.path, 'status', '--porcelain', '--untracked-files=all']);
+		// `normal` keeps untracked directories collapsed (one line per
+		// `node_modules/`), so a huge dependency tree cannot flood the output.
+		const status = await this.git(['-C', entry.path, 'status', '--porcelain', '--untracked-files=normal']);
 		if (status.code !== 0) return keep('status-failed', status.stderr.trim().slice(0, 200), idleMs);
-		const dirtyLines = status.stdout.split('\n').filter((l) => l.trim() !== '');
+		const dirtyLines = dirtyStatusLines(status.stdout);
 		if (dirtyLines.length > 0) return keep('dirty', `${dirtyLines.length} changed/untracked path(s)`, idleMs);
 
 		if (!entry.head) return keep('not-merged', 'no HEAD', idleMs);
@@ -749,7 +1030,29 @@ export class WorktreeJanitorService {
 			const pr = await this.mergedPrFor(repo, entry.branch, entry.head);
 			if (pr !== null) return { ...base, decision: 'remove', reason: 'pr-merged', detail: `PR #${pr} merged`, idleMs };
 		}
-		return keep('not-merged', defaultRef ? `not in ${defaultRef}, no merged PR` : 'no origin default branch, no merged PR', idleMs);
+		if (defaultRef) {
+			// Host-agnostic: squash merges on Bitbucket / GitLab / anywhere leave no
+			// ancestry and no GitHub PR, but the CONTENT is in the default branch.
+			const signal = await contentLandedSignal((a, o) => this.git(a, o), repo.main, defaultRef, entry.head, repo.landed);
+			if (signal) return { ...base, decision: 'remove', reason: 'content-landed', detail: `${signal} in ${defaultRef}`, idleMs };
+		}
+		return keep('not-merged', defaultRef ? `not in ${defaultRef} (history or content), no merged PR` : 'no origin default branch, no merged PR', idleMs);
+	}
+
+	/**
+	 * Low disk: delete the regenerable dirs (node_modules, .next) of a kept
+	 * worktree that has been idle for a day. Reversible; never touches
+	 * tracked or source files. Never throws.
+	 */
+	private async reclaimKept(worktreePath: string, idleMs: number | undefined, dryRun: boolean): Promise<{ dirs: string[]; freedBytes: number } | null> {
+		if (idleMs === undefined || idleMs < WORKTREE_JANITOR_CONSTANTS.RECLAIM_MIN_IDLE_MS) return null;
+		try {
+			const r = await reclaimRegenerableDirs(worktreePath, this.opts.sizeOf ?? diskUsageBytes, dryRun);
+			return r.dirs.length > 0 ? r : null;
+		} catch (err) {
+			this.logger.warn('Reclaiming regenerable dirs failed (non-fatal)', { path: worktreePath, error: err instanceof Error ? err.message : String(err) });
+			return null;
+		}
 	}
 
 	/** `origin/<default>` after one quiet fetch per repo per pass; null when there is no origin. */
@@ -798,6 +1101,12 @@ export class WorktreeJanitorService {
 	private async mergedPrFor(repo: RepoContext, branch: string, head: string): Promise<number | null> {
 		const gh = this.opts.ghBin === undefined ? 'gh' : this.opts.ghBin;
 		if (!gh) return null;
+		if (repo.nonGithub === undefined) {
+			const url = await this.git(['-C', repo.main, 'config', '--get', 'remote.origin.url']);
+			repo.nonGithub = url.code === 0 && isNonGithubRemote(url.stdout);
+		}
+		// Bitbucket / GitLab remotes: gh cannot see their PRs, and asking costs a call per worktree.
+		if (repo.nonGithub) return null;
 		if (this.ghUsable === undefined) {
 			const auth = await runCommand(gh, ['auth', 'status'], { cwd: repo.main, timeoutMs: WORKTREE_JANITOR_CONSTANTS.GH_TIMEOUT_MS });
 			this.ghUsable = auth.code === 0;
@@ -825,8 +1134,8 @@ export class WorktreeJanitorService {
 		if (r.code !== 0) {
 			// Force only when git's refusal can only be ignored output: status is
 			// still clean (untracked included) and there are no submodules.
-			const status = await this.git(['-C', outcome.path, 'status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none']);
-			const clean = status.code === 0 && status.stdout.trim() === '';
+			const status = await this.git(['-C', outcome.path, 'status', '--porcelain', '--untracked-files=normal', '--ignore-submodules=none']);
+			const clean = status.code === 0 && dirtyStatusLines(status.stdout).length === 0;
 			const hasSubmodules = fs.existsSync(path.join(outcome.path, '.gitmodules'));
 			if (clean && !hasSubmodules) {
 				r = await this.git(['-C', repo.main, 'worktree', 'remove', '--force', outcome.path]);

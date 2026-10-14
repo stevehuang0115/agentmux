@@ -271,11 +271,13 @@ describe('project tickets API', () => {
         expect(asked.status).toBe(200);
         expect(asked.body.data.decision).toMatchObject({ id: 'D-1', asker: 'dev-ann', requestedBy: 'tl-sam', defaultKey: 'b', status: 'open' });
         expect(asked.body.data.ticket.labels).toContain('needs-owner');
-        // The assignee itself may ask too.
-        expect((await request(app).post('/api/project-tickets/p1/APP-1/ask-owner').set('X-Agent-Session', 'dev-ann').send(ask)).status).toBe(200);
+        // The assignee itself may ask too; the same question joins the card already open.
+        const again = await request(app).post('/api/project-tickets/p1/APP-1/ask-owner').set('X-Agent-Session', 'dev-ann').send(ask);
+        expect(again.status).toBe(200);
+        expect(again.body.data.decision.id).toBe('D-1');
         const cleared = await request(app).post('/api/project-tickets/p1/APP-1/ask-owner').set('X-Agent-Session', 'tl-sam').send({ clear: true, note: 'owner said yes' });
         expect(cleared.body.data.ticket.labels).not.toContain('needs-owner');
-        expect(cleared.body.data.withdrawn).toBe(2);
+        expect(cleared.body.data.withdrawn).toBe(1);
         expect(await decisions.list('open')).toEqual([]);
       } finally {
         DecisionService.setInstance(null);

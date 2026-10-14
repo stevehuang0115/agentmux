@@ -162,6 +162,14 @@ export const TICKET_AUTOPILOT_CONSTANTS = {
 	 * daily cap applies ({@link TICKET_AUTOPILOT_CONSTANTS.SPEED_MODES}).
 	 */
 	REPLANS_PER_DAY_LIMIT: 12,
+	/**
+	 * Safety ceiling on ALL goal replans of a local day, productive or not
+	 * (CREW-265). The daily cap (`replansPerDay` / the mode's
+	 * `replansPerDayCap`) counts only replans that opened no tickets, so an
+	 * autopilot whose replans keep producing work keeps going; this ceiling
+	 * still stops a runaway loop. Never below the daily cap itself.
+	 */
+	REPLAN_HARD_CEILING_PER_DAY: 16,
 	/** Tickets closed (done / cancelled) this many days back are listed in the replan brief */
 	REPLAN_CLOSED_LOOKBACK_DAYS: 7,
 	/** Most closed tickets listed in the replan brief */
@@ -339,6 +347,17 @@ export const TURN_STATE_CONSTANTS = {
 	HOOK_SILENCE_MS: 10 * 60 * 1000,
 	/** An open tool call or a running subagent / background task expires after this (ms) */
 	OPEN_WORK_MAX_MS: 60 * 60 * 1000,
+	/**
+	 * A background subagent / fork whose transcript has not grown for this long,
+	 * while the agent's own turn is over, is stalled: it stops counting as busy
+	 * and the agent is told (ms). Pia's fork died after 2 minutes and the agent
+	 * stayed "busy" for the full OPEN_WORK_MAX_MS (2026-10-12).
+	 */
+	BACKGROUND_STALL_MS: 10 * 60 * 1000,
+	/** Progress probes (a directory read plus a few stats) are reused for this long (ms) */
+	BACKGROUND_PROBE_CACHE_MS: 30_000,
+	/** How often the stalled-background watchdog looks (ms) */
+	BACKGROUND_WATCHDOG_INTERVAL_MS: 60_000,
 	/** After a delivery, wait this long for the runtime to report the turn started (ms) */
 	DELIVERY_START_MS: 2 * 60 * 1000,
 	/** A transcript that says "mid-turn" counts only if it changed within this window (ms) */
@@ -461,6 +480,13 @@ export const BROWSER_BRIDGE_CONSTANTS = {
 	/** Default timeout for commands sent to Chrome Extension (ms) */
 	COMMAND_TIMEOUT_MS: 30000,
 	/**
+	 * Timeout for screenshot / full-page-screenshot (ms). Capturing a heavy
+	 * page (Slack web, long feeds) and relaying a multi-MB base64 image takes
+	 * well beyond the 30 s default; the shorter limit made them look like a
+	 * missing browser (crewly#1080).
+	 */
+	SCREENSHOT_TIMEOUT_MS: 90000,
+	/**
 	 * Per-tab dispatch (1 agent : 1 tab) — see
 	 * `.crewly/specs/crewly-in-chrome-per-tab-fix-2026-04-25.md`.
 	 */
@@ -471,7 +497,13 @@ export const BROWSER_BRIDGE_CONSTANTS = {
 	/** Default TTL for an idle binding in minutes (configurable via CREWLY_TAB_BIND_TTL_MINUTES). */
 	TAB_BIND_TTL_MINUTES: 30,
 	/** Cadence of the orphan/TTL sweep timer in milliseconds. */
-	TAB_BIND_SWEEP_MS: 5 * 60 * 1000,
+	TAB_BIND_SWEEP_MS: 60 * 1000,
+	/**
+	 * Minutes an agent's tab may sit untouched after its turn ended before it
+	 * is closed (env `CREWLY_TAB_IDLE_CLOSE_MINUTES`; 0 disables). The agent
+	 * working again, or touching the tab, resets the clock.
+	 */
+	TAB_IDLE_CLOSE_MINUTES: 10,
 	/** Default tabId on a 503 retry hint (milliseconds the skill should back off). */
 	TAB_BIND_RETRY_AFTER_MS: 30000,
 	/**
@@ -679,12 +711,50 @@ export const CONTROL_PLANE_GUARD_CONSTANTS = {
 		'config/hooks/subagent-guard',
 		// The credential guard (specs/2026-10-04-agent-credential-isolation.md).
 		'config/hooks/credential-guard',
+		// The live-checkout guard: an agent must not be able to switch it off.
+		'config/hooks/live-checkout-guard',
+		// The destructive-git guard: an agent must not be able to switch it off.
+		'config/hooks/destructive-git-guard',
 		'dist',
 	],
 	/** Write-protected files under the install root. */
 	INSTALL_FILES: ['config/skills/_common/lib.sh'],
 	/** Write-protected directories under the agent's project path (whole subtree). */
 	PROJECT_DIRS: ['.claude/agents', '.crewly/triggers'],
+} as const;
+
+/**
+ * Live-checkout guard: agents may not change the checkout the running Crewly
+ * is built from (git state changes or file edits). Incident 2026-10-08/09: an
+ * agent switched branches in it and the next restart refused to start.
+ */
+export const LIVE_CHECKOUT_GUARD_CONSTANTS = {
+	/** Backend env var; `0` turns the guard off for sessions launched by this backend. */
+	KILL_SWITCH_ENV: 'CREWLY_LIVE_CHECKOUT_GUARD',
+	/** Value of KILL_SWITCH_ENV that disables the guard. */
+	KILL_SWITCH_OFF_VALUE: '0',
+	/** The hook script (node), relative to the install root. */
+	HOOK_SCRIPT: 'config/hooks/live-checkout-guard/guard.mjs',
+	/** Claude Code tools the hook is attached to. */
+	CLAUDE_MATCHER: 'Bash|Edit|Write|MultiEdit|NotebookEdit',
+	/** Codex tools the hook is attached to (shell, plus its patch tool). */
+	CODEX_MATCHER: 'Bash|apply_patch|Edit|Write',
+} as const;
+
+/**
+ * Destructive-git guard: blocks force-push, push to main/master, reset --hard,
+ * clean -f, branch -D, checkout . and restore . in an agent's Bash tool, so an
+ * agent cannot destroy its own unmerged work.
+ */
+export const DESTRUCTIVE_GIT_GUARD_CONSTANTS = {
+	/** Backend env var; `0` turns the guard off for sessions launched by this backend (the owner/TL override). */
+	KILL_SWITCH_ENV: 'CREWLY_DESTRUCTIVE_GIT_GUARD',
+	/** Value of KILL_SWITCH_ENV that disables the guard. */
+	KILL_SWITCH_OFF_VALUE: '0',
+	/** The hook script (node), relative to the install root. */
+	HOOK_SCRIPT: 'config/hooks/destructive-git-guard/guard.mjs',
+	/** Claude Code tool the hook is attached to. */
+	CLAUDE_MATCHER: 'Bash',
 } as const;
 
 /**
@@ -1050,6 +1120,36 @@ export const RUNTIME_INPUT_SAFETY = {
 } as const;
 
 /**
+ * Claude Code auto-compacts each agent's conversation at this many tokens
+ * (`autoCompactWindow` in the control-plane `--settings` file; Claude Code
+ * accepts 100k–1M). Owner 2026-10-10: compact at ~350k instead of near the
+ * 1M window, so long sessions stop paying for huge contexts on every turn.
+ * Override with CREWLY_CLAUDE_AUTOCOMPACT_WINDOW (tokens, or `auto` for
+ * Claude Code's own default).
+ */
+export const CLAUDE_CODE_CONTEXT = {
+	DEFAULT_AUTO_COMPACT_WINDOW: 350_000,
+	MIN_AUTO_COMPACT_WINDOW: 100_000,
+	MAX_AUTO_COMPACT_WINDOW: 1_000_000,
+	ENV_OVERRIDE: 'CREWLY_CLAUDE_AUTOCOMPACT_WINDOW',
+} as const;
+
+/**
+ * The auto-compact window Crewly sets for Claude Code sessions.
+ *
+ * @param env - Environment (tests)
+ * @returns Tokens, or null to leave Claude Code's default (`auto`)
+ */
+export function claudeAutoCompactWindow(env: NodeJS.ProcessEnv = process.env): number | null {
+	const raw = env[CLAUDE_CODE_CONTEXT.ENV_OVERRIDE]?.trim();
+	if (!raw) return CLAUDE_CODE_CONTEXT.DEFAULT_AUTO_COMPACT_WINDOW;
+	if (raw.toLowerCase() === 'auto') return null;
+	const n = Number(raw);
+	if (!Number.isInteger(n)) return CLAUDE_CODE_CONTEXT.DEFAULT_AUTO_COMPACT_WINDOW;
+	return Math.min(CLAUDE_CODE_CONTEXT.MAX_AUTO_COMPACT_WINDOW, Math.max(CLAUDE_CODE_CONTEXT.MIN_AUTO_COMPACT_WINDOW, n));
+}
+
+/**
  * Input guard for typing into agent runtimes (2026-10-03 phantom-input
  * incident). See services/session/tui-input-guard.ts.
  */
@@ -1068,6 +1168,23 @@ export const TUI_INPUT_GUARD = {
 	REPAINT_READ_SETTLE_MS: 1200,
 	/** At most one repaint request per session per this long */
 	REPAINT_MIN_INTERVAL_MS: 30_000,
+	/**
+	 * Unreadable recovery ladder (2026-10-08 Ella: a frame taller than the
+	 * 80x24 window scrolled the box off screen, and the small repaint above
+	 * cannot fix a window that is too short). This many unreadable settled
+	 * reads in a row, and the session is enlarged to RECOVERY_TERMINAL_COLS x
+	 * RECOVERY_TERMINAL_ROWS before reading again. Still only re-reads: the
+	 * reading decides what is typed, exactly as before.
+	 */
+	UNREADABLE_RESIZE_AFTER_READS: 2,
+	/** Wait after enlarging an unreadable session before reading again (ms) */
+	RESIZE_READ_SETTLE_MS: 1500,
+	/**
+	 * Output a session produces this long after Crewly resized it is the
+	 * runtime redrawing its screen, not the agent working: it does not count
+	 * as activity (ms).
+	 */
+	RESIZE_OUTPUT_IGNORE_MS: 3000,
 	/** Bottom screen rows logged (as a shape, letters masked) when a box stays unreadable */
 	UNKNOWN_SHAPE_ROWS: 8,
 	/** Shortest run of `─` that counts as an input-box rule */
@@ -1089,6 +1206,14 @@ export const TUI_INPUT_GUARD = {
 	RULE_STALE_PREFIX_MIN_CHARS: 40,
 	/** Most status/footer lines allowed below an input box */
 	FOOTER_MAX_LINES: 6,
+	/**
+	 * Most rows below the bottom rule when searching for a Claude Code /
+	 * Antigravity box. Claude Code lists background agents and shells under
+	 * the box, so a busy session can have well over FOOTER_MAX_LINES rows
+	 * there (crewly#1113). Only the box search uses this; turn-signal reading
+	 * keeps FOOTER_MAX_LINES.
+	 */
+	BOX_FOOTER_MAX_LINES: 14,
 	/** Most lines an input box may span */
 	MAX_BOX_LINES: 60,
 	/**
@@ -1320,6 +1445,24 @@ export const ACTIVITY_MONITOR_CONSTANTS = {
 	 *  Prevents workingStatus from getting stuck due to continuous terminal output
 	 *  (spinners, TUI re-renders). Default: 15 minutes. */
 	MAX_IN_PROGRESS_MS: 900_000,
+} as const;
+
+/**
+ * Antigravity "Running command..." hang (2026-10-10): agy's TUI kept a
+ * "Running command..." spinner for 8+ minutes after the command had finished
+ * and agy had no child process. The agent stayed busy forever, so queued
+ * messages and the runtime switch (which waits for a safe point) never ran.
+ * Escape un-sticks it.
+ */
+export const ANTIGRAVITY_STUCK_COMMAND_CONSTANTS = {
+	/** The spinner must have been on screen this long (ms) before Escape is sent */
+	STUCK_AFTER_MS: 3 * 60_000,
+	/** Not more than one Escape per session in this window (ms) */
+	REPEAT_COOLDOWN_MS: 5 * 60_000,
+	/** Bottom screen lines searched for the spinner */
+	SCREEN_LINES: 20,
+	/** The spinner label (case-insensitive) */
+	SPINNER_PATTERN: /\brunning command(?:\.{1,3}|\u2026)/i,
 } as const;
 
 /**
@@ -1706,10 +1849,10 @@ export const SLACK_NOTIFICATION_FALLBACK_MAX_CANDIDATES = 4;
  * `{cmd}` is the interim form of the agent's reply skill.
  */
 export const CHAT_REPLY_PACING_HINT =
-	'回复节奏: 动手前先判断工作量。一两分钟内能做完的（查一下、答一句、改一处）→ 直接做，做完一次性回复。' +
-	'要花更久的（多个步骤、要跑命令/开浏览器/查很多资料、预计超过约 3 分钟）→ **先**用一两句话回复（{cmd}）：你理解的需求、打算怎么做、大概多久，有要对方确认的就一并问；' +
-	'发完再开始做，做完发最终回复。中间不要刷进度，除非遇到阻塞或计划变了。' +
-	'对方是在回答你问的问题、或给了你新信息/决定时，至少回一句简短确认（例如「收到，按 X 来」）——不回会让对方以为没人看；只有「好」「ok」「谢谢」这类收尾可以不回。';
+	'Reply pacing: size the job before you start. If you can finish it in a minute or two (a quick lookup, a one-line answer, a single edit) → just do it and send one reply when done. ' +
+	'If it takes longer (several steps, running commands, opening a browser, reading a lot of material, expected to take more than about 3 minutes) → **first** reply with a sentence or two ({cmd}): what you understand the ask to be, how you plan to do it, roughly how long it will take, and anything you need them to confirm; ' +
+	'then start, and send the final reply when done. Do not post progress updates in between unless you hit a blocker or the plan changes. ' +
+	'When the person is answering a question you asked, or gave you new information or a decision, reply with at least a short acknowledgement (e.g. "Got it, going with X") — silence makes them think nobody saw it; only closers like "ok" or "thanks" may go unanswered.';
 
 /** Unassigned work goes to a decider and moves up when not taken (owner, 2026-09-24). */
 export const UNASSIGNED_ROUTE_CONSTANTS = {
@@ -1727,8 +1870,10 @@ export const SLACK_TYPING_CONSTANTS = {
 	/** Shown when a cold start is taking longer than WAKING_SLOW_MS */
 	WAKING_SLOW_TEXT: '🌙 {name} is still starting up (a cold start takes 1–2 minutes)…',
 	WAKING_SLOW_MS: 60 * 1000,
-	/** Shown when the agent could not be started or the message could not be delivered */
-	FAILED_TEXT: '⚠️ {name} could not be reached right now — please try again in a minute.',
+	/** Shown while the agent's start waits for a free slot: the message is held and delivered when it starts (not a failure) */
+	QUEUED_TEXT: '🕐 {name} will pick this up shortly — the reply will follow here.',
+	/** Shown when the message could not be delivered even after Crewly retried; never asks the owner to resend */
+	FAILED_TEXT: "⚠️ {name} couldn't take this message just now — Crewly will keep trying and the reply will follow here if it gets through.",
 	/** What the placeholder becomes when the agent has not replied in time */
 	TIMEOUT_TEXT: '⏱ {name} is still working on this — the reply will follow.',
 	/** How long a placeholder waits for the reply before it is edited to TIMEOUT_TEXT */
@@ -1820,9 +1965,29 @@ export const SLACK_THREAD_CONTEXT_CONSTANTS = {
 	/** Most messages shown (newest kept) */
 	MAX_MESSAGES: 30,
 	/** Character budget of the whole block's message lines (newest kept) */
-	MAX_CHARS: 12_000,
+	MAX_CHARS: 5_000,
 	/** Characters kept per message before clipping */
 	PER_MESSAGE_CHARS: 4_000,
+	/**
+	 * Characters kept per message in the rendered block. The block is a
+	 * compact "thread so far", not a transcript: a 4 000-char draft pasted in
+	 * the thread made the prompt 13.5k chars, the busy-agent note cut it at
+	 * 6 000, and the newest posts and the owner's ping were the part cut
+	 * (2026-10-08, #content-team).
+	 */
+	BLOCK_PER_MESSAGE_CHARS: 500,
+	/** The block shows at least this many of the newest messages, or everything since the agent's own last post when that is more */
+	BLOCK_RECENT_MESSAGES: 8,
+	/** Marks a line addressed to the agent (or a person's post) after its last post in the thread */
+	UNANSWERED_MARK: '⟵ not answered by you yet',
+	/**
+	 * Said after a bare @-mention (no text). `{name}` = who pinged, `{where}` =
+	 * "in this thread" / "in this channel", `{what}` = what to read above.
+	 */
+	BARE_MENTION_NOTE:
+		'{name} pinged you {where} with no text — read the {what} above and act on what is pending for you there (oldest unanswered request first). Do not switch to another topic.',
+	/** Metadata flag on chat rows recorded from a Slack thread read (posts this machine never received) */
+	BACKFILL_METADATA_KEY: 'slackBackfill',
 	/** Recent channel messages read before a top-level @-mention */
 	CHANNEL_HISTORY_LIMIT: 15,
 	/** Page size for `conversations.replies` */
@@ -1861,6 +2026,32 @@ export const SLACK_THREAD_CONTEXT_CONSTANTS = {
 	] as readonly string[],
 	/** Message subtypes that are conversation, not channel housekeeping */
 	CONTENT_SUBTYPES: ['bot_message', 'thread_broadcast', 'file_share', 'me_message'] as readonly string[],
+} as const;
+
+/**
+ * Crewly channels (specs/2026-10-07-crewly-channels.md): a named room whose
+ * members are agents from any team, matched to a Slack channel when Slack is
+ * connected.
+ */
+export const CREWLY_CHANNEL_CONSTANTS = {
+	/** Registry filename under CREWLY_HOME */
+	STORE_FILENAME: 'crewly-channels.json',
+	/** Most agents one channel may hold (same cap as a huddle) */
+	MAX_MEMBERS: 50,
+	/** Longest purpose line (Slack's purpose limit) */
+	MAX_PURPOSE_LENGTH: 250,
+	/** A list call refreshes names/members from Slack at most this often (ms) */
+	SLACK_REFRESH_MIN_INTERVAL_MS: 60 * 1000,
+	/** Purpose used when the owner gives none */
+	DEFAULT_PURPOSE: 'Crewly channel',
+	/** How often channels are checked against Slack in the background, incl. linking ones made while Slack was off (ms) */
+	SLACK_SYNC_INTERVAL_MS: 5 * 60 * 1000,
+	/**
+	 * Agent-to-agent hand-offs in a channel without Slack, in a row, before the
+	 * owner speaks again. Past it an agent's @ is recorded but wakes nobody
+	 * (the same cap Cloud applies to agent posts in shared Slack rooms).
+	 */
+	AGENT_CHAIN_MAX: 8,
 } as const;
 
 export const SLACK_TEAM_CHANNEL_CONSTANTS = {
@@ -2035,6 +2226,10 @@ export const SLACK_CLOUD_CONSTANTS = {
 	AGENTS_PATH: '/agents',
 	/** `POST` — deliver a room message to an agent on another machine */
 	HANDOFF_PATH: '/handoff',
+	/** `POST` — ask Cloud to put agents of another machine in a Slack channel (orchestrator-created rooms) */
+	ROOM_JOIN_PATH: '/rooms/join',
+	/** Event type of the Cloud-pushed room-join envelope */
+	ROOM_JOIN_EVENT_TYPE: 'crewly_room_join',
 	/** `GET` — the account's Slack routing log (where each channel message went and why, 14 days) */
 	ROUTING_DECISIONS_PATH: '/routing-decisions',
 	/** GET → who is who across the account (instances, teams, agents, bot users) */
@@ -2279,8 +2474,8 @@ export const OWNER_MESSAGE_WATCHDOG_CONSTANTS = {
 	] as readonly string[],
 	/** Nudge delivered to the responsible agent ({waited} = minutes) */
 	NUDGE_TEXT:
-		'[REMINDER] 这条来自 owner 的消息已经 {waited} 分钟没有回复了。现在回复它：`{replyCmd}`——会自动发回这条消息来的地方。' +
-		'如果已经在别处回答过，或者确实不需要回复，运行 `{noneCmd}`。',
+		'[REMINDER] This message from the owner has gone {waited} minutes without a reply. Reply to it now: `{replyCmd}` — it is sent automatically back to where the message came from. ' +
+		'If you already answered elsewhere, or it genuinely needs no reply, run `{noneCmd}`.',
 	/**
 	 * Note texts (from Crewly's own bot), English like the rest of the
 	 * owner-facing UI. {name} = agent display name. The login note names the
@@ -2291,6 +2486,18 @@ export const OWNER_MESSAGE_WATCHDOG_CONSTANTS = {
 	NOTE_ERROR_TEXT: "⏳ Still waiting on {name} — your message couldn't be delivered ({detail}).",
 	NOTE_BUSY_CAP_TEXT: '⏳ {name} is still working on your message ({waited} min so far).',
 	NOTE_SILENT_TEXT: "⏳ {name} got your message but hasn't replied in {waited} min; I've sent a reminder.",
+	/**
+	 * The reminder did not reach the agent either. Said instead of "I've sent
+	 * a reminder", which would be false (2026-10-08 Ella).
+	 * - stuck: its input box cannot be read — Crewly restarts the session;
+	 * - foreign: its input box holds text Crewly did not write;
+	 * - queued: it is busy, the reminder waits in its queue.
+	 */
+	NOTE_STUCK_TEXT: "⏳ {name}'s session is stuck; Crewly is restarting it — your message is queued.",
+	NOTE_INPUT_FOREIGN_TEXT: "⏳ {name} hasn't replied in {waited} min: its input box holds text Crewly didn't write, so your message is queued. Clear {name}'s input box to let it through.",
+	NOTE_SILENT_QUEUED_TEXT: "⏳ {name} got your message but hasn't replied in {waited} min; a reminder is queued for when {name} is free.",
+	/** At most one "session is stuck" note per agent per this long (ms) */
+	STUCK_NOTE_COOLDOWN_MS: 30 * 60 * 1000,
 	/** Shown in a note when a failed delivery left no error detail */
 	NOTE_UNKNOWN_DETAIL: 'reason unknown',
 	/** The agent took the message but its run failed (crewly#1015 §2) */
@@ -2470,8 +2677,35 @@ export const WORKTREE_JANITOR_CONSTANTS = {
 	LOW_DISK_REPORT_ITEMS: 5,
 	/** Timeout of one `du -sk` size probe (ms). */
 	DU_TIMEOUT_MS: 60_000,
+	/** Runaway-file watcher (crewly#1078): how often agent scratch dirs and worktrees are scanned (1 minute). */
+	RUNAWAY_CHECK_INTERVAL_MS: 60 * 1000,
+	/** A file this big in an agent dir is reported to the owner (5 GB); if it is also still growing, its writer is stopped. */
+	RUNAWAY_FILE_BYTES: 5 * 1024 ** 3,
+	/** A file that grew by this much per minute between two scans is a runaway whatever its size (1 GB/min). */
+	RUNAWAY_GROWTH_BYTES_PER_MIN: 1024 ** 3,
+	/** Files smaller than this are never tracked between scans (cheap pre-filter, 256 MB). */
+	RUNAWAY_TRACK_MIN_BYTES: 256 * 1024 ** 2,
+	/** Bytes of a stopped runaway file kept (the head, so the agent can see what it was writing, 1 MB). */
+	RUNAWAY_KEEP_HEAD_BYTES: 1024 ** 2,
+	/** How deep under each watched dir files are looked for. */
+	RUNAWAY_SCAN_DEPTH: 8,
+	/** Cap on directory entries visited per scan. */
+	RUNAWAY_SCAN_MAX_ENTRIES: 200_000,
+	/** Wait after SIGTERM before SIGKILL for the writer (ms). */
+	RUNAWAY_KILL_GRACE_MS: 3000,
+	/** Timeout of the `lsof` that finds a file's writers (ms). */
+	RUNAWAY_LSOF_TIMEOUT_MS: 10_000,
+	/** One line added to every agent's start prompt. */
+	PROMPT_HINT:
+		'Disk hygiene: never let a command or script write an unbounded file. When you redirect or concatenate output (`> file`, `>> file`, `cat a b > all.md`), cap it (`| head -c 50M`, `| head -n 100000`) and never build a file from its own output. A file in your scratch dir or worktree that grows past a few GB is stopped by Crewly and the owner is alerted. Worktree hygiene: deploy only from a commit that is on main (merge first, never from a side branch); remove your worktree once its ticket is done.',
 	/** State file under CREWLY_HOME remembering when the owner was last told about low disk. */
 	STATE_FILENAME: 'disk-janitor-state.json',
+	/** File (in CREWLY_HOME) remembering which unmerged worktrees their lead was already told about. */
+	UNMERGED_NOTICE_STATE_FILENAME: 'unmerged-worktree-notices.json',
+	/** A kept worktree is only reported when its newest commit is older than this (24 hours) — fresh work is still in flight. */
+	UNMERGED_NOTICE_MIN_AGE_MS: 24 * 60 * 60 * 1000,
+	/** A worktree's lead is told about it at most this often (3 days). */
+	UNMERGED_NOTICE_INTERVAL_MS: 3 * 24 * 60 * 60 * 1000,
 	/**
 	 * Directory, relative to the repo's main worktree, where agent tools
 	 * (Claude Code subagents, Crewly agents) create per-task worktrees.
@@ -2493,6 +2727,27 @@ export const WORKTREE_JANITOR_CONSTANTS = {
 	 * instead of 24 h). `worktree-agent-` is Claude Code's automatic subagent branch.
 	 */
 	AGENT_BRANCH_PREFIXES: ['worktree-agent-'] as readonly string[],
+	/**
+	 * Untracked paths under a directory with one of these names (or a `*.log`
+	 * file) are regenerable output and do not make a worktree "dirty". Nested
+	 * packages often do not ignore their own `node_modules` / `.next`, so
+	 * `git status` lists them as untracked.
+	 */
+	REGENERABLE_DIRS: ['node_modules', '.next', 'dist', 'build', '.turbo', 'coverage', '.cache', 'logs'] as readonly string[],
+	/** File suffixes treated as regenerable output (logs). */
+	REGENERABLE_FILE_SUFFIXES: ['.log'] as readonly string[],
+	/** Directories deleted from kept (dirty / not-merged) worktrees under low disk — reinstalled by `npm install` / rebuilt by `next build`. */
+	RECLAIM_DIRS: ['node_modules', '.next'] as readonly string[],
+	/** A kept worktree must be idle this long before its regenerable dirs are reclaimed under low disk (24 hours). */
+	RECLAIM_MIN_IDLE_MS: 24 * 60 * 60 * 1000,
+	/** How deep under a worktree reclaimable dirs are searched for (root = 0; `web/node_modules` = 1). */
+	RECLAIM_SEARCH_DEPTH: 3,
+	/** Work completion (task done / verified) schedules one tidy pass after this quiet period (2 minutes); bursts share it. */
+	COMPLETION_TIDY_DELAY_MS: 2 * 60 * 1000,
+	/** Idle needed by a completion-triggered pass: the agent said it is finished, so far less than the periodic threshold (10 minutes). */
+	COMPLETION_MIN_IDLE_MS: 10 * 60 * 1000,
+	/** Commits of the default branch searched for a squash-merge patch-equivalent of a branch. */
+	SQUASH_SEARCH_MAX_COMMITS: 300,
 	/** Branches that are never deleted, whatever the verdict. */
 	PROTECTED_BRANCHES: ['main', 'master', 'develop', 'HEAD'] as readonly string[],
 	/** Timeout of one local git command (ms). */
@@ -2943,6 +3198,29 @@ export const ORC_CONVERSATION_CONSTANTS = {
 	HANDOVER_MAX_CHARS: 16_000,
 	/** Directory under CREWLY_HOME for handover files */
 	HANDOVER_DIR: 'handover',
+	/** A plain restart hands over the previous conversation only when its transcript was written within this window */
+	RESTART_HANDOVER_MAX_AGE_MS: 7 * 24 * 60 * 60 * 1000,
+	/** Where the last conversation id of a stopped session is remembered (under the state dir) */
+	LAST_CONVERSATIONS_FILE: 'last-conversations.json',
+	/** How much of a transcript's start is read to check it belongs to a session (cwd-wide fallback) */
+	OWNERSHIP_HEAD_BYTES: 256 * 1024,
+	/** Most of an earlier handover carried into a new one when the source conversation is unreadable */
+	CHAINED_HANDOVER_MAX_CHARS: 16_000,
+} as const;
+
+/** Pointer header (open work, suggested skills) written at the top of a handover file. */
+export const HANDOVER_POINTERS_CONSTANTS = {
+	/** Task pool file under CREWLY_HOME (dir, file) */
+	POOL_DIR: 'task-pool',
+	POOL_FILE: 'pool.json',
+	/** WorkItem statuses that count as still open for the agent */
+	OPEN_STATUSES: ['queued', 'scheduled', 'proposed', 'accepted', 'running', 'blocked', 'escalated'] as readonly string[],
+	MAX_OPEN_WORK: 15,
+	MAX_LINKS: 10,
+	TITLE_CHARS: 80,
+	/** Markers around the header, so a chained handover can strip it */
+	START_MARK: '<!-- handover-pointers -->',
+	END_MARK: '<!-- /handover-pointers -->',
 } as const;
 
 /**
@@ -3076,6 +3354,60 @@ export const MEMBER_MODEL_DEFAULT_CONSTANTS = {
 	UPGRADE_HINT_AFTER_REJECTIONS: 2,
 } as const;
 
+/**
+ * Model tiers (crewly#1173, specs/2026-10-08-model-tiers.md): strong / mid /
+ * weak, mapped to a concrete model per runtime. A team may override the map
+ * (`Team.tierModels`); an explicit `TeamMember.modelId` always wins.
+ *
+ * A runtime with no model for `weak` uses its `mid` model (still cheaper than
+ * the strong default). Any other unmapped tier gets no model flag: the
+ * runtime's own default. `opencode-cli` and `crewly-agent` are unmapped (their
+ * model ids are provider/model pairs the owner picks).
+ */
+export const MODEL_TIER_CONSTANTS = {
+	/** Tiers, strongest first */
+	TIERS: ['strong', 'mid', 'weak'],
+	/** Global tier → model map per runtime (names each harness accepts at launch) */
+	DEFAULT_TIER_MODELS: {
+		'claude-code': { strong: 'opus', mid: 'sonnet', weak: 'haiku' },
+		// Model names from the dashboard presets (RUNTIME_MODEL_PRESETS); Codex has no small model there yet.
+		'codex-cli': { strong: 'gpt-5.6-sol', mid: 'gpt-5.4' },
+		'gemini-cli': { strong: 'gemini-2.5-pro', mid: 'gemini-2.5-flash' },
+		// Slugs from `agy models` (agy 1.2.11)
+		'antigravity-cli': { strong: 'gemini-3.1-pro-high', mid: 'gemini-3.8-flash-high', weak: 'gemini-3.8-flash-medium' },
+	} as Record<string, Partial<Record<'strong' | 'mid' | 'weak', string>>>,
+	/** Store of review drafts / applied changes, under CREWLY_HOME */
+	STORE_FILE: 'model-tier-reviews.json',
+	/** Decision kind of the owner card */
+	DECISION_KIND: 'model_tier_change',
+	/** Days between automatic reviews while "Optimize usage" is on */
+	REVIEW_INTERVAL_DAYS: 7,
+	/** Usage window the report covers (days) */
+	REPORT_WINDOW_DAYS: 7,
+	/** How often the service checks for due reviews / guards */
+	TICK_MS: 60 * 60 * 1000,
+	/** A draft nobody submitted is sent to the owner after this long */
+	DRAFT_AUTO_SUBMIT_MS: 2 * 60 * 60 * 1000,
+	/** How long a tier card waits for the owner (default = keep as is) */
+	DECISION_DEADLINE_MS: 72 * 60 * 60 * 1000,
+	/** Work titles listed per member in the report */
+	REPORT_MAX_TITLES: 5,
+	/** Max characters of a reason / routing rule */
+	MAX_REASON_CHARS: 300,
+	/** Max routing rules per proposal */
+	MAX_ROUTING_RULES: 10,
+	/** Quality guard: settled work items needed after a lowered tier before judging */
+	GUARD_MIN_ITEMS: 5,
+	/** Quality guard: settled items before the change used as the baseline */
+	GUARD_BASELINE_ITEMS: 10,
+	/** Quality guard: send-back rate rise (0..1) over the baseline that counts as worse */
+	GUARD_WORSE_MARGIN: 0.2,
+	/** Quality guard: at least this many sent-back items after the change */
+	GUARD_MIN_BAD: 2,
+	/** Quality guard: stop watching a change after this many days */
+	GUARD_MAX_DAYS: 30,
+} as const;
+
 export const CHAT_CONTEXT_CONSTANTS = {
 	/** Whether preceding messages are included at all */
 	ENABLED: true,
@@ -3102,6 +3434,19 @@ export const CHAT_CONTEXT_CONSTANTS = {
 	 * wrong one.
 	 */
 	MAX_AGE_MS: 6 * 60 * 60 * 1000,
+	/**
+	 * A top-level owner message in a room or channel (not a thread, not a DM)
+	 * is often a follow-up to yesterday ("how is the video plan going?"), so it
+	 * gets a longer look back than other top-level messages: the last
+	 * {@link TOP_LEVEL_OWNER_MAX} messages or the last
+	 * {@link TOP_LEVEL_OWNER_MAX_AGE_MS}, whichever is smaller, within
+	 * {@link TOP_LEVEL_OWNER_MAX_CHARS} characters (oldest dropped first).
+	 */
+	TOP_LEVEL_OWNER_MAX: 15,
+	/** See {@link TOP_LEVEL_OWNER_MAX} */
+	TOP_LEVEL_OWNER_MAX_AGE_MS: 24 * 60 * 60 * 1000,
+	/** See {@link TOP_LEVEL_OWNER_MAX} */
+	TOP_LEVEL_OWNER_MAX_CHARS: 3_000,
 } as const;
 
 /**
@@ -3800,6 +4145,20 @@ export const INPUT_BLOCKED_RETRY_CONSTANTS = {
 	 * per episode still meant an alert after every delivery (2026-10-05).
 	 */
 	NOTIFY_COOLDOWN_MS: 30 * 60 * 1000,
+	/**
+	 * Last step of the unreadable ladder (2026-10-08 Ella): an input box that
+	 * stays unreadable this long while messages are queued for the agent, and
+	 * the agent is not mid-turn, gets the session restarted (stop/start with
+	 * conversation resume) so the queue can drain (ms).
+	 */
+	RESTART_AFTER_UNREADABLE_MS: 10 * 60 * 1000,
+	/** At most one such restart per agent per this long (ms) */
+	RESTART_COOLDOWN_MS: 30 * 60 * 1000,
+	/**
+	 * Mid-turn for the restart check: a live spinner / busy bar on screen, or
+	 * agent output within this long (Crewly's own resize redraws excluded) (ms)
+	 */
+	RESTART_QUIET_MS: 2 * 60 * 1000,
 } as const;
 
 /**
@@ -3896,8 +4255,15 @@ export const SYSTEM_RESOURCE_ALERT_CONSTANTS = {
  * Shared Slack API limits used by both image and file upload services.
  */
 export const SLACK_API_LIMITS = {
-	/** Maximum allowed file size (20 MB — Slack limit) */
-	MAX_FILE_SIZE: 20 * 1024 * 1024,
+	/**
+	 * Maximum file size for Slack transfers in either direction (default 1 GB,
+	 * which is what Slack itself allows). Files are streamed to/from disk, never
+	 * buffered. Override with CREWLY_SLACK_MAX_FILE_BYTES.
+	 */
+	MAX_FILE_SIZE: ((): number => {
+		const fromEnv = Number(process.env.CREWLY_SLACK_MAX_FILE_BYTES);
+		return Number.isFinite(fromEnv) && fromEnv > 0 ? Math.floor(fromEnv) : 1024 * 1024 * 1024;
+	})(),
 	/** Maximum number of retry attempts for Slack API 429 responses */
 	UPLOAD_MAX_RETRIES: 3,
 	/** Default backoff delay (ms) when no Retry-After header is present */
@@ -3912,8 +4278,8 @@ export const SLACK_API_LIMITS = {
 export const SLACK_IMAGE_CONSTANTS = {
 	/** Temp directory for downloaded images (relative to ~/.crewly/) */
 	TEMP_DIR: 'tmp/slack-images',
-	/** Maximum allowed file size for image downloads (20 MB) */
-	MAX_FILE_SIZE: SLACK_API_LIMITS.MAX_FILE_SIZE,
+	/** Maximum allowed file size for image downloads (20 MB — images go to an LLM as vision input) */
+	MAX_FILE_SIZE: 20 * 1024 * 1024,
 	/** Supported image MIME types for download (SVG excluded — not accepted by LLM vision APIs) */
 	SUPPORTED_MIMES: ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const,
 	/**
@@ -3957,7 +4323,7 @@ export const SLACK_IMAGE_CONSTANTS = {
 export const SLACK_FILE_UPLOAD_CONSTANTS = {
 	/** Temp directory for generated PDFs (relative to ~/.crewly/) */
 	TEMP_DIR: 'tmp/slack-pdfs',
-	/** Maximum allowed file size for uploads (20 MB — Slack limit) */
+	/** Maximum allowed file size for uploads (streamed; see SLACK_API_LIMITS.MAX_FILE_SIZE) */
 	MAX_FILE_SIZE: SLACK_API_LIMITS.MAX_FILE_SIZE,
 	/** File extensions accepted for upload */
 	SUPPORTED_EXTENSIONS: [
@@ -3967,6 +4333,8 @@ export const SLACK_FILE_UPLOAD_CONSTANTS = {
 	] as const,
 	/** Maximum number of retry attempts for Slack API 429 responses */
 	UPLOAD_MAX_RETRIES: SLACK_API_LIMITS.UPLOAD_MAX_RETRIES,
+	/** Waits before each try of posting a privately uploaded image under an agent's name (the file needs a moment) */
+	PERSONA_IMAGE_WAITS_MS: [1_500, 3_000, 6_000] as readonly number[],
 	/** Default backoff delay (ms) when no Retry-After header is present */
 	UPLOAD_DEFAULT_BACKOFF_MS: SLACK_API_LIMITS.UPLOAD_DEFAULT_BACKOFF_MS,
 } as const;
@@ -4044,10 +4412,40 @@ export const SLACK_RECONNECT_CONSTANTS = {
 	PING_FAILURES_BEFORE_RECONNECT: 2,
 } as const;
 
+/**
+ * Fetching a Slack file by link or id (`slack-file get`, and files linked
+ * in an inbound message). Local bot tokens first, then Crewly Cloud, which
+ * holds every bot of the account (`POST /api/cloud/slack/files/fetch`).
+ */
+export const SLACK_FILE_FETCH_CONSTANTS = {
+	/** Largest file fetched (bytes) — same cap as Cloud */
+	MAX_BYTES: 25 * 1024 * 1024,
+	/** Cloud endpoint, appended to the cloud URL */
+	CLOUD_FETCH_PATH: '/api/cloud/slack/files/fetch',
+	/** Header carrying the file metadata on Cloud's raw answer (base64url JSON) */
+	CLOUD_META_HEADER: 'x-crewly-slack-file',
+	/** Local bot tokens tried at most */
+	MAX_LOCAL_CANDIDATES: 12,
+	/** Slack API / Cloud call timeout (ms) */
+	API_TIMEOUT_MS: 15_000,
+	/** Download timeout (ms) */
+	DOWNLOAD_TIMEOUT_MS: 60_000,
+	/** Redirect hops followed on a download */
+	MAX_REDIRECTS: 5,
+	/** Linked files auto-fetched per inbound message */
+	MAX_LINKED_PER_MESSAGE: 3,
+	/** Linked files larger than this are not auto-fetched (the agent can still run `slack-file get`) */
+	MAX_LINKED_BYTES: 5 * 1024 * 1024,
+	/** Lines of a text file shown inline by the skill */
+	PREVIEW_LINES: 20,
+	/** Characters of a text file shown inline by the skill */
+	PREVIEW_CHARS: 2000,
+} as const;
+
 export const SLACK_FILE_DOWNLOAD_CONSTANTS = {
 	/** Temp directory for downloaded files (relative to ~/.crewly/) */
 	TEMP_DIR: 'tmp/slack-files',
-	/** Maximum allowed file size for downloads (20 MB — Slack limit) */
+	/** Maximum allowed file size for downloads (streamed to disk; see SLACK_API_LIMITS.MAX_FILE_SIZE) */
 	MAX_FILE_SIZE: SLACK_API_LIMITS.MAX_FILE_SIZE,
 	/** Maximum concurrent file downloads per message */
 	MAX_CONCURRENT_DOWNLOADS: 3,
@@ -4433,6 +4831,8 @@ export const GOOGLE_WORKSPACE_CONSTANTS = {
 	/** Default / ceiling for Gmail search results per call */
 	GMAIL_DEFAULT_MAX_RESULTS: 20,
 	GMAIL_MAX_RESULTS_CEILING: 100,
+	/** Largest attachment the connector will hand to an agent (25 MB, Gmail's own send limit). */
+	GMAIL_ATTACHMENT_MAX_BYTES: 25 * 1024 * 1024,
 	/** Default / ceiling for Calendar list results per call */
 	CALENDAR_DEFAULT_MAX_RESULTS: 50,
 	CALENDAR_MAX_RESULTS_CEILING: 250,
@@ -4465,6 +4865,36 @@ export const GOOGLE_WORKSPACE_CONSTANTS = {
 	 * accept only `drive` or `drive.file`). Optional on the Cloud grant.
 	 */
 	DRIVE_FULL_SCOPE: 'https://www.googleapis.com/auth/drive',
+	/**
+	 * Gmail compose scope. `drafts.create` / `drafts.send` need it; grants made
+	 * before 2026-10-08 carry only `gmail.readonly` + `gmail.send` and answer
+	 * drafts with 403 "insufficient authentication scopes". Optional on the
+	 * Cloud grant, like {@link DRIVE_FULL_SCOPE}.
+	 */
+	GMAIL_COMPOSE_SCOPE: 'https://www.googleapis.com/auth/gmail.compose',
+	/**
+	 * Reconnect cards the harness posts to the owner when a Google call fails
+	 * for want of a scope, or because the grant expired / was revoked.
+	 */
+	REAUTH: {
+		/**
+		 * A card that went out less than this long ago is not repeated for the
+		 * same product + Google account (concurrent failures share one card);
+		 * after it, a new failure posts a fresh card unless the owner has
+		 * reconnected (ms)
+		 */
+		CARD_RESEND_AFTER_MS: 10 * 60 * 1000,
+		/** First wait between looks at Cloud for the reconnect (ms) */
+		POLL_INTERVAL_MS: 30_000,
+		/** The wait grows by this factor after each look... */
+		POLL_BACKOFF_FACTOR: 1.5,
+		/** ...up to this ceiling (ms) */
+		POLL_MAX_INTERVAL_MS: 15 * 60 * 1000,
+		/** The card link never expires, so keep watching for the reconnect this long (ms) */
+		WATCH_MS: 24 * 60 * 60 * 1000,
+		/** Give up posting the card after this long, so the skill call is not held (ms) */
+		POST_TIMEOUT_MS: 8_000,
+	},
 	/** Comments fetched per Drive `comments.list` page (Google's max is 100) */
 	COMMENTS_PAGE_SIZE: 100,
 	/** Pages read per `docs-comment list` before stopping (caps a huge thread) */
@@ -4477,6 +4907,12 @@ export const GOOGLE_WORKSPACE_CONSTANTS = {
 	SLIDES_MAX_SLIDES: 60,
 	/** Dashboard path the Cloud consent flow returns to */
 	SETTINGS_RETURN_PATH: '/connections?platform=google-workspace',
+	/**
+	 * Cloud portal page that starts Google consent. It mints the consent
+	 * ticket when the owner opens it, so a link to it never expires and
+	 * carries no credential. Query: `products=<csv>&account=<email>&auto=1`.
+	 */
+	PORTAL_CONNECT_PATH: '/portal/integrations/google',
 	/** Metadata headers requested on Gmail search hits */
 	GMAIL_SEARCH_HEADERS: ['From', 'To', 'Subject', 'Date'],
 	/** How often watched Gmail threads are checked for replies (one history.list per tick); must stay well under the 60 s wake promise */
@@ -4575,10 +5011,18 @@ export const CREWLY_APPS_CONSTANTS = {
 	PUBLISH_CLOSE_ABOVE_BYTES: 64 * 1024,
 	/** The publish route, for the dedicated body parser registered before the global one */
 	PUBLISH_ROUTE: '/api/apps/publish',
+	/** A file upload to an app (POST /api/apps/:appId/files): body cap here; Cloud applies its own, smaller one and its answer is passed through */
+	UPLOAD_BODY_LIMIT: '10mb',
+	UPLOAD_BODY_MAX_BYTES: 10 * 1024 * 1024,
 	/** Cloud request timeout (publish uploads can be large) */
 	REQUEST_TIMEOUT_MS: 120_000,
 	/** Default entry file of a bundle */
 	DEFAULT_ENTRY: 'index.html',
+	/** Owner file uploads (request-file): how often the inbox is read, and the error backoff ceiling */
+	FILE_REQUEST_POLL_MS: 15_000,
+	FILE_REQUEST_MAX_BACKOFF_MS: 5 * 60_000,
+	/** One inbox request may take at most this long */
+	FILE_REQUEST_TIMEOUT_MS: 20_000,
 	/** Change poller cadence and per-app error backoff ceiling */
 	POLL_INTERVAL_MS: 30_000,
 	POLL_MAX_BACKOFF_MS: 5 * 60_000,
@@ -4718,6 +5162,46 @@ export const CREWLY_APPS_CONSTANTS = {
 		/** Anchor fields shown in a wake */
 		MAX_WAKE_SELECTOR_CHARS: 200,
 		MAX_WAKE_TEXT_CHARS: 120,
+		/**
+		 * A comment for an app owned by a team or channel (crewly-services
+		 * apps/SPEC.md §15) is posted into that room after this short window (no
+		 * cooldown: each comment is its own thread there, and the room's rules
+		 * decide who is woken).
+		 */
+		ROOM_BATCH_WINDOW_MS: 5_000,
+		/** Owner text shown in the room's (and its Slack channel's) thread */
+		MAX_ROOM_BODY_CHARS: 2000,
+		/** Sender label of the owner's comment rows in a room */
+		ROOM_SENDER: 'Owner (app comment)',
+		/** chat-v2 `metadata.source` of rows written for app comments in a room */
+		ROOM_SOURCE: 'app-comment',
+	},
+	/**
+	 * Voice comments (crewly-services apps/SPEC.md §16): the owner records audio
+	 * in the app's comment box; this instance downloads it when the comment is
+	 * delivered and tells the agent the local path to transcribe.
+	 */
+	VOICE: {
+		/** Where recordings are saved (relative to the Crewly home), next to Slack's downloaded files */
+		DIR: 'tmp/app-comment-audio',
+		/** Largest recording accepted (Cloud's cap is 5 MB; a little slack) */
+		MAX_BYTES: 6 * 1024 * 1024,
+		/** One download */
+		DOWNLOAD_TIMEOUT_MS: 30_000,
+		/** Recordings fetched for one wake (the rest are named with the command to fetch them) */
+		MAX_PER_WAKE: 10,
+		/** Recording ids Cloud issues */
+		BLOB_ID_PATTERN: /^[a-z0-9]{16}$/,
+		/** File extension per audio type */
+		EXT: {
+			'audio/webm': 'webm',
+			'audio/mp4': 'm4a',
+			'audio/x-m4a': 'm4a',
+			'audio/aac': 'aac',
+			'audio/ogg': 'ogg',
+			'audio/mpeg': 'mp3',
+			'audio/wav': 'wav',
+		} as Readonly<Record<string, string>>,
 	},
 	/**
 	 * @mentions in comments (crewly-services apps/SPEC.md §12.1): this
@@ -4730,6 +5214,10 @@ export const CREWLY_APPS_CONSTANTS = {
 		MAX_AGENTS: 200,
 		MAX_NAME_CHARS: 60,
 		MAX_TEAM_CHARS: 80,
+		/** Teams / channels / members per channel pushed with the roster (Cloud's caps; app owners, SPEC §15) */
+		MAX_TEAMS: 100,
+		MAX_CHANNELS: 100,
+		MAX_CHANNEL_MEMBERS: 100,
 		/** An unchanged roster is re-pushed this often (Cloud drops one silent for 14 days) */
 		REFRESH_MS: 24 * 60 * 60_000,
 	},
@@ -4739,8 +5227,31 @@ export const CREWLY_APPS_CONSTANTS = {
 		/** Pages read per tick */
 		MAX_PAGES: 5,
 	},
+	/**
+	 * Marketplace app templates (crewly-services apps/SPEC.md §17,
+	 * specs/2026-10-08-app-templates.md): an agent asks, the owner taps Yes on
+	 * a decision card, Cloud lists it. Agents find and use templates before
+	 * building a new app.
+	 */
+	TEMPLATES: {
+		/** Shape of a template id */
+		ID_PATTERN: /^tpl-[a-km-np-z2-9]{10}$/,
+		/** How long the owner has to answer the card (nothing is listed without a yes) */
+		DECISION_DEADLINE_MS: 72 * 60 * 60_000,
+		/** Cloud's caps on what the agent sends */
+		MAX_DESCRIPTION_CHARS: 500,
+		MAX_TAGS: 8,
+		MAX_AUTHOR_CHARS: 60,
+		/** Results find-app-template returns by default / at most */
+		FIND_DEFAULT_LIMIT: 5,
+		FIND_MAX_LIMIT: 20,
+		/** The Marketplace page a template's card links to (`template=<id>` is appended) */
+		MARKETPLACE_URL: 'https://crewlyai.com/portal/marketplace?tab=apps',
+	},
 	/** Error codes the controller and skills share */
 	ERROR_CODES: {
+		/** A template's bundle holds something that looks like a secret or personal data (Cloud's scan) */
+		UNSAFE_CONTENT: 'unsafe_content',
 		NOT_YOUR_APP: 'not_your_app',
 		NOT_LOGGED_IN: 'not_logged_in',
 		NO_INSTANCE: 'instance_unknown',
@@ -4934,6 +5445,17 @@ export const CLOUD_SYNC_CONSTANTS = {
 	 * backs off so a relay that is refusing (quota, outage) is not hammered.
 	 */
 	REGISTER_RETRY_BACKOFF_MS: [30_000, 60_000, 120_000, 300_000] as readonly number[],
+	/**
+	 * Upper bound (ms) on honouring a relay 429 `Retry-After`. A daily-limit
+	 * 429 can ask for hours; we re-check at most this often so a limit that was
+	 * raised or reset is noticed without a restart.
+	 */
+	RETRY_AFTER_MAX_MS: 10 * 60_000,
+	/**
+	 * A machine with no queue must stay without one this long before the owner
+	 * is told (ms). One 429 at restart usually clears on the next retry.
+	 */
+	QUEUE_OUTAGE_NOTIFY_AFTER_MS: 5 * 60 * 1000,
 	/** Device considered offline after this threshold (ms) */
 	OFFLINE_THRESHOLD_MS: 60_000,
 	/** HTTP request timeout for sync API calls (ms) */
@@ -5241,6 +5763,12 @@ export const OWNER_RECEIPT_CONSTANTS = {
 } as const;
 
 /**
+ * Hours a ticket waits in 待验收 with no objection before silence accepts it
+ * (default 24).
+ */
+export const REVIEW_AUTO_ACCEPT_HOURS = 24;
+
+/**
  * Ticket loop (specs/ticket-loop.md, Phase 1): owner messages become tickets
  * (a `Request` with a TKT number), receipts go back where the owner spoke,
  * and WorkItems link back to the ticket.
@@ -5363,17 +5891,17 @@ export const TICKET_CONSTANTS = {
 	SLACK_DISMISS_ACTION_ID: 'ticket_dismiss',
 	/** Receipt texts */
 	RECEIPT: {
-		RECORDED: (tkt: string) => `已记成 ${tkt}`,
-		DISMISSED: (tkt: string) => `${tkt} 已取消记录`,
+		RECORDED: (tkt: string) => `Recorded as ${tkt}`,
+		DISMISSED: (tkt: string) => `${tkt} is no longer tracked`,
 		/** chat-v2 receipt once the ticket is accepted */
-		DONE: (tkt: string) => `${tkt} 已完成`,
+		DONE: (tkt: string) => `${tkt} is done`,
 		/** Slack receipt: this reaction on the owner's message (no reply, no notification) */
 		REACTION: 'ticket',
 		/** Slack: the 🎫 becomes this once the ticket is accepted */
 		DONE_REACTION: 'white_check_mark',
 		/**
 		 * Receipts are off (owner, 2026-09-24): tickets are Crewly's own record
-		 * of the work — no 🎫 / ✅ / 「已记成 TKT-…」 in the owner's conversations.
+		 * of the work — no 🎫 / ✅ / "Recorded as TKT-…" in the owner's conversations.
 		 */
 		ENABLED: false,
 	},
@@ -5405,7 +5933,11 @@ export const TICKET_CONSTANTS = {
 		 * did (owner, 2026-09-28: 43 tickets sat in 待验收; the old 24h → nudge →
 		 * 24h → nudge → 24h chain took 72h+ and restarted on every re-answer).
 		 */
-		AUTO_ACCEPT_MS: 24 * 60 * 60 * 1000,
+		AUTO_ACCEPT_MS: REVIEW_AUTO_ACCEPT_HOURS * 60 * 60 * 1000,
+		/** Why a ticket was accepted without the owner's word (ticket discussion note + log) */
+		AUTO_ACCEPT_REASON: 'auto-accepted: no objection',
+		/** Author of that note */
+		AUTO_ACCEPT_NOTE_AUTHOR: 'crewly',
 		/**
 		 * The agent that answered asks the owner itself (owner, 2026-09-24):
 		 * with no word from the owner this long after the answer, the agent is
@@ -5448,9 +5980,9 @@ export const TICKET_CONSTANTS = {
 		/** 「打回 <reason>」 — send it back; group 2 is the reason */
 		REJECT_PATTERN: /^\s*(打回|退回|重做|不通过|reject(ed)?|redo)\s*[:：,，。.\-—]*\s*([\s\S]*)$/i,
 		/** Reason recorded when 打回 came without one */
-		REJECT_NO_REASON: '（未写原因）',
+		REJECT_NO_REASON: '(no reason given)',
 		/** WorkItem title for a rework sent from the board */
-		REWORK_TITLE: (tkt: string) => `打回 ${tkt}`,
+		REWORK_TITLE: (tkt: string) => `Sent back ${tkt}`,
 	},
 	/**
 	 * Follow-ups vs new tickets (owner, 2026-09-28): an answer to an agent's
@@ -5463,6 +5995,8 @@ export const TICKET_CONSTANTS = {
 		 * still takes follow-ups into that ticket instead of opening a new one.
 		 */
 		RECENT_TICKET_MS: 3 * 24 * 60 * 60 * 1000,
+		/** A chase matches only tickets with activity in this window */
+		CHASE_MATCH_WINDOW_MS: 14 * 24 * 60 * 60 * 1000,
 		/**
 		 * In a DM (every message is top level) a reply this soon after the
 		 * conversation's latest ticket activity is a follow-up to that ticket.
@@ -5523,6 +6057,19 @@ export const POOL_ARCHIVE_CONSTANTS = {
 	MIN_AGE_MS: 7 * 24 * 60 * 60 * 1000,
 	/** Terminal statuses that are archived once old enough */
 	TERMINAL_STATUSES: ['verified', 'done', 'failed', 'cancelled'],
+} as const;
+
+/**
+ * Ongoing pruning of the task pool (crewly#1108). The pool file is rewritten
+ * whole on every write, and finished items and ended claims were never
+ * removed (13 MB, 5,600 claims): writes queued behind each other. Old
+ * finished items and ended claims move to the dated archive file.
+ */
+export const POOL_PRUNE_CONSTANTS = {
+	/** A finished item (and the ended claims on it) is kept in the live pool this long (ms) */
+	RETENTION_MS: 7 * 24 * 60 * 60 * 1000,
+	/** How often the prune runs after boot (ms) */
+	INTERVAL_MS: 6 * 60 * 60 * 1000,
 } as const;
 
 /**
@@ -5817,7 +6364,7 @@ export const ONBOARDING_CONSTANTS = {
 	/** Longest first task accepted */
 	FIRST_TASK_MAX_LENGTH: 4000,
 	/** First line of the message the orchestrator receives for a first task */
-	FIRST_TASK_HEADER: '[初始设置 · 第一件事]',
+	FIRST_TASK_HEADER: '[Initial setup · first task]',
 	/** Chat metadata `source` of a first task sent from setup */
 	FIRST_TASK_SOURCE: 'onboarding_first_task',
 	/** Query parameter that opens `/setup` at a step (e.g. `/setup?step=cloud`) */
@@ -5867,13 +6414,13 @@ export const BUNDLE_CONSTANTS = {
 	STEP_ORDER: ['team', 'norms', 'skills', 'connectors', 'slack', 'schedules', 'first_week'] as readonly string[],
 	/** Owner-facing step labels */
 	STEP_LABELS: {
-		team: '建团队',
-		norms: '写团队规范和 SOP',
-		skills: '装技能',
-		connectors: '检查要接的服务',
-		slack: '建 Slack 频道',
-		schedules: '排定时任务',
-		first_week: '安排第一周的工作',
+		team: 'Set up the team',
+		norms: 'Write team norms and SOPs',
+		skills: 'Install skills',
+		connectors: 'Check the services to connect',
+		slack: 'Create Slack channels',
+		schedules: 'Schedule recurring tasks',
+		first_week: 'Plan the first week of work',
 	} as Readonly<Record<string, string>>,
 	/** Why a step is waiting (status `pending`) */
 	PENDING_REASONS: {
@@ -5895,7 +6442,7 @@ export const BUNDLE_CONSTANTS = {
 	/** Chat metadata `source` of a first-week task */
 	FIRST_WEEK_SOURCE: 'bundle_first_week',
 	/** First line of a first-week task the orchestrator receives */
-	FIRST_WEEK_HEADER: '[成套方案 · 第一周]',
+	FIRST_WEEK_HEADER: '[Solution bundle · week one]',
 	/** How often the backend delivers due first-week tasks and resumes waiting deployments */
 	TICK_INTERVAL_MS: 5 * 60 * 1000,
 	/** How often `crewly deploy-bundle` polls a running backend's job */
@@ -6030,6 +6577,17 @@ export const SKILL_SETUP_CONSTANTS = {
  * Column vocabularies for the first-class copies of what used to live only
  * in `chat_messages.metadata`.
  */
+export const CHAT_SEARCH_CONSTANTS = {
+	/** Default number of hits */
+	DEFAULT_LIMIT: 10,
+	/** Most hits one search returns */
+	MAX_LIMIT: 30,
+	/** Characters of a message kept in a hit */
+	SNIPPET_CHARS: 300,
+	/** Most keywords used (extra words are ignored) */
+	MAX_TERMS: 6,
+} as const;
+
 export const CONVERSATION_LOG_CONSTANTS = {
 	/** `chat_messages.source` values — which surface a message belongs to. */
 	SOURCES: ['slack', 'crewly-chat', 'cloud-talk', 'google-chat', 'telegram', 'whatsapp', 'system', 'runtime'],
@@ -6490,6 +7048,12 @@ export const DECISION_CONSTANTS = {
 	 * (specs/2026-10-02-decision-card-thread-answers.md §2) (ms)
 	 */
 	WAIT_REMINDER_DELAY_MS: 30 * 60 * 1000,
+	/**
+	 * `wait` default: a card still unanswered this long after its one reminder
+	 * (a lifted reply question: after the deadline notice, it never gets a
+	 * reminder) expires instead of staying open for days (#1243) (ms)
+	 */
+	WAIT_EXPIRE_AFTER_REMINDER_MS: 24 * 60 * 60 * 1000,
 	/** Max characters of a withdrawn card's reason ("Closed — <reason>") */
 	CLOSED_REASON_MAX_CHARS: 120,
 	/** Withdraw reasons the harness itself uses (cancelWhere notes) */
@@ -6497,7 +7061,23 @@ export const DECISION_CONSTANTS = {
 		TICKET_DONE: 'ticket done',
 		TICKET_CANCELLED: 'ticket cancelled',
 		HANDLED_IN_THREAD: 'already handled in this thread',
+		/** `answered in D-7`: the same question, answered on another card */
+		ANSWERED_IN_PREFIX: 'answered in ',
+		/** `answered by your reply to D-7`: the owner's words on another card moved the thread on */
+		ANSWERED_BY_REPLY_PREFIX: 'answered by your reply to ',
+		/** The open item the card tracked expired (nothing happened for 7 days) */
+		STALE: 'no longer needed',
 	},
+	/**
+	 * Two questions with at least this character-bigram overlap, from the same
+	 * asker in the same thread / ticket / request, are one question: a new ask
+	 * reuses the open card, and an answer closes the other open ones.
+	 */
+	SAME_OPEN_QUESTION_SIMILARITY: 0.6,
+	/** A settled card Slack refused to update (buttons still live) is retried this often (ms) */
+	CARD_SYNC_RETRY_MS: 5 * 60 * 1000,
+	/** Open cards are checked this often for what they track having closed (then withdrawn silently) (ms) */
+	MOOT_CHECK_MS: 10 * 60 * 1000,
 } as const;
 
 /**
@@ -6531,6 +7111,12 @@ export const OPEN_ITEMS_CONSTANTS = {
 	OWNER_NOTE_AFTER_NUDGE_MS: 2 * 60 * 60 * 1000,
 	/** An item still active this long after it was made is expired (ms) */
 	EXPIRE_AFTER_MS: 7 * 24 * 60 * 60 * 1000,
+	/**
+	 * A commitment older than this is "stale": before it is resurfaced (nudge, ready wake, restart
+	 * reminder) Crewly checks whether the owner already answered or the ticket is done, and the agent
+	 * is told to verify it is still needed before contacting the owner (ms)
+	 */
+	STALE_VERIFY_AFTER_MS: 24 * 60 * 60 * 1000,
 	/** Requests looked at by the sweep and the backfill: updated within (ms) */
 	LOOKBACK_MS: 7 * 24 * 60 * 60 * 1000,
 	/** The backfill only looks at promises and questions made within this long before it runs (ms) */
@@ -6542,6 +7128,8 @@ export const OPEN_ITEMS_CONSTANTS = {
 	DELIVERY_FINISH_GRACE_MS: 10 * 60 * 1000,
 	/** Sweep cadence (ms) */
 	SWEEP_INTERVAL_MS: 60 * 1000,
+	/** A conditional promise (waiting on the owner) with no gate anyone can answer is surfaced to the owner after this long (ms) */
+	GATE_SURFACE_AFTER_MS: 24 * 60 * 60 * 1000,
 	/** An ask-owner decision this close in time to the reply, by the same agent, is the same question (ms) */
 	ASK_OWNER_DEDUPE_WINDOW_MS: 2 * 60 * 60 * 1000,
 	/** Two questions with at least this character-bigram overlap are the same question */
@@ -6550,6 +7138,18 @@ export const OPEN_ITEMS_CONSTANTS = {
 	YES_LABEL: 'Yes',
 	NO_LABEL: 'No',
 	REPLY_LABEL: 'Reply in thread',
+	/** A lifted question shorter than this (characters) gets its subject prepended (#1242) */
+	QUESTION_MIN_CHARS: 20,
+	/** Still shorter than this after the subject was added (characters): too vague for a card, tracked without one */
+	QUESTION_VAGUE_CHARS: 12,
+	/** Suffix of the option the agent recommended */
+	RECOMMENDED_SUFFIX: ' (recommended)',
+	/** A sentence that recommends something ("我推荐 A", "I recommend B") */
+	RECOMMENDATION_PATTERN: /推荐|建议|我倾向|倾向于|我的看法|\bi(?:'d| would)? recommend|\bi suggest|\bmy recommendation|\bi(?:'d| would)? lean\b/iu,
+	/** A recommendation that argues against doing it ("不建议", "don't recommend") */
+	RECOMMENDATION_NEGATIVE_PATTERN: /不建议|不推荐|不要|别|不用|(?:do not|don'?t|wouldn'?t|not) (?:recommend|suggest)/iu,
+	/** A project ticket id named in a promise ("CE-16"); the work done under it fulfils the promise wherever it ran (crewly#1037) */
+	PROJECT_TICKET_REF_PATTERN: /\b[A-Z]{2,6}-\d{1,5}\b/g,
 	/** `WorkItem.metadata` key of a follow-up WorkItem */
 	FOLLOW_UP_METADATA_KEY: 'openItemFollowUp',
 	/**
@@ -6561,20 +7161,32 @@ export const OPEN_ITEMS_CONSTANTS = {
 	CANCELLED_BY_METADATA_KEY: 'cancelledBy',
 	/** The one line every agent prompt carries */
 	PROMPT_LINE:
-		'If you promise the owner something or ask them a question, say it plainly; Crewly tracks it. Use `ask-owner` for real decisions.',
-	/** Max characters of the quoted context a question card carries when its question points back at earlier text */
-	CONTEXT_EXCERPT_MAX_CHARS: 300,
+		'If you promise the owner something or ask them a question, say it plainly; Crewly tracks it. Use `ask-owner` for real decisions. ' +
+		'Never re-ask the owner for something old without first checking whether it already happened (the thread since, the ticket status, the Sent folder / existing drafts for email work).',
 	/**
-	 * Words that make a question point back at earlier text ("这样安排行不行？", "Does this plan work?"):
-	 * such a card carries a quoted context block (specs/2026-10-02-decision-card-thread-answers.md §5)
+	 * Max characters of the agent's own words quoted on a question card (the
+	 * paragraph(s) before the question). Every auto-extracted question card
+	 * carries context: a question lifted out of a message must stand on its own.
+	 */
+	CONTEXT_EXCERPT_MAX_CHARS: 500,
+	/** Max characters of a quoted / fenced block (a draft) the question refers to */
+	CONTEXT_BLOCK_MAX_CHARS: 1200,
+	/** Max characters of the "About:" line (the owner's original ask) */
+	CONTEXT_ABOUT_MAX_CHARS: 200,
+	/**
+	 * Words that make a question point back at earlier text ("这样安排行不行？", "按这个草稿回？",
+	 * "Does this plan work?"): its card prefers the text right before it and
+	 * quotes the block (draft) it points at (specs/2026-10-02-decision-card-thread-answers.md §5)
 	 */
 	REFERS_BACK_PATTERNS: [
 		/这样(?:安排|做|处理|弄|改|搞|分工|设置|配置)?/u,
-		/(?:这个|那个|上述|上面的?|以上的?|刚才的?|前面的?|之前说的|上次说的)(?:方案|安排|计划|做法|思路|建议|办法|想法|改动|版本|设计|方向)/u,
-		/如上|上面(?:说|讲|列|提)的|以上|上述|刚才说的|前面说的|上次说的|之前说的/u,
-		/\b(?:this|that|these|those) (?:plan|arrangement|approach|proposal|setup|change|idea|option|draft|version|layout)\b/i,
-		/\b(?:the above|as above|above plan|as discussed|as described|what i (?:said|described|proposed))\b/i,
+		/(?:这个|那个|这份|那份|这条|那条|这篇|那篇|这版|上述|上面的?|以上的?|刚才的?|前面的?|之前说的|上次说的)(?:方案|安排|计划|做法|思路|建议|办法|想法|改动|版本|设计|方向|草稿|稿子|初稿|文案|回复|帖子|邮件|内容|清单|列表|消息)/u,
+		/如上|上面(?:说|讲|列|提|写)的|以上|上述|刚才说的|前面说的|上次说的|之前说的/u,
+		/\b(?:this|that|these|those|the above|my) (?:plan|arrangement|approach|proposal|setup|change|idea|option|draft|version|layout|reply|response|post|email|message|list|text|copy|wording)s?\b/i,
+		/\b(?:the above|as above|above plan|as discussed|as described|what i (?:said|described|proposed|wrote|drafted))\b/i,
 	] as readonly RegExp[],
+	/** Words of a question about a draft: its card quotes the fenced / quoted block of the message */
+	DRAFT_WORD_PATTERN: /草稿|稿子|初稿|文案|回复|帖子|邮件|\bdraft|\breply\b|\bpost\b|\bemail\b|\bwording\b|\bcopy\b/iu,
 } as const;
 
 /**
@@ -6590,6 +7202,38 @@ export const WORK_ITEM_DESTINATION_CONSTANTS = {
 	TOPIC_MAX_CHARS: 120,
 	/** The one line every prompt carries about where to answer */
 	PROMPT_LINE: 'Answer where you were asked; a new topic goes in a new thread.',
+} as const;
+
+/**
+ * Finished owner-requested work is reported back where the owner asked
+ * (2026-10-07: CREW-305/309/310 were all verified and nobody told the owner).
+ * See `services/orc/owner-completion-report.service.ts`.
+ */
+export const OWNER_COMPLETION_REPORT_CONSTANTS = {
+	/** How often the pool is scanned for finished owner chains (ms) */
+	TICK_MS: 60_000,
+	/** A chain must stay finished this long before the report is asked for — the lead may still be handing out the next step (ms) */
+	SETTLE_MS: 5 * 60_000,
+	/** Wait for the report after asking (and again after the one reminder) (ms) */
+	REPORT_WAIT_MS: 20 * 60_000,
+	/** Chains whose first item is older than this are never reported (ms) */
+	MAX_CHAIN_AGE_MS: 14 * 24 * 60 * 60_000,
+	/** Finished chain records are forgotten after this long (ms) */
+	RECORD_TTL_MS: 30 * 24 * 60 * 60_000,
+	/** Store file under CREWLY_HOME */
+	STORE_FILE: 'owner-completion-reports.json',
+	/** Titles named in a message (the rest are counted) */
+	MAX_TITLES: 5,
+	/** Max characters of one title in a message */
+	TITLE_MAX_CHARS: 90,
+	/** Max evidence lines in the fallback post */
+	MAX_EVIDENCE_LINES: 6,
+	/** Max characters of one evidence line */
+	EVIDENCE_LINE_MAX_CHARS: 200,
+	/** An app comment / relayed owner request stays the agent's current request this long (ms) */
+	CONTEXT_FRESH_MS: 2 * 60 * 60 * 1000,
+	/** Max sessions the owner-request context registry remembers */
+	MAX_CONTEXT_SESSIONS: 500,
 } as const;
 
 /**
@@ -7190,4 +7834,874 @@ export const TEAM_PAUSE_CONSTANTS = {
 	SLACK_NOTICE_MEMORY: 2000,
 	/** Metadata key on a WorkItem unassigned because its team was paused */
 	UNASSIGNED_METADATA_KEY: 'pausedTeamUnassigned',
+} as const;
+
+/**
+ * Scheduled commands: an owner-edited list of host commands the backend runs
+ * on an interval (e.g. the crewly-web release script). Read from disk only.
+ */
+export const SCHEDULED_COMMANDS = {
+	/** Config file under CREWLY_HOME; absent = feature off */
+	CONFIG_FILE: 'scheduled-commands.json',
+	/** Directory under CREWLY_HOME that receives each command's stdout/stderr */
+	LOG_DIR: 'logs',
+	/** Log file name pattern; `{name}` is the entry name */
+	LOG_FILE_TEMPLATE: 'scheduled-{name}.log',
+	/** Shortest interval accepted (minutes); smaller values are rejected */
+	MIN_INTERVAL_MINUTES: 1,
+	/** Delay before the first run after boot (ms), so restarts do not starve a run */
+	INITIAL_DELAY_MS: 30_000,
+	/** Entry names: letters, digits, dot, dash, underscore */
+	NAME_PATTERN: /^[A-Za-z0-9._-]{1,64}$/,
+	/** Milliseconds per minute */
+	MS_PER_MINUTE: 60_000,
+} as const;
+
+/**
+ * Remote MCP servers (Zoho MCP and any other streamable-HTTP MCP server) the
+ * owner connects in Connections. The URL usually carries the server's key,
+ * so it is stored only under CREWLY_HOME and never logged or echoed.
+ */
+export const REMOTE_MCP_CONSTANTS = {
+	/** Store file under CREWLY_HOME (mode 0600). */
+	STORE_FILE: 'remote-mcp-servers.json',
+	/** Per-agent launch files under CREWLY_HOME (mode 0600, one dir per session). */
+	RUNTIME_DIR: 'runtime/remote-mcp',
+	/** Claude Code `--mcp-config` file name inside a session's runtime dir. */
+	CLAUDE_CONFIG_FILE: 'claude-mcp.json',
+	/** Connector-access id prefix: `mcp:<id>`. */
+	CONNECTOR_PREFIX: 'mcp:',
+	/** Server ids (also the MCP server name in the runtime config). */
+	ID_PATTERN: /^[a-z0-9][a-z0-9_-]{0,39}$/,
+	/** Longest label kept. */
+	MAX_LABEL_LENGTH: 60,
+	/** Longest URL accepted. */
+	MAX_URL_LENGTH: 2048,
+	/** Most servers one instance may hold. */
+	MAX_SERVERS: 30,
+	/** Test (initialize + tools/list) timeout per request, ms. */
+	TEST_TIMEOUT_MS: 15_000,
+	/** MCP protocol version sent on initialize. */
+	PROTOCOL_VERSION: '2025-03-26',
+	/** Most tool names returned by a test. */
+	MAX_TOOL_NAMES: 50,
+	/** Catalog presets the add form offers. */
+	PROVIDERS: ['zoho', 'custom'] as readonly string[],
+	/**
+	 * Tools an AGENT may never call through the proxy, per server kind (the
+	 * server's provider, or its id when it has none). Compared after
+	 * trim + NFKC + lower-casing, so case and width tricks do not bypass it.
+	 * Zoho has no draft tool: a draft is a mode of sendEmail, so one missing
+	 * field sends mail. Mail is only ever drafted through the backend's
+	 * draft-only path (CREW-400). resendVerification* mails an address a
+	 * verification link; denied too since an agent has no reason to trigger it.
+	 */
+	DENIED_AGENT_TOOLS: {
+		zoho: [
+			'ZohoMail_sendEmail',
+			'ZohoMail_sendReplyEmail',
+			'ZohoMail_resendVerificationReplyToAdmin',
+			'ZohoMail_resendVerificationReplyToSelf',
+		],
+	} as Record<string, readonly string[]>,
+	/** Zoho tool that saves a draft when `mode` is `draft` (it is the only send tool Zoho has). */
+	ZOHO_DRAFT_TOOL: 'ZohoMail_sendEmail',
+	/** Zoho tool listing the mail accounts (to find an account id from an address). */
+	ZOHO_ACCOUNTS_TOOL: 'ZohoMail_getMailAccounts',
+	/** Timeout for one draft (initialize + call), ms. */
+	ZOHO_DRAFT_TIMEOUT_MS: 30_000,
+	/** Message an agent gets when it calls a denied tool. */
+	DENIED_TOOL_MESSAGE: 'sending mail is not allowed for agents; save a draft instead',
+	/**
+	 * OAuth state (clients, tokens, pending sign-ins) under CREWLY_HOME:
+	 * AES-256-GCM with the install's master key, mode 0600.
+	 */
+	OAUTH_STORE_FILE: 'remote-mcp-oauth.enc',
+	/** Master key the OAuth store is encrypted with (under CREWLY_HOME). */
+	OAUTH_MASTER_KEY_FILE: 'credentials/master.key',
+	/** Cloud broker that hosts the public redirect URI (crewly-services auth). */
+	OAUTH_CLOUD_PATH: '/api/cloud/mcp-oauth',
+	/** Client name sent in dynamic client registration. */
+	OAUTH_CLIENT_NAME: 'Crewly',
+	/** Refresh an access token this long before it expires (Zoho's last ~1 h). */
+	OAUTH_REFRESH_MARGIN_MS: 5 * 60_000,
+	/** Assumed lifetime when the token endpoint omits expires_in. */
+	OAUTH_DEFAULT_TOKEN_TTL_MS: 60 * 60_000,
+	/** Discovery / registration / token request timeout. */
+	OAUTH_REQUEST_TIMEOUT_MS: 15_000,
+	/** Poll the Cloud broker this often while the link is untapped. */
+	OAUTH_POLL_SLOW_MS: 20_000,
+	/** ...and this often once the owner has opened it. */
+	OAUTH_POLL_FAST_MS: 2_000,
+	/** Post the "sign in" card for a server at most this often while its link is unused. */
+	OAUTH_CARD_THROTTLE_MS: 6 * 60 * 60_000,
+	/** Agent → backend proxy path suffix: `/api/connectors/remote-mcp/<id>/mcp`. */
+	PROXY_SUFFIX: '/mcp',
+	/** JSON-RPC error code the proxy answers with when the owner must sign in. */
+	PROXY_NEEDS_AUTH_RPC_CODE: -32001,
+} as const;
+
+/**
+ * Reconciler wake pacing (CREW-304). On 2026-10-06 the reconciler traced
+ * 2,295 failed wakes in 6h for two CE sessions — one per 10s fast-loop tick —
+ * because a wake that did not work was simply asked again next tick.
+ */
+export const RECONCILER_WAKE_CONSTANTS = {
+	/** First wait after a failed start / rehydrate / redeliver for one session + WorkItem (ms) */
+	FAILURE_BACKOFF_BASE_MS: 60_000,
+	/** Ceiling of the doubling failure backoff (ms) */
+	FAILURE_BACKOFF_MAX_MS: 30 * 60_000,
+	/**
+	 * How long a pass waits on a start before treating it as pending (ms). A
+	 * start queued behind the running-agent cap can wait minutes for a slot;
+	 * the reconciler must not stall every other rule meanwhile, nor ask again.
+	 */
+	START_AWAIT_MS: 15_000,
+} as const;
+
+/**
+ * Stalled-agent recovery (CREW-303). A member with queued work that nobody
+ * progresses — its session stopped, hung, or idle — is restarted by the
+ * reconciler instead of waiting for an owner (Owen, 2026-10-06: verify items
+ * queued 13:09–17:50Z with his session down and nothing restarting it).
+ */
+export const STALLED_AGENT_RECOVERY_CONSTANTS = {
+	/** Queued work this old (ms, since it was queued) marks its target as stalled */
+	QUEUED_WORK_AGE_MS: 20 * 60_000,
+	/**
+	 * Work a STOPPED agent still holds (running / accepted / proposed, or blocked
+	 * by its outage) marks it as stalled once it has been down this long (ms).
+	 */
+	HELD_WORK_STOPPED_MS: 10 * 60_000,
+	/** An awake agent counts as idle-not-progressing after this long without activity (ms) */
+	IDLE_NO_PROGRESS_MS: 20 * 60_000,
+	/** One recovery per session at most this often (ms) */
+	RECOVERY_COOLDOWN_MS: 30 * 60_000,
+	/**
+	 * Dropout reasons that mean the HARNESS parked the agent (idle stop, slot
+	 * freed for another agent, Crewly update, finished its task, stalled-work
+	 * recovery). A team dormant only because of these is resuming, not being
+	 * launched: the reconciler's own wake for that team's queued work does not
+	 * need a fresh owner approval.
+	 */
+	HARNESS_PARK_REASONS: ['idle_exit', 'idle_exit_pressure', 'update_exit', 'task_complete'] as readonly string[],
+	/** A parked team counts as resuming for this long after the park (ms) */
+	PARKED_RESUME_WINDOW_MS: 24 * 60 * 60_000,
+} as const;
+
+/**
+ * Owner-thread sentinel (specs/2026-10-08-owner-thread-sentinel.md): an owner
+ * Slack thread where an agent promised something, or has owner work / a card
+ * in flight, is never left silent when that agent gets stuck.
+ */
+export const OWNER_THREAD_SENTINEL_CONSTANTS = {
+	/** Persisted state under CREWLY_HOME */
+	STORE_FILENAME: 'owner-thread-sentinel.json',
+	/** Evaluation cadence (promise deadlines, re-asks, restart lines) */
+	TICK_MS: 30 * 1000,
+	/** A thread stays watched this long after the owner's last unanswered message / the agent's last promise */
+	ACTIVE_WINDOW_MS: 6 * 60 * 60 * 1000,
+	/** Threads with no activity for this long are forgotten */
+	FORGET_AFTER_MS: 24 * 60 * 60 * 1000,
+	/** The same status is never posted again in a thread within this window (flapping guard) */
+	REPEAT_STATE_MS: 10 * 60 * 1000,
+	/** Two informational status lines in one thread are at least this far apart (actionable ones are not held) */
+	MIN_INFO_GAP_MS: 2 * 60 * 1000,
+	/** A promise of "~N min" is overdue at N times this factor */
+	DEADLINE_FACTOR: 1.5,
+	/** Floor of a promise deadline (ms) */
+	MIN_DEADLINE_MS: 3 * 60 * 1000,
+	/**
+	 * A promise with no stated time ("做好发到 #x", "I'll post the result") is
+	 * overdue after this much silence from the agent in the thread (#1240) (ms)
+	 */
+	NO_ETA_SILENCE_MS: 45 * 60 * 1000,
+	/** Longest promise the sentinel times (longer ones are not timed) */
+	MAX_PROMISE_MINUTES: 8 * 60,
+	/** Slot freeing / idle stop spare an agent whose owner message or promise is this recent */
+	RECENT_PROMISE_MS: 30 * 60 * 1000,
+	/** After an approval card expires, the agent has this long to ask again before it is nudged once */
+	REASK_GRACE_MS: 3 * 60 * 1000,
+	/** At most this many threads get a line for one agent-wide event */
+	MAX_THREADS_PER_EVENT: 1,
+	/** Cap on tracked threads (oldest dropped) */
+	MAX_THREADS: 500,
+	/** Characters of a reason / question quoted in a status line */
+	QUOTE_CHARS: 160,
+	/** Cards older than this do not make their asker "work in hand" at boot */
+	BOOT_CARD_MAX_AGE_MS: 24 * 60 * 60 * 1000,
+	/** A card goes into an owner thread only when that thread was active this recently */
+	CARD_THREAD_MAX_AGE_MS: 2 * 60 * 60 * 1000,
+} as const;
+
+/**
+ * Drive mode briefing (specs/2026-10-08-drive-mode.md): the owner's queue of
+ * things waiting on them, read out one at a time by the voice briefer.
+ */
+export const BRIEFING_CONSTANTS = {
+	/** Per-machine state file under CREWLY_HOME (snoozes, passes, pending lookups) */
+	STATE_FILENAME: 'briefing-state.json',
+	/** "Next" / skip hides an item for this long without settling it (ms) */
+	SKIP_HIDE_MS: 6 * 60 * 60 * 1000,
+	/** "Later" with no time: tomorrow at this local hour */
+	LATER_DEFAULT_HOUR_LOCAL: 9,
+	/** Longest snooze accepted (ms) */
+	LATER_MAX_MS: 30 * 24 * 60 * 60 * 1000,
+	/** A decision whose deadline is this close counts as urgent (ms) */
+	URGENT_DEADLINE_MS: 2 * 60 * 60 * 1000,
+	/** A ticket that silence accepts this soon counts as normal instead of low (ms) */
+	REVIEW_SOON_MS: 6 * 60 * 60 * 1000,
+	/** A pending lookup older than this is given up and the item comes back (ms) */
+	LOOKUP_GIVE_UP_MS: 24 * 60 * 60 * 1000,
+	/** Spoken summary: longest length (characters) */
+	SUMMARY_MAX_CHARS: 220,
+	/** Details: longest length (characters) */
+	DETAILS_MAX_CHARS: 2400,
+	/** An agent's lookup answer: longest length handed to the briefer (characters) */
+	LOOKUP_ANSWER_MAX_CHARS: 1500,
+	/** Owner answer / question: longest length accepted (characters) */
+	TEXT_MAX_CHARS: 2000,
+	/** Items listed at most */
+	MAX_ITEMS: 50,
+	/** A confirmation token stays valid this long (ms) */
+	CONFIRM_TTL_MS: 3 * 60 * 1000,
+	/** Agent timeline messages looked at for a lookup answer */
+	LOOKUP_SCAN_LIMIT: 30,
+	/** An open card this long past its deadline is stale, not read out (ms) */
+	CARD_STALE_AFTER_DEADLINE_MS: 24 * 60 * 60 * 1000,
+	/** A card (or reply question) asked longer ago than this is stale, not read out (ms) */
+	CARD_MAX_AGE_MS: 7 * 24 * 60 * 60 * 1000,
+	/** A finished ticket in review longer than this is stale, not asked about (ms) */
+	REVIEW_MAX_AGE_MS: 3 * 24 * 60 * 60 * 1000,
+	/** A message this long (CJK counts double) with no request verb is a reflective voice note, not an ask */
+	REVIEW_DISCUSSION_MIN_WEIGHTED: 220,
+	/** Review line: longest quote of what the owner asked (characters) */
+	REVIEW_ASK_MAX_CHARS: 70,
+	/** Review item label (what the owner asked, for lists): longest length (characters) */
+	REVIEW_LABEL_MAX_CHARS: 40,
+	/** Review line: longest quote of what the agent reports (characters) */
+	REVIEW_RESULT_MAX_CHARS: 110,
+	/** Two cards from one asker whose questions are at least this similar (0–1, character bigrams) are duplicates */
+	CARD_DUPLICATE_SIMILARITY: 0.6,
+	/** Words in a title / question that make an item sensitive (spoken confirmation required) */
+	SENSITIVE_PATTERN:
+		/\b(deploy|deployment|release|publish|ship to prod|production|send (an? )?e-?mail|email (them|him|her|the)|delete|remove|drop|wipe|refund|pay|payment|charge|purchase|buy|invoice|transfer|spend)\b|上线|发布|部署|删除|清空|付款|支付|转账|退款|购买|发邮件|发送邮件|群发/i,
+	/** Decision sensitivities that always need a spoken confirmation */
+	SENSITIVE_DECISION_KINDS: ['email', 'publish', 'deploy', 'spend', 'browser_action', 'app_access'] as const,
+	/** Error codes returned to the page / the voice model */
+	CODES: {
+		OWNER_ONLY: 'owner_only',
+		NOT_FOUND: 'not_found',
+		NOT_READY: 'not_ready',
+		INVALID: 'invalid',
+		CONFIRM_MISMATCH: 'confirm_mismatch',
+		FAILED: 'failed',
+	},
+} as const;
+
+/**
+ * Drive mode, the machine side (specs/2026-10-08-drive-mode.md §7). Crewly
+ * Cloud hosts the session; this machine delivers the owner's words to its
+ * agents, carries their `reply --drive` answers to Cloud, reads back an
+ * agent's recent messages (recall) and has each agent post its recap.
+ */
+export const DRIVE_CONSTANTS = {
+	/** Per-machine file under CREWLY_HOME: this machine's Drive mode conversations */
+	STATE_FILENAME: 'drive-conversations.json',
+	/** Capability advertised to Cloud while the handler runs */
+	CAPABILITY: 'drive_message',
+	/** Relay message type Cloud reuses for Drive mode (told apart by `kind`) */
+	RELAY_MESSAGE_TYPE: 'talk_message',
+	RELAY_KIND: 'drive',
+	/** Cloud routes (under `/api/cloud/talk/session/:id`) */
+	CLOUD_BASE_PATH: '/api/cloud/talk/session',
+	/** A session id Cloud makes */
+	SESSION_ID_PATTERN: /^drv_[A-Za-z0-9_-]{8,64}$/,
+	/** Local conversations are forgotten this long after they started (ms) */
+	KEEP_MS: 2 * 24 * 60 * 60 * 1000,
+	/** Agent reply: longest length sent (characters) */
+	TEXT_MAX_CHARS: 4000,
+	/** Recall: how far back an agent's messages to the owner are read (ms) */
+	RECALL_WINDOW_MS: 3 * 24 * 60 * 60 * 1000,
+	/** Recall: messages returned at most */
+	RECALL_MAX: 4,
+	/** Recall: one message, longest length (characters) */
+	RECALL_MESSAGE_MAX_CHARS: 900,
+	/** Recall: messages scanned at most */
+	RECALL_SCAN_LIMIT: 3000,
+	/** Cloud calls: timeout and retries */
+	REQUEST_TIMEOUT_MS: 10_000,
+	FETCH_RETRIES: 3,
+	/** Metadata `via` on every chat-v2 row Drive mode writes (the Slack mirrors skip them) */
+	VIA: 'drive-mode',
+	/** Keep-warm (v3): agents one session keeps warm, at most */
+	MAX_WARM: 20,
+	/** Status check (`op:'refresh'`): how long the agents get to update their items before the snapshot is rebuilt (ms) */
+	STATUS_CHECK_WAIT_MS: 12_000,
+	/** Status check: agents asked at most (the ones holding the most open items first) */
+	STATUS_CHECK_MAX_AGENTS: 6,
+	/** Status check: items listed to one agent at most */
+	STATUS_CHECK_MAX_ITEMS: 5,
+	/** Session logs Cloud copies here (`op:'log'`): directory under CREWLY_HOME, `<date>-<sessionId>.md` + `.jsonl` */
+	LOG_DIRNAME: 'drive-logs',
+	/** Local session logs are deleted this long after they were written (ms) */
+	LOG_KEEP_MS: 30 * 24 * 60 * 60 * 1000,
+	/** A log file larger than this is refused (bytes) */
+	LOG_MAX_BYTES: 2 * 1024 * 1024,
+	/** `GET /api/drive-logs`: default and largest page */
+	LOG_LIST_DEFAULT: 10,
+	LOG_LIST_MAX: 50,
+} as const;
+
+/**
+ * Ticket hygiene: keeps the project tickets honest so status views (Drive
+ * mode, boards) do not show finished work as open.
+ *
+ * - An hourly sweep closes or advances tickets whose state is objectively
+ *   settled and flags tickets whose assignee / team no longer exists. No agent
+ *   is woken for it.
+ * - Once a day per team, the team lead (the orchestrator when there is none)
+ *   gets ONE batched WorkItem listing the team's stale tickets to decide.
+ */
+export const TICKET_HYGIENE_CONSTANTS = {
+	/** Kill switch: `0` turns the whole mechanism off */
+	ENV_SWITCH: 'CREWLY_TICKET_HYGIENE',
+	/** State file under the Crewly home */
+	STATE_FILENAME: 'ticket-hygiene-state.json',
+	/** How often the sweep runs (ms) */
+	SWEEP_INTERVAL_MS: 60 * 60 * 1000,
+	/** First sweep this long after boot (ms), so boot work settles first */
+	FIRST_SWEEP_DELAY_MS: 3 * 60 * 1000,
+	/** `in_progress` / `review` ticket with no activity this long is stale (days) */
+	STALE_ACTIVE_DAYS: 3,
+	/** `ready` / `backlog` ticket with no activity this long is stale (days) */
+	STALE_IDLE_DAYS: 14,
+	/** A ticket already sent to the lead is not sent again for this long (days) */
+	REVIEW_COOLDOWN_DAYS: 3,
+	/** At most one review batch per team this often (ms) */
+	REVIEW_INTERVAL_MS: 24 * 60 * 60 * 1000,
+	/** A review item still queued (never picked up) after this long is cancelled and may be replaced (ms) */
+	REVIEW_STALE_QUEUED_MS: 24 * 60 * 60 * 1000,
+	/** Max tickets in one batch (oldest activity first); the rest wait for the next day */
+	MAX_TICKETS_PER_REVIEW: 15,
+	/** Max characters of a ticket title in the brief */
+	TITLE_MAX_CHARS: 120,
+	/** WorkItem type of the batch */
+	REVIEW_WORK_ITEM_TYPE: 'ticket_hygiene_review',
+	/** `metadata.kind` of the batch (also how a live one is found) */
+	REVIEW_METADATA_KIND: 'ticket_hygiene_review',
+	/** Actor written in the ticket Log by the sweep (its lines never count as activity) */
+	ACTOR: 'crewly-hygiene',
+	/** Reason written in every automatic Log line */
+	REASON: 'auto-reconcile',
+	/** Label the sweep puts on a ticket whose assignee or team no longer exists */
+	ORPHAN_LABEL: 'orphaned',
+	/** Entries in the per-ticket "already sent" memory are dropped after this long (days) */
+	STATE_RETENTION_DAYS: 30,
+} as const;
+
+/**
+ * Drive mode v3 status briefing (specs/2026-10-09-drive-mode-v3.md §1): the
+ * compact per-team / per-agent snapshot this machine keeps up to date and
+ * pushes to Crewly Cloud, so the voice answers status questions with no
+ * agent round trip. Built from structured data only — no LLM calls.
+ */
+export const DRIVE_BRIEFING_CONSTANTS = {
+	/** Cloud route (`:instanceId` = this machine's device id) */
+	PUT_PATH: '/api/cloud/instances/:instanceId/briefing',
+	/** `0` / `off` turns the snapshot push off */
+	KILL_SWITCH_ENV: 'CREWLY_DRIVE_BRIEFING',
+	/** Gather events this long before rebuilding (ms) */
+	DEBOUNCE_MS: 3_000,
+	/** At most one rebuild this often; events in between are coalesced (ms) */
+	MIN_INTERVAL_MS: 30_000,
+	/** A project's tickets are re-read after this even without a change event (ms) */
+	TICKET_CACHE_MS: 5 * 60_000,
+	/** The task pool is re-read after this even without an event (ms) */
+	POOL_CACHE_MS: 60_000,
+	/** Rebuild anyway this often; uploads only when it changed (ms) */
+	CHECK_INTERVAL_MS: 60_000,
+	/** Upload even when unchanged this often (Cloud sees the machine is alive) (ms) */
+	FULL_SYNC_INTERVAL_MS: 5 * 60_000,
+	/** Cloud call timeout (ms) */
+	REQUEST_TIMEOUT_MS: 10_000,
+	/** Backoff after a failed upload (ms) */
+	BACKOFF_INITIAL_MS: 15_000,
+	BACKOFF_MAX_MS: 10 * 60_000,
+	/** Cloud does not take snapshots (not deployed / refused): check again after (ms) */
+	UNAVAILABLE_RETRY_MS: 60 * 60_000,
+	/** Largest snapshot sent (bytes of JSON); Cloud refuses above 64 KB */
+	MAX_BYTES: 48 * 1024,
+	MAX_TEAMS: 30,
+	MAX_AGENTS: 80,
+	MAX_ITEMS: 80,
+	MAX_WAITING: 30,
+	/** An agent's recent messages to the owner, at most */
+	MAX_LAST_TO_OWNER: 3,
+	/** How far back an agent's messages to the owner are read (ms) */
+	OWNER_FEED_WINDOW_MS: 3 * 24 * 60 * 60 * 1000,
+	/** chat-v2 rows scanned for them, at most */
+	OWNER_FEED_SCAN_LIMIT: 1500,
+	/** Done / cancelled work older than this is left out (ms) */
+	DONE_WINDOW_MS: 24 * 60 * 60 * 1000,
+	/** Text lengths (characters) */
+	NAME_MAX: 60,
+	TITLE_MAX: 140,
+	TEXT_MAX: 240,
+} as const;
+
+/**
+ * Drive mode voice layer: Gemini Live ephemeral tokens minted on this
+ * machine with its Gemini API key (specs/2026-10-08-drive-mode.md §3).
+ */
+export const TALK_LIVE_CONSTANTS = {
+	/** Live model (stable, low latency, native audio). Override: CREWLY_GEMINI_LIVE_MODEL */
+	DEFAULT_MODEL: 'gemini-3.8-live',
+	MODEL_ENV: 'CREWLY_GEMINI_LIVE_MODEL',
+	/** API version ephemeral tokens work on (the SDK uses v1alpha). Override: CREWLY_GEMINI_LIVE_API_VERSION */
+	DEFAULT_API_VERSION: 'v1alpha',
+	API_VERSION_ENV: 'CREWLY_GEMINI_LIVE_API_VERSION',
+	/** Gemini API base */
+	API_BASE: 'https://generativelanguage.googleapis.com',
+	/** Live WebSocket base (the page appends `/ws/google.ai.generativelanguage.<v>.GenerativeService.BidiGenerateContentConstrained`) */
+	WS_BASE: 'wss://generativelanguage.googleapis.com',
+	/** Env fallback when no key is stored for Antigravity */
+	API_KEY_ENV: 'GEMINI_API_KEY',
+	/** The token opens one session within this window (ms) */
+	NEW_SESSION_WINDOW_MS: 60 * 1000,
+	/** The session may run this long on one token (ms) */
+	TOKEN_TTL_MS: 30 * 60 * 1000,
+	/** Sessions one token may open */
+	TOKEN_USES: 1,
+	/** Google's answer deadline (ms) */
+	REQUEST_TIMEOUT_MS: 15_000,
+	/**
+	 * Gemini Live voice activity detection, locked into the token's setup
+	 * (`realtimeInputConfig.automaticActivityDetection`). LOW start
+	 * sensitivity: a cough, a click or road noise does not count as the owner
+	 * starting to speak, so it no longer cuts the voice off. LOW end
+	 * sensitivity + 800 ms of silence: a short pause mid-sentence does not end
+	 * the owner's turn. 300 ms of padding keeps the first syllable.
+	 */
+	VAD: {
+		START_OF_SPEECH_SENSITIVITY: 'START_SENSITIVITY_LOW',
+		END_OF_SPEECH_SENSITIVITY: 'END_SENSITIVITY_LOW',
+		PREFIX_PADDING_MS: 300,
+		SILENCE_DURATION_MS: 800,
+		/** Speech over the voice interrupts it (barge-in stays on) */
+		ACTIVITY_HANDLING: 'START_OF_ACTIVITY_INTERRUPTS',
+	},
+	/**
+	 * Setup fields locked as a whole in the token's field mask. Google
+	 * refuses a mask path into an array (`tools.0`) — and a nested object is
+	 * masked by its top-level key too (`realtimeInputConfig`).
+	 */
+	FIELD_MASK_WHOLE: ['tools', 'realtimeInputConfig'] as const,
+	/** Gemini prebuilt voice the briefer speaks with (multilingual) */
+	VOICE: 'Aoede',
+	/** Languages the briefer starts in */
+	LANGUAGES: ['zh', 'en', 'es'] as const,
+	DEFAULT_LANGUAGE: 'zh',
+	CODES: {
+		OWNER_ONLY: 'owner_only',
+		NO_KEY: 'no_gemini_key',
+		GOOGLE_REJECTED: 'google_rejected',
+		UNREACHABLE: 'unreachable',
+		FAILED: 'failed',
+	},
+} as const;
+
+/**
+ * Team roster (specs/2026-10-10-team-roster.md): the harness-generated map of
+ * who owns what, injected into the orchestrator's prompt and served by the
+ * `team-roster` / `find-owner-for` skills.
+ */
+export const TEAM_ROSTER_CONSTANTS = {
+	/** Token budget of the roster section in the orchestrator prompt */
+	PROMPT_MAX_TOKENS: 2500,
+	/** How long a built roster is reused before it is rebuilt (ms) */
+	CACHE_TTL_MS: 60_000,
+	/** Window of "recently finished" work (days) */
+	RECENT_DAYS: 7,
+	/** Window of ticket titles that feed matching, beyond open and recent work (days) */
+	MATCH_HISTORY_DAYS: 30,
+	/** Longest charter a lead may store (chars) */
+	CHARTER_MAX_CHARS: 400,
+	/** A description with fewer words (CJK: characters) than this is not a charter; one is derived instead */
+	MIN_DESCRIPTION_TOKENS: 5,
+	/** Work titles are cut to this many chars in the roster */
+	TITLE_MAX_CHARS: 70,
+	/** Member specialties shown per member */
+	MAX_SPECIALTIES: 3,
+	/** Default number of candidates `find-owner-for` returns */
+	FIND_DEFAULT_LIMIT: 3,
+	/** Hard cap on candidates */
+	FIND_MAX_LIMIT: 8,
+	/** A runner-up scoring at least this share of the best one makes the match ambiguous */
+	AMBIGUOUS_SCORE_RATIO: 0.85,
+	/** Longest request text matched (chars) */
+	QUERY_MAX_CHARS: 600,
+	/** Heading of the roster section */
+	HEADING: '## Team Roster',
+	/** SessionStart sources after which the orchestrator's context lost the prompt: the hook hands the roster back */
+	REINJECT_SOURCES: ['compact', 'clear'],
+	/** Boost for a request that names a member or team outright */
+	NAME_MATCH_BOOST: 6,
+	/** Detail tiers, richest first: open items, finished items, charter chars */
+	TIERS: [
+		{ open: 4, done: 3, charter: 260, specialties: true },
+		{ open: 2, done: 1, charter: 160, specialties: true },
+		{ open: 0, done: 0, charter: 120, specialties: true },
+		{ open: 0, done: 0, charter: 80, specialties: false },
+	],
+} as const;
+
+/**
+ * Team move (crewly#1189): move a whole team to another machine of the same
+ * account through Crewly Cloud. Cloud only relays an end-to-end encrypted
+ * package; both machines run this code. See specs/2026-10-12-team-move.md.
+ */
+export const TEAM_MOVE_CONSTANTS = {
+	/** Capability advertised to Cloud in the heartbeat once the driver runs. */
+	CAPABILITY: 'teamMove:1',
+	/** Relay message `type` Cloud pushes (`{moveId, role, action}`). */
+	RELAY_MESSAGE_TYPE: 'team_move',
+	/** Cloud REST path (under the Cloud base URL). */
+	CLOUD_PATH: '/api/cloud/team-moves',
+	/** Package schema version; bump on any breaking layout change. */
+	SCHEMA_VERSION: 1,
+	/** Package kind written to the manifest. */
+	PACKAGE_KIND: 'crewly-team-move',
+	/** Directory under CREWLY_HOME holding per-move state (journal, keys, archive). */
+	HOME_DIR: 'team-moves',
+	/** Upload/download chunk size (matches Cloud's 8 MiB chunks). */
+	TRANSFER_CHUNK_BYTES: 8 * 1024 * 1024,
+	/** Plaintext frame size of the encrypted stream. */
+	CRYPTO_FRAME_BYTES: 64 * 1024,
+	/** The source keeps the archived team this long for rollback. */
+	ARCHIVE_RETENTION_MS: 7 * 24 * 60 * 60 * 1000,
+	/** Per-file cap for project-local `.crewly` files in a package. */
+	PROJECT_FILE_MAX_BYTES: 10 * 1024 * 1024,
+	/** Total cap for project-local `.crewly` files in a package (all projects). */
+	PROJECT_FILES_MAX_BYTES: 150 * 1024 * 1024,
+	/** Total cap for the working files of projects that are not git repositories (all such projects). */
+	WORK_FILES_MAX_BYTES: 500 * 1024 * 1024,
+	/** Per-file cap for those working files. */
+	WORK_FILE_MAX_BYTES: 100 * 1024 * 1024,
+	/** Env vars (megabytes) overriding the two caps above. */
+	WORK_FILES_MAX_MB_ENV: 'CREWLY_TEAM_MOVE_WORK_MAX_MB',
+	WORK_FILE_MAX_MB_ENV: 'CREWLY_TEAM_MOVE_WORK_FILE_MAX_MB',
+	/** Directory names never packaged from a non-git project (dependencies and build output). */
+	WORK_EXCLUDED_DIRS: ['node_modules', '.next', 'dist', 'build', '.cache', '.crewly', '.git'],
+	/** A machine counts as live when its Cloud heartbeat is newer than this. */
+	MACHINE_LIVE_WINDOW_MS: 5 * 60 * 1000,
+	/** Cloud instance ids/names that are not machines (virtual instances). */
+	NON_MACHINE_INSTANCE_PATTERN: '^crewly-cloud',
+	/** Newest handover notes kept per agent. */
+	HANDOVERS_PER_AGENT: 10,
+	/** Largest text file that is path-rewritten and secret-scanned in memory. */
+	TEXT_FILE_MAX_BYTES: 8 * 1024 * 1024,
+	/** Free disk the target needs beyond the package (bytes): 2x package + this. */
+	DISK_HEADROOM_BYTES: 512 * 1024 * 1024,
+	/** Oldest Crewly version that can take part in a move. */
+	MIN_CREWLY_VERSION: '1.20.304',
+	/** Folder (under the target's home dir) projects are relocated to. */
+	DEFAULT_PROJECTS_DIR_NAME: 'crewly-projects',
+	/** Env var that overrides the target's projects root. */
+	PROJECTS_ROOT_ENV: 'CREWLY_PROJECTS_ROOT',
+	/** Cloud request timeout (ms). */
+	REQUEST_TIMEOUT_MS: 30_000,
+	/** Upload/download retries per chunk. */
+	CHUNK_RETRIES: 4,
+	/** Backoff base between retries (ms). */
+	RETRY_BASE_MS: 1_000,
+	/** How often the driver re-reads pending moves from Cloud (ms). */
+	POLL_INTERVAL_MS: 5 * 60 * 1000,
+	/** Delay before the first pending-move check after boot (ms). */
+	BOOT_DELAY_MS: 20_000,
+	/** Shortest wall-clock limit of one git network call (ms); also the default when the repository size is unknown. */
+	GIT_TIMEOUT_MS: 15 * 60 * 1000,
+	/** Longest wall-clock limit of one git network call (ms), however big the repository. */
+	GIT_MAX_TIMEOUT_MS: 3 * 60 * 60 * 1000,
+	/** Transfer speed assumed when scaling the limit to the repository size (bytes per second). */
+	GIT_ASSUMED_BYTES_PER_SEC: 512 * 1024,
+	/** A git network call that prints no progress for this long is stalled and gets killed (ms). */
+	GIT_STALL_MS: 3 * 60 * 1000,
+	/** `git ls-remote` access test (ms). */
+	GIT_LS_REMOTE_TIMEOUT_MS: 30_000,
+	/** How often an import logs (and tells Cloud) what the clone is doing (ms). */
+	PROGRESS_REPORT_INTERVAL_MS: 30_000,
+	/** "Carry uncommitted changes": most bytes of patches and untracked files taken from one repository. */
+	CARRY_MAX_BYTES: 512 * 1024 * 1024,
+	/** ...largest single patch or untracked file. */
+	CARRY_FILE_MAX_BYTES: 128 * 1024 * 1024,
+	/** Env vars (megabytes) overriding the two carry caps above. */
+	CARRY_MAX_MB_ENV: 'CREWLY_TEAM_MOVE_CARRY_MAX_MB',
+	CARRY_FILE_MAX_MB_ENV: 'CREWLY_TEAM_MOVE_CARRY_FILE_MAX_MB',
+	/** Env vars (megabytes) overriding the `.crewly` project-file caps (PROJECT_FILE_MAX_BYTES / PROJECT_FILES_MAX_BYTES). */
+	PROJECT_FILE_MAX_MB_ENV: 'CREWLY_TEAM_MOVE_PROJECT_FILE_MAX_MB',
+	PROJECT_FILES_MAX_MB_ENV: 'CREWLY_TEAM_MOVE_PROJECT_FILES_MAX_MB',
+	/** Git bundle ("carry the repo"): largest bundle of one repository. Streamed to disk, never held in memory. */
+	BUNDLE_REPO_MAX_BYTES: 2 * 1024 * 1024 * 1024,
+	/** ...all bundles of one move together. */
+	BUNDLES_MAX_BYTES: 3 * 1024 * 1024 * 1024,
+	/** Env vars (megabytes) overriding the two bundle caps above. */
+	BUNDLE_REPO_MAX_MB_ENV: 'CREWLY_TEAM_MOVE_BUNDLE_MAX_MB',
+	BUNDLES_MAX_MB_ENV: 'CREWLY_TEAM_MOVE_BUNDLES_MAX_MB',
+	/** Package path (below `projects/<id>/`) of a repository's bundle. */
+	BUNDLE_FILE: 'bundle/repo.bundle',
+	/** `git bundle create` timeout (ms). */
+	BUNDLE_TIMEOUT_MS: 30 * 60 * 1000,
+	/** ...most changed files (patches plus untracked files) per repository. */
+	CARRY_MAX_FILES: 2000,
+	/** Changed files named per repository in a preflight report. */
+	PREFLIGHT_TOP_FILES: 8,
+	/** Flagged files named in a preflight report. */
+	PREFLIGHT_MAX_FINDINGS: 30,
+	/** The heavy part of a preflight (package dry run + secret scan) is reused this long while nothing changed (ms). */
+	PREFLIGHT_SCAN_TTL_MS: 2 * 60 * 1000,
+	/** Relay actions Cloud pushes for a preflight (before any move exists). */
+	PREFLIGHT_ACTIONS: ['preflight', 'ask_team'],
+	/** Tools a package may require; found by name in prompts, norms and SOPs. */
+	KNOWN_TOOLS: ['ffmpeg', 'docker', 'xcodebuild', 'gh', 'python3', 'node', 'git', 'jq', 'yt-dlp', 'imagemagick', 'whisper-cli'],
+	/** Binary each known tool is looked up by on PATH. */
+	TOOL_BINARIES: {
+		ffmpeg: 'ffmpeg',
+		docker: 'docker',
+		xcodebuild: 'xcodebuild',
+		gh: 'gh',
+		python3: 'python3',
+		node: 'node',
+		git: 'git',
+		jq: 'jq',
+		'yt-dlp': 'yt-dlp',
+		imagemagick: 'convert',
+		'whisper-cli': 'whisper-cli',
+	},
+} as const;
+
+/**
+ * Owner Board, machine side (crewly#1247): the activity normalizer, the
+ * snapshot builder and the push to Crewly Cloud. Wire contract:
+ * `services/board/board.types.ts`.
+ */
+export const BOARD_CONSTANTS = {
+	/** Kill switch: `CREWLY_BOARD_PUSH=0` turns the push off (the local `GET /api/board` still works) */
+	ENV_SWITCH: 'CREWLY_BOARD_PUSH',
+	/** Machine → Cloud: full snapshot */
+	SNAPSHOT_PATH: '/api/cloud/board/snapshot',
+	/** Machine → Cloud: changed agent rows + timeline events */
+	DELTA_PATH: '/api/cloud/board/delta',
+	/** Header carrying this machine's Cloud instance id */
+	INSTANCE_HEADER: 'X-Crewly-Instance-Id',
+	/** Push a full snapshot at least this often (ms); Cloud may ask for another cadence */
+	FULL_INTERVAL_MS: 60_000,
+	/** A change is pushed within this long (ms); later changes join the same delta */
+	DELTA_DELAY_MS: 2_000,
+	/** First failure waits this long, doubling up to the max (ms) */
+	BACKOFF_INITIAL_MS: 5_000,
+	BACKOFF_MAX_MS: 5 * 60_000,
+	/** Cloud answered 404 / 400 / 503: not deployed or refusing; look again after this (ms) */
+	UNAVAILABLE_RETRY_MS: 30 * 60_000,
+	/** Request timeout (ms) */
+	REQUEST_TIMEOUT_MS: 15_000,
+	/** Cloud's body limit (bytes) */
+	MAX_BODY_BYTES: 256 * 1024,
+	/** Text fields never exceed this many characters */
+	MAX_TEXT: 140,
+	/** Timeline kept per agent (events) and for how long (ms) */
+	TIMELINE_MAX_EVENTS: 200,
+	TIMELINE_MAX_AGE_MS: 24 * 60 * 60 * 1000,
+	/** Timeline events sent in one delta, per agent */
+	DELTA_TIMELINE_MAX: 40,
+	/** After a tool ends, its activity still shows this long (ms), then the agent is "thinking" */
+	ACTIVITY_LINGER_MS: 20_000,
+	/** A tool start without an end is dropped after this long (a lost PostToolUse) (ms) */
+	OPEN_TOOL_MAX_MS: 30 * 60_000,
+	/** Rows per outcome list */
+	MAX_DONE: 50,
+	MAX_WAITING: 50,
+	MAX_STUCK: 30,
+	MAX_SUMMARY_PHRASES: 6,
+	/** A queued WorkItem older than this is "stuck" (ms) */
+	STUCK_QUEUED_MS: 2 * 60 * 60 * 1000,
+	/** A running WorkItem older than this is "stuck" (ms) */
+	STUCK_RUNNING_MS: 12 * 60 * 60 * 1000,
+	/** A failed WorkItem stays on the stuck list this long (ms) */
+	STUCK_FAILED_MAX_AGE_MS: 24 * 60 * 60 * 1000,
+	/** An agent's ledger unit counts as its current task if it had usage this recently (ms) */
+	LEDGER_TASK_MAX_AGE_MS: 2 * 60 * 60 * 1000,
+	/** Project-ticket scan is cached this long (ms) */
+	PROJECT_TICKET_CACHE_MS: 5 * 60_000,
+	/** Canvas links (CANVAS-V2-CONTRACT.md): at most this many in a snapshot */
+	LINKS_MAX: 300,
+	/** A link's label is at most this many characters */
+	LINK_LABEL_MAX: 60,
+	/** Delegations count while open or finished this recently (ms) */
+	LINK_DELEGATION_WINDOW_MS: 24 * 60 * 60 * 1000,
+	/** Agent-to-agent messages count this long (ms) */
+	LINK_MESSAGING_WINDOW_MS: 2 * 60 * 60 * 1000,
+	/** A messaging link is "active" if the last message is this recent (ms) */
+	LINK_MESSAGING_ACTIVE_MS: 10 * 60_000,
+	/** Messages remembered per sender/receiver pair */
+	LINK_MESSAGING_MAX_PER_PAIR: 100,
+	/** Most agents linked by one shared ticket (pairs grow quadratically) */
+	LINK_SAME_TASK_MAX_GROUP: 6,
+} as const;
+
+/**
+ * Crewly Canvas, machine side (crewly#1247 v2): the live step stream, the
+ * owner actions Cloud relays to this machine, the masked terminal tail and the
+ * per-agent capabilities. Shared contract: CANVAS-CONTRACT.md.
+ */
+export const CANVAS_CONSTANTS = {
+	/** Steps kept per agent in memory */
+	STEPS_MAX_PER_AGENT: 300,
+	/** Steps older than this are dropped from memory (ms) */
+	STEPS_MAX_AGE_MS: 24 * 60 * 60 * 1000,
+	/** Steps sent in one delta (all agents) and per agent */
+	DELTA_STEPS_MAX: 120,
+	DELTA_STEPS_PER_AGENT_MAX: 40,
+	/** Unsent steps kept per agent (a failed push loses nothing, up to this) */
+	UNSENT_MAX_PER_AGENT: 200,
+	/** The agent's own text lines: longest (chars) */
+	TEXT_MAX: 280,
+	/** An instant step equal to the previous one within this long is dropped (ms) */
+	STEP_DEDUPE_MS: 5_000,
+	/** A tool start without an end is closed after this long (ms) */
+	OPEN_STEP_MAX_MS: 30 * 60_000,
+
+	/** While Cloud says viewers are watching, a change is pushed within this long (ms) */
+	LIVE_DELTA_DELAY_MS: 1_000,
+	/** A "live" answer from Cloud is believed this long (ms) */
+	LIVE_TTL_MS: 30_000,
+
+	/** Transcript tail: poll cadence with viewers / without (ms) */
+	TAIL_LIVE_INTERVAL_MS: 2_000,
+	TAIL_IDLE_INTERVAL_MS: 8_000,
+	/** A transcript path found (or not found) is trusted this long (ms) */
+	TAIL_LOCATE_TTL_MS: 30_000,
+	/** First look at a transcript reads at most this many bytes from its end */
+	TAIL_FIRST_READ_BYTES: 64 * 1024,
+	/** One pass reads at most this many new bytes per file */
+	TAIL_MAX_READ_BYTES: 512 * 1024,
+	/** First look only keeps text newer than this (ms) */
+	TAIL_FIRST_MAX_AGE_MS: 10 * 60_000,
+
+	/** Relay message `type` Cloud pushes for an owner action (ids only) */
+	RELAY_MESSAGE_TYPE: 'canvas_action',
+	/** Capability advertised to Cloud once the action handler runs */
+	CAPABILITY: 'canvas_actions',
+	/** `GET <path>/:actionId?instanceId=` fetches an action; `POST <path>/:actionId/result` reports it */
+	ACTIONS_PATH: '/api/cloud/canvas/actions',
+	/** Machine -> Cloud: one masked terminal frame */
+	TERMINAL_FRAME_PATH: '/api/cloud/canvas/terminal/frame',
+	/** Kinds of owner action */
+	ACTION_KINDS: ['message', 'stop', 'terminal_open', 'terminal_renew', 'terminal_close'] as const,
+	/** Longest owner message accepted (chars) */
+	MESSAGE_MAX: 4_000,
+	/** Delays before retrying a failed action fetch (ms) */
+	FETCH_RETRY_DELAYS_MS: [1_000, 5_000, 15_000],
+	REQUEST_TIMEOUT_MS: 15_000,
+	/** Actions already carried out are remembered this long / this many */
+	DONE_ACTIONS_TTL_MS: 60 * 60 * 1000,
+	DONE_ACTIONS_MAX: 500,
+
+	/** Terminal stream: frame cadence, lease without a renew, longest total, and streams at once */
+	TERMINAL_FRAME_INTERVAL_MS: 1_000,
+	TERMINAL_LEASE_MS: 2 * 60_000,
+	TERMINAL_MAX_STREAM_MS: 30 * 60_000,
+	TERMINAL_MAX_STREAMS: 3,
+	TERMINAL_TAIL_LINES: 200,
+	TERMINAL_MAX_LINE_CHARS: 400,
+	/** Failed frame posts in a row before the stream stops */
+	TERMINAL_MAX_FAILURES: 5,
+	/** A Chrome session counts as the agent's browser while it was active this recently (ms) */
+	BROWSER_ACTIVE_MS: 10 * 60_000,
+} as const;
+
+/**
+ * Hand-off of an owner-approved change to a recurring job to the agent that
+ * runs it (crewly#1137).
+ */
+export const RECURRING_CHANGE_HANDOFF_CONSTANTS = {
+	/** Share of the schedule's name/title terms the decision text must contain */
+	MIN_COVERAGE: 0.6,
+	/** Distinct terms the decision and the schedule must share */
+	MIN_SHARED_TERMS: 2,
+	/** ...or this many shared terms whatever the coverage (labels mixing two languages) */
+	SURE_SHARED_TERMS: 3,
+	/** Terms shorter than this (Latin words) are noise */
+	MIN_WORD_CHARS: 3,
+	/** Chars of a schedule label that name the job (the rest is its instructions) */
+	MAX_IDENTITY_CHARS: 80,
+	/** `WorkItem.metadata` marker on the hand-off WorkItem */
+	METADATA_KEY: 'recurringChangeHandoff',
+	/** Option labels / answers that decline a change (nothing to hand off) */
+	DECLINE_PATTERN: /^\s*(?:(?:no|nope|not now|skip|wait|keep|cancel|don'?t)\b|不|别|先不|算了|保持)/iu,
+} as const;
+
+/**
+ * Automatic cross-machine file hand-off: files an agent mentions or attaches
+ * travel through Cloud's file-handoff relay (apps SPEC section 18) and land
+ * in the receiving agent's project inbox.
+ */
+export const FILE_HANDOFF_CONSTANTS = {
+	/** Largest file Cloud accepts for one handoff (2 GB) */
+	MAX_FILE_BYTES: 2 * 1024 * 1024 * 1024,
+	/** Files attached to one message, explicit and automatic together */
+	MAX_FILES_PER_MESSAGE: 5,
+	/** Marker token a message carries; the id follows the colon */
+	MARKER_PREFIX: 'crewly-file:',
+	/** Glyph that starts a marker line in front of a human reader */
+	MARKER_GLYPH: '📎',
+	/** Handoff id shape (22 url-safe characters after `hf_`) */
+	ID_PATTERN: 'hf_[A-Za-z0-9_-]{22}',
+	/** Per-file upload ceiling */
+	UPLOAD_TIMEOUT_MS: 10 * 60 * 1000,
+	/** Per-file download ceiling before the message is delivered without it */
+	DOWNLOAD_TIMEOUT_MS: 45 * 1000,
+	/** All downloads of one incoming message together */
+	DOWNLOAD_TOTAL_TIMEOUT_MS: 90 * 1000,
+	/** Text files up to this size are scanned for secrets before they leave the machine */
+	SECRET_SCAN_MAX_BYTES: 1024 * 1024,
+	/** Inbox folder under the project data directory */
+	INBOX_DIR: 'inbox',
+	/** Fallback content type when none is known */
+	DEFAULT_CONTENT_TYPE: 'application/octet-stream',
+	/** File names (lower-cased) that never leave the machine */
+	SECRET_NAME_PATTERNS: [
+		/^\.env(\..*)?$/,
+		/\.(pem|key|p12|pfx|keystore|jks|kdbx|ppk)$/,
+		/^id_[a-z0-9_]+$/,
+		/^\.(npmrc|netrc|pypirc|git-credentials|pgpass)$/,
+		/^credentials(\..*)?$/,
+		/^(secrets?|service-account.*)\.(json|ya?ml|toml)$/,
+	] as readonly RegExp[],
+	/** Directory names (lower-cased) a path must not pass through */
+	SECRET_DIR_NAMES: ['.ssh', '.aws', '.gnupg', '.git', 'node_modules'] as readonly string[],
+} as const;
+
+/**
+ * Slack inbound backfill (CREW-89): after Cloud could not deliver Slack
+ * events to this machine (queue registration failing, then recovered), read
+ * the owner's messages straight from Slack and ingest the ones we never saw.
+ */
+export const SLACK_INBOUND_BACKFILL_CONSTANTS = {
+	/** Start this far before the gap began, to catch events in flight (ms) */
+	GAP_MARGIN_MS: 2 * 60 * 1000,
+	/** Never look further back than this, however long the gap (ms) — 24 h */
+	MAX_LOOKBACK_MS: 24 * 60 * 60 * 1000,
+	/** Only channels where the owner wrote within this window are scanned (ms) — 14 d */
+	CHANNEL_ACTIVITY_WINDOW_MS: 14 * 24 * 60 * 60 * 1000,
+	/** Most channels scanned in one backfill */
+	MAX_CHANNELS: 50,
+	/** `conversations.history` page size */
+	HISTORY_LIMIT: 200,
+	/** Most threads whose replies are read per channel */
+	MAX_THREADS_PER_CHANNEL: 20,
+	/** Slack Web API base URL */
+	API_BASE: 'https://slack.com/api',
+	/** Per-request timeout (ms) */
+	REQUEST_TIMEOUT_MS: 15_000,
 } as const;

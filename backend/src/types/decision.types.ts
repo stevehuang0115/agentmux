@@ -11,7 +11,7 @@
  */
 
 /** Sensitive asks are never auto-applied at the deadline. */
-export type DecisionSensitiveKind = 'email' | 'publish' | 'deploy' | 'spend' | 'browser_action' | 'runtime_terms';
+export type DecisionSensitiveKind = 'email' | 'publish' | 'deploy' | 'spend' | 'browser_action' | 'runtime_terms' | 'app_access';
 
 /**
  * Decisions Crewly asks itself (not through ask-owner). The kind's handler
@@ -30,7 +30,7 @@ export type DecisionSensitiveKind = 'email' | 'publish' | 'deploy' | 'spend' | '
  * - `owner_receipt_format`: one real sample of the nightly receipt — turn it on
  *   in this format, or keep the per-ask format (specs/owner-receipt.md, #856)
  */
-export type DecisionKind = 'browser_action' | 'runtime_terms' | 'reply_question' | 'spend_cap' | 'owner_receipt_format' | 'retro_harness_gaps' | 'gmail_send';
+export type DecisionKind = 'browser_action' | 'runtime_terms' | 'reply_question' | 'spend_cap' | 'owner_receipt_format' | 'retro_harness_gaps' | 'app_collaborator' | 'app_template' | 'model_tier_change' | 'gmail_send';
 
 /** How a decision came to be: asked live, or carded by the open-items backfill. */
 export type DecisionSource = 'live' | 'backfill';
@@ -54,6 +54,89 @@ export interface DecisionSystemRef {
    * even when the decision is sensitive (declining is always safe).
    */
   defaultIsDecline?: boolean;
+}
+
+/**
+ * What an `app_collaborator` decision grants if the owner allows it. Fixed on
+ * this machine when the agent asks (from who the caller is); only the owner's
+ * tap acts on it.
+ */
+export interface AppCollaboratorSubject {
+  appId: string;
+  /** The app's name when known */
+  appName?: string;
+  /** Who would be added */
+  kind: 'team' | 'agent';
+  /** Team name (kind `team`) */
+  team?: string;
+  /** Agent session (kind `agent`) */
+  session?: string;
+  /** This instance's Cloud id (the grant is bound to it) */
+  instanceId: string;
+  /** The agent that asked, and its display name */
+  askerSession: string;
+  askerName: string;
+  /** Why, in the agent's words (shown to the owner) */
+  reason?: string;
+}
+
+/**
+ * What an `app_template` decision lists on the Crewly Marketplace if the owner
+ * says yes (specs/2026-10-08-app-templates.md). Fixed on this machine when the
+ * agent asks: the draft Cloud made (id + version) and the author name the
+ * agent proposed; only the owner's tap lists it.
+ */
+export interface AppTemplateSubject {
+  appId: string;
+  appName: string;
+  templateId: string;
+  /** The draft version the owner is shown (Cloud refuses another) */
+  version: number;
+  /** "by …" when the owner picks "Publish as <name>"; absent = only anonymous is offered */
+  authorName?: string;
+  /** The agent that asked, and its display name */
+  askerSession: string;
+  askerName: string;
+}
+
+/** One member's tier change inside a `model_tier_change` decision. */
+export interface TierChangeEntry {
+  memberId: string;
+  memberName: string;
+  /** The member's session (agent id) */
+  session: string;
+  /** Tier before (null = none set) */
+  from: import('./index.js').ModelTier | null;
+  to: import('./index.js').ModelTier;
+  /** Model the member ran before / will run (for the card) */
+  fromModel?: string;
+  toModel?: string;
+  /** The member's explicit modelId, cleared on apply (so the tier takes effect); restored by a revert */
+  clearsModelId?: string;
+  /** Explicit modelId a revert puts back */
+  restoreModelId?: string;
+  /** A revert to "no tier" (the member had none before): the tier is removed, `to` is only its rank */
+  clearTier?: boolean;
+  /** Why, in the lead's words */
+  reason: string;
+}
+
+/**
+ * What a `model_tier_change` decision applies if the owner says yes
+ * (crewly#1173). Fixed when the card is asked; only the owner's tap applies it.
+ */
+export interface TierChangeSubject {
+  teamId: string;
+  teamName: string;
+  /** Review id (`review` cards) or guard id (`revert` cards) */
+  reviewId: string;
+  /** `review`: the lead's proposals; `revert`: the quality guard asks to move a member back */
+  kind: 'review' | 'revert';
+  changes: TierChangeEntry[];
+  /** Task routing rules the lead proposed */
+  routing: string[];
+  askerSession: string;
+  askerName: string;
 }
 
 /** The held browser action a `browser_action` decision is about. */
@@ -118,13 +201,13 @@ export type DecisionStatus =
   /** The owner skipped it ("I don't care about this anymore"): the asker drops it and must not ask again */
   | 'skipped';
 
-/** How an answer arrived. */
 /**
  * How an answer arrived. `thread`: the owner answered in the card's thread
  * with a voice note, audio or another file and no text
- * (specs/2026-10-02-decision-card-thread-answers.md §1).
+ * (specs/2026-10-02-decision-card-thread-answers.md §1). `voice`: spoken in
+ * Drive mode on the phone (specs/2026-10-08-drive-mode.md).
  */
-export type DecisionAnswerVia = 'button' | 'reaction' | 'reply' | 'thread' | 'dashboard' | 'deadline' | 'bulk';
+export type DecisionAnswerVia = 'button' | 'reaction' | 'reply' | 'thread' | 'dashboard' | 'deadline' | 'bulk' | 'voice';
 
 /** A file the owner answered with in a card's thread. */
 export interface DecisionAnswerFile {
@@ -168,6 +251,12 @@ export interface OwnerDecision {
   browser?: BrowserActionSubject;
   /** The held email (kind `gmail_send`) */
   gmail?: GmailSendSubject;
+  /** What the owner would grant (kind `app_collaborator`) */
+  appCollaborator?: AppCollaboratorSubject;
+  /** The template the owner would list (kind `app_template`) */
+  appTemplate?: AppTemplateSubject;
+  /** The tier changes the owner would apply (kind `model_tier_change`) */
+  tierChange?: TierChangeSubject;
   /** Option a plain "yes" / ✅ means (default: the default option, else the first) */
   yesKey?: string;
   /** Session that called ask-owner */
@@ -201,6 +290,16 @@ export interface OwnerDecision {
   card?: DecisionCardRef;
   /** Why the card could not be posted (shown in the dashboard; retried on the next tick) */
   postError?: string;
+  /**
+   * The Slack card still shows an older state (chat.update failed — e.g. live
+   * buttons on a closed decision). Retried on the tick until Slack takes it.
+   */
+  cardSyncPending?: boolean;
+  /**
+   * Response only, never stored: an ask that matched an open card from the
+   * same asker in the same place returns that card instead of posting a new one.
+   */
+  reused?: boolean;
   createdAt: string;
   updatedAt: string;
   /** "Remind me tomorrow": when to remind */

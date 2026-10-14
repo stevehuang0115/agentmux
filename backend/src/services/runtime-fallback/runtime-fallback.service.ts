@@ -59,6 +59,9 @@ import {
 
 const C = RUNTIME_FALLBACK_CONSTANTS;
 
+/** How often a runtime that is not installed / signed in here is looked at again. */
+const LOGIN_RECHECK_MS = 2 * 60_000;
+
 /**
  * Result of a switch-back probe: `available` (it answered normally),
  * `limited` (still out), `unknown` (the probe ran but could not tell — never
@@ -108,6 +111,8 @@ export interface RuntimeFallbackDeps {
 	store: RuntimeFallbackStore;
 	/** Configured agent behind a session (null when unknown) */
 	getAgent: (sessionName: string) => Promise<FallbackAgentInfo | null>;
+	/** Session names of every configured agent (orc included); used to re-evaluate agents on an exhausted runtime */
+	listSessions?: () => Promise<string[]>;
 	/** Number of agents configured on a runtime (orc included), for the notice */
 	countAgentsOnRuntime?: (runtime: string) => Promise<number>;
 	/** The session has a live runtime (PTY or in-process) */
@@ -308,6 +313,81 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 	async onAccountLogin(account: string): Promise<void> {
 		this.availability = null;
 		const target = runtimeTarget(RUNTIME_TYPES.CLAUDE_CODE, account);
+		try {
+			await this.recoverSignedOutAccount(target);
+		} finally {
+			// The owner is away: a freshly signed-in account must be usable at once,
+			// without a trip to Settings, and agents stuck on an exhausted runtime
+			// move to it now rather than on their next message.
+			if (this.addToChains(target)) this.logger.info('Added the signed-in Claude Code account to the fallback order', { runtime: target });
+			this.availability = null;
+			void this.reevaluateExhausted().catch((err) =>
+				this.logger.warn('Re-evaluating agents after an account sign-in failed', { runtime: target, error: err instanceof Error ? err.message : String(err) }),
+			);
+		}
+	}
+
+	/**
+	 * Insert a target right after the last `claude-code` / `claude-code@*`
+	 * entry of the global chain (first when there is none), and of every
+	 * member chain that already holds a Claude Code entry. Saves when changed.
+	 *
+	 * @param target - `claude-code@<account>`
+	 * @returns True when a chain changed
+	 */
+	private addToChains(target: string): boolean {
+		const insert = (chain: string[]): string[] => {
+			if (chain.includes(target)) return chain;
+			let at = -1;
+			chain.forEach((r, i) => {
+				if (baseRuntimeOf(r) === RUNTIME_TYPES.CLAUDE_CODE) at = i;
+			});
+			const next = [...chain];
+			next.splice(at + 1, 0, target);
+			return next;
+		};
+		const settings = this.state.settings;
+		let changed = false;
+		const chain = insert(settings.chain);
+		if (chain !== settings.chain) {
+			settings.chain = chain;
+			changed = true;
+		}
+		for (const [memberId, own] of Object.entries(settings.memberChains)) {
+			if (!own.some((r) => baseRuntimeOf(r) === RUNTIME_TYPES.CLAUDE_CODE)) continue;
+			const next = insert(own);
+			if (next !== own) {
+				settings.memberChains[memberId] = next;
+				changed = true;
+			}
+		}
+		if (changed) this.save();
+		return changed;
+	}
+
+	/**
+	 * Switch every agent whose current runtime is out of usage (or signed out)
+	 * to the next available runtime of its chain, at its safe point.
+	 */
+	private async reevaluateExhausted(): Promise<void> {
+		if (!this.state.settings.enabled || !this.deps.listSessions) return;
+		for (const sessionName of await this.deps.listSessions()) {
+			if (this.isExempt(sessionName)) continue;
+			const agent = await this.deps.getAgent(sessionName).catch(() => null);
+			if (!agent) continue;
+			const current = this.state.overrides[sessionName]?.runtime ?? agent.primary;
+			if (!this.state.exhausted[current]) continue;
+			if (!this.deps.isLive(sessionName)) continue;
+			await this.switchSession(sessionName, { waitForSafePoint: true, flushAfter: false });
+		}
+	}
+
+	/**
+	 * If the account was marked signed out, probe it and bring it back.
+	 *
+	 * @param target - `claude-code@<account>`
+	 */
+	private async recoverSignedOutAccount(target: string): Promise<void> {
 		const entry = this.state.exhausted[target];
 		if (!entry || entry.kind !== 'login') return;
 		const result = await this.deps.probe(target).catch((): ProbeResult => 'unknown');
@@ -405,7 +485,12 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 				return this.decision(existing.runtime);
 			}
 		}
-		if (!this.state.exhausted[input.configured]) return configured;
+		if (!this.state.exhausted[input.configured]) {
+			// Not out of usage, but maybe not installed / signed in on this machine
+			// (a team moved here): run the agent on its fallback until it is.
+			if (input.isOrchestrator && !this.state.settings.orcFollows) return configured;
+			if (!(await this.markUnavailableHere(input.configured))) return configured;
+		}
 		if (input.isOrchestrator && !this.state.settings.orcFollows) return configured;
 
 		const agent: FallbackAgentInfo = (await this.deps.getAgent(input.sessionName).catch(() => null)) ?? {
@@ -428,6 +513,32 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 			runtime: target,
 		});
 		return this.decision(target);
+	}
+
+	/**
+	 * The configured runtime of a launching agent is not installed / not signed
+	 * in on this machine: record it like a signed-out account so the agent starts
+	 * on its fallback chain now and switches back once the runtime is available.
+	 *
+	 * @param runtime - Configured runtime
+	 * @returns True when the runtime is now marked unavailable
+	 */
+	private async markUnavailableHere(runtime: string): Promise<boolean> {
+		if (accountOf(runtime)) return false;
+		const entry = (await this.getAvailability()).find((a) => a.runtime === runtime);
+		if (!entry || entry.selectable || !entry.loginProblem) return false;
+		this.state.exhausted[runtime] = {
+			runtime,
+			since: new Date(this.now()).toISOString(),
+			kind: 'login',
+			ruleId: entry.reason === 'Not installed' ? 'not_installed' : 'not_signed_in',
+			switched: [],
+			switchedTo: [],
+			notified: false,
+		};
+		this.save();
+		this.logger.info('Runtime is not available on this machine — its agents start on their fallback chain', { runtime, reason: entry.reason });
+		return true;
 	}
 
 	// --------------------------------------------------------------- detection
@@ -808,6 +919,14 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 		if (!entry) return;
 		const now = this.now();
 		if (!this.isRecoveryCheckDue(entry, now)) return;
+		if (entry.kind === 'login' && !accountOf(runtime)) {
+			// Installed and signed in here now? (No usage probe: it was never about usage.)
+			entry.lastProbeAt = new Date(now).toISOString();
+			const available = (await this.getAvailability(true)).find((a) => a.runtime === runtime);
+			if (available?.selectable) await this.recover(runtime);
+			else this.save();
+			return;
+		}
 		const result = await this.deps.probe(runtime).catch((): ProbeResult => 'unknown');
 		entry.lastProbeAt = new Date(now).toISOString();
 		const until = entry.until ? Date.parse(entry.until) : null;
@@ -844,6 +963,7 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 		const baseMs = entry.kind === 'billing' ? C.BILLING_PROBE_INTERVAL_MS : this.state.settings.probeIntervalMinutes * 60_000;
 		const backoffMs = Math.min(baseMs * 2 ** Math.min(entry.failedReverts ?? 0, 16), Math.max(baseMs, C.MAX_PROBE_BACKOFF_MS));
 		const sinceLast = now - lastCheck;
+		if (entry.kind === 'login' && !accountOf(entry.runtime)) return sinceLast >= LOGIN_RECHECK_MS;
 		if (entry.kind === 'billing') return sinceLast >= backoffMs;
 		const until = entry.until ? Date.parse(entry.until) : null;
 		if (until !== null) {
@@ -1031,6 +1151,13 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 	 */
 	private signedOutNoticeText(entry: ExhaustedRuntime): string {
 		const account = accountOf(entry.runtime) ?? '';
+		if (!account) {
+			const why = entry.ruleId === 'not_installed' ? 'is not installed' : 'is not signed in';
+			const base = `${this.label(entry.runtime)} ${why} on ${this.deps.machineName()}, so its agents run on another runtime until it is.`;
+			const n = entry.switched.length;
+			const targets = entry.switchedTo.map((r) => this.label(r)).join(' / ');
+			return n === 0 ? `${base} No other runtime is available: they wait.` : `${base} ${agents(n)} switched to ${targets}; they switch back by themselves.`;
+		}
 		const head = `${this.label(entry.runtime)} is signed out on ${this.deps.machineName()}. Reply \`login claude ${account}\` to sign it in again.`;
 		const n = entry.switched.length;
 		if (n === 0) return `${head} No other runtime is available meanwhile.`;
@@ -1113,7 +1240,9 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 		const parts = [
 			kind === 'billing'
 				? `Crewly moved you from ${this.label(from)} to ${this.label(to)} because ${this.label(from)} is out of credit; you will be moved back once it is topped up.`
-				: kind === 'login'
+				: kind === 'login' && !accountOf(from)
+					? `Crewly moved you from ${this.label(from)} to ${this.label(to)} because ${this.label(from)} is not installed or signed in on this machine yet; you will be moved back once it is.`
+					: kind === 'login'
 					? `Crewly moved you from ${this.label(from)} to ${this.label(to)} because the ${this.label(from)} login expired.`
 					: `Crewly moved you from ${this.label(from)} to ${this.label(to)} because ${this.label(from)} hit its usage limit${reset}; you will be moved back when it resets.`,
 			handover

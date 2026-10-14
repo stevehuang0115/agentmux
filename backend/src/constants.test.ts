@@ -30,6 +30,7 @@ import {
   WHATSAPP_CONSTANTS,
   WORKTREE_JANITOR_CONSTANTS,
   WAITING_SYNC_CONSTANTS,
+  CREWLY_CHANNEL_CONSTANTS,
 } from './constants.js';
 
 describe('WORKTREE_JANITOR_CONSTANTS', () => {
@@ -370,8 +371,8 @@ describe('TICKET_CONSTANTS / POOL_ARCHIVE_CONSTANTS (ticket loop)', () => {
     expect(TICKET_CONSTANTS.NUMBER_PAD).toBe(3);
     // No `.json`: RequestService.listAll must never read the counter as a Request.
     expect(TICKET_CONSTANTS.COUNTER_FILENAME.endsWith('.json')).toBe(false);
-    expect(TICKET_CONSTANTS.RECEIPT.RECORDED('TKT-001')).toBe('已记成 TKT-001');
-    expect(TICKET_CONSTANTS.RECEIPT.DISMISSED('TKT-001')).toBe('TKT-001 已取消记录');
+    expect(TICKET_CONSTANTS.RECEIPT.RECORDED('TKT-001')).toBe('Recorded as TKT-001');
+    expect(TICKET_CONSTANTS.RECEIPT.DISMISSED('TKT-001')).toBe('TKT-001 is no longer tracked');
     expect(TICKET_CONSTANTS.DISMISS_PATTERN.test('不用记')).toBe(true);
     expect(TICKET_CONSTANTS.DISMISS_PATTERN.test('不用记这个')).toBe(false);
     expect(TICKET_CONSTANTS.INTAKE_TIMEOUT_MS).toBeGreaterThan(0);
@@ -540,5 +541,14 @@ describe('WIKI_QUEUE_CONSTANTS (#914 wiki queue hygiene)', () => {
 		expect(C.CLAIM_TIMEOUT_MS).toBeLessThan(C.STALE_ALERT_AGE_MS);
 		expect(C.STALE_ALERT_COOLDOWN_MS).toBeGreaterThan(0);
 		expect(C.DEAD_LETTER_DIR).toBe('dead-letter');
+	});
+});
+
+describe('CREWLY_CHANNEL_CONSTANTS', () => {
+	it('names the registry file and keeps limits in line with Slack and huddles', () => {
+		expect(CREWLY_CHANNEL_CONSTANTS.STORE_FILENAME).toBe('crewly-channels.json');
+		expect(CREWLY_CHANNEL_CONSTANTS.MAX_MEMBERS).toBe(50);
+		expect(CREWLY_CHANNEL_CONSTANTS.MAX_PURPOSE_LENGTH).toBe(250);
+		expect(CREWLY_CHANNEL_CONSTANTS.SLACK_REFRESH_MIN_INTERVAL_MS).toBeGreaterThan(0);
 	});
 });

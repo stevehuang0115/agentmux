@@ -530,6 +530,20 @@ unset CREWLY_AGENT_GOAL 2>/dev/null || true
 assert_eq "non-ASCII goal decoded" "核对 DMARC 设置" "$(decode_goal "$(request_field 0 headers.X-Agent-Goal)")"
 scenario_teardown
 
+# Scenario 23: done / close-tab are aliases of unbind-tab
+scenario_init "scenario 23: done alias hits /browser/unbind and purges cache"
+mkdir -p "${RUNTIME_DIR}/agent-23"
+echo "44" > "${RUNTIME_DIR}/agent-23/browser-tab-id"
+queue_response '{"success":true,"data":{"released":true,"tabClosed":true}}'
+start_stub
+export CREWLY_SESSION_NAME="agent-23"
+"$SKILL" --action done > /dev/null 2>&1 || true
+assert_contains "done posts to /browser/unbind" "$(request_field 0 path)" "unbind"
+[ -f "${RUNTIME_DIR}/agent-23/browser-tab-id" ] \
+  && fail "cache should be purged" "still present" \
+  || pass "cache purged after done"
+scenario_teardown
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------

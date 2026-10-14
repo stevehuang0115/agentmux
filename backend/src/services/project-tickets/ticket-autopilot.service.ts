@@ -60,9 +60,13 @@ import {
   classifyStopReason,
   findStalledWork,
   type StallRecord,
+  type RedeliverResult,
+  normalizeRedeliver,
   effectiveReplanGapMs,
   isParkedTicket,
   closedTicketsSince,
+  countReplans,
+  replanCeilingReached,
   decideDigest,
   decideReplan,
   decideSelfReview,
@@ -306,10 +310,11 @@ export interface TicketAutopilotDeps {
   leadShareDigest?: (now: Date) => Promise<string | null>;
   /**
    * Re-push a live WorkItem's brief to its idle assignee (stalled work).
-   * Resolves false when it was not written. Absent = stalled work is only
-   * reported (stop reason), never acted on.
+   * Resolves false (or `failed`) when it was not written, `waiting` when the
+   * earlier notice still sits on the member's queue. Absent = stalled work is
+   * only reported (stop reason), never acted on.
    */
-  redeliverWork?: (workItem: WorkItem) => Promise<boolean>;
+  redeliverWork?: (workItem: WorkItem) => Promise<boolean | RedeliverResult>;
   /** Let an idle member take the best ready ticket now (AutoClaim). Absent = left to AutoClaim's own poll. */
   claimReadyFor?: (session: string) => Promise<boolean>;
   now?: () => Date;
@@ -339,7 +344,15 @@ interface ProjectState {
    * Goal replans of the local day (the daily limit) and the last one;
    * `assessed` once its outcome (tickets opened or not) set the backoff
    */
-  replans?: { day: string; count: number; lastAt?: number; lastWorkItemId?: string; assessed?: boolean };
+  replans?: {
+    day: string;
+    count: number;
+    lastAt?: number;
+    lastWorkItemId?: string;
+    assessed?: boolean;
+    /** Replans of `day` that opened tickets: they do not count toward the daily cap (CREW-265) */
+    productive?: number;
+  };
   /** Backing off after replans that opened no tickets */
   replanBackoff?: ReplanBackoff;
   /** Why the autopilot stopped (traced on change), and since when (ms) */
@@ -949,10 +962,11 @@ export class TicketAutopilotService {
       members.length > 0 &&
       members.every(isIdle) &&
       !c.tickets.some((t) => (t.status === 'ready' || t.status === 'in_progress') && !isParkedTicket(t, nowMs, c.settings.skipLabels));
-    const replansToday = c.ps.replans?.day === today ? c.ps.replans.count : 0;
-
     // The last replan is over: did it open tickets? None → wait for the mode's retry.
+    // Assessed first: a productive replan does not count toward the daily cap.
     this.assessLastReplan(project, c.ps, c.tickets, c.liveReplanId, nowMs, c.settings.emptyReplanRetry);
+    const replanCounts = countReplans(c.ps.replans, today);
+    const replansToday = replanCounts.counted;
 
     // Cheap gates first (in-memory state only); the goal is read last.
     const gates = {
@@ -960,6 +974,8 @@ export class TicketAutopilotService {
       driver: c.driver.session,
       maxReplansPerDay: c.settings.replansPerDay,
       replansToday,
+      replansTotalToday: replanCounts.total,
+      hardCeilingPerDay: C.REPLAN_HARD_CEILING_PER_DAY,
       // The speed mode's gap counts from the last replan, across days.
       ...(c.ps.replans?.lastAt !== undefined ? { lastReplanAt: c.ps.replans.lastAt } : {}),
       minGapMs: c.settings.replanMinGapMs,
@@ -1043,8 +1059,15 @@ export class TicketAutopilotService {
     if (replanTrace) workItem.traceId = replanTrace;
     await this.deps.pool.addToPool(workItem);
 
-    const count = replansToday + 1;
-    c.ps.replans = { day: today, count, lastAt: nowMs, lastWorkItemId: workItem.id, assessed: false };
+    const count = replanCounts.total + 1;
+    c.ps.replans = {
+      day: today,
+      count,
+      lastAt: nowMs,
+      lastWorkItemId: workItem.id,
+      assessed: false,
+      ...(replanCounts.productive > 0 ? { productive: replanCounts.productive } : {}),
+    };
     // A replan is autopilot work: it starts the day's run trace. Not an owner touch.
     traceAutopilotAction(project, 'replan', {
       summary: `${project.name}: ${c.driver.session} woken to plan the next tickets toward the goal (nothing left to triage)`,
@@ -1057,6 +1080,7 @@ export class TicketAutopilotService {
         closed: closed.length,
         experiments: experiments.length,
         replansToday: count,
+        replansCountedToday: replansToday + 1,
         replansPerDay: c.settings.replansPerDay,
         speedMode: c.settings.speedMode,
       },
@@ -1140,7 +1164,11 @@ export class TicketAutopilotService {
     if (liveReplanId === last.lastWorkItemId) return;
     const next = nextReplanBackoff({ replanAt: last.lastAt, replanDay: last.day, tickets, previous: ps.replanBackoff, retry, now: nowMs });
     if (next) ps.replanBackoff = next;
-    else delete ps.replanBackoff;
+    else {
+      delete ps.replanBackoff;
+      // Opened tickets: this replan no longer counts toward the daily cap (CREW-265).
+      last.productive = (last.productive ?? 0) + 1;
+    }
     last.assessed = true;
     this.logger.info(next ? 'Goal replan opened no tickets: backing off' : 'Goal replan opened tickets', {
       projectId: project.id,
@@ -1208,6 +1236,12 @@ export class TicketAutopilotService {
     for (const wi of items) {
       const age = nowMs - (Date.parse(wi.createdAt) || nowMs);
       if (replanTtlHours !== undefined) {
+        // The driver finished its planning turn: nothing is running, so it must not hold
+        // triage or the next replan until the TTL (CREW-395).
+        if (wi.status === 'done_by_worker') {
+          this.logger.debug('Goal replan finished by the driver; no longer holds triage', { projectId: project.id, workItemId: wi.id, ageMs: age });
+          continue;
+        }
         if (age >= replanTtlHours * 60 * 60 * 1000) {
           await this.expireReplan(project, wi, replanTtlHours);
           continue;
@@ -2049,8 +2083,10 @@ export class TicketAutopilotService {
     // Replan timing: the daily cap, and the gap (the mode's while work is in flight, the debounce once idle and empty).
     const today = localDateKey(now);
     const cap = settings.replansPerDay;
-    const replansToday = ps.replans?.day === today ? ps.replans.count : 0;
-    const capReached = cap > 0 && replansToday >= cap;
+    const replanCounts = countReplans(ps.replans, today);
+    const capReached =
+      cap > 0 &&
+      (replanCounts.counted >= cap || replanCeilingReached(replanCounts.total, cap, C.REPLAN_HARD_CEILING_PER_DAY));
     const idleAndEmpty =
       selection.candidates.length === 0 &&
       members.length > 0 &&
@@ -2138,22 +2174,48 @@ export class TicketAutopilotService {
           if (!wi) continue;
           const ticket = tickets.find((t) => t.id === s.ticketId);
           const prev = ps.stalls?.[s.ticketId];
-          const used = prev && prev.lastAt >= (Date.parse(ticket?.updatedAt ?? '') || 0) ? prev.count : 0;
-          const delivered = await this.deps.redeliverWork(wi).catch(() => false);
-          (ps.stalls ??= {})[s.ticketId] = { count: used + 1, lastAt: nowMs };
+          const fresh = !!prev && prev.lastAt >= (Date.parse(ticket?.updatedAt ?? '') || 0);
+          const used = fresh ? prev!.count : 0;
+          const usedFailures = fresh ? prev!.failures ?? 0 : 0;
+          const usedWaiting = fresh ? prev!.waiting ?? 0 : 0;
+          const result = normalizeRedeliver(
+            await this.deps.redeliverWork(wi).catch((err: unknown): RedeliverResult => ({ status: 'failed', reason: err instanceof Error ? err.message : String(err) })),
+          );
+          // Only a brief that reached the member counts toward releasing the
+          // ticket as its stall. One that never reached it (write failed,
+          // held) is a delivery failure of ours, reported as such; one still
+          // on its queue (mid-turn) was not missed (CREW-394).
+          const delivered = result.status === 'delivered';
+          const failures = result.status === 'failed' ? usedFailures + 1 : 0;
+          const waiting = result.status === 'waiting' ? usedWaiting + 1 : 0;
+          (ps.stalls ??= {})[s.ticketId] = { count: used + (delivered ? 1 : 0), lastAt: nowMs, ...(failures > 0 ? { failures } : {}), ...(waiting > 0 ? { waiting } : {}) };
           dirty = true;
+          const attempt = used + (delivered ? 1 : 0);
+          const summary =
+            result.status === 'delivered'
+              ? `${s.ticketId}: ${s.session} idle with no progress for ${minutes} min — brief re-delivered`
+              : result.status === 'waiting'
+                ? `${s.ticketId}: ${s.session} shows idle for ${minutes} min but the brief is already waiting on its queue (mid-turn) — not counted against it (waiting push #${waiting})`
+                : `${s.ticketId}: brief could not be delivered to ${s.session} (${result.reason ?? 'not written'}) — delivery failure #${failures}, not counted against ${s.session}`;
           traceAutopilotAction(project, 'stalled_redeliver', {
-            summary: `${s.ticketId}: ${s.session} idle with no progress for ${minutes} min — brief re-delivered${delivered ? '' : ' (not written)'}`,
-            outcome: delivered ? 'ok' : 'failed',
+            summary,
+            outcome: result.status === 'delivered' ? 'ok' : result.status === 'waiting' ? 'queued' : 'failed',
             ticketId: s.ticketId,
             workItemId: s.workItemId,
             session: s.session,
-            data: { stalledMs: s.stalledMs, attempt: used + 1, delivered },
+            data: { stalledMs: s.stalledMs, attempt, delivered, status: result.status, ...(result.reason ? { reason: result.reason } : {}), ...(failures > 0 ? { deliveryFailures: failures } : {}) },
             now,
           });
-          this.logger.info('Stalled work: brief re-delivered to the idle assignee', { projectId: project.id, ticketId: s.ticketId, session: s.session, minutes, delivered });
+          const logFields = { projectId: project.id, ticketId: s.ticketId, session: s.session, minutes, delivered, status: result.status, ...(result.reason ? { reason: result.reason } : {}) };
+          if (result.status === 'failed') this.logger.warn('Stalled work: brief could not be delivered to the assignee', logFields);
+          else this.logger.info('Stalled work: brief re-delivered to the idle assignee', logFields);
         } else if (s.action === 'release' && this.deps.workflow.releaseStalledTicket) {
-          const reason = `stalled: ${s.session} idle with no progress for ${minutes} min after ${C.STALL_MAX_REDELIVERIES} re-delivered briefs`;
+          const reason =
+            s.releaseCause === 'busy'
+              ? `brief still queued for ${s.session} after ${minutes} min mid-turn (${s.waitingPushes ?? C.STALL_MAX_REDELIVERIES} pushes in a row found it waiting); never picked up — not a stall of the member`
+              : s.releaseCause === 'delivery'
+              ? `brief could not be delivered to ${s.session}: ${s.deliveryFailures ?? C.STALL_MAX_REDELIVERIES} pushes in a row did not reach it (${minutes} min without progress) — a delivery failure, not a stall of the member`
+              : `stalled: ${s.session} idle with no progress for ${minutes} min after ${C.STALL_MAX_REDELIVERIES} re-delivered briefs`;
           const released = await this.deps.workflow.releaseStalledTicket(project.path, s.ticketId, reason).catch(() => false);
           if (ps.stalls) delete ps.stalls[s.ticketId];
           dirty = true;
@@ -2163,7 +2225,7 @@ export class TicketAutopilotService {
             ticketId: s.ticketId,
             workItemId: s.workItemId,
             session: s.session,
-            data: { stalledMs: s.stalledMs, released },
+            data: { stalledMs: s.stalledMs, released, ...(s.releaseCause ? { releaseCause: s.releaseCause } : {}) },
             now,
           });
           this.logger.info('Stalled work: ticket back to ready', { projectId: project.id, ticketId: s.ticketId, session: s.session, released });
@@ -2441,6 +2503,7 @@ export class TicketAutopilotService {
           wi.metadata?.kind === kind &&
           wi.metadata?.projectId === project.id &&
           LIVE_STATUSES.has(wi.status) &&
+          (kind !== TICKET_AUTOPILOT_CONSTANTS.REPLAN_METADATA_KIND || wi.status !== 'done_by_worker') &&
           (kind !== TICKET_AUTOPILOT_CONSTANTS.REPLAN_METADATA_KIND || nowMs - (Date.parse(wi.createdAt) || nowMs) < ttlMs),
       );
     const live = liveOf(TICKET_AUTOPILOT_CONSTANTS.TRIAGE_METADATA_KIND);

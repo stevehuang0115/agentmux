@@ -11,6 +11,7 @@ import { RestartDrainService } from '../restart/restart-drain.service.js';
 import { ProjectTicketService } from './project-ticket.service.js';
 import { ProjectTicketWorkflowService, type ProjectTicketPool } from './project-ticket-workflow.service.js';
 import { TicketAutopilotService, type OwnerNotice } from './ticket-autopilot.service.js';
+import type { RedeliverResult } from './ticket-autopilot-decision.js';
 import type { ComponentLogger } from '../core/logger.service.js';
 import type { Project, Team, TeamMember } from '../../types/index.js';
 import type { WorkItem, WorkItemStatus } from '../../types/v2/work-item.types.js';
@@ -920,36 +921,46 @@ describe('TicketAutopilotService', () => {
         // Still live → replan_in_flight (triage holds too).
         advance(30 * MIN);
         expect((await svc.onMemberIdle('ce-dev'))[0]).toEqual({ projectId: 'p-ce', decision: { action: 'skip', reason: 'replan_in_flight' } });
-        // Done (the driver opened a ticket), but already replanned today.
+        // Done, and the driver opened a ticket: a productive replan does not
+        // use today's one (CREW-265), so the next idle event replans again.
         await closeTicket('Feed card 1', 'done');
         replans()[0].status = 'done';
+        advance(2 * HOUR);
+        expect((await svc.onMemberIdle('ce-dev'))[0].replan).toEqual({ action: 'replan' });
+        expect(replans()).toHaveLength(2);
+        // That one opens nothing: it is the day's one.
+        replans()[1].status = 'done';
         advance(2 * HOUR);
         const [again] = await svc.onMemberIdle('ce-dev');
         expect(again.replan).toEqual({ action: 'skip', reason: 'replanned_today' });
         expect(again.workItem).toBeUndefined();
         expect((await svc.tick())[0].replan).toEqual({ action: 'skip', reason: 'replanned_today' });
-        expect(replans()).toHaveLength(1);
+        expect(replans()).toHaveLength(2);
         // The limit survives a restart.
         const restarted = withGoal(build());
         expect((await restarted.onMemberIdle('ce-dev'))[0].replan).toEqual({ action: 'skip', reason: 'replanned_today' });
         // Cheap gates first: the replan skips above never read the goal (the
-        // one other read is the tick's first self-review).
-        expect(goalReads).toBe(2);
-        // Next day.
+        // other reads are the two replans and the tick's first self-review).
+        expect(goalReads).toBe(3);
+        // Next day, after a new ticket lifts the empty replan's backoff.
         clock = new Date(2026, 9, 1, 10, 0);
+        await closeTicket('Feed card 2', 'done');
+        advance(MIN);
         expect((await svc.onMemberIdle('ce-dev'))[0].replan).toEqual({ action: 'replan' });
-        expect(replans()).toHaveLength(2);
+        expect(replans()).toHaveLength(3);
       });
 
       it('the daily limit is configurable (0 = off, 2 = twice) and wins over the speed\'s cap', async () => {
         await enable({ replansPerDay: 0, speedMode: 'chill' });
         expect((await svc.onMemberIdle('ce-dev'))[0].replan).toEqual({ action: 'skip', reason: 'replan_off' });
-        await enable({ replansPerDay: 2 });
+        await enable({ replansPerDay: 1 });
         expect((await svc.onMemberIdle('ce-dev'))[0].replan).toEqual({ action: 'replan' });
+        // A replan that opened tickets is free (CREW-265)…
         await closeTicket('Opened by the replan', 'done');
         replans()[0].status = 'done';
+        advance(MIN);
         expect((await svc.onMemberIdle('ce-dev'))[0].replan).toEqual({ action: 'replan' });
-        await closeTicket('Opened by the second replan', 'done');
+        // …an empty one uses the day's one.
         replans()[1].status = 'done';
         expect((await svc.onMemberIdle('ce-dev'))[0].replan).toEqual({ action: 'skip', reason: 'replanned_today' });
       });
@@ -996,16 +1007,23 @@ describe('TicketAutopilotService', () => {
         expect((await svc.tick())[0].decision).toEqual({ action: 'skip', reason: 'nothing_to_triage' });
         expect(pool.items.get(r1.id)?.status).toBe('cancelled');
 
-        // Configurable; a replan the driver finished (done_by_worker) cannot be cancelled, but stops counting as live.
+        // Configurable (replanTtlHours); a replan the driver finished (done_by_worker) cannot be cancelled,
+        // and stops holding triage at once, not at the TTL (CREW-395).
         await enable({ replanTtlHours: 2 });
         clock = new Date(2026, 9, 1, 10, 0);
         await closeTicket('Lifts the backoff', 'done');
         expect((await svc.onMemberIdle('ce-dev'))[0].replan).toEqual({ action: 'replan' });
         const r2 = replans().find((w) => w.id !== r1.id)!;
         r2.status = 'done_by_worker';
-        advance(90 * MIN);
-        expect((await svc.tick())[0].decision).toEqual({ action: 'skip', reason: 'replan_in_flight' });
-        advance(30 * MIN);
+        advance(5 * MIN);
+        expect((await svc.getStatus('p-ce', owner)).replanInFlight).toBe(false);
+        // The skip repeats every tick for as long as the replan sits done_by_worker, so it logs at debug only.
+        const quietLog = quiet();
+        svc = build({ logger: quietLog });
+        expect((await svc.tick())[0].decision).toEqual({ action: 'skip', reason: 'nothing_to_triage' });
+        expect(quietLog.debug).toHaveBeenCalledWith(expect.stringContaining('Goal replan finished by the driver'), expect.anything());
+        expect(quietLog.info).not.toHaveBeenCalledWith(expect.stringContaining('Goal replan finished by the driver'), expect.anything());
+        advance(120 * MIN);
         expect((await svc.tick())[0].decision).toEqual({ action: 'skip', reason: 'nothing_to_triage' });
         expect(pool.items.get(r2.id)?.status).toBe('done_by_worker');
       });
@@ -1050,7 +1068,8 @@ describe('TicketAutopilotService', () => {
         expect((await svc.onMemberIdle('ce-dev'))[0].replan).toEqual({ action: 'skip', reason: 'backed_off' });
         advance(35 * MIN);
         expect((await svc.onMemberIdle('ce-dev'))[0].replan).toEqual({ action: 'replan' });
-        // Productive replans from here: every hour until the cap of 12.
+        // Productive replans from here: every hour. They do not count toward
+        // the cap of 12 (CREW-265); the hard ceiling of 16 a day stops them.
         let n = replans().length;
         for (let i = 0; i < 20; i += 1) {
           for (const w of replans()) if (w.status === 'queued') w.status = 'done';
@@ -1060,8 +1079,13 @@ describe('TicketAutopilotService', () => {
           if (ev.replan?.action === 'replan') n += 1;
           if (clock.getDate() !== 30) break;
         }
-        expect(n).toBe(12);
-        expect((await svc.getStatus('p-ce', owner)).replansToday).toBe(12);
+        expect(n).toBe(C.REPLAN_HARD_CEILING_PER_DAY);
+        expect((await svc.getStatus('p-ce', owner)).replansToday).toBe(C.REPLAN_HARD_CEILING_PER_DAY);
+        // The ceiling shows as the daily replan cap.
+        await svc.tick();
+        const st = await svc.getStatus('p-ce', owner);
+        expect(st.stopReason).toBe('daily_replan_cap');
+        expect(st.stopReasonText).toContain("today's goal replan limit is reached");
       });
 
       describe('idle and empty replans at once (specs/2026-10-04-autopilot-speed-modes.md §1)', () => {
@@ -1138,18 +1162,33 @@ describe('TicketAutopilotService', () => {
           expect((await svc.getStatus('p-ce', owner)).stopReason).toBe('no_ideas');
         });
 
-        it('the daily cap still applies and shows as daily_replan_cap (in status and the digest)', async () => {
+        it('the daily cap still applies to replans that opened nothing', async () => {
           await enable({ replansPerDay: 1 });
           await svc.onMemberIdle('ce-dev');
-          await closeTicket('Opened by the replan', 'done');
-          replans()[0].status = 'done';
+          replans()[0].status = 'done'; // opened nothing
+          advance(HOUR);
+          expect((await svc.onMemberIdle('ce-dev'))[0].replan).toEqual({ action: 'skip', reason: 'replanned_today' });
+        });
+
+        it('replans that opened tickets do not count toward the daily cap (CREW-265)', async () => {
+          await enable({ replansPerDay: 1 });
+          for (let i = 0; i < 4; i += 1) {
+            expect((await svc.onMemberIdle('ce-dev'))[0].replan).toEqual({ action: 'replan' });
+            await closeTicket(`Opened by replan ${i}`, 'done');
+            replans()[i].status = 'done';
+            advance(HOUR);
+          }
+          // Four productive replans, the cap of one never reached; status still shows them all.
+          expect(replans()).toHaveLength(4);
+          expect((await svc.getStatus('p-ce', owner)).replansToday).toBe(4);
+          // The fifth opens nothing: it is the one that counts.
+          expect((await svc.onMemberIdle('ce-dev'))[0].replan).toEqual({ action: 'replan' });
+          replans()[4].status = 'done';
           advance(HOUR);
           expect((await svc.onMemberIdle('ce-dev'))[0].replan).toEqual({ action: 'skip', reason: 'replanned_today' });
           await svc.tick();
           const st = await svc.getStatus('p-ce', owner);
-          expect(st.stopReason).toBe('daily_replan_cap');
-          expect(st.stopReasonText).toContain("today's goal replan limit is reached");
-          expect(st.stopUntil).toBe(new Date(2026, 9, 1, 0, 0).toISOString()); // next local midnight
+          expect(['daily_replan_cap', 'no_ideas']).toContain(st.stopReason);
         });
       });
 
@@ -1443,15 +1482,17 @@ describe('TicketAutopilotService', () => {
   describe('stalled work (CE, 2026-10-05: idle members, tickets in progress, nobody moving)', () => {
     let redelivered: string[];
     let claimed: string[];
+    let redeliverResult: boolean | RedeliverResult;
 
     beforeEach(() => {
       svc.stop();
       redelivered = [];
       claimed = [];
+      redeliverResult = true;
       svc = build({
         redeliverWork: async (wi) => {
           redelivered.push(wi.id);
-          return true;
+          return redeliverResult;
         },
         claimReadyFor: async (session) => {
           claimed.push(session);
@@ -1494,6 +1535,100 @@ describe('TicketAutopilotService', () => {
       expect(after.status).toBe('in_progress');
       expect(after.workItemId).not.toBe(workItem.id);
       expect(after.log.some((l) => l.includes('back to ready and unassigned: stalled'))).toBe(true);
+    });
+
+    it('CREW-394: briefs that never reached the member (write failed) are not counted as its stall, but do not re-push forever', async () => {
+      await enable();
+      const t = await wf.create('p-ce', { title: 'Release card', status: 'ready' }, owner);
+      const workItem = (await wf.assign('p-ce', t.id, 'ce-dev', lead)).workItem!;
+      redeliverResult = { status: 'failed', reason: 'write refused (HTTP 409)' };
+      // One failed push (below the cap of 2): still pushing, not released.
+      advance(21 * MIN);
+      await svc.tick();
+      expect(redelivered).toHaveLength(1);
+      expect(pool.items.get(workItem.id)?.status).not.toBe('cancelled');
+      // The second consecutive failure reaches the cap: the next tick gives the ticket back.
+      advance(21 * MIN);
+      await svc.tick();
+      expect(redelivered).toHaveLength(2);
+      advance(21 * MIN);
+      await svc.tick();
+      expect(redelivered).toHaveLength(2);
+      expect(pool.items.get(workItem.id)?.status).toBe('cancelled');
+      const after = (await wf['tickets'].list(project.path)).tickets.find((x) => x.id === t.id)!;
+      expect(after.log.some((l) => l.includes('back to ready and unassigned: brief could not be delivered'))).toBe(true);
+      expect(after.log.some((l) => l.includes('back to ready and unassigned: stalled'))).toBe(false);
+    });
+
+    it('CREW-394: a delivered push in between resets the failure count', async () => {
+      await enable();
+      const t = await wf.create('p-ce', { title: 'Reset card', status: 'ready' }, owner);
+      const workItem = (await wf.assign('p-ce', t.id, 'ce-dev', lead)).workItem!;
+      for (const status of ['failed', 'delivered', 'failed'] as const) {
+        redeliverResult = status === 'failed' ? { status, reason: 'write refused (HTTP 409)' } : { status };
+        advance(21 * MIN);
+        await svc.tick();
+      }
+      // failed, delivered, failed: never 2 failures in a row and only 1 stall counted -> still pushing.
+      expect(redelivered).toHaveLength(3);
+      expect(pool.items.get(workItem.id)?.status).not.toBe('cancelled');
+      const stuck = (await wf['tickets'].list(project.path)).tickets.find((x) => x.id === t.id)!;
+      expect(stuck.workItemId).toBe(workItem.id);
+    });
+
+    it('CREW-394: a brief still waiting on the member\'s queue (mid-turn) is not counted as a stall', async () => {
+      await enable();
+      const t = await wf.create('p-ce', { title: 'Waiting card', status: 'ready' }, owner);
+      const workItem = (await wf.assign('p-ce', t.id, 'ce-dev', lead)).workItem!;
+      redeliverResult = { status: 'waiting', reason: "an earlier notice still waits on the agent's queue" };
+      advance(21 * MIN);
+      await svc.tick();
+      expect(redelivered).toHaveLength(1);
+      expect(pool.items.get(workItem.id)?.status).not.toBe('cancelled');
+    });
+
+    it('CREW-394: a brief that stays queued is released as busy after the bound, not blamed on the member', async () => {
+      await enable();
+      const t = await wf.create('p-ce', { title: 'Queued forever', status: 'ready' }, owner);
+      const workItem = (await wf.assign('p-ce', t.id, 'ce-dev', lead)).workItem!;
+      redeliverResult = { status: 'waiting', reason: "an earlier notice still waits on the agent's queue" };
+      for (let i = 0; i < 2; i++) {
+        advance(21 * MIN);
+        await svc.tick();
+      }
+      expect(redelivered).toHaveLength(2);
+      advance(21 * MIN);
+      await svc.tick();
+      expect(redelivered).toHaveLength(2);
+      expect(pool.items.get(workItem.id)?.status).toBe('cancelled');
+      const after = (await wf['tickets'].list(project.path)).tickets.find((x) => x.id === t.id)!;
+      expect(after.log.some((l) => l.includes('still queued for ce-dev') && l.includes('never picked up'))).toBe(true);
+      expect(after.log.some((l) => l.includes('back to ready and unassigned: stalled'))).toBe(false);
+    });
+
+    it('CREW-394: a delivered push between waiting pushes resets the waiting count', async () => {
+      await enable();
+      const t = await wf.create('p-ce', { title: 'Waiting reset', status: 'ready' }, owner);
+      const workItem = (await wf.assign('p-ce', t.id, 'ce-dev', lead)).workItem!;
+      for (const status of ['waiting', 'delivered', 'waiting'] as const) {
+        redeliverResult = { status };
+        advance(21 * MIN);
+        await svc.tick();
+      }
+      expect(redelivered).toHaveLength(3);
+      expect(pool.items.get(workItem.id)?.status).not.toBe('cancelled');
+    });
+
+    it('a plain boolean from redeliverWork keeps its meaning (true = delivered, false = not written)', async () => {
+      await enable();
+      const t = await wf.create('p-ce', { title: 'Bool card', status: 'ready' }, owner);
+      const workItem = (await wf.assign('p-ce', t.id, 'ce-dev', lead)).workItem!;
+      redeliverResult = false;
+      for (let i = 0; i < 2; i++) {
+        advance(21 * MIN);
+        await svc.tick();
+      }
+      expect(pool.items.get(workItem.id)?.status).not.toBe('cancelled');
     });
 
     it('waits for an agent that is not registered yet (restart), and acts once it is', async () => {

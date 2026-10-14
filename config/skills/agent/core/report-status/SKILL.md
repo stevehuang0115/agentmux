@@ -70,6 +70,8 @@ Pass the `workItemId` of the work you are reporting on (from your `[CREWLY-DISPA
 | `--blocked-step <step> --blocked-reason <why>` | — | `{"type":"blocked",…}` — the WorkItem is recorded as **blocked**, not done |
 | `--evidence '<json array>'` | `evidence` | The raw array, sent ahead of any flag entries |
 
+For a bug fix, the failing "before" run belongs in the evidence too: put it in the PR's Evidence section (the server only accepts the passing "after" `--command ... --exit-code 0`).
+
 The server rejects (400) a missing artifact, a non-zero exit code, or a
 malformed entry; the skill then prints `{"warning":"… completing the WorkItem
 FAILED …","error":…}` with the reason. Without any evidence, `done` is accepted

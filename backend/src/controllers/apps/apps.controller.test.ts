@@ -7,7 +7,7 @@ import request from 'supertest';
 import http from 'http';
 import type { AddressInfo } from 'net';
 import express, { type Application } from 'express';
-import { createAppsRouter, rejectOversizedPublish } from './apps.routes.js';
+import { createAppsRouter, rejectOversizedPublish, rejectOversizedUpload } from './apps.routes.js';
 import { bodyParserExcept } from '../../middleware/body-parser-except.js';
 import { sendAppsError } from './apps.controller.js';
 import { setAppsParts } from '../../services/apps/apps.wiring.js';
@@ -30,12 +30,17 @@ beforeEach(() => {
   service = {
     publish: jest.fn().mockResolvedValue({ appId: ID, name: 'G', url: `https://apps.crewlyai.com/${ID}`, version: 1, created: true, notified: false }),
     rollback: jest.fn().mockResolvedValue({ appId: ID, currentVersion: 1 }),
+    deleteApp: jest.fn().mockResolvedValue({ appId: ID, deleted: true }),
     transfer: jest.fn().mockResolvedValue({ appId: ID, name: 'G', publisher: 'milo-1', previous: 'dev-ella', changed: true, notified: ['milo-1'] }),
+    getOwner: jest.fn().mockResolvedValue({ appId: ID, owner: { kind: 'channel', name: '#daily-brief' } }),
+    setOwner: jest.fn().mockResolvedValue({ appId: ID, owner: { kind: 'channel', name: '#daily-brief' }, previous: null }),
+    addAgentCollaborator: jest.fn().mockResolvedValue({ collaborators: [] }),
     list: jest.fn().mockResolvedValue([{ appId: ID }]),
     versions: jest.fn().mockResolvedValue([]),
     listDocs: jest.fn().mockResolvedValue({ docs: [], next: null }),
     addDoc: jest.fn().mockResolvedValue({ id: 'n', rev: 1 }),
     getDoc: jest.fn().mockResolvedValue({ id: 'milk', data: {}, rev: 1 }),
+    getDocField: jest.fn().mockResolvedValue({ field: '/photo', type: 'string', chars: 3, value: 'abc' }),
     setDoc: jest.fn().mockResolvedValue({ id: 'milk', rev: 2 }),
     updateDoc: jest.fn().mockResolvedValue({ id: 'milk', rev: 3 }),
     deleteDoc: jest.fn().mockResolvedValue({ deleted: true }),
@@ -46,10 +51,14 @@ beforeEach(() => {
     requestPublic: jest.fn().mockResolvedValue({ appId: ID, visibility: 'private', publicRequest: null, message: 'Requested: the owner approves it by opening the app.', notified: true }),
     cancelPublicRequest: jest.fn().mockResolvedValue({ appId: ID, cancelled: true, visibility: 'private' }),
     makePrivate: jest.fn().mockResolvedValue({ appId: ID, visibility: 'private' }),
+    requestCapabilities: jest.fn().mockResolvedValue({ appId: ID, requested: true }),
+    cancelCapabilityRequest: jest.fn().mockResolvedValue({ appId: ID, cancelled: true }),
     listComments: jest.fn().mockResolvedValue({ comments: [] }),
     getComment: jest.fn().mockResolvedValue({ id: 'c1' }),
     replyComment: jest.fn().mockResolvedValue({ id: 'c1', replies: [{}] }),
     setCommentStatus: jest.fn().mockResolvedValue({ id: 'c1', status: 'resolved' }),
+    downloadFile: jest.fn().mockResolvedValue({ data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), contentType: 'image/png', name: 'subs shot.png' }),
+    uploadFile: jest.fn().mockResolvedValue({ fileId: 'f1', name: 'a b.png', size: 4, contentType: 'image/png', url: 'https://apps.crewlyai.com/_f/t/f1' }),
   };
   service.assertPublisher = jest.fn().mockResolvedValue(undefined);
   thumbs = {
@@ -71,6 +80,212 @@ beforeEach(() => {
 });
 
 afterEach(() => setAppsParts(null));
+
+describe('Crewly Apps controller: collaborators', () => {
+  let collaborators: Record<string, jest.Mock>;
+  beforeEach(() => {
+    collaborators = {
+      request: jest.fn().mockResolvedValue({ requested: true, decisionId: 'D-1', for: 'the Marketing team' }),
+      add: jest.fn().mockResolvedValue({ collaborators: [] }),
+      remove: jest.fn().mockResolvedValue({ collaborators: [] }),
+      list: jest.fn().mockResolvedValue({ collaborators: [] }),
+    };
+    setAppsParts({
+      client: {} as AppsCloudClient,
+      registry: {} as unknown as AppsRegistryService,
+      service: service as unknown as AppsService,
+      collaborators: collaborators as unknown as import('../../services/apps/app-collaborators.service.js').AppCollaboratorsService,
+    });
+  });
+
+  it('an agent can ask: the verified session goes to the service, the body only carries scope and reason', async () => {
+    await request(app).post(`/api/apps/${ID}/collaborators/request`).set(agentAuthHeaders('crewly-marketing-ella-1')).send({ scope: 'team', reason: 'write the briefing', team: 'Sales', session: 'someone-else' }).expect(200);
+    expect(collaborators.request).toHaveBeenCalledWith(ID, 'crewly-marketing-ella-1', { scope: 'team', reason: 'write the briefing' });
+  });
+
+  it('NEGATIVE: an agent cannot add or remove a collaborator (it cannot grant itself)', async () => {
+    const a = await request(app).post(`/api/apps/${ID}/collaborators`).set(agentAuthHeaders('crewly-marketing-ella-1')).send({ kind: 'team', team: 'Marketing' }).expect(403);
+    expect(a.body.error).toBe('owner_only');
+    await request(app).delete(`/api/apps/${ID}/collaborators/entry1`).set(agentAuthHeaders('crewly-marketing-ella-1')).expect(403);
+    expect(collaborators.add).not.toHaveBeenCalled();
+    expect(collaborators.remove).not.toHaveBeenCalled();
+  });
+
+  it('the owner adds and removes', async () => {
+    await request(app).post(`/api/apps/${ID}/collaborators`).send({ kind: 'team', team: 'Marketing' }).expect(200);
+    expect(collaborators.add).toHaveBeenCalledWith(ID, { kind: 'team', team: 'Marketing' });
+    await request(app).delete(`/api/apps/${ID}/collaborators/entry1`).expect(200);
+    expect(collaborators.remove).toHaveBeenCalledWith(ID, 'entry1');
+  });
+});
+
+describe('Crewly Apps controller: Marketplace templates', () => {
+  let templates: Record<string, jest.Mock>;
+  beforeEach(() => {
+    templates = {
+      requestPublish: jest.fn().mockResolvedValue({ requested: true, decisionId: 'D-7', templateId: 'tpl-abcdefghij', version: 1 }),
+      find: jest.fn().mockResolvedValue({ templates: [], total: 0 }),
+      mine: jest.fn().mockResolvedValue({ templates: [] }),
+      use: jest.fn().mockResolvedValue({ appId: 'newapp2345', files: [] }),
+      unlist: jest.fn().mockResolvedValue({ status: 'unlisted' }),
+      checkout: jest.fn().mockResolvedValue({ appId: ID, files: [] }),
+    };
+    setAppsParts({
+      client: {} as AppsCloudClient,
+      registry: {} as unknown as AppsRegistryService,
+      service: service as unknown as AppsService,
+      templates: templates as unknown as import('../../services/apps/app-templates.service.js').AppTemplatesService,
+    });
+  });
+
+  it('template-request: the verified agent and only the known fields reach the service', async () => {
+    await request(app)
+      .post(`/api/apps/${ID}/template-request`)
+      .set(agentAuthHeaders('dev-ella'))
+      .send({ description: 'Chores', tags: 'kids', author: 'Steve', approved: true, authorName: 'Mallory' })
+      .expect(200);
+    expect(templates.requestPublish).toHaveBeenCalledWith(ID, { agentSession: 'dev-ella' }, { description: 'Chores', name: undefined, category: undefined, tags: 'kids', author: 'Steve', sampleData: undefined });
+  });
+
+  it('a refused scan answers 422 with the findings', async () => {
+    templates.requestPublish.mockRejectedValueOnce(new AppsCloudError(422, 'unsafe_content', 'Found: app.js:3 — Google API key', { findings: [{ path: 'app.js', line: 3, kind: 'secret', excerpt: 'AIza…' }] }));
+    const res = await request(app).post(`/api/apps/${ID}/template-request`).set(agentAuthHeaders('dev-ella')).send({ description: 'x' }).expect(422);
+    expect(res.body).toMatchObject({ success: false, error: 'unsafe_content', findings: [{ path: 'app.js', line: 3, kind: 'secret' }] });
+  });
+
+  it('find / mine / use / unlist / template-files are routed before the /:appId routes', async () => {
+    await request(app).get('/api/apps/templates?q=chores&limit=3').set(agentAuthHeaders('dev-ella')).expect(200);
+    expect(templates.find).toHaveBeenCalledWith({ q: 'chores', tag: undefined, category: undefined, limit: '3' }, { agentSession: 'dev-ella' });
+    await request(app).get('/api/apps/templates/mine').expect(200);
+    expect(templates.mine).toHaveBeenCalledWith({});
+    const used = await request(app).post('/api/apps/templates/tpl-abcdefghij/use').set(agentAuthHeaders('dev-ella')).send({ name: 'Ours', source: '/p/ours' }).expect(201);
+    expect(used.body.data.appId).toBe('newapp2345');
+    expect(templates.use).toHaveBeenCalledWith('tpl-abcdefghij', { agentSession: 'dev-ella' }, { name: 'Ours', source: '/p/ours' });
+    await request(app).post('/api/apps/templates/tpl-abcdefghij/unlist').set(agentAuthHeaders('dev-ella')).expect(200);
+    await request(app).post(`/api/apps/${ID}/template-files`).set(agentAuthHeaders('dev-ella')).send({ source: '/p/x' }).expect(200);
+    expect(templates.checkout).toHaveBeenCalledWith(ID, { agentSession: 'dev-ella' }, { source: '/p/x' });
+  });
+});
+
+describe('Crewly Apps controller: owner (crewly-services apps/SPEC.md §15)', () => {
+  it('an agent reads and sets the owner as itself; the owner as the owner', async () => {
+    await request(app).get(`/api/apps/${ID}/owner`).set(agentAuthHeaders('dev-ella')).expect(200);
+    expect(service.getOwner).toHaveBeenCalledWith(ID, expect.objectContaining({ agentSession: 'dev-ella' }));
+    const res = await request(app).put(`/api/apps/${ID}/owner`).set(agentAuthHeaders('dev-ella')).send({ owner: 'channel:#daily-brief' }).expect(200);
+    expect(res.body.data.owner.kind).toBe('channel');
+    expect(service.setOwner).toHaveBeenCalledWith(ID, { owner: 'channel:#daily-brief' }, expect.objectContaining({ agentSession: 'dev-ella' }));
+    await request(app).put(`/api/apps/${ID}/owner`).send({ owner: 'default' }).expect(200);
+    expect(service.setOwner).toHaveBeenLastCalledWith(ID, { owner: 'default' }, expect.not.objectContaining({ agentSession: expect.anything() }));
+  });
+
+  it('an owner agent adds an agent collaborator (Cloud decides whether it may)', async () => {
+    await request(app).post(`/api/apps/${ID}/collaborators/agents`).set(agentAuthHeaders('dev-ella')).send({ agent: 'Kai' }).expect(200);
+    expect(service.addAgentCollaborator).toHaveBeenCalledWith(ID, 'Kai', expect.objectContaining({ agentSession: 'dev-ella' }));
+  });
+});
+
+describe('Crewly Apps controller: file upload', () => {
+  const h = () => agentAuthHeaders('dev-ella');
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+
+  it('proxies the raw body, content type and decoded file name to the service as the verified agent and answers 201 with the URL', async () => {
+    const res = await request(app).post(`/api/apps/${ID}/files`).set(h()).set('Content-Type', 'image/png').set('X-File-Name', 'a%20b.png').send(png);
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ success: true, data: expect.objectContaining({ fileId: 'f1', url: 'https://apps.crewlyai.com/_f/t/f1' }) });
+    expect(service.uploadFile).toHaveBeenCalledWith(ID, { data: png, contentType: 'image/png', name: 'a b.png' }, { agentSession: 'dev-ella' });
+  });
+
+  it('lets the owner upload (no agent session)', async () => {
+    await request(app).post(`/api/apps/${ID}/files`).set('Content-Type', 'image/png').send(png);
+    expect(service.uploadFile).toHaveBeenCalledWith(ID, { data: png, contentType: 'image/png', name: undefined }, {});
+  });
+
+  it("passes the service's refusal (not a collaborator) through with its status and code, not a 500", async () => {
+    service.uploadFile.mockRejectedValue(new AppsCloudError(403, 'not_your_app', 'This app is not yours.'));
+    const res = await request(app).post(`/api/apps/${ID}/files`).set(h()).set('Content-Type', 'image/png').send(png);
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ success: false, error: 'not_your_app' });
+  });
+
+  it("passes Cloud's size refusal through (413 too_large)", async () => {
+    service.uploadFile.mockRejectedValue(new AppsCloudError(413, 'too_large', 'A file can be at most 5 MB.'));
+    const res = await request(app).post(`/api/apps/${ID}/files`).set(h()).set('Content-Type', 'image/png').send(png);
+    expect(res.status).toBe(413);
+    expect(res.body).toMatchObject({ success: false, error: 'too_large' });
+  });
+
+  it('refuses a body over the limit by its declared size before reading it', () => {
+    const res = { setHeader: jest.fn(), status: jest.fn().mockReturnThis(), json: jest.fn() } as unknown as express.Response;
+    const next = jest.fn();
+    rejectOversizedUpload({ headers: { 'content-length': String(11 * 1024 * 1024) } } as unknown as express.Request, res, next);
+    expect(res.status).toHaveBeenCalledWith(413);
+    expect(next).not.toHaveBeenCalled();
+    rejectOversizedUpload({ headers: { 'content-length': '1000' } } as unknown as express.Request, res, next);
+    rejectOversizedUpload({ headers: {} } as express.Request, res, next);
+    expect(next).toHaveBeenCalledTimes(2);
+  });
+
+  it('answers 415, not a fake success, when the body was already parsed as JSON (no raw bytes)', async () => {
+    const res = await request(app).post(`/api/apps/${ID}/files`).set(h()).send({ not: 'a file' });
+    expect(res.status).toBe(415);
+    expect(res.body).toMatchObject({ success: false, error: 'unsupported_type' });
+    expect(service.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it('refuses an anonymous caller', async () => {
+    const res = await request(app).post(`/api/apps/${ID}/files`).set('X-Test-Anonymous', '1').set('Content-Type', 'image/png').send(png);
+    expect(res.status).toBe(401);
+  });
+});
+
+describe('Crewly Apps controller: file download', () => {
+  const FID = 'abcdefghij012345';
+
+  it('streams the bytes with content type and file name as the verified agent', async () => {
+    const res = await request(app).get(`/api/apps/${ID}/files/${FID}`).set(agentAuthHeaders('dev-ella')).buffer(true).parse((r, cb) => {
+      const chunks: Buffer[] = [];
+      r.on('data', (c: Buffer) => chunks.push(c));
+      r.on('end', () => cb(null, Buffer.concat(chunks)));
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('image/png');
+    expect(res.headers['content-disposition']).toBe('attachment; filename="subs shot.png"');
+    expect(res.headers['x-file-name']).toBe('subs%20shot.png');
+    expect(res.body).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    expect(service.downloadFile).toHaveBeenCalledWith(ID, FID, { agentSession: 'dev-ella' });
+  });
+
+  it("passes the service's refusal (not a collaborator / other account) through with its status and code", async () => {
+    service.downloadFile.mockRejectedValueOnce(new AppsCloudError(403, 'not_your_app', 'This app is not yours.'));
+    const res = await request(app).get(`/api/apps/${ID}/files/${FID}`).set(agentAuthHeaders('dev-ella'));
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ success: false, error: 'not_your_app' });
+    service.downloadFile.mockRejectedValueOnce(new AppsCloudError(404, 'not_found', 'No such file in this app.'));
+    const res2 = await request(app).get(`/api/apps/${ID}/files/${FID}`).set(agentAuthHeaders('dev-ella'));
+    expect(res2.status).toBe(404);
+    expect(res2.body).toMatchObject({ success: false, error: 'not_found' });
+  });
+
+  it('refuses an anonymous caller', async () => {
+    const res = await request(app).get(`/api/apps/${ID}/files/${FID}`).set('X-Test-Anonymous', '1');
+    expect(res.status).toBe(401);
+    expect(service.downloadFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('Crewly Apps controller: delete (crewly#1081)', () => {
+  it('passes the verified agent as the caller', async () => {
+    const res = await request(app).delete(`/api/apps/${ID}`).set(agentAuthHeaders('dev-ella')).expect(200);
+    expect(res.body).toEqual({ success: true, data: { appId: ID, deleted: true } });
+    expect(service.deleteApp).toHaveBeenCalledWith(ID, { agentSession: 'dev-ella' });
+  });
+
+  it('maps a refusal (public app) to its status', async () => {
+    service.deleteApp.mockRejectedValueOnce(new AppsCloudError(403, 'forbidden', 'public'));
+    const res = await request(app).delete(`/api/apps/${ID}`).set(agentAuthHeaders('dev-ella')).expect(403);
+    expect(res.body.error).toBe('forbidden');
+  });
+});
 
 describe('Crewly Apps controller: transfer', () => {
   it('passes toSession and the verified caller to the service', async () => {
@@ -172,6 +387,39 @@ describe('Crewly Apps controller', () => {
     expect(missing.body.error).toBe('not_found');
   });
 
+  it('comment audio: checks access through getComment, downloads the recordings under CREWLY_HOME, answers local paths', async () => {
+    const fs = await import('fs/promises');
+    const os = await import('os');
+    const path = await import('path');
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'apps-ctl-voice-'));
+    const prev = process.env.CREWLY_HOME;
+    process.env.CREWLY_HOME = home;
+    try {
+      const download = jest.fn().mockResolvedValue({ data: Buffer.from('bytes'), contentType: 'audio/webm' });
+      setAppsParts({
+        client: { download } as unknown as AppsCloudClient,
+        registry: {} as unknown as AppsRegistryService,
+        service: service as unknown as AppsService,
+      });
+      service.getComment.mockResolvedValueOnce({ id: 'c1', attachments: [{ kind: 'audio', blobId: 'abcdefgh12345678', mime: 'audio/webm', durationMs: 42_000 }], replies: [] });
+      const agent = agentAuthHeaders('dev-ella');
+      const r = await request(app).post(`/api/apps/${ID}/comments/c1/audio`).set(agent).send({}).expect(200);
+      expect(service.getComment).toHaveBeenCalledWith(ID, 'c1', { agentSession: 'dev-ella' });
+      expect(download).toHaveBeenCalledWith(`/apps/${ID}/comments/c1/audio/abcdefgh12345678`, expect.objectContaining({ maxBytes: expect.any(Number) }));
+      const p = path.join(home, 'tmp', 'app-comment-audio', `${ID}-abcdefgh12345678.webm`);
+      expect(r.body.data).toEqual({ recordings: [{ blobId: 'abcdefgh12345678', durationMs: 42_000, mime: 'audio/webm', path: p }] });
+      expect(await fs.readFile(p, 'utf8')).toBe('bytes');
+      // No access to the thread → no download.
+      service.getComment.mockRejectedValueOnce(new AppsCloudError(403, 'forbidden', 'Not your team.'));
+      await request(app).post(`/api/apps/${ID}/comments/c1/audio`).set(agent).send({}).expect(403);
+      expect(download).toHaveBeenCalledTimes(1);
+    } finally {
+      if (prev === undefined) delete process.env.CREWLY_HOME;
+      else process.env.CREWLY_HOME = prev;
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
   it('refuses an agent with only the session header (no badge)', async () => {
     const res = await request(app).get('/api/apps').set('X-Agent-Session', 'dev-ella');
     expect(res.status).toBe(403);
@@ -265,6 +513,9 @@ describe('Crewly Apps controller', () => {
     expect(service.addDoc).toHaveBeenCalledWith(ID, 'items', { n: 1 }, who);
     await request(app).get(`/api/apps/${ID}/data/items/milk`).set(h);
     expect(service.getDoc).toHaveBeenCalledWith(ID, 'items', 'milk', who);
+    const field = await request(app).get(`/api/apps/${ID}/data/items/milk/field?path=%2Fphoto`).set(h);
+    expect(field.body.data.value).toBe('abc');
+    expect(service.getDocField).toHaveBeenCalledWith(ID, 'items', 'milk', '/photo', who);
     await request(app).put(`/api/apps/${ID}/data/items/milk`).set(h).send({ data: { a: 1 } });
     expect(service.setDoc).toHaveBeenCalledWith(ID, 'items', 'milk', { a: 1 }, who);
     await request(app).patch(`/api/apps/${ID}/data/items/milk`).set(h).send({ data: { a: 2 }, ifRev: 2 });
@@ -311,6 +562,10 @@ describe('Crewly Apps controller', () => {
     expect(service.requestPublic).toHaveBeenCalledWith(ID, { publicRead: ['items'], publicSubmit: ['votes'], note: 'n' }, who);
     await request(app).delete(`/api/apps/${ID}/visibility-request`).set(h);
     expect(service.cancelPublicRequest).toHaveBeenCalledWith(ID, who);
+    await request(app).post(`/api/apps/${ID}/capability-request`).set(h).send({ capabilities: ['microphone'], note: 'noise meter', extra: 1 });
+    expect(service.requestCapabilities).toHaveBeenCalledWith(ID, { capabilities: ['microphone'], note: 'noise meter' }, who);
+    await request(app).delete(`/api/apps/${ID}/capability-request`).set(h);
+    expect(service.cancelCapabilityRequest).toHaveBeenCalledWith(ID, who);
     await request(app).post(`/api/apps/${ID}/make-private`).set(h);
     expect(service.makePrivate).toHaveBeenCalledWith(ID, who);
     await request(app).post(`/api/apps/${ID}/share`).send({});
@@ -397,5 +652,103 @@ describe('Crewly Apps controller', () => {
       expect(res.body.data.updatedBy).toEqual({ kind: 'visitor', id: 'anonymous' });
       expectNeutral(JSON.stringify(res.body));
     });
+  });
+});
+
+describe('Crewly Apps controller: file handoff', () => {
+  const HID = 'hf_AbCdEfGhIjKlMnOpQrStUv';
+  let client: { request: jest.Mock };
+  beforeEach(() => {
+    client = { request: jest.fn().mockResolvedValue({ handoffId: HID, sizeBytes: 5 }) };
+    setAppsParts({ client: client as unknown as AppsCloudClient, registry: {} as unknown as AppsRegistryService, service: service as unknown as AppsService });
+  });
+
+  it('create forwards only the known fields to Cloud as the verified agent and answers 201', async () => {
+    const res = await request(app).post('/api/apps/handoffs').set(agentAuthHeaders('dev-ella')).send({ fileName: 'a.mp4', sizeBytes: 5, note: 'n', evil: 'x' });
+    expect(res.status).toBe(201);
+    expect(client.request).toHaveBeenCalledWith('POST', '/handoffs', { body: { fileName: 'a.mp4', sizeBytes: 5, contentType: undefined, note: 'n', to: undefined }, agent: 'dev-ella' });
+  });
+
+  it('get / complete / ack / delete route to the Cloud handoff paths; the owner calls as owner', async () => {
+    await request(app).get(`/api/apps/handoffs/${HID}`).set(agentAuthHeaders('dev-ella')).expect(200);
+    expect(client.request).toHaveBeenLastCalledWith('GET', `/handoffs/${HID}`, { agent: 'dev-ella' });
+    await request(app).post(`/api/apps/handoffs/${HID}/complete`).set(agentAuthHeaders('dev-ella')).expect(200);
+    expect(client.request).toHaveBeenLastCalledWith('POST', `/handoffs/${HID}/complete`, { agent: 'dev-ella' });
+    await request(app).post(`/api/apps/handoffs/${HID}/ack`).expect(200);
+    expect(client.request).toHaveBeenLastCalledWith('POST', `/handoffs/${HID}/ack`, { asOwner: true });
+    await request(app).delete(`/api/apps/handoffs/${HID}`).set(agentAuthHeaders('dev-ella')).expect(200);
+    expect(client.request).toHaveBeenLastCalledWith('DELETE', `/handoffs/${HID}`, { agent: 'dev-ella' });
+  });
+
+  it('a malformed id is 404 and never reaches Cloud; Cloud refusals pass through', async () => {
+    client.request.mockClear();
+    await request(app).get('/api/apps/handoffs/..%2F..%2Fapps').set(agentAuthHeaders('dev-ella')).expect(404);
+    expect(client.request).not.toHaveBeenCalled();
+    client.request.mockRejectedValue(new AppsCloudError(402, 'quota_exceeded', 'Too many bytes waiting.'));
+    const res = await request(app).post('/api/apps/handoffs').set(agentAuthHeaders('dev-ella')).send({ fileName: 'a', sizeBytes: 1 });
+    expect(res.status).toBe(402);
+    expect(res.body).toMatchObject({ success: false, error: 'quota_exceeded' });
+  });
+});
+
+describe('Crewly Apps controller: owner upload requests', () => {
+  const RID = 'ur_AbCdEfGhIjKlMnOpQrStUv';
+  let client: { request: jest.Mock };
+  beforeEach(() => {
+    client = { request: jest.fn().mockResolvedValue({ requestId: RID, url: `https://crewlyai.com/portal/upload/${RID}` }) };
+    setAppsParts({ client: client as unknown as AppsCloudClient, registry: {} as unknown as AppsRegistryService, service: service as unknown as AppsService });
+  });
+
+  it('create forwards only the known fields to Cloud as the verified agent and answers 201 with the link', async () => {
+    const res = await request(app).post('/api/apps/upload-requests').set(agentAuthHeaders('dev-ella')).send({ purpose: 'raw footage', agentName: 'Ella', maxFiles: 2, evil: 'x' });
+    expect(res.status).toBe(201);
+    expect(res.body.data.url).toContain('/portal/upload/');
+    expect(client.request).toHaveBeenCalledWith('POST', '/upload-requests', { body: { purpose: 'raw footage', agentName: 'Ella', maxFiles: 2 }, agent: 'dev-ella' });
+  });
+
+  it('get and cancel route to the Cloud paths; a malformed id never reaches Cloud', async () => {
+    await request(app).get(`/api/apps/upload-requests/${RID}`).set(agentAuthHeaders('dev-ella')).expect(200);
+    expect(client.request).toHaveBeenLastCalledWith('GET', `/upload-requests/${RID}`, { agent: 'dev-ella' });
+    await request(app).delete(`/api/apps/upload-requests/${RID}`).set(agentAuthHeaders('dev-ella')).expect(200);
+    expect(client.request).toHaveBeenLastCalledWith('DELETE', `/upload-requests/${RID}`, { agent: 'dev-ella' });
+    client.request.mockClear();
+    await request(app).get('/api/apps/upload-requests/..%2Fx').set(agentAuthHeaders('dev-ella')).expect(404);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+});
+
+describe('Crewly Apps controller: shares (agent file for the owner)', () => {
+  const SID = 'sf_AbCdEfGhIjKlMnOpQrStUv';
+  let client: { request: jest.Mock };
+  beforeEach(() => {
+    client = { request: jest.fn().mockResolvedValue({ shareId: SID, url: `https://crewlyai.com/portal/files/${SID}` }) };
+    setAppsParts({ client: client as unknown as AppsCloudClient, registry: {} as unknown as AppsRegistryService, service: service as unknown as AppsService });
+  });
+
+  it('create forwards only the known fields to Cloud as the verified agent and answers 201', async () => {
+    const res = await request(app).post('/api/apps/shares').set(agentAuthHeaders('dev-ella')).send({ fileName: 'final.mp4', sizeBytes: 5, note: 'n', to: 'x', evil: 'y' });
+    expect(res.status).toBe(201);
+    expect(client.request).toHaveBeenCalledWith('POST', '/shares', { body: { fileName: 'final.mp4', sizeBytes: 5, contentType: undefined, note: 'n' }, agent: 'dev-ella' });
+  });
+
+  it('get / complete / list / delete route to the Cloud share paths', async () => {
+    await request(app).get(`/api/apps/shares/${SID}`).set(agentAuthHeaders('dev-ella')).expect(200);
+    expect(client.request).toHaveBeenLastCalledWith('GET', `/shares/${SID}`, { agent: 'dev-ella' });
+    await request(app).post(`/api/apps/shares/${SID}/complete`).set(agentAuthHeaders('dev-ella')).expect(200);
+    expect(client.request).toHaveBeenLastCalledWith('POST', `/shares/${SID}/complete`, { agent: 'dev-ella' });
+    await request(app).get('/api/apps/shares').set(agentAuthHeaders('dev-ella')).expect(200);
+    expect(client.request).toHaveBeenLastCalledWith('GET', '/shares', { agent: 'dev-ella' });
+    await request(app).delete(`/api/apps/shares/${SID}`).set(agentAuthHeaders('dev-ella')).expect(200);
+    expect(client.request).toHaveBeenLastCalledWith('DELETE', `/shares/${SID}`, { agent: 'dev-ella' });
+  });
+
+  it('a malformed id is 404 and never reaches Cloud; Cloud refusals pass through', async () => {
+    client.request.mockClear();
+    await request(app).get('/api/apps/shares/..%2F..%2Fapps').set(agentAuthHeaders('dev-ella')).expect(404);
+    expect(client.request).not.toHaveBeenCalled();
+    client.request.mockRejectedValue(new AppsCloudError(413, 'too_large', 'A shared file can be at most 4096 MB.'));
+    const res = await request(app).post('/api/apps/shares').set(agentAuthHeaders('dev-ella')).send({ fileName: 'a', sizeBytes: 1 });
+    expect(res.status).toBe(413);
+    expect(res.body).toMatchObject({ success: false, error: 'too_large' });
   });
 });

@@ -37,6 +37,8 @@ export class AppsCloudError extends Error {
     public readonly status: number,
     public readonly code: string,
     message: string,
+    /** Cloud's machine-readable `details` (e.g. a template scan's findings), when it sent any */
+    public readonly details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = 'AppsCloudError';
@@ -49,12 +51,20 @@ export interface AppsRequestOptions {
   body?: unknown;
   /** Raw bytes instead of JSON (the thumbnail upload); wins over `body` */
   raw?: { data: Buffer; contentType: string };
+  /** Extra request headers (a file upload's `X-File-Name`); never overrides auth, instance, agent or content type */
+  headers?: Record<string, string>;
   /** Query parameters (undefined values are dropped) */
   query?: Record<string, string | number | undefined>;
   /** Agent session to attribute the call to; omitted for the owner */
   agent?: string;
   /** Request timeout (default REQUEST_TIMEOUT_MS) */
   timeoutMs?: number;
+  /**
+   * Call as the account owner: no `X-Crewly-Instance`, no `X-Crewly-Agent`
+   * (Cloud's owner actor). Only for work the owner approved, never for an
+   * agent's own call (the collaborator grant after an owner tap).
+   */
+  asOwner?: boolean;
 }
 
 /**
@@ -95,8 +105,8 @@ export class AppsCloudClient {
     if (!this.isAvailable()) {
       throw new AppsCloudError(409, C.ERROR_CODES.NOT_LOGGED_IN, 'This machine is not signed in to Crewly Cloud. Run `crewly cloud login`.');
     }
-    const instanceId = await this.deps.instanceId();
-    if (!instanceId) {
+    const instanceId = opts.asOwner ? '' : ((await this.deps.instanceId()) ?? '');
+    if (!opts.asOwner && !instanceId) {
       throw new AppsCloudError(409, C.ERROR_CODES.NO_INSTANCE, 'This machine has no Crewly Cloud instance id yet. Sign in to Crewly Cloud and try again in a minute.');
     }
     let res = await this.send(method, path, opts, instanceId);
@@ -112,13 +122,49 @@ export class AppsCloudClient {
         : res.status === 401
           ? 'Crewly Cloud rejected the session. Run `crewly cloud login` again.'
           : `Crewly Apps request failed (${res.status}).`;
-    throw new AppsCloudError(res.status === 401 ? 409 : res.status, code, message);
+    const details = json?.details && typeof json.details === 'object' && !Array.isArray(json.details) ? (json.details as Record<string, unknown>) : undefined;
+    throw new AppsCloudError(res.status === 401 ? 409 : res.status, code, message, details);
   }
 
-  private static async readJson(res: Response): Promise<{ success?: boolean; data?: unknown; error?: unknown; code?: unknown } | null> {
+  /**
+   * GET binary content from the Apps API (a voice comment's recording).
+   * Same auth, refresh and error mapping as {@link request}; a body larger
+   * than `maxBytes` is refused.
+   *
+   * @param path - Path under `/api/apps/v1`
+   * @param opts - `maxBytes` cap, timeout
+   * @returns Bytes, Content-Type and the response headers
+   * @throws AppsCloudError as {@link request}, or `too_large`
+   */
+  async download(path: string, opts: { maxBytes: number; timeoutMs?: number; agent?: string }): Promise<{ data: Buffer; contentType: string; headers: Headers }> {
+    if (!this.isAvailable()) {
+      throw new AppsCloudError(409, C.ERROR_CODES.NOT_LOGGED_IN, 'This machine is not signed in to Crewly Cloud. Run `crewly cloud login`.');
+    }
+    const instanceId = await this.deps.instanceId();
+    if (!instanceId) {
+      throw new AppsCloudError(409, C.ERROR_CODES.NO_INSTANCE, 'This machine has no Crewly Cloud instance id yet. Sign in to Crewly Cloud and try again in a minute.');
+    }
+    const reqOpts: AppsRequestOptions = { ...(opts.agent ? { agent: opts.agent } : {}), ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}) };
+    let res = await this.send('GET', path, reqOpts, instanceId);
+    if (res.status === 401 && (await this.cloud.tryRefreshToken().catch(() => false))) {
+      res = await this.send('GET', path, reqOpts, instanceId);
+    }
+    if (!res.ok) {
+      const json = await AppsCloudClient.readJson(res);
+      const code = typeof json?.code === 'string' ? json.code : `http_${res.status}`;
+      throw new AppsCloudError(res.status === 401 ? 409 : res.status, code, typeof json?.error === 'string' ? json.error : `Crewly Apps download failed (${res.status}).`);
+    }
+    const declared = Number(res.headers.get('content-length') ?? '0');
+    if (declared > opts.maxBytes) throw new AppsCloudError(413, 'too_large', 'The file is larger than this machine accepts.');
+    const data = Buffer.from(await res.arrayBuffer());
+    if (data.length > opts.maxBytes) throw new AppsCloudError(413, 'too_large', 'The file is larger than this machine accepts.');
+    return { data, contentType: (res.headers.get('content-type') ?? 'application/octet-stream').split(';')[0]!.trim().toLowerCase(), headers: res.headers };
+  }
+
+  private static async readJson(res: Response): Promise<{ success?: boolean; data?: unknown; error?: unknown; code?: unknown; details?: unknown } | null> {
     try {
       const parsed: unknown = await res.json();
-      return parsed && typeof parsed === 'object' ? (parsed as { success?: boolean; data?: unknown; error?: unknown; code?: unknown }) : null;
+      return parsed && typeof parsed === 'object' ? (parsed as { success?: boolean; data?: unknown; error?: unknown; code?: unknown; details?: unknown }) : null;
     } catch {
       return null;
     }
@@ -131,10 +177,11 @@ export class AppsCloudClient {
       if (v !== undefined && v !== '') url.searchParams.set(k, String(v));
     }
     const headers: Record<string, string> = {
+      ...(opts.headers ?? {}),
       Authorization: `Bearer ${this.cloud.getToken() ?? ''}`,
-      'X-Crewly-Instance': instanceId,
     };
-    if (opts.agent) headers['X-Crewly-Agent'] = opts.agent;
+    if (!opts.asOwner) headers['X-Crewly-Instance'] = instanceId;
+    if (opts.agent && !opts.asOwner) headers['X-Crewly-Agent'] = opts.agent;
     if (opts.raw) headers['Content-Type'] = opts.raw.contentType;
     else if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
     try {

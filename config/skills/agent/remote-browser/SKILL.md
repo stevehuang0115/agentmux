@@ -68,7 +68,7 @@ bash execute.sh -a click -s "#submit"
 |---|---|---|
 | `navigate` | `--url` | |
 | `screenshot` | | |
-| `full-page-screenshot` | | scrolls and stitches the whole page |
+| `full-page-screenshot` | | whole page as one downscaled JPEG; works on background tabs (needs extension 0.4.24+) |
 | `read-text` | | `--selector` (defaults to whole page) |
 | `scroll` | | `--params` e.g. `'{"direction":"down","amount":3}'` |
 | `scroll-in-element` | | `--params` with a selector + direction |
@@ -109,7 +109,7 @@ bash execute.sh -a click -s "#submit"
 | Action | Notes |
 |---|---|
 | `bind-tab` | bind a tab to this agent; `--active` foregrounds it (default: background) |
-| `unbind-tab` | release the tab and close it |
+| `unbind-tab` (aliases `done`, `close-tab`) | release the tab and close it. Run it when the job is finished |
 
 ## Per-agent tab binding
 
@@ -156,7 +156,7 @@ bash execute.sh -a execute-js -c '[...document.querySelectorAll(".row")].map(r=>
 # Explicit lifecycle when doing a long multi-step job
 bash execute.sh -a bind-tab
 # ... many commands ...
-bash execute.sh -a unbind-tab
+bash execute.sh -a done        # close the tab you opened (alias of unbind-tab)
 ```
 
 ## Prerequisites
@@ -256,8 +256,13 @@ it. Do not paraphrase an instruction into something stronger than it was.
   do it themselves in their own window.
 - Avoid clicking elements that raise native `alert()` / `confirm()` dialogs:
   they block the extension until dismissed by hand.
-- Always `unbind-tab` when a job is done, or abandoned tabs accumulate in the
-  user's window.
+- **Close the tabs you opened when the task is done**: run
+  `bash execute.sh -a done` (same as `unbind-tab`) as the last browser step.
+  Abandoned tabs pile up in the owner's Chrome and slow their machine. It only
+  closes the tab Crewly opened for you, never the owner's own tabs, and never a
+  tab the owner has taken control of or is watching. As a safety net the backend
+  also closes a tab left untouched about 10 minutes after your turn ends, and
+  when you stop, but do not rely on it.
 
 ## Which control surface to use
 

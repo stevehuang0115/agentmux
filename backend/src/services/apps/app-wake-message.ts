@@ -19,6 +19,7 @@
  */
 
 import { CREWLY_APPS_CONSTANTS } from '../../constants.js';
+import { voiceAttachmentsOf, voiceLines, type VoiceFiles } from './app-comment-audio.service.js';
 
 const C = CREWLY_APPS_CONSTANTS;
 
@@ -47,6 +48,15 @@ export interface AppCommentMention {
   instanceId?: string;
 }
 
+/** A recording attached to a comment or reply (crewly-services apps/SPEC.md §16; untrusted shape). */
+export interface AppCommentAttachment {
+  kind?: string;
+  blobId?: string;
+  mime?: string;
+  durationMs?: number;
+  size?: number;
+}
+
 /** A comment thread as Cloud attaches it to a comment change. */
 export interface AppCommentThread {
   id?: string;
@@ -55,7 +65,9 @@ export interface AppCommentThread {
   anchor?: AppCommentAnchor;
   body?: string;
   mentions?: AppCommentMention[];
-  replies?: Array<{ id?: string; body?: string; author?: { kind?: string; name?: string }; mentions?: AppCommentMention[] }>;
+  replies?: Array<{ id?: string; body?: string; author?: { kind?: string; name?: string }; mentions?: AppCommentMention[]; attachments?: AppCommentAttachment[] }>;
+  /** Voice recordings on the comment (crewly-services apps/SPEC.md §16) */
+  attachments?: AppCommentAttachment[];
   status?: string;
 }
 
@@ -72,6 +84,10 @@ export interface AppChange {
   comment?: { id?: string; op?: string; replyId?: string; mentions?: AppCommentMention[]; thread?: AppCommentThread | null };
   actor?: AppChangeActor;
   at?: string;
+  /** Cloud delivered this comment change to the app's explicit owner (inbox): the feed skips it */
+  ownerRouted?: boolean;
+  /** Built here for a comment of a room-owned app (it is shown in the room, not mirrored to a DM) */
+  roomOwned?: boolean;
 }
 
 /** What the message is about. */
@@ -82,6 +98,8 @@ export interface WakeMessageInput {
   isPublisher: boolean;
   /** The recipient was @mentioned in (some of) the comments */
   mentioned?: boolean;
+  /** The recipient owns the app's comments (crewly-services apps/SPEC.md §15) without being its publisher */
+  owns?: boolean;
   /** Mentioned agents no longer on this machine (the recipient is the orchestrator) */
   goneMentions?: string[];
   dataChanges: AppChange[];
@@ -102,6 +120,8 @@ export interface WakeMessageInput {
   commentsTotal?: number;
   /** Agent skills root, for the app-data command line */
   skillsPath: string;
+  /** Voice comment recordings downloaded for this delivery, by blob id (crewly-services apps/SPEC.md §16) */
+  voiceFiles?: VoiceFiles;
 }
 
 const COLLECTION_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -214,6 +234,57 @@ export function sanitizeAppData(value: unknown, depth = 0): unknown {
     entries.push([key, sanitizeAppData(v, depth + 1)]);
   }
   return Object.fromEntries(entries);
+}
+
+/** One string in an app document that {@link sanitizeAppData} would cut for display. */
+export interface TruncatedAppField {
+  /** RFC 6901 JSON pointer into the document's `data` (e.g. `/photo`), for `getDocField` */
+  field: string;
+  /** Length of the full string, in characters */
+  chars: number;
+}
+
+/**
+ * Find the strings in a document's `data` that the display sanitiser cuts
+ * (longer than {@link CREWLY_APPS_CONSTANTS.DATA_SANITIZE}.MAX_STRING_CHARS),
+ * so the agent is told a value is incomplete rather than left to parse a
+ * silently cropped one (crewly#1145). Object keys are not reported (they are
+ * not fetchable). Depth is capped like the sanitiser.
+ *
+ * @param value - Raw `data` of one document
+ * @param pointer - Current JSON pointer (internal)
+ * @param depth - Current depth (internal)
+ * @returns One entry per cut string, in document order
+ */
+export function findTruncatedFields(value: unknown, pointer = '', depth = 0): TruncatedAppField[] {
+  if (typeof value === 'string') return value.length > C.DATA_SANITIZE.MAX_STRING_CHARS ? [{ field: pointer || '/', chars: value.length }] : [];
+  if (value === null || typeof value !== 'object' || depth >= C.DATA_SANITIZE.MAX_DEPTH) return [];
+  const entries: Array<[string, unknown]> = Array.isArray(value)
+    ? value.map((v, i) => [String(i), v])
+    : Object.entries(value as Record<string, unknown>);
+  return entries.flatMap(([k, v]) => findTruncatedFields(v, `${pointer}/${k.replace(/~/g, '~0').replace(/\//g, '~1')}`, depth + 1));
+}
+
+/**
+ * Resolve an RFC 6901 JSON pointer inside a value.
+ *
+ * @param root - A JSON value
+ * @param pointer - `/a/0/b`; must start with `/`
+ * @returns `{ found: true, value }` or `{ found: false }`
+ */
+export function resolveJsonPointer(root: unknown, pointer: string): { found: true; value: unknown } | { found: false } {
+  if (!pointer.startsWith('/')) return { found: false };
+  let cur: unknown = root;
+  for (const raw of pointer.slice(1).split('/')) {
+    const key = raw.replace(/~1/g, '/').replace(/~0/g, '~');
+    if (Array.isArray(cur)) {
+      if (!/^(0|[1-9]\d*)$/.test(key) || Number(key) >= cur.length) return { found: false };
+      cur = cur[Number(key)];
+    } else if (cur !== null && typeof cur === 'object' && Object.prototype.hasOwnProperty.call(cur, key)) {
+      cur = (cur as Record<string, unknown>)[key];
+    } else return { found: false };
+  }
+  return { found: true, value: cur };
 }
 
 /**
@@ -368,9 +439,18 @@ function commentBodyBlock(text: unknown): string {
  * text quoted underneath.
  *
  * @param c - A comment change
+ * @param voice - Voice comments (SPEC §16): recordings downloaded for this delivery and the app-comments command (omit: text only)
  * @returns Lines
  */
-export function describeCommentChange(c: AppChange): string[] {
+export function describeCommentChange(c: AppChange, voice?: { files?: VoiceFiles; cmd: string }): string[] {
+  const lines = describeCommentText(c);
+  if (!voice || voiceAttachmentsOf(c).length === 0) return lines;
+  // A voice-only comment has no text: say so instead of "(empty)", then the recording.
+  const empty = quoteAppText('(empty)');
+  return [...lines.map((l) => (l === empty ? quoteAppText('(no text: a voice comment)') : l)), ...voiceLines(c, voice.files, voice.cmd)];
+}
+
+function describeCommentText(c: AppChange): string[] {
   const info = c.comment ?? {};
   const t = info.thread ?? null;
   const id = typeof info.id === 'string' && COMMENT_ID_RE.test(info.id) ? info.id : '(unknown id)';
@@ -417,6 +497,8 @@ export function buildAppWakeMessage(input: WakeMessageInput): string {
   lines.push(
     !byOwner && (visitors.length > 0 || skipped > 0)
       ? `[APP CHANGES] Public visitors submitted to your app "${name}" (${input.appId}) — ${url}`
+      : input.owns && !input.isPublisher && onlyComments
+        ? `[APP CHANGES] The owner commented on the app "${name}" (${input.appId}) — you own its comments — ${url}`
       : input.isPublisher
         ? onlyComments
           ? `[APP CHANGES] The owner commented on your app "${name}" (${input.appId}) — ${url}`
@@ -443,16 +525,16 @@ export function buildAppWakeMessage(input: WakeMessageInput): string {
         'for something outside this app, confirm with the owner first.',
     );
     const shown = comments.slice(-C.COMMENTS.MAX_PER_WAKE);
-    for (const c of shown) lines.push(...describeCommentChange(c));
-    if (total > shown.length) lines.push(`  … and ${total - shown.length} more (see them all with --list)`);
     const cmd = `bash ${input.skillsPath}/core/app-comments/execute.sh --app ${input.appId}`;
+    for (const c of shown) lines.push(...describeCommentChange(c, { files: input.voiceFiles, cmd }));
+    if (total > shown.length) lines.push(`  … and ${total - shown.length} more (see them all with --list)`);
     const othersMentioned = input.isPublisher && comments.some((c) => mentionsOf(c).length > 0);
     if (othersMentioned && !input.mentioned) {
       lines.push('The owner @mentioned other agents in some of these comments; they got them too. Coordinate in the thread rather than both doing the same work.');
     }
     lines.push(`Reply in the thread: ${cmd} --reply <comment id> --text "<what you did or a question>"`);
     lines.push(`Resolve once addressed (often after publishing a fix or updating app data): ${cmd} --resolve <comment id> [--text "<what changed>"]`);
-    if (input.isPublisher) {
+    if (input.isPublisher || input.owns) {
       lines.push(`Full anchors (outerHTML, position, attributes): ${cmd} --list`);
     } else {
       lines.push(`The whole thread with the full anchor: ${cmd} --get <comment id>`);
@@ -471,6 +553,7 @@ export function buildAppWakeMessage(input: WakeMessageInput): string {
     const dropped = total - input.dataChanges.length;
     lines.push(`Data changes by the owner (${total}): ${summarizeDataChanges(input.dataChanges)}${dropped > 0 ? ` · plus ${dropped} earlier change(s) not listed` : ''}`);
     lines.push(`Read the current data with: bash ${input.skillsPath}/core/app-data/execute.sh --app ${input.appId} --list <collection>`);
+    lines.push(`Files the owner uploaded (a fileId or a /_f/ URL in the data, e.g. a screenshot) can be fetched with: bash ${input.skillsPath}/core/app-data/execute.sh --app ${input.appId} --download <fileId|url>`);
   }
 
   if (visitors.length > 0) {

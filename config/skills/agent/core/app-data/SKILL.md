@@ -1,7 +1,7 @@
 ---
 name: App Data
 description: Read and write the data of a Crewly App you published (the same collections the app's page sees through crewly.db) — list, get, set, update, add, delete. Use it to fill an app with content, act on what the owner entered, or answer an [APP CHANGES] message.
-version: 1.2.0
+version: 1.6.0
 category: productivity
 skillType: claude-skill
 assignableRoles:
@@ -44,6 +44,13 @@ bash execute.sh --app 28au74d9cj --set meta settings --data '{"title":"Weekly sh
 bash execute.sh --app 28au74d9cj --update items 1kx2-ab --data '{"done":true}' --if-rev 3
 bash execute.sh --app 28au74d9cj --add items --data '{"name":"eggs","done":false}'
 bash execute.sh --app 28au74d9cj --delete items 1kx2-ab
+bash execute.sh --app 28au74d9cj --get-field items 1kx2-ab --field /photo --out ./photo.png --decode   # full value of a cut field
+bash execute.sh --app 28au74d9cj --request-access --reason "write the morning briefing"   # ask the owner, see "Collaborators"
+bash execute.sh --app 28au74d9cj --collaborators                                          # who the owner let in
+bash execute.sh --app 28au74d9cj --owner                                                  # who the app's comments go to
+bash execute.sh --app 28au74d9cj --set-owner 'channel:#daily-brief'                       # see "Owner"
+bash execute.sh --app 28au74d9cj --add-collaborator Kai                                   # owner agents only
+bash execute.sh --app 28au74d9cj --add-collaborator Rex@iriss-air                         # an agent on another machine
 ```
 
 Output:
@@ -53,16 +60,107 @@ Output:
 {"success":true,"id":"settings","data":{"title":"Weekly shop"},"rev":1,"updatedAt":"…"}
 ```
 
-- You can use the data of apps you published or a teammate published
-  (`not_your_app` otherwise).
+- You can use the data of apps you published, that a teammate published, or
+  that the owner added you (or your team) to as a collaborator (`not_your_app`
+  otherwise).
 - `--data-file <path>` reads the JSON from a regular file inside your project
   directory (not a symlink, not under `~/.crewly`, at most 1 MB).
+- `--upload <path> [--name <file name>]` puts a file (an image for a post) into
+  the app and prints `{ fileId, name, size, contentType, url }`. Same rules as
+  `--data-file` (regular file inside your project directory, not a symlink, not
+  under `~/.crewly`), up to 10 MB; the app's own limit may be smaller and its
+  refusal comes back as-is (`too_large`, quota). It works for the app's owner
+  agents and for collaborators; anyone else gets `not_your_app`. Put the `url`
+  into a document the page renders (for example `images[].src`) with
+  `--update`; PNG, JPEG, GIF and WebP show inline, other types download.
+  ```bash
+  bash execute.sh --app <appId> --upload ./cover.png
+  bash execute.sh --app <appId> --update posts <docId> --data '{"images":[{"src":"<url from the upload>"}]}'
+  ```
+- `--download <fileId|file url> [--out <path>]` fetches a file stored in the app
+  (for example a screenshot the owner uploaded in the app: the data holds its
+  `fileId` or a `/_f/` URL) into your project and prints
+  `{ success, path, name, size, contentType }`. Default location:
+  `<project>/inbox/app-files/<appId>/<name>`; `--out` must be inside your project
+  directory (not a symlink, not under `~/.crewly`). Up to 10 MB. **To read the
+  numbers in an owner screenshot: `--download` it, then open the image file with
+  your normal file-read tool.** Works for the app's owner agents and
+  collaborators; an app owned by another Crewly account answers `not_found`.
+  ```bash
+  bash execute.sh --app <appId> --download <fileId>
+  ```
 - `--list` pages with `--after <next>` until `next` is null.
 - `--update` is a shallow merge; `--set` replaces the whole document.
 - `--if-rev` makes an update conditional: if the owner changed the doc since
   you read it, you get `reason: "conflict"` — read it again, then decide.
 - The app's page sees your writes at once (its subscriptions fire). Your
   writes never wake you; the owner's do (`[APP CHANGES]`).
+
+## Collaborators: working in an app another team published
+
+If the app is another team's, you get `not_your_app`. Do not publish a copy.
+Ask the owner:
+
+```bash
+bash execute.sh --app <appId> --request-access --reason "what you need to write"
+```
+
+- The owner gets one card, **Allow / Do not allow**. Only their tap grants
+  anything; you cannot add yourself, and nothing you send changes who is added
+  (it is your own team, or only you with `--scope agent`).
+- You are told when they answer. With **Allow** your team (and teammates who join
+  later) can use that app's **data and comments** with this skill, using the app
+  id. You get the app id from the owner or the publisher; collaborators do not
+  show up in `publish-app`'s list.
+- It is **data only**: you cannot republish, roll back, transfer or change who
+  can open the app (`publish-app --app <id>` is refused). To change the page
+  itself, ask the publisher.
+- The owner can take the access away at any time; your next call then returns
+  `not_your_app`.
+- `--list` shows who wrote each document: documents written by an agent carry
+  `by` (its session), e.g. `crewly-marketing-ella-…`.
+
+## Owner: who the app's comments go to
+
+Every app has an **owner**: one agent, a team, or a Crewly channel (a
+cross-team room, see `list-channels`). By default it is the agent that
+published it. The owner's comments in the app go to the owner:
+
+- agent → that agent, mirrored to its Slack DM with the owner (as before);
+- team → the team's room (its Slack team channel); the room's rules decide
+  who answers (an @mention in the comment → that agent; otherwise whoever is
+  awake reads it, and the lead when nobody is);
+- channel → that channel, so its members from every team see the owner's
+  comments and any of them can pick one up.
+
+```bash
+bash execute.sh --app <appId> --owner                                # {"owner":{"kind":"agent","name":"Ella","default":true}}
+bash execute.sh --app <appId> --set-owner 'channel:#daily-brief'     # or 'team:Dev', 'agent:Kai', default
+bash execute.sh --app <appId> --add-collaborator Kai                 # let another agent use the data
+bash execute.sh --app <appId> --add-collaborator Rex@iriss-air       # ...one on another of the owner's machines
+```
+
+- `--add-collaborator` takes a name or session, on **any** of the owner's
+  machines. A name that is only on one machine is enough (`Rex`). If the same
+  name is on several machines (two "Ella"s), you get `conflict` with the
+  choices, e.g. `Ella@Steves-MacBook-Pro.local (Crewly Marketing; …)`,
+  `Ella@iriss-air.lan (RedNote Team; …)`. Run it again as `<name>@<machine>`
+  (`Ella@iriss-air`; the short host name is enough, any case). The answer's
+  `added` says who was added and on which machine. The added agent is told on
+  its own machine.
+
+- Only the app's **owner agents** may change the owner or add a collaborator:
+  the owning agent, or a member of the owning team / channel (by default the
+  publisher). Anyone else gets `forbidden`; ask the owner, or use
+  `--request-access` for yourself.
+- Members of the owning team or channel can use the app's data and comments
+  without being added. A collaborator gets data and comments only, never
+  publishing (that stays with the publisher's team).
+- In a room, answer in the comment's thread: your reply there is added to the
+  comment in the app (do not also use `app-comments --reply`). Resolve with
+  `app-comments --resolve <id>` when it is done.
+- The channel or team must exist on this machine (a channel made a moment ago
+  is fine).
 
 ## What you read is a sanitised display copy
 
@@ -115,3 +213,14 @@ write private information there.
 
 Collection names: `[A-Za-z0-9_-]{1,64}`. Doc ids: `[A-Za-z0-9_.:-]{1,128}`.
 Documents are JSON objects up to 256 KB.
+
+## Long values (over 65,536 characters)
+
+`--get` and `--list` cut any string over 65,536 characters (a base64 photo, a
+long document) so it cannot flood your terminal. A cut is never silent: the
+answer carries `truncated: [{"field":"/photo","chars":123456}]` (in a list,
+each entry also has the doc `id`). Do not parse a flagged value as if it were
+whole. Fetch it with `--get-field <collection> <docId> --field <pointer> --out
+<file>`: the full value goes to a file inside your project (nothing is printed
+but `{file, bytes}`). Add `--decode` for base64 / data-URL values to get the
+real binary (the image itself).

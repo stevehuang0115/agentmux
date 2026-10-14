@@ -31,6 +31,7 @@ import { SLACK_AGENT_POST_CONSTANTS, SLACK_TYPING_CONSTANTS } from '../../consta
 import { slackIdentityFor } from './slack-team-channel.service.js';
 import { parseSlackThreadKey } from './slack-thread-key.js';
 import type { SlackAgentIdentityService } from './slack-agent-identity.service.js';
+import { reportOwnerThreadAgentPost } from '../messaging/owner-thread-sentinel.service.js';
 
 /** The slice of SlackService this service uses. */
 export interface AgentPostSlackApi {
@@ -39,6 +40,15 @@ export interface AgentPostSlackApi {
   findChannelByName(name: string): Promise<SlackChannelInfo | null>;
   openDirectMessage(userId: string, botToken?: string): Promise<string>;
   findUserByHandle(handle: string): Promise<string | null>;
+  /** Upload a file into a channel; optional so a slice without it can still post text. */
+  uploadFile?(options: {
+    channelId: string;
+    filePath: string;
+    filename?: string;
+    threadTs?: string;
+    botToken?: string;
+    persona?: { username: string; iconEmoji?: string; iconUrl?: string };
+  }): Promise<{ fileId?: string }>;
 }
 
 /** The slice of the identity service this service uses. */
@@ -59,6 +69,12 @@ export interface SlackAgentPostServiceDeps {
     Partial<Pick<SlackTypingPlaceholderService, 'owes' | 'noteAnswerPosted'>>) | null;
   /** Links `@Name` to real Slack mentions (agents' bots and known people). */
   linkMentions?: SlackMentionLinker;
+  /**
+   * Channel a Crewly team room is mapped to, by its Slack name. Consulted
+   * before `conversations.list`, which does not return a private channel the
+   * workspace bot is not a member of.
+   */
+  findMappedChannelByName?: (name: string) => { id: string; name: string } | null;
 }
 
 /** One post request. */
@@ -76,6 +92,8 @@ export interface SlackAgentPostRequest {
    * specs/2026-10-01-decision-cards.md §6).
    */
   newTopLevel?: boolean;
+  /** Absolute paths of files to upload into the same channel/thread after the text. */
+  files?: string[];
 }
 
 /** What happened. */
@@ -87,6 +105,10 @@ export interface SlackAgentPostResult {
   postedAs: 'agent' | 'crewly';
   /** Display name the message carries. */
   identity: string;
+  /** Files uploaded to Slack (absolute paths), when `files` were requested. */
+  filesSent?: string[];
+  /** Files Slack did not take, with Slack's own error code. */
+  filesFailed?: Array<{ path: string; error: string }>;
 }
 
 /**
@@ -234,7 +256,11 @@ export class SlackAgentPostService {
         answeredOwedReply: true,
         chars: text.length,
       });
-      return { channelId, messageTs: answeredTs, kind, postedAs, identity: identity.username ?? agentSession };
+      reportOwnerThreadAgentPost({ agent: agentSession, slackChannelId: channelId, ...(owed.threadTs ? { threadTs: owed.threadTs } : {}), text: rawText });
+      return {
+        channelId, messageTs: answeredTs, kind, postedAs, identity: identity.username ?? agentSession,
+        ...(await this.uploadFiles(req, channelId, owed.threadTs ?? req.threadTs, identity)),
+      };
     }
 
     let messageTs: string;
@@ -254,6 +280,7 @@ export class SlackAgentPostService {
     }
 
     if (req.threadTs) this.deps.typing?.noteAnswerPosted?.(channelId, req.threadTs);
+    reportOwnerThreadAgentPost({ agent: agentSession, slackChannelId: channelId, ...(req.threadTs ? { threadTs: req.threadTs } : {}), text: rawText });
     this.logger.info('Agent posted to Slack', {
       agentSession,
       channelId,
@@ -262,7 +289,55 @@ export class SlackAgentPostService {
       threaded: !!req.threadTs,
       chars: text.length,
     });
-    return { channelId, messageTs, kind, postedAs, identity: identity.username ?? agentSession };
+    return {
+      channelId, messageTs, kind, postedAs, identity: identity.username ?? agentSession,
+      ...(await this.uploadFiles(req, channelId, req.threadTs, identity)),
+    };
+  }
+
+  /**
+   * Upload the requested files with the identity that just posted the text:
+   * the agent's own bot when it has one, otherwise the workspace bot (the
+   * one that already proved it can post here) with the agent's persona.
+   * Never throws; each failure is reported with Slack's error code.
+   *
+   * @param req - The post request (carries `files`)
+   * @param channelId - Resolved conversation id
+   * @param threadTs - Thread to upload into, if any
+   * @param identity - Identity the text was sent under
+   * @returns `filesSent` / `filesFailed` fields (empty when no files requested)
+   */
+  private async uploadFiles(
+    req: SlackAgentPostRequest,
+    channelId: string,
+    threadTs: string | undefined,
+    identity: Pick<SlackOutgoingMessage, 'username' | 'iconEmoji' | 'iconUrl' | 'botToken'>,
+  ): Promise<Pick<SlackAgentPostResult, 'filesSent' | 'filesFailed'>> {
+    const files = req.files ?? [];
+    if (files.length === 0) return {};
+    const filesSent: string[] = [];
+    const filesFailed: Array<{ path: string; error: string }> = [];
+    for (const path of files) {
+      try {
+        if (!this.deps.slack.uploadFile) throw new Error('file upload is not available');
+        await this.deps.slack.uploadFile({
+          channelId,
+          filePath: path,
+          ...(threadTs ? { threadTs } : {}),
+          ...(identity.botToken
+            ? { botToken: identity.botToken }
+            : identity.username
+              ? { persona: { username: identity.username, ...(identity.iconEmoji ? { iconEmoji: identity.iconEmoji } : {}), ...(identity.iconUrl ? { iconUrl: identity.iconUrl } : {}) } }
+              : {}),
+        });
+        filesSent.push(path);
+      } catch (err) {
+        const error = errText(err);
+        this.logger.warn('Agent file upload failed', { agentSession: req.agentSession, channelId, path, error });
+        filesFailed.push({ path, error });
+      }
+    }
+    return { filesSent, ...(filesFailed.length ? { filesFailed } : {}) };
   }
 
   /**
@@ -326,6 +401,10 @@ export class SlackAgentPostService {
     }
 
     const name = target.replace(/^#/, '');
+    // A Crewly team room is known by name locally, even when it is private
+    // and the workspace bot cannot list it.
+    const mapped = this.deps.findMappedChannelByName?.(name);
+    if (mapped) return { channelId: mapped.id, kind: 'channel' };
     let channel: SlackChannelInfo | null;
     try {
       channel = await this.deps.slack.findChannelByName(name);

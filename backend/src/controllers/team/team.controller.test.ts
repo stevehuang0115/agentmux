@@ -14,6 +14,7 @@ import { CREWLY_CONSTANTS } from '../../constants.js';
 import { getSessionBackendSync, getSessionStatePersistence } from '../../services/session/index.js';
 import { ownerAuthHeaders } from '../../middleware/caller-identity.testing.js';
 import { isOwnerStopped, markOwnerStopped, resetOwnerStoppedForTesting } from '../../services/agent/owner-stopped.registry.js';
+import { setOwnerThreadSentinel, type OwnerThreadSentinelService } from '../../services/messaging/owner-thread-sentinel.service.js';
 
 // Mock dependencies
 jest.mock('../../services/index.js');
@@ -196,6 +197,19 @@ describe('Teams Handlers', () => {
       const res = await teamsHandlers.activateAgentBySession(mockApiContext, 'ghost-session');
       expect(res.success).toBe(false);
       expect(res.error).toMatch(/No team member/);
+    });
+
+    it('a start that fails tells the owner thread waiting on the agent (Nova, 2026-10-08)', async () => {
+      const noteBlocking = jest.fn<any>().mockResolvedValue(0);
+      setOwnerThreadSentinel({ noteBlocking } as unknown as OwnerThreadSentinelService);
+      try {
+        mockStorageService.findMemberBySessionName.mockRejectedValue(new Error('teams.json unreadable'));
+        const res = await teamsHandlers.activateAgentBySession(mockApiContext, 'crewly-nova');
+        expect(res.success).toBe(false);
+        expect(noteBlocking).toHaveBeenCalledWith('crewly-nova', { kind: 'start_failed', detail: 'teams.json unreadable' });
+      } finally {
+        setOwnerThreadSentinel(null);
+      }
     });
   });
 
@@ -456,6 +470,40 @@ describe('Teams Handlers', () => {
       mockRequest.headers = {};
       await teamsHandlers.updateTeamMember.call(mockApiContext, mockRequest as Request, mockResponse as Response);
       expect(responseMock.status).toHaveBeenCalledWith(401);
+      mockRequest.headers = {};
+    });
+
+    it('updateTeamMember sets and clears a tier for the owner only (crewly#1173)', async () => {
+      const team: Team = {
+        id: 'team-1', name: 'T', members: [{
+          id: 'm1', name: 'Pia', sessionName: 'pia', role: 'developer', systemPrompt: 'p', runtimeType: 'claude-code',
+          agentStatus: 'inactive', workingStatus: 'idle',
+          createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+        }], projectIds: [], createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+      };
+      mockStorageService.getTeams.mockResolvedValue([team]);
+      mockRequest.params = { teamId: 'team-1', memberId: 'm1' };
+      mockRequest.headers = ownerAuthHeaders();
+
+      mockRequest.body = { tier: 'weak' };
+      await teamsHandlers.updateTeamMember.call(mockApiContext, mockRequest as Request, mockResponse as Response);
+      let saved = (mockStorageService.saveTeam as jest.Mock).mock.calls.at(-1)![0] as Team;
+      expect(saved.members[0].tier).toBe('weak');
+
+      mockRequest.body = { tier: '' };
+      await teamsHandlers.updateTeamMember.call(mockApiContext, mockRequest as Request, mockResponse as Response);
+      saved = (mockStorageService.saveTeam as jest.Mock).mock.calls.at(-1)![0] as Team;
+      expect(saved.members[0].tier).toBeUndefined();
+
+      (responseMock.status as jest.Mock).mockClear();
+      mockRequest.body = { tier: 'super' };
+      await teamsHandlers.updateTeamMember.call(mockApiContext, mockRequest as Request, mockResponse as Response);
+      expect(responseMock.status).toHaveBeenCalledWith(400);
+
+      mockRequest.headers = { 'x-agent-session': 'pia' };
+      mockRequest.body = { tier: 'strong' };
+      await teamsHandlers.updateTeamMember.call(mockApiContext, mockRequest as Request, mockResponse as Response);
+      expect(responseMock.status).toHaveBeenCalledWith(403);
       mockRequest.headers = {};
     });
   });
@@ -3291,6 +3339,29 @@ describe('Teams Handlers', () => {
         expect(Number.isNaN(Date.parse(saved?.lastStartError?.at ?? ''))).toBe(false);
       });
 
+      it('a start deferred by the running-agent cap is not a failure: retried later, not recorded (Nova, 2026-10-07)', async () => {
+        const createAgentSession = jest.fn<any>().mockResolvedValue({
+          success: false,
+          error: 'Machine is under resource pressure and the running-agent cap is reached; the start is deferred and messages stay queued',
+          errorCode: 'RESOURCE_PRESSURE_CAP',
+        });
+        mockApiContext.agentRegistrationService = { createAgentSession } as any;
+
+        await teamsHandlers.startTeamMember.call(mockApiContext, mockRequest as Request, mockResponse as Response);
+
+        // One attempt: retrying here only waits again.
+        expect(createAgentSession).toHaveBeenCalledTimes(1);
+        const saved = lastSavedMember();
+        expect(saved?.agentStatus).toBe('inactive');
+        expect(saved?.lastStartError).toBeUndefined();
+        // Still visible to the reconciler / stalled-agent recovery.
+        expect(saved?.sessionName).toBeTruthy();
+        // The reconciler reads the code to classify it as deferred.
+        expect((responseMock.json as jest.Mock).mock.calls.at(-1)?.[0]).toEqual(
+          expect.objectContaining({ success: false, code: 'RESOURCE_PRESSURE_CAP' }),
+        );
+      });
+
       it('clears it on the next successful start', async () => {
         const team = (await mockStorageService.getTeams())[0] as Team;
         (team.members[0] as TeamMember).lastStartError = { reason: 'old failure', at: '2026-09-27T00:00:00.000Z' };
@@ -4487,6 +4558,39 @@ describe('Teams Handlers', () => {
       expect(got400).toBe(false);
     });
 
+    it('allows a stopped member that holds running work (Nova, CE-206, 2026-10-07)', async () => {
+      mockStorageService.getTeams.mockResolvedValue([buildTeamWithMember('crewly-product-leo')]);
+      mockTaskPool([
+        { id: 'wi-held', status: 'running', target: 'crewly-product-leo' },
+      ]);
+      mockRequest.body = { workItemId: 'wi-held' };
+
+      const { startTeamMember } = await import('./team.controller.js');
+      mockApiContext.agentRegistrationService = {
+        createAgentSession: jest.fn<any>().mockResolvedValue({ success: true, sessionName: 'crewly-product-leo' }),
+        isInProcessRuntimeActive: jest.fn<any>().mockReturnValue(false),
+      } as any;
+
+      await startTeamMember.call(mockApiContext, mockRequest as Request, mockResponse as Response);
+
+      expect(responseMock.status.mock.calls.some((c: any[]) => c[0] === 400)).toBe(false);
+    });
+
+    it('rejects running work held by someone else, even when named', async () => {
+      mockStorageService.getTeams.mockResolvedValue([buildTeamWithMember('crewly-product-leo')]);
+      mockTaskPool([
+        { id: 'wi-max', status: 'running', target: 'crewly-product-max' },
+      ]);
+      mockRequest.body = { workItemId: 'wi-max' };
+
+      const { startTeamMember } = await import('./team.controller.js');
+
+      await startTeamMember.call(mockApiContext, mockRequest as Request, mockResponse as Response);
+
+      expect(responseMock.status).toHaveBeenCalledWith(400);
+      expect(responseMock.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'wake_gate_no_pool_work' }));
+    });
+
     it('rejects when pool only has orphan WIs (no explicit target match) — direct caller path', async () => {
       // 2026-05-09: tightened from PR #518's original behaviour. Orphan
       // (target=null) WIs no longer satisfy the pool scan — only an
@@ -4739,6 +4843,98 @@ describe('Teams Handlers', () => {
       expect((mockApiContext.agentRegistrationService as any).createAgentSession).toHaveBeenCalled();
     });
   });
+  // ---------------------------------------------------------------------
+  // CREW-303/304: a team the harness parked is resumed by the reconciler's
+  // wake for its own queued work; it is not a cold launch needing approval.
+  // ---------------------------------------------------------------------
+  describe('startTeamMember resumes a team the harness parked (CREW-303/304)', () => {
+    const SESSION = 'ce-owen-ad0320ab';
+    const parkedTeam = (dropoutReason: string): Team => ({
+      id: 'team-ce',
+      name: 'CE',
+      description: 'Test',
+      members: [{
+        id: 'member-owen',
+        name: 'Owen',
+        sessionName: SESSION,
+        role: 'team-leader',
+        systemPrompt: 'Test',
+        agentStatus: 'inactive' as TeamMember['agentStatus'],
+        workingStatus: 'idle',
+        runtimeType: 'claude-code',
+        dropoutReason,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date(Date.now() - 40 * 60_000).toISOString(),
+      } as TeamMember],
+      projectIds: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    const getRecentOwnerMessageContents = jest.fn<any>();
+    let wakeItem: Record<string, unknown>;
+
+    beforeEach(() => {
+      jest.resetModules();
+      getRecentOwnerMessageContents.mockReset();
+      getRecentOwnerMessageContents.mockReturnValue([]);
+      wakeItem = { id: 'wi-verify', status: 'queued', target: SESSION, owner: 'system' };
+      jest.doMock('../../services/chat-v2/chat-v2.singleton.js', () => ({
+        getChatV2Service: () => ({ getRecentOwnerMessageContents }),
+      }));
+      jest.doMock('../../services/task-pool/task-pool.service.js', () => ({
+        TaskPoolService: {
+          getInstance: () => ({
+            getAllItems: jest.fn<any>().mockImplementation(async () => [wakeItem]),
+            findWorkItem: jest.fn<any>().mockImplementation(async () => wakeItem),
+          }),
+        },
+      }));
+      mockResponse = responseMock as any;
+      mockStorageService.getProjects.mockResolvedValue([]);
+      mockApiContext.agentRegistrationService = {
+        createAgentSession: jest.fn<any>().mockResolvedValue({ success: true, sessionName: SESSION }),
+        isInProcessRuntimeActive: jest.fn<any>().mockReturnValue(false),
+      } as any;
+    });
+
+    afterEach(() => {
+      jest.dontMock('../../services/chat-v2/chat-v2.singleton.js');
+      jest.dontMock('../../services/task-pool/task-pool.service.js');
+    });
+
+    /** The reconciler's wake: no caller headers, the triggering WorkItem in the body. */
+    const reconcilerWake = async (dropoutReason: string): Promise<void> => {
+      mockStorageService.getTeams.mockResolvedValue([parkedTeam(dropoutReason)]);
+      mockTmuxService.listSessions.mockResolvedValue([]);
+      mockRequest = {
+        params: { teamId: 'team-ce', memberId: 'member-owen' },
+        body: { sessionName: SESSION, workItemId: 'wi-verify' },
+        headers: {},
+      };
+      const { startTeamMember } = await import('./team.controller.js');
+      await startTeamMember.call(mockApiContext, mockRequest as Request, mockResponse as Response);
+    };
+    const statuses = (): number[] => responseMock.status.mock.calls.map((c: any[]) => c[0]);
+
+    it('starts the lead of a team stopped by idle stop, for its own queued work, without owner approval', async () => {
+      await reconcilerWake('idle_exit');
+      expect(statuses()).not.toContain(403);
+      expect((mockApiContext.agentRegistrationService as any).createAgentSession).toHaveBeenCalled();
+    });
+
+    it('still needs approval when the orchestrator created the work', async () => {
+      wakeItem = { ...wakeItem, owner: 'orchestrator' };
+      await reconcilerWake('idle_exit');
+      expect(responseMock.status).toHaveBeenCalledWith(403);
+      expect((mockApiContext.agentRegistrationService as any).createAgentSession).not.toHaveBeenCalled();
+    });
+
+    it('still needs approval when the owner stopped the team', async () => {
+      await reconcilerWake('manual');
+      expect(responseMock.status).toHaveBeenCalledWith(403);
+      expect((mockApiContext.agentRegistrationService as any).createAgentSession).not.toHaveBeenCalled();
+    });
+  });
   describe('team pause (specs/2026-10-04-team-pause.md)', () => {
     const pausedTeam = (over: Partial<Team> = {}): Team => ({
       id: 'team-crewly',
@@ -4823,6 +5019,19 @@ describe('Teams Handlers', () => {
       expect(res.success).toBe(false);
       expect(res.error).toBe('Crewly is paused by the owner; only the owner can start its members.');
       expect(createSession()).not.toHaveBeenCalled();
+    });
+
+    it('a paused team is not reported to the owner thread as a failed start', async () => {
+      const noteBlocking = jest.fn<any>().mockResolvedValue(0);
+      setOwnerThreadSentinel({ noteBlocking } as unknown as OwnerThreadSentinelService);
+      try {
+        const t = pausedTeam();
+        mockStorageService.findMemberBySessionName.mockResolvedValue({ team: t, member: t.members[0] });
+        await teamsHandlers.activateAgentBySession(mockApiContext, 'crewly-leo');
+        expect(noteBlocking).not.toHaveBeenCalled();
+      } finally {
+        setOwnerThreadSentinel(null);
+      }
     });
 
     describe('updateTeam issueRepo', () => {

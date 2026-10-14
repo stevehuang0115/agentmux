@@ -36,6 +36,7 @@ import {
 	type SystemActionWhen,
 	type UpdateStatus,
 } from '../types/system-control.types';
+import { setVisibleInterval } from '../utils/visible-interval';
 
 /** Panel phase. */
 export type SystemControlPhase = 'loading' | 'ready' | 'working' | 'reconnecting' | 'done' | 'failed' | 'gave-up' | 'shut-down';
@@ -310,7 +311,7 @@ export function useSystemControl(): UseSystemControlResult {
 	useEffect(() => {
 		if (phase !== 'shut-down') return undefined;
 		let cancelled = false;
-		const timer = setInterval(() => {
+		const timer = setVisibleInterval(() => {
 			void isBackendUp().then((up) => {
 				if (up && !cancelled) void reload();
 			});

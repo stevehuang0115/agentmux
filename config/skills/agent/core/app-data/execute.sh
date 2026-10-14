@@ -15,10 +15,18 @@ print_usage() {
 Usage:
   bash execute.sh --app <appId> --list <collection> [--limit 100] [--after <docId>]
   bash execute.sh --app <appId> --get <collection> <docId>
+  bash execute.sh --app <appId> --get-field <collection> <docId> --field </json/pointer> --out <file> [--decode]
   bash execute.sh --app <appId> --set <collection> <docId> --data '{"done":true}'
   bash execute.sh --app <appId> --update <collection> <docId> --data '{"done":true}' [--if-rev 4]
   bash execute.sh --app <appId> --add <collection> --data '{"name":"milk"}'
   bash execute.sh --app <appId> --delete <collection> <docId>
+  bash execute.sh --app <appId> --upload <path-to-image> [--name <file name>]
+  bash execute.sh --app <appId> --download <fileId|file url> [--out <path>]
+  bash execute.sh --app <appId> --request-access [--scope team|agent] [--reason "why"]
+  bash execute.sh --app <appId> --collaborators
+  bash execute.sh --app <appId> --owner
+  bash execute.sh --app <appId> --set-owner 'channel:#daily-brief'   # or 'team:<name>', 'agent:<name>', default
+  bash execute.sh --app <appId> --add-collaborator <agent name or session>[@<machine>]
 
 Options:
   --app        App id (from publish-app)
@@ -26,6 +34,20 @@ Options:
   --if-rev     Only update when the doc is still at this rev (409 conflict otherwise)
   --limit      Page size for --list (1-500, default 100)
   --after      Continue a --list after this doc id (the previous page's "next")
+  --get-field  Save the FULL value of one field to a file (reads cut strings over 65,536 characters and list them in "truncated"); prints only {file, bytes}
+  --field      JSON pointer into the doc's data, as listed in "truncated" (e.g. /photo, /items/0/image)
+  --out        File to write for --get-field: inside your project directory, not an existing symlink
+  --decode     With --get-field: base64-decode the value (a data:...;base64, prefix is dropped) so a photo is written as the real image
+  --upload     Put a file (an image for a post) into the app and print its url; works for the owner's agents and for collaborators. Regular, non-symlink file inside your project directory, up to 10 MB (the app's own limit may be smaller)
+  --download   Fetch a file stored in the app (a screenshot the owner uploaded: the fileId or /_f/ URL in the app data) into your project, default <project>/inbox/app-files/<appId>/<name>; prints {success, path, name, size, contentType}. Open an image with your file-read tool to see it. Up to 10 MB
+  --name       File name to show for --upload (default: the file's name)
+  --request-access  Ask the owner to let your team (default) or only you work in an app another team published; a card goes to the owner, nothing is granted until they tap Allow
+  --collaborators   Who the owner let work in the app
+  --scope      team (your team, default) or agent (only you), with --request-access
+  --reason     One line for the owner, with --request-access
+  --owner      Show who owns the app's comments (an agent, a team or a channel)
+  --set-owner  Change it: channel:#<name>, team:<name>, agent:<name> or default (the publishing agent). Only the app's owner agents (and the owner) may
+  --add-collaborator  An owner agent lets another agent work in the app's data and comments. The agent may be on any of the owner's machines: Rex, or Rex@iriss-air when the name is on several machines
   --help | -h  Show this help
 EOF_USAGE
 }
@@ -36,10 +58,20 @@ fail_from() {
   exit 1
 }
 
+# Run one API call. stdout (the whole response body, however many lines it
+# spans) is kept apart from stderr (the missing-session warning, or the JSON
+# error object api_call prints on failure) so neither pollutes the other.
 call() {
-  local out
-  out=$(api_call "$@" 2>&1) || { fail_from "$(printf '%s\n' "$out" | tail -n 1)"; }
-  printf '%s\n' "$out" | tail -n 1
+  local out err errfile rc=0
+  errfile=$(mktemp "${TMPDIR:-/tmp}/app-data-err.XXXXXX") || errfile=/dev/null
+  out=$(api_call "$@" 2>"$errfile") || rc=$?
+  err=$(cat "$errfile" 2>/dev/null || true)
+  [ "$errfile" = /dev/null ] || rm -f "$errfile"
+  if [ "$rc" -ne 0 ]; then
+    # The error object is the last non-empty stderr line (warnings come first).
+    fail_from "$(printf '%s\n' "$err" | awk 'NF{l=$0} END{print l}')"
+  fi
+  printf '%s\n' "$out"
 }
 
 uri() { jq -rn --arg v "$1" '$v|@uri'; }
@@ -48,7 +80,7 @@ uri() { jq -rn --arg v "$1" '$v|@uri'; }
 # (CREWLY_PROJECT_PATH, else the working directory), never under Crewly's home.
 read_data_file() {
   command -v node >/dev/null 2>&1 || error_exit "node is required for --data-file"
-  DF_PATH="$1" DF_PROJECT="${CREWLY_PROJECT_PATH:-$PWD}" node <<'NODE'
+  DF_MODE="${2:-read}" DF_PATH="$1" DF_PROJECT="${CREWLY_PROJECT_PATH:-$PWD}" node <<'NODE'
 const fs = require('fs'); const path = require('path'); const os = require('os');
 const fail = (m) => { process.stderr.write(JSON.stringify({ error: m }) + '\n'); process.exit(1); };
 const real = (p) => { try { return fs.realpathSync(p); } catch { return null; } };
@@ -64,18 +96,71 @@ if (!project) fail('cannot resolve the project directory');
 const homes = [path.join(os.homedir(), '.crewly'), process.env.CREWLY_HOME].filter(Boolean).map((p) => real(p) || path.resolve(p));
 if (homes.some((h) => within(r, h))) fail(`${given} is inside Crewly's home directory`);
 if (!within(r, project)) fail(`${given} is outside your project directory (${project})`);
-if (st.size > 1024 * 1024) fail(`${given} is larger than 1 MB`);
-process.stdout.write(fs.readFileSync(r, 'utf8'));
+if (process.env.DF_MODE === 'path') {
+  if (st.size === 0) fail(`${given} is empty`);
+  if (st.size > 10 * 1024 * 1024) fail(`${given} is larger than 10 MB`);
+  process.stdout.write(r);
+} else {
+  if (st.size > 1024 * 1024) fail(`${given} is larger than 1 MB`);
+  process.stdout.write(fs.readFileSync(r, 'utf8'));
+}
 NODE
 }
 
-APP=""; OP=""; COLL=""; DOC=""; DATA=""; IF_REV=""; LIMIT=""; AFTER=""
+# Content type from the extension. JSON-like types are sent as octet-stream so
+# the backend receives raw bytes; Cloud decides what a browser may show inline.
+content_type_for() {
+  case "$(printf '%s' "${1##*.}" | tr '[:upper:]' '[:lower:]')" in
+    png) echo image/png ;;
+    jpg|jpeg) echo image/jpeg ;;
+    gif) echo image/gif ;;
+    webp) echo image/webp ;;
+    svg) echo image/svg+xml ;;
+    pdf) echo application/pdf ;;
+    mp4) echo video/mp4 ;;
+    webm) echo video/webm ;;
+    txt) echo text/plain ;;
+    *) echo application/octet-stream ;;
+  esac
+}
+
+# --out for --get-field: a new regular file inside the project directory
+# (CREWLY_PROJECT_PATH, else the working directory), never under Crewly's home,
+# never through a symlink. Prints the absolute target path.
+resolve_out_path() {
+  local given="$1" dir base project real_dir
+  dir="$(dirname "$given")"; base="$(basename "$given")"
+  [ -d "$dir" ] || error_exit "the directory of --out does not exist: $dir"
+  real_dir="$(cd "$dir" && pwd -P)"
+  project="$(cd "${CREWLY_PROJECT_PATH:-$PWD}" && pwd -P)" || error_exit "cannot resolve the project directory"
+  case "$real_dir/" in "$project"/*) ;; *) error_exit "--out must be inside your project directory ($project)" ;; esac
+  case "$real_dir/" in "${CREWLY_HOME:-$HOME/.crewly}"/*|"$HOME/.crewly"/*) error_exit "--out is inside Crewly's home directory" ;; esac
+  [ ! -L "$real_dir/$base" ] || error_exit "--out is a symbolic link; pass a real file path"
+  [ ! -d "$real_dir/$base" ] || error_exit "--out is a directory"
+  printf '%s/%s' "$real_dir" "$base"
+}
+
+# The 16-character file id out of a bare id or a file URL (https://apps.../_f/<token>/<fileId>[?q]).
+file_id_of() {
+  local v="${1%%[?#]*}"
+  v="${v##*/}"
+  [[ "$v" =~ ^[a-z0-9]{16}$ ]] || return 1
+  printf '%s' "$v"
+}
+
+APP=""; OP=""; DOWNLOAD=""; UPLOAD=""; NAME=""; COLL=""; DOC=""; DATA=""; IF_REV=""; LIMIT=""; AFTER=""; SCOPE=""; REASON=""; SET_OWNER=""; WHO=""; FIELD=""; OUT_FILE=""; DECODE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --app)    [ $# -ge 2 ] || error_exit "--app requires a value"; APP="$2"; shift 2 ;;
     --list|--add)
       [ $# -ge 2 ] || error_exit "$1 requires a collection"
       OP="${1#--}"; COLL="$2"; shift 2 ;;
+    --get-field)
+      [ $# -ge 3 ] || error_exit "--get-field requires a collection and a doc id"
+      OP="get-field"; COLL="$2"; DOC="$3"; shift 3 ;;
+    --field)     [ $# -ge 2 ] || error_exit "--field requires a JSON pointer"; FIELD="$2"; shift 2 ;;
+    --out)       [ $# -ge 2 ] || error_exit "--out requires a file path";   OUT_FILE="$2"; shift 2 ;;
+    --decode)    DECODE=1; shift ;;
     --get|--set|--update|--delete)
       [ $# -ge 3 ] || error_exit "$1 requires a collection and a doc id"
       OP="${1#--}"; COLL="$2"; DOC="$3"; shift 3 ;;
@@ -84,17 +169,91 @@ while [[ $# -gt 0 ]]; do
     --if-rev)    [ $# -ge 2 ] || error_exit "--if-rev requires a value";    IF_REV="$2"; shift 2 ;;
     --limit)     [ $# -ge 2 ] || error_exit "--limit requires a value";     LIMIT="$2"; shift 2 ;;
     --after)     [ $# -ge 2 ] || error_exit "--after requires a value";     AFTER="$2"; shift 2 ;;
+    --upload)    [ $# -ge 2 ] || error_exit "--upload requires a file path"; OP="upload"; UPLOAD="$2"; shift 2 ;;
+    --download)  [ $# -ge 2 ] || error_exit "--download requires a file id or file URL"; OP="download"; DOWNLOAD="$2"; shift 2 ;;
+    --name)      [ $# -ge 2 ] || error_exit "--name requires a value";      NAME="$2"; shift 2 ;;
+    --request-access) OP="request-access"; shift ;;
+    --collaborators)  OP="collaborators"; shift ;;
+    --owner)     OP="owner"; shift ;;
+    --set-owner) [ $# -ge 2 ] || error_exit "--set-owner requires an owner (channel:#name, team:<name>, agent:<name> or default)"; OP="owner"; SET_OWNER="$2"; shift 2 ;;
+    --add-collaborator) [ $# -ge 2 ] || error_exit "--add-collaborator requires an agent name or session"; OP="add-collaborator"; WHO="$2"; shift 2 ;;
+    --scope)     [ $# -ge 2 ] || error_exit "--scope requires a value";     SCOPE="$2"; shift 2 ;;
+    --reason)    [ $# -ge 2 ] || error_exit "--reason requires a value";    REASON="$2"; shift 2 ;;
     --help|-h)   print_usage; exit 0 ;;
-    *) error_exit "Unknown option: $1" ;;
+    *) unknown_arg_exit "$1" ;;
   esac
 done
 
 [ -n "$APP" ] || error_exit "--app is required"
-[ -n "$OP" ] || error_exit "one of --list / --get / --set / --update / --add / --delete is required"
+[ -n "$OP" ] || error_exit "one of --list / --get / --set / --update / --add / --delete / --upload / --download / --request-access / --collaborators / --owner / --add-collaborator is required"
 [[ "$APP" =~ ^[a-z0-9]{10}$ ]] || error_exit "--app must be a 10-character app id"
 case "$COLL" in .|..) error_exit "collection cannot be . or .." ;; esac
 case "$DOC" in .|..) error_exit "doc id cannot be . or .." ;; esac
 BASE="/apps/${APP}/data/$(uri "$COLL")"
+
+case "$OP" in
+  upload)
+    FILE_PATH="$(read_data_file "$UPLOAD" path)" || exit 1
+    [ -n "$NAME" ] || NAME="$(basename "$FILE_PATH")"
+    RESPONSE=$(CREWLY_API_UPLOAD_FILE="$FILE_PATH" CREWLY_API_UPLOAD_TYPE="$(content_type_for "$FILE_PATH")" CREWLY_API_UPLOAD_NAME="$(uri "$NAME")" call POST "/apps/${APP}/files") || { printf '%s\n' "$RESPONSE"; exit 1; }
+    printf '%s' "$RESPONSE" | jq -e '.data.url | type == "string" and length > 0' >/dev/null 2>&1 || error_exit "the upload answered without a url; the file may not be stored"
+    printf '%s' "$RESPONSE" | jq -c '{success: true, fileId: .data.fileId, name: .data.name, size: .data.size, contentType: .data.contentType, url: .data.url}'
+    exit 0
+    ;;
+  download)
+    FILE_ID="$(file_id_of "$DOWNLOAD")" || error_exit "--download needs the 16-character file id (or the file URL) from the app data"
+    PROJECT_DIR="$(cd "${CREWLY_PROJECT_PATH:-$PWD}" && pwd -P)" || error_exit "cannot resolve the project directory"
+    if [ -n "$OUT_FILE" ]; then
+      TARGET="$(resolve_out_path "$OUT_FILE")" || exit 1
+    else
+      case "$PROJECT_DIR/" in "${CREWLY_HOME:-$HOME/.crewly}"/*|"$HOME/.crewly"/*) error_exit "your project directory is inside Crewly's home directory" ;; esac
+      mkdir -p "$PROJECT_DIR/inbox/app-files/$APP" || error_exit "cannot create inbox/app-files/$APP in your project directory"
+      TARGET=""
+    fi
+    DL_TMP="$(mktemp "${TARGET:-$PROJECT_DIR/inbox/app-files/$APP/.download}.XXXXXX")" || error_exit "cannot write the download into your project directory"
+    trap 'rm -f "$DL_TMP" "$DL_TMP.hdr"' EXIT
+    DL_OUT=$(CREWLY_API_DOWNLOAD_TO="$DL_TMP" call GET "/apps/${APP}/files/${FILE_ID}") || { printf '%s\n' "$DL_OUT"; exit 1; }
+    DL_NAME="$(grep -i '^x-file-name:' "$DL_TMP.hdr" | tail -1 | sed -E 's/^[^:]*:[[:space:]]*//' | tr -d '\r')"
+    DL_NAME="$(printf '%b' "$(printf '%s' "$DL_NAME" | sed 's/%/\\x/g')")"
+    DL_TYPE="$(grep -i '^content-type:' "$DL_TMP.hdr" | tail -1 | sed -E 's/^[^:]*:[[:space:]]*//' | tr -d '\r' | cut -d';' -f1)"
+    [ -s "$DL_TMP" ] || error_exit "the download came back empty"
+    if [ -z "$TARGET" ]; then
+      SAFE_NAME="$(printf '%s' "${DL_NAME:-$FILE_ID}" | tr -d '\000-\037' | sed -E 's#[/\\]#_#g; s#^\.+##')"
+      [ -n "$SAFE_NAME" ] || SAFE_NAME="$FILE_ID"
+      TARGET="$PROJECT_DIR/inbox/app-files/$APP/$SAFE_NAME"
+      [ ! -L "$TARGET" ] || error_exit "$TARGET is a symbolic link; refusing to overwrite it"
+    fi
+    mv "$DL_TMP" "$TARGET"
+    jq -cn --arg p "$TARGET" --arg n "${DL_NAME:-$(basename "$TARGET")}" --arg t "${DL_TYPE:-application/octet-stream}" --argjson s "$(wc -c < "$TARGET" | tr -d ' ')" '{success: true, path: $p, name: $n, size: $s, contentType: $t}'
+    exit 0
+    ;;
+  request-access)
+    case "$SCOPE" in ""|team|agent) ;; *) error_exit "--scope is team or agent" ;; esac
+    BODY=$(jq -cn --arg s "$SCOPE" --arg r "$REASON" '{} + (if $s != "" then {scope: $s} else {} end) + (if $r != "" then {reason: $r} else {} end)')
+    RESPONSE=$(call POST "/apps/${APP}/collaborators/request" "$BODY") || { printf '%s\n' "$RESPONSE"; exit 1; }
+    printf '%s' "$RESPONSE" | jq -c '{success: true, requested: .data.requested, for: .data.for, note: "The owner got a card. You are told here when they answer; until then you still cannot use this app."}'
+    exit 0
+    ;;
+  collaborators)
+    RESPONSE=$(call GET "/apps/${APP}/collaborators") || { printf '%s\n' "$RESPONSE"; exit 1; }
+    printf '%s' "$RESPONSE" | jq -c '{success: true, collaborators: [.data.collaborators[]? | {id, kind, name, who}]}'
+    exit 0
+    ;;
+  owner)
+    if [ -n "$SET_OWNER" ]; then
+      RESPONSE=$(call PUT "/apps/${APP}/owner" "$(jq -cn --arg o "$SET_OWNER" '{owner: $o}')") || { printf '%s\n' "$RESPONSE"; exit 1; }
+    else
+      RESPONSE=$(call GET "/apps/${APP}/owner") || { printf '%s\n' "$RESPONSE"; exit 1; }
+    fi
+    printf '%s' "$RESPONSE" | jq -c '{success: true, owner: (.data.owner | if . == null then null else {kind, name, default: (.explicit | not)} + (if .members then {members: .members} else {} end) end)}'
+    exit 0
+    ;;
+  add-collaborator)
+    RESPONSE=$(call POST "/apps/${APP}/collaborators/agents" "$(jq -cn --arg a "$WHO" '{agent: $a}')") || { printf '%s\n' "$RESPONSE"; exit 1; }
+    printf '%s' "$RESPONSE" | jq -c '{success: true, added: (.data.added // null), collaborators: [.data.collaborators[]? | {id, kind, name, who, instanceId}]}'
+    exit 0
+    ;;
+esac
 
 need_data() {
   [ -n "$DATA" ] || error_exit "--data is required for --$OP"
@@ -107,11 +266,28 @@ case "$OP" in
     [ -n "$LIMIT" ] && Q="limit=$(uri "$LIMIT")"
     [ -n "$AFTER" ] && Q="${Q:+$Q&}after=$(uri "$AFTER")"
     RESPONSE=$(call GET "${BASE}${Q:+?$Q}") || { printf '%s\n' "$RESPONSE"; exit 1; }
-    printf '%s' "$RESPONSE" | jq -c '{success: true, docs: [.data.docs[]? | {id, data, rev, updatedAt, updatedBy: (.updatedBy.kind // null)}], next: .data.next}'
+    printf '%s' "$RESPONSE" | jq -c '(tojson | test("\"fileId\"|/_f/")) as $hasFile | {success: true, docs: [.data.docs[]? | {id, data, rev, updatedAt, updatedBy: (.updatedBy.kind // null)} + (if .updatedBy.kind == "agent" then {by: .updatedBy.id} else {} end)], next: .data.next} + (if .data.truncated then {truncated: .data.truncated, truncatedHint: .data.truncatedHint} else {} end) + (if $hasFile then {fileHint: "Files in this data (fileId / /_f/ URL) can be fetched with --download <fileId|url>, then opened with your file-read tool."} else {} end)'
+    ;;
+  get-field)
+    [ -n "$FIELD" ] || error_exit "--field is required for --get-field (a JSON pointer such as /photo)"
+    [ -n "$OUT_FILE" ] || error_exit "--out is required for --get-field"
+    TARGET="$(resolve_out_path "$OUT_FILE")" || exit 1
+    RESPONSE=$(CREWLY_SKILL_FULL_OUTPUT=1 call GET "${BASE}/$(uri "$DOC")/field?path=$(uri "$FIELD")") || { printf '%s\n' "$RESPONSE"; exit 1; }
+    printf '%s' "$RESPONSE" | jq -e '.data.type == "string"' >/dev/null 2>&1 || error_exit "that field is not a string; read it with --get"
+    TMP_OUT="$(mktemp "${TARGET}.XXXXXX")" || error_exit "cannot write next to $OUT_FILE"
+    printf '%s' "$RESPONSE" | jq -j '.data.value' > "$TMP_OUT"
+    if [ -n "$DECODE" ]; then
+      sed -E '1s#^data:[^,]*;base64,##' "$TMP_OUT" | tr -d '\n\r ' > "${TMP_OUT}.b64"
+      { base64 -d < "${TMP_OUT}.b64" > "${TMP_OUT}.bin" 2>/dev/null || base64 -D < "${TMP_OUT}.b64" > "${TMP_OUT}.bin" 2>/dev/null; } \
+        || { rm -f "$TMP_OUT" "${TMP_OUT}.b64" "${TMP_OUT}.bin"; error_exit "the value is not valid base64"; }
+      mv "${TMP_OUT}.bin" "$TMP_OUT"; rm -f "${TMP_OUT}.b64"
+    fi
+    mv "$TMP_OUT" "$TARGET"
+    jq -cn --arg f "$TARGET" --argjson b "$(wc -c < "$TARGET" | tr -d ' ')" --argjson c "$(printf '%s' "$RESPONSE" | jq '.data.chars')" '{success: true, file: $f, bytes: $b, chars: $c}'
     ;;
   get)
     RESPONSE=$(call GET "${BASE}/$(uri "$DOC")") || { printf '%s\n' "$RESPONSE"; exit 1; }
-    printf '%s' "$RESPONSE" | jq -c '{success: true, id: .data.id, data: .data.data, rev: .data.rev, updatedAt: .data.updatedAt}'
+    printf '%s' "$RESPONSE" | jq -c '(tojson | test("\"fileId\"|/_f/")) as $hasFile | {success: true, id: .data.id, data: .data.data, rev: .data.rev, updatedAt: .data.updatedAt} + (if .data.truncated then {truncated: .data.truncated, truncatedHint: .data.truncatedHint} else {} end) + (if $hasFile then {fileHint: "Files in this data (fileId / /_f/ URL) can be fetched with --download <fileId|url>, then opened with your file-read tool."} else {} end)'
     ;;
   set)
     need_data

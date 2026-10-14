@@ -11,7 +11,7 @@
 import express from 'express';
 import request from 'supertest';
 import { createBrowserRouter } from './browser.routes.js';
-import { classifyExtensionFailure, clearOwnerViewportCache } from './browser.controller.js';
+import { classifyDispatchFailure, classifyExtensionFailure, clearOwnerViewportCache } from './browser.controller.js';
 import {
 	BrowserBridgeService,
 	type BrowserCommandResponse,
@@ -115,6 +115,47 @@ describe('Browser Controller', () => {
 			const res = await request(app).post('/api/browser/screenshot');
 			expect(res.status).toBe(503);
 			expect(res.body.code).toBe('NO_BROWSER_CLIENT');
+		});
+	});
+
+	describe('screenshot timeouts and honest failure reasons (crewly#1080)', () => {
+		it('gives screenshots a longer command timeout than the default', async () => {
+			const bridge = BrowserBridgeService.getInstance();
+			markBridgeConnected(bridge);
+			const sendSpy = jest
+				.spyOn(bridge, 'sendCommand')
+				.mockResolvedValue({ id: 's1', success: true, result: {} } as Awaited<ReturnType<typeof bridge.sendCommand>>);
+			await request(app).post('/api/browser/screenshot');
+			expect(sendSpy.mock.calls[0][2]).toBe(90000);
+			await request(app).post('/api/browser/full-page-screenshot');
+			expect(sendSpy.mock.calls[1][2]).toBe(90000);
+		});
+
+		it('answers 504 BROWSER_COMMAND_TIMEOUT, not NO_BROWSER_CLIENT, when a connected browser times out', async () => {
+			const bridge = BrowserBridgeService.getInstance();
+			markBridgeConnected(bridge);
+			jest.spyOn(bridge, 'sendCommand').mockRejectedValue(new Error("Command 'screenshot' timed out after 90000ms"));
+			const res = await request(app).post('/api/browser/screenshot');
+			expect(res.status).toBe(504);
+			expect(res.body.code).toBe('BROWSER_COMMAND_TIMEOUT');
+			expect(res.body.error).toMatch(/connected but did not answer/);
+		});
+
+		it('classifies dispatch failures', () => {
+			expect(classifyDispatchFailure('click', [])).toMatchObject({ status: 503, code: 'NO_BROWSER_CLIENT' });
+			expect(classifyDispatchFailure('screenshot', ["direct-ws: Command 'screenshot' timed out after 1ms", "proxy-relay: Browser command 'screenshot' timed out after 1ms"])).toMatchObject({
+				status: 504,
+				code: 'BROWSER_COMMAND_TIMEOUT',
+			});
+			expect(classifyDispatchFailure('screenshot', ['proxy-relay: Max payload size exceeded'])).toMatchObject({ status: 413, code: 'BROWSER_PAYLOAD_TOO_LARGE' });
+			expect(classifyDispatchFailure('screenshot', ["proxy-relay: Browser extension disconnected while capturing 'screenshot': the result was probably too large for the relay's 1 MiB frame limit."])).toMatchObject({ status: 413, code: 'BROWSER_PAYLOAD_TOO_LARGE' });
+			expect(classifyDispatchFailure('screenshot', ['direct-ws: socket closed'])).toMatchObject({ status: 503, code: 'NO_BROWSER_CLIENT' });
+		});
+
+		it('status says how a browser is drivable', async () => {
+			const res = await request(app).get('/api/browser/status');
+			expect(res.body.drivableVia).toBeNull();
+			expect(res.body.drivableNote).toMatch(/clientCount/);
 		});
 	});
 

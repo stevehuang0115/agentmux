@@ -18,6 +18,7 @@ import { delay } from '../../utils/async.utils.js';
 import type { AIRuntime } from '../../types/settings.types.js';
 import { toCodexResumeCommand } from './runtime-session-recovery.js';
 import { detectRuntimeCliMissing, isRuntimeStartupBlockedError } from './runtime-startup-blocked.error.js';
+import { findStartupErrorPattern } from './runtime-startup-screen.js';
 import { injectRuntimeFlags } from '../../utils/runtime-model-flags.utils.js';
 import { codexSupportsNoDaemon, withCodexNoDaemon, codexSupportsFlag } from './codex-daemon.utils.js';
 import {
@@ -38,6 +39,7 @@ import {
 	prepareControlPlaneGuard,
 	applyControlPlaneSettingsFlag,
 } from './control-plane-guard.service.js';
+import { prepareLiveCheckoutGuard, codexLiveCheckoutGroup } from './live-checkout-guard.service.js';
 
 /**
  * Environment variable that stops OpenCode from self-upgrading on launch
@@ -266,21 +268,26 @@ export abstract class RuntimeAgentService {
 	 */
 	protected async applyCodexCredentialGuard(sessionName: string, commands: string[]): Promise<string[]> {
 		const cred = this.prepareCredentialGuardFiles(sessionName);
-		if (!cred) return commands;
 		try {
-			const args = codexCredentialGuardArgs(cred.wrappers.codex);
+			// The live-checkout guard rides in the same hooks.PreToolUse list (one -c key).
+			const live = prepareLiveCheckoutGuard(this.projectRoot);
+			const liveGroup = live ? codexLiveCheckoutGroup(live) : null;
+			if (live && !liveGroup) {
+				this.logger.warn('Live-checkout guard: Codex hook command cannot be embedded (quote in path) — Codex unguarded for it', { sessionName });
+			}
+			const args = codexCredentialGuardArgs(cred ? cred.wrappers.codex : null, liveGroup ? [liveGroup] : []);
 			if (!args) {
-				this.logger.warn('Credential guard: Codex hook path cannot be embedded (quote in path) — unguarded', { sessionName });
+				if (cred) this.logger.warn('Credential guard: Codex hook path cannot be embedded (quote in path) — unguarded', { sessionName });
 				return commands;
 			}
 			if (!(await codexSupportsFlag(CREDENTIAL_GUARD_CONSTANTS.CODEX_HOOK_TRUST_FLAG))) {
-				this.logger.warn(`Credential guard: this Codex has no ${CREDENTIAL_GUARD_CONSTANTS.CODEX_HOOK_TRUST_FLAG} — unguarded (upgrade Codex)`, { sessionName });
+				this.logger.warn(`Credential/live-checkout guard: this Codex has no ${CREDENTIAL_GUARD_CONSTANTS.CODEX_HOOK_TRUST_FLAG} — unguarded (upgrade Codex)`, { sessionName });
 				return commands;
 			}
-			this.logger.info('Credential guard: active (Codex session PreToolUse hook)', { sessionName });
+			this.logger.info('Codex session PreToolUse hooks: active', { sessionName, credentialGuard: !!cred, liveCheckoutGuard: !!liveGroup });
 			return commands.map((cmd) => withCodexCredentialGuard(cmd, args));
 		} catch (error) {
-			this.logger.error('Credential guard: could not be attached to Codex — launching without it', {
+			this.logger.error('Credential/live-checkout guard: could not be attached to Codex — launching without it', {
 				sessionName,
 				error: error instanceof Error ? error.message : String(error),
 			});
@@ -681,11 +688,11 @@ export abstract class RuntimeAgentService {
 				const cliMissing = detectRuntimeCliMissing(output, this.getRuntimeType());
 				if (cliMissing) throw cliMissing;
 
-				// Check for error patterns — fail fast instead of waiting for full timeout
-				const errorPatterns = this.getRuntimeErrorPatterns();
-				const hasError = errorPatterns.some((pattern) => output.includes(pattern));
-				if (hasError) {
-					const detectedError = errorPatterns.find((p) => output.includes(p));
+				// Check for error patterns — fail fast instead of waiting for full timeout.
+				// Only what the shell/launcher printed counts: a resumed conversation
+				// re-renders history that may mention "No such file or directory".
+				const detectedError = findStartupErrorPattern(output, this.getRuntimeErrorPatterns());
+				if (detectedError) {
 					this.logger.error('Runtime error pattern detected during startup', {
 						sessionName,
 						runtimeType: this.getRuntimeType(),

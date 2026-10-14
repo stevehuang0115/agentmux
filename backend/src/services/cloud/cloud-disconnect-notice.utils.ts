@@ -17,14 +17,17 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { atomicWriteFileSync } from '../../utils/file-io.utils.js';
 import type { CloudSyncHealth } from './cloud-sync.types.js';
 
 /**
  * Why this machine cannot talk to Cloud. `relay_queue`: Cloud answers, but
  * the relay will not give this machine a message queue (e.g. 429
  * quota_exceeded), so nothing — Slack included — is delivered here.
+ * `local_config`: the cause is on this machine — the saved sign-in cannot be
+ * read (damaged file) — not the network.
  */
-export type DisconnectReason = 'auth' | 'unreachable' | 'relay_queue';
+export type DisconnectReason = 'auth' | 'unreachable' | 'relay_queue' | 'local_config';
 
 /** Inputs to {@link evaluateDisconnect}. */
 export interface DisconnectInput {
@@ -38,6 +41,8 @@ export interface DisconnectInput {
 	now: number;
 	/** No successful Cloud request for this long = disconnected (ms) */
 	thresholdMs: number;
+	/** The saved sign-in exists but cannot be read (text of what is wrong); null/undefined = readable */
+	configProblem?: string | null;
 	/** Queue registration failing (no queue held) for this long = disconnected (ms) */
 	queueThresholdMs?: number;
 }
@@ -64,6 +69,7 @@ const DEFAULT_QUEUE_THRESHOLD_MS = 2 * 60 * 1000;
  */
 export function describeQueueError(error: string | null): string {
 	if (!error) return 'relay registration keeps failing';
+	if (/\b429\b/.test(error) && /daily_limit/.test(error)) return 'this account reached its daily relay limit (resets at 00:00 UTC)';
 	if (/\b429\b/.test(error)) return /quota_exceeded/.test(error) ? 'relay quota full' : 'the relay is rate-limiting this account';
 	if (/\b403\b/.test(error)) return 'the relay queue belongs to another account';
 	if (/\b401\b/.test(error)) return 'the relay rejected the sign-in';
@@ -93,6 +99,8 @@ export function describeQueueError(error: string | null): string {
 export function evaluateDisconnect(input: DisconnectInput): DisconnectVerdict {
 	const { signedIn, health, monitorStartedAt, now, thresholdMs } = input;
 	if (!signedIn) return { status: 'signed_out' };
+	// Local cause, known immediately: nothing signed in can run from unreadable credentials.
+	if (input.configProblem) return { status: 'disconnected', reason: 'local_config', since: monitorStartedAt, detail: input.configProblem };
 	const since = health.lastContactAt ?? health.startedAt ?? monitorStartedAt;
 	if (health.state === 'auth_expired') return { status: 'disconnected', reason: 'auth', since };
 	// No queue: deaf even while heartbeats succeed. Checked before the
@@ -175,6 +183,7 @@ export function formatLocalTime(ms: number): string {
 const REASON_TEXT: Record<DisconnectReason, string> = {
 	auth: 'the sign-in expired',
 	unreachable: 'Cloud is unreachable from this network',
+	local_config: 'the saved sign-in data on this machine is damaged and cannot be read, so Crewly is acting as signed out',
 	relay_queue: 'relay registration keeps failing',
 };
 
@@ -212,6 +221,16 @@ export function composeDisconnectNotice(input: DisconnectNoticeInput): string {
 			`This machine (${input.deviceName}) can't connect to Crewly Cloud (${why}) — Slack messages won't arrive here until it does. ` +
 			`Failing since ${formatLocalTime(input.since)}; Crewly keeps retrying on its own.`
 		);
+	}
+	if (input.reason === 'local_config') {
+		const head =
+			`Crewly (machine: ${input.deviceName}) cannot read its saved Crewly Cloud sign-in (the file on this machine is damaged), so it is acting as signed out (since ${formatLocalTime(input.since)}). ` +
+			'This is a problem on this machine, not with the network or Cloud. Slack messages to agents on this machine are queued in Cloud until you sign in again. ';
+		if (input.loginUrl) {
+			const code = input.userCode ? `; check code ${input.userCode}` : '';
+			return `${head}Sign in again here: ${input.loginUrl} (one tap on your phone${code}). Queued messages are delivered once you are signed in.`;
+		}
+		return `${head}No sign-in link yet. Crewly keeps trying and will update this message when it has one.`;
 	}
 	const head =
 		`Crewly (machine: ${input.deviceName}) lost its connection to Crewly Cloud (${REASON_TEXT[input.reason]}, since ${formatLocalTime(input.since)}). ` +
@@ -252,7 +271,7 @@ export function readNoticeState(file: string): DisconnectNoticeState | null {
 		if (typeof parsed.episodeStartedAt !== 'string') return null;
 		return {
 			episodeStartedAt: parsed.episodeStartedAt,
-			reason: parsed.reason === 'auth' || parsed.reason === 'relay_queue' ? parsed.reason : 'unreachable',
+			reason: parsed.reason === 'auth' || parsed.reason === 'relay_queue' || parsed.reason === 'local_config' ? parsed.reason : 'unreachable',
 			lastNotifiedAt: typeof parsed.lastNotifiedAt === 'string' ? parsed.lastNotifiedAt : null,
 			...(typeof parsed.channelId === 'string' ? { channelId: parsed.channelId } : {}),
 			...(typeof parsed.messageTs === 'string' ? { messageTs: parsed.messageTs } : {}),
@@ -273,7 +292,7 @@ export function readNoticeState(file: string): DisconnectNoticeState | null {
  */
 export function writeNoticeState(file: string, state: DisconnectNoticeState): void {
 	fs.mkdirSync(path.dirname(file), { recursive: true });
-	fs.writeFileSync(file, JSON.stringify(state, null, 2), 'utf-8');
+	atomicWriteFileSync(file, JSON.stringify(state, null, 2));
 }
 
 /**
@@ -312,5 +331,5 @@ export function readLastRelayQueueNotice(file: string): number | null {
  */
 export function writeLastRelayQueueNotice(file: string, at: number): void {
 	fs.mkdirSync(path.dirname(file), { recursive: true });
-	fs.writeFileSync(file, JSON.stringify({ lastNotifiedAt: new Date(at).toISOString() }, null, 2), 'utf-8');
+	atomicWriteFileSync(file, JSON.stringify({ lastNotifiedAt: new Date(at).toISOString() }, null, 2));
 }

@@ -63,7 +63,7 @@ check "backend error: message" "$(printf '%s' "$OUT" | jq -r .error)" "registry 
 
 check "missing query" "$(run_err)" "Missing required parameter: query (--query)"
 check "bad limit" "$(run_err --query x --limit lots)" "--limit must be a number"
-check "unknown option" "$(run_err --install)" "Unknown option: --install"
+check "unknown option" "$(run_err --install)" "Unknown argument: --install"
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

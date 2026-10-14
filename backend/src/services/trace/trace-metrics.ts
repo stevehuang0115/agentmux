@@ -279,7 +279,7 @@ const REQUEST_AGENT_HOLD = new Set(['open', 'ready', 'running', 'awaiting_follow
 /** Request statuses work goes back to on a send-back. */
 const REQUEST_BACK_TO_WORK = new Set(['open', 'ready', 'running', 'blocked']);
 /** Events that are not progress (pushing, refusals, failures). */
-const NOT_PROGRESS = new Set(['harness.nudge', 'harness.redelivery', 'harness.wake', 'harness.correction', 'harness.subagent_sendback', 'guard.block', 'error', 'runtime.blocked', 'trace.truncated', 'trace.root']);
+const NOT_PROGRESS = new Set(['harness.nudge', 'harness.redelivery', 'harness.wake', 'harness.recover', 'harness.correction', 'harness.subagent_sendback', 'guard.block', 'error', 'runtime.blocked', 'trace.truncated', 'trace.root']);
 /** turn.error text that means the runtime is out of usage or signed out. */
 const QUOTA_TEXT = /usage limit|rate limit|quota|credit|billing|sign.?in|log.?in|logged out|unauthori[sz]ed|\b401\b/i;
 
@@ -452,7 +452,7 @@ function collectHolds(timed: ReadonlyArray<Timed>, end: number): Holds {
 	const owner: Hold[] = [];
 	const agent: Hold[] = [];
 	const openDecisions = new Map<string, number>();
-	const requestState = new Map<string, { status: string; since: number }>();
+	const requestState = new Map<string, { status: string; since: number; waitsOnOwner?: boolean }>();
 	const workItems = new Map<string, { status: string; since: number; target?: string; open: boolean }>();
 	const pendingMessages: Array<{ target: string; from?: string; since: number }> = [];
 
@@ -460,7 +460,8 @@ function collectHolds(timed: ReadonlyArray<Timed>, end: number): Holds {
 		const st = requestState.get(id);
 		if (!st) return;
 		const flag = stillOpen ? { stillOpen } : {};
-		if (st.status === 'waiting_confirmation') owner.push({ start: st.since, end: t, label: `Ticket ${id} waits for the owner's review`, ...flag });
+		if (st.status === 'awaiting_followup' && st.waitsOnOwner) owner.push({ start: st.since, end: t, label: `Ticket ${id} has a conditional promise waiting on the owner`, ...flag });
+		else if (st.status === 'waiting_confirmation') owner.push({ start: st.since, end: t, label: `Ticket ${id} waits for the owner's review`, ...flag });
 		else if (REQUEST_AGENT_HOLD.has(st.status)) agent.push({ start: st.since, end: t, label: `Ticket ${id} is ${st.status.replace(/_/g, ' ')}`, ...flag });
 	};
 	const closeWorkItem = (id: string, t: number, stillOpen = false): void => {
@@ -512,7 +513,7 @@ function collectHolds(timed: ReadonlyArray<Timed>, end: number): Holds {
 				const status = e.type === 'request.created' ? (dataStr(e, 'status') ?? 'open') : (dataStr(e, 'to') ?? '');
 				if (!status) break;
 				closeRequest(id, t);
-				requestState.set(id, { status, since: t });
+				requestState.set(id, { status, since: t, ...(e.type === 'request.status' && status === 'awaiting_followup' && dataStr(e, 'followupWaitsOn') === 'owner' ? { waitsOnOwner: true } : {}) });
 				break;
 			}
 			case 'workitem.created': {
@@ -728,6 +729,7 @@ export function computeTraceMetrics(root: TraceRoot, events: ReadonlyArray<Trace
 				interventions.redeliveries += 1;
 				break;
 			case 'harness.wake':
+			case 'harness.recover':
 				interventions.wakes += 1;
 				break;
 			case 'harness.correction':

@@ -346,6 +346,38 @@ RESULT=$(CREWLY_SESSION_NAME=dev-1 CREWLY_AGENT_BADGE=b1 bash -c 'source "$1"; a
 assert_eq "agent_auth_curl_args: badge and session as curl args" "$(printf '%s\n' -H 'X-Agent-Badge: b1' -H 'X-Agent-Session: dev-1')" "$RESULT"
 unset ARGS_OUT
 
+# ---- Test 30: api_call from a scheduled command (CREWLY_SCHEDULER_CREDENTIAL) ----
+export ARGS_OUT="$TEMP_DIR/curl-args.txt"
+ERR_OUT="$TEMP_DIR/sched-stderr.txt"
+env -u CREWLY_SESSION_NAME -u CREWLY_AGENT_BADGE CREWLY_SCHEDULER_CREDENTIAL=scheduler.sig CREWLY_SCHEDULER_NAME=crewly-web-release bash "$TEMP_DIR/skills/fake-badge/execute.sh" >/dev/null 2>"$ERR_OUT"
+assert_contains "api_call: a scheduled command sends X-Crewly-Internal" "X-Crewly-Internal: scheduler.sig" "$(cat "$ARGS_OUT")"
+assert_contains "api_call: a scheduled command names itself in X-Crewly-Scheduler" "X-Crewly-Scheduler: crewly-web-release" "$(cat "$ARGS_OUT")"
+assert_eq "api_call: a scheduled command sends no X-Agent-Session" "0" "$(grep -c 'X-Agent-Session' "$ARGS_OUT" || true)"
+assert_eq "api_call: a scheduled command gets no missing-session warning" "0" "$(grep -c 'CREWLY_SESSION_NAME is not set' "$ERR_OUT" || true)"
+env -u CREWLY_SESSION_NAME -u CREWLY_AGENT_BADGE -u CREWLY_SCHEDULER_CREDENTIAL bash "$TEMP_DIR/skills/fake-badge/execute.sh" >/dev/null 2>&1
+assert_eq "api_call: no credential header without CREWLY_SCHEDULER_CREDENTIAL" "0" "$(grep -c 'X-Crewly-Internal' "$ARGS_OUT" || true)"
+CREWLY_SESSION_NAME=dev-1 CREWLY_SCHEDULER_CREDENTIAL=scheduler.sig bash "$TEMP_DIR/skills/fake-badge/execute.sh" >/dev/null 2>&1
+assert_eq "api_call: an agent session wins over a leaked scheduler credential" "0" "$(grep -c 'X-Crewly-Internal' "$ARGS_OUT" || true)"
+unset ARGS_OUT
+
+# ---- Test 31: unknown_arg_exit — the error is the LAST line, one JSON object, exit 2 ----
+UA_OUT=$(bash -c 'source "$1"; unknown_arg_exit app; ' _ "$SCRIPT_DIR/lib.sh" 2>&1 >/dev/null; echo "rc=$?")
+assert_contains "unknown_arg_exit: bare word → nothing sent + quoting hint" "nothing was sent" "$UA_OUT"
+assert_contains "unknown_arg_exit: hint names content-file" "content-file" "$UA_OUT"
+assert_contains "unknown_arg_exit: exit code 2" "rc=2" "$UA_OUT"
+assert_eq "unknown_arg_exit: success:false" "false" "$(printf '%s' "$UA_OUT" | head -1 | jq -r .success)"
+UA_FLAG=$(bash -c 'source "$1"; unknown_arg_exit --bogus' _ "$SCRIPT_DIR/lib.sh" 2>&1 >/dev/null || true)
+assert_eq "unknown_arg_exit: unknown flag → bare message, no quoting hint" "Unknown argument: --bogus" "$(printf '%s' "$UA_FLAG" | jq -r .error)"
+
+# ---- Test 32: reply-channel with a split --content (the 2026-10-12 incident) ----
+RC_OUT=$(CREWLY_SESSION_NAME=t bash "$SCRIPT_DIR/../agent/core/reply-channel/execute.sh" --channel C1 --content 是我理解错了:我问要不要先不用 app 画面 2>&1 | tail -1; echo "rc=${PIPESTATUS[0]}")
+assert_contains "reply-channel split content: LAST line is the JSON error" '"success":false' "$RC_OUT"
+assert_contains "reply-channel split content: says nothing was sent" "nothing was sent" "$RC_OUT"
+RC_RC=$(CREWLY_SESSION_NAME=t bash "$SCRIPT_DIR/../agent/core/reply-channel/execute.sh" --channel C1 --content a b c >/dev/null 2>&1; echo $?)
+assert_eq "reply-channel split content: exit code 2" "2" "$RC_RC"
+AF_RC=$(CREWLY_SESSION_NAME=t bash "$SCRIPT_DIR/../agent/core/attach-file/execute.sh" --channel C1 --path /x --comment a b c 2>&1 | tail -1 || true)
+assert_contains "attach-file split comment: LAST line is the JSON error" '"success":false' "$AF_RC"
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 

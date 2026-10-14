@@ -32,10 +32,12 @@ import { CapabilityOverlayModule } from './capability-overlay.module.js';
 import { DomainSOPModule } from './domain-sop.module.js';
 import { RiskPolicyModule } from './risk-policy.module.js';
 import { TeamNormsModule } from './team-norms.module.js';
+import { ModelTiersModule } from './model-tiers.module.js';
 import { WorkingMemoryModule } from './working-memory.module.js';
 import { ActiveWorkModule } from './active-work.module.js';
 import { SessionBriefingModule } from './session-briefing.module.js';
 import { StandingAnswersModule } from './standing-answers.module.js';
+import { TeamRosterModule } from './team-roster.module.js';
 
 /**
  * Default total token budget for all prompt modules combined.
@@ -170,6 +172,9 @@ export class PromptAssemblyService {
 			// Standing answers (#816 part B, 1.7): settled project knowledge
 			// and the agent's own page, read as files, capped, stale-labelled.
 			new StandingAnswersModule(),
+			// Team roster (specs/2026-10-10-team-roster.md, 1.8, orchestrator
+			// only): who owns what, so owner requests route without asking.
+			new TeamRosterModule(),
 			new SoulModule(),
 			new ExpertProfileModule(),
 			new RecoveryModule(),
@@ -219,6 +224,7 @@ export class PromptAssemblyService {
 			new CommunicationModule(),
 			new DomainSOPModule(),
 			new TeamNormsModule(),
+			new ModelTiersModule(),
 			new UserProfileReferenceModule(),
 			new RiskPolicyModule(),
 			new LearningReferenceModule(),

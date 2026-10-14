@@ -5,6 +5,7 @@
  */
 
 import { TaskPoolService, WorkItemClaimedError } from './task-pool.service.js';
+import { setOwnerThreadSentinel, type OwnerThreadSentinelService } from '../messaging/owner-thread-sentinel.service.js';
 import { TeamBudgetExceededError } from '../budget/team-budget-gate.service.js';
 import { PoolStorage } from './pool-storage.js';
 import {
@@ -164,7 +165,7 @@ describe('TaskPoolService', () => {
         const delegate = makeWorkItem({ target: 'sage', metadata: { delegatedBy: 'atlas' } });
         await service.addToPool(delegate, { creatorSession: 'atlas' });
         const stored = (await service.getAllItems()).find((w) => w.id === delegate.id)!;
-        expect(stored.metadata?.origin).toEqual({ kind: 'owner', conversationId: 'room-brief', slackChannelId: 'C0BRIEF', threadTs: '1790856242.596149' });
+        expect(stored.metadata?.origin).toEqual({ kind: 'owner', conversationId: 'room-brief', slackChannelId: 'C0BRIEF', threadTs: '1790856242.596149', receivedBy: 'atlas' });
 
         // The verify item is created by the system (no creator) — it inherits from its source.
         service.setTurnOriginLookup(() => undefined);
@@ -203,7 +204,7 @@ describe('TaskPoolService', () => {
         const delegate = makeWorkItem({ target: 'sage', metadata: { delegatedBy: 'atlas', ownerThread: 'C0THINK:1790000000.000100' } });
         await service.addToPool(delegate, { creatorSession: 'atlas' });
         const stored = (await service.getAllItems()).find((w) => w.id === delegate.id)!;
-        expect(stored.metadata?.origin).toEqual({ kind: 'owner', conversationId: 'room-think', slackChannelId: 'C0THINK', threadTs: '1790000000.000100' });
+        expect(stored.metadata?.origin).toEqual({ kind: 'owner', conversationId: 'room-think', slackChannelId: 'C0THINK', threadTs: '1790000000.000100', receivedBy: 'atlas' });
       });
 
       it('an explicit owner thread that IS the delegator\'s turn takes that turn\'s conversation', async () => {
@@ -212,8 +213,18 @@ describe('TaskPoolService', () => {
         service.setSlackThreadConversationLookup(lookup);
         const delegate = makeWorkItem({ target: 'sage', metadata: { ownerThread: '[SLACK-THREAD:C0BRIEF:1790856242.596149]' } });
         await service.addToPool(delegate, { creatorSession: 'atlas' });
-        expect((await service.getAllItems())[0].metadata?.origin).toEqual({ kind: 'owner', conversationId: 'room-brief', slackChannelId: 'C0BRIEF', threadTs: '1790856242.596149' });
+        expect((await service.getAllItems())[0].metadata?.origin).toEqual({ kind: 'owner', conversationId: 'room-brief', slackChannelId: 'C0BRIEF', threadTs: '1790856242.596149', receivedBy: 'atlas' });
         expect(lookup).not.toHaveBeenCalled();
+      });
+
+      it('an owner thread named by its chat message id resolves to that message\'s Slack thread (CE-199)', async () => {
+        service.setTurnOriginLookup(() => undefined);
+        service.setChatMessageThreadLookup(async (id) =>
+          id === 'fbecfa4b-3474-4c61-8a72-79cccb0d1941' ? { slackChannelId: 'C0PROCE', threadTs: '1791379103.320929', conversationId: 'room-ce' } : null,
+        );
+        const delegate = makeWorkItem({ target: 'vera', metadata: { delegatedBy: 'owen', ownerThread: 'fbecfa4b-3474-4c61-8a72-79cccb0d1941' } });
+        await service.addToPool(delegate, { creatorSession: 'owen' });
+        expect((await service.getAllItems())[0].metadata?.origin).toEqual({ kind: 'owner', conversationId: 'room-ce', slackChannelId: 'C0PROCE', threadTs: '1791379103.320929', receivedBy: 'owen' });
       });
 
       it('an unreadable explicit thread falls back to normal inheritance', async () => {
@@ -222,6 +233,70 @@ describe('TaskPoolService', () => {
         const delegate = makeWorkItem({ target: 'sage', metadata: { ownerThread: 'garbage' } });
         await service.addToPool(delegate, { creatorSession: 'atlas' });
         expect((await service.getAllItems())[0].metadata?.origin).toMatchObject({ kind: 'owner', conversationId: 'room-brief' });
+      });
+
+      // 2026-10-07: the schedule-app comment reached Lyra (no chat turn).
+      describe('owner request contexts (app comment, hand-over)', () => {
+        const appComment = { appId: 'upb7se5pfj', commentId: 'QMSjXIhFanDw' };
+        const appCtx = (at: number) => ({
+          origin: { kind: 'owner' as const, receivedBy: 'lyra', appComment, slackChannelId: 'C0C2WMFB9EF', threadTs: '1791380650.784969' },
+          at,
+          via: 'app-comment' as const,
+        });
+        afterEach(() => service.setOwnerContextLookup(null));
+
+        it('work created while handling an app comment carries an owner origin pointing at the comment and its Slack thread', async () => {
+          service.setTurnOriginLookup(() => undefined);
+          service.setOwnerContextLookup(async (s) => (s === 'lyra' ? appCtx(Date.now()) : null));
+          const delegate = makeWorkItem({ target: 'luna', metadata: { delegatedBy: 'lyra' } });
+          await service.addToPool(delegate, { creatorSession: 'lyra' });
+          expect((await service.getAllItems())[0].metadata?.origin).toEqual({
+            kind: 'owner',
+            receivedBy: 'lyra',
+            appComment,
+            slackChannelId: 'C0C2WMFB9EF',
+            threadTs: '1791380650.784969',
+          });
+        });
+
+        it('a hand-over keeps who received the request; a ticket link does not erase the owner origin', async () => {
+          service.setTurnOriginLookup(() => undefined);
+          service.setOwnerContextLookup(async (s) => (s === 'ella' ? { ...appCtx(Date.now()), via: 'hand-over' as const } : null));
+          const linked = makeWorkItem({
+            target: 'sage',
+            metadata: { delegatedBy: 'ella', projectTicket: { projectPath: '/p/crewly-marketing', id: 'CREW-309' } },
+          });
+          await service.addToPool(linked, { creatorSession: 'ella' });
+          const stored = (await service.getAllItems())[0];
+          expect(stored.metadata?.origin).toMatchObject({ kind: 'owner', receivedBy: 'lyra', appComment });
+        });
+
+        it('a context older than the creator\'s current work item is not used', async () => {
+          service.setTurnOriginLookup(() => undefined);
+          const running = makeWorkItem({ target: 'ella', status: 'queued' });
+          await service.addToPool(running);
+          await storage.updateWorkItem(running.id, (w) => { w.status = 'running'; w.startedAt = new Date().toISOString(); });
+          service.setOwnerContextLookup(async () => appCtx(Date.now() - 60_000));
+          const delegate = makeWorkItem({ target: 'sage' });
+          await service.addToPool(delegate, { creatorSession: 'ella' });
+          expect((await service.getAllItems()).find((w) => w.id === delegate.id)!.metadata?.origin).toBeUndefined();
+        });
+
+        it('ownerOriginOnly (a ticket assignment) takes the owner origin, never the creator\'s ticket origin', async () => {
+          service.setTurnOriginLookup(() => undefined);
+          service.setOwnerContextLookup(async () => null);
+          const current = makeWorkItem({ target: 'ella', metadata: { projectTicket: { projectPath: '/p/m', id: 'CREW-300' } } });
+          await service.addToPool(current);
+          await storage.updateWorkItem(current.id, (w) => { w.status = 'running'; w.startedAt = new Date().toISOString(); });
+          const assigned = makeWorkItem({ target: 'kai', metadata: { projectTicket: { projectPath: '/p/m', id: 'CREW-310' } } });
+          await service.addToPool(assigned, { creatorSession: 'ella', ownerOriginOnly: true });
+          expect((await service.getAllItems()).find((w) => w.id === assigned.id)!.metadata?.origin).toBeUndefined();
+
+          service.setOwnerContextLookup(async () => appCtx(Date.now() + 1000));
+          const assigned2 = makeWorkItem({ target: 'kai', metadata: { projectTicket: { projectPath: '/p/m', id: 'CREW-311' } } });
+          await service.addToPool(assigned2, { creatorSession: 'ella', ownerOriginOnly: true });
+          expect((await service.getAllItems()).find((w) => w.id === assigned2.id)!.metadata?.origin).toMatchObject({ kind: 'owner', receivedBy: 'lyra' });
+        });
       });
     });
 
@@ -555,6 +630,23 @@ describe('TaskPoolService', () => {
       const items = await service.getAllItems();
       const after = items.find((wi) => wi.id === downstream.id)!;
       expect(after.status).toBe('queued');
+    });
+
+    it('does not dispatch a blocked task (by claim or by id) until its blocker is done (decompose-goal blockedBy)', async () => {
+      const blocker = makeWorkItem({ type: 'cron_run', title: 'blocker' });
+      await service.addToPool(blocker);
+      const dependent = makeWorkItem({ type: 'cron_run', title: 'dependent', dependsOn: [blocker.id] });
+      await service.addToPool(dependent);
+
+      // Only the blocker is offered; the dependent cannot be taken by id either.
+      expect(await service.claimSpecificItem('agent-b', dependent.id)).toBeNull();
+      const first = await service.claimFromPool('agent-a');
+      expect(first!.workItem.id).toBe(blocker.id);
+      expect(await service.claimFromPool('agent-b')).toBeNull();
+
+      await service.completeItem(blocker.id, undefined, AGENT_ACTOR);
+      const second = await service.claimFromPool('agent-b');
+      expect(second!.workItem.id).toBe(dependent.id);
     });
 
     it('keeps the dependent blocked until ALL deps complete', async () => {
@@ -996,6 +1088,31 @@ describe('TaskPoolService', () => {
     });
   });
 
+  describe('team move (crewly#1189)', () => {
+    it('imports work items exactly as they were and skips ones already in the pool', async () => {
+      const blocked = { ...makeWorkItem({ title: 'blocked one', target: 'a-1' }), status: 'blocked' as const };
+      const queued = makeWorkItem({ title: 'queued one', target: 'a-1' });
+      expect(await service.importWorkItems([blocked, queued, { nonsense: true } as never])).toBe(2);
+      expect(await service.importWorkItems([blocked, queued])).toBe(0);
+      const all = await service.getAllItems();
+      expect(all.map((w) => w.id).sort()).toEqual([blocked.id, queued.id].sort());
+      expect(all.find((w) => w.id === blocked.id)!.status).toBe('blocked');
+    });
+
+    it('removes the items of a moved team together with their claims', async () => {
+      const a = makeWorkItem({ title: 'a', target: 'x-1' });
+      const b = makeWorkItem({ title: 'b', target: 'y-1' });
+      await service.addToPool(a);
+      await service.addToPool(b);
+      await service.claimFromPool('x-1');
+      expect(await service.getActiveClaims()).toHaveLength(1);
+      expect(await service.removeWorkItemsForMove([a.id])).toBe(1);
+      expect((await service.getAllItems()).map((w) => w.id)).toEqual([b.id]);
+      expect(await service.getActiveClaims()).toHaveLength(0);
+      expect(await service.removeWorkItemsForMove([])).toBe(0);
+    });
+  });
+
   describe('retargetQueuedItem', () => {
     it('moves a queued item and records where it came from; leaves running work alone', async () => {
       const wi = makeWorkItem({ title: 'metrics', target: 'old-scribe-45506487' });
@@ -1036,7 +1153,7 @@ describe('TaskPoolService', () => {
       await service.addToPool(wi, { creatorSession: 'leo' });
       const stored = (await service.getAllItems()).find((w) => w.id === wi.id)!;
       expect(stored).toMatchObject({ target: 'sam', targetSource: 'escalated', metadata: expect.objectContaining({ routeLevel: 0, createdBy: 'leo' }) });
-      expect(stored.description).toContain('交给你决定');
+      expect(stored.description).toContain('yours to decide');
       // A targeted item is left alone.
       const own = makeWorkItem({ title: 'mine', target: 'max' });
       await service.addToPool(own);
@@ -2165,6 +2282,28 @@ describe('TaskPoolService', () => {
 
       expect(updated).not.toBeNull();
       expect(updated!.status).toBe('verified');
+    });
+
+    it('verifying a retry stamps its rejected parent succeeded_by the retry (CREW-403)', async () => {
+      const parent = await makeAwaitingVerification();
+      await service.verifyItem(parent.id, REVIEWER_ACTOR, 'rejected', 'redo');
+      const retry = makeWorkItem({
+        id: `${parent.id}:retry:1`,
+        type: 'delegate',
+        metadata: { sourceWorkItemId: parent.id, requiresVerification: true, reviewer: REVIEWER_ACTOR.session },
+      });
+      await service.addToPool(retry);
+      await service.claimFromPool('agent-leo');
+      await service.submitForVerification(retry.id, 'agent', { output: 'v2' });
+
+      await service.verifyItem(retry.id, REVIEWER_ACTOR, 'verified');
+
+      const after = (await service.getAllItems()).find((i) => i.id === parent.id)!;
+      expect(after.status).toBe('rejected');
+      expect((after.metadata as any).disposition).toMatchObject({
+        kind: 'succeeded_by',
+        successorWorkItemId: retry.id,
+      });
     });
 
     it('publishes task:verified (not task:rejected) on the verified verdict', async () => {
@@ -4061,6 +4200,31 @@ describe('TaskPoolService', () => {
       expect(next?.alreadyHeld).toBeFalsy();
     });
 
+    it('block tells the owner-thread sentinel, with the owner thread the work came from (not for ticket work)', async () => {
+      const noteBlocking = jest.fn(async () => 0);
+      setOwnerThreadSentinel({ noteBlocking } as unknown as OwnerThreadSentinelService);
+      try {
+        const wi = makeWorkItem({ title: 'read the PDFs', target: AGENT, metadata: { origin: { kind: 'owner', slackChannelId: 'C1', threadTs: '1.1' } } });
+        await service.addToPool(wi);
+        await service.claimFromPool(AGENT);
+        await service.blockItem(wi.id, { agentId: AGENT, reason: 'awaiting owner browser approval' });
+        expect(noteBlocking).toHaveBeenCalledWith(AGENT, {
+          kind: 'work_blocked',
+          reason: 'awaiting owner browser approval',
+          thread: { slackChannelId: 'C1', threadTs: '1.1' },
+        });
+
+        noteBlocking.mockClear();
+        const ticket = makeWorkItem({ title: 'ticket work', target: AGENT, metadata: { projectTicket: { projectPath: '/p', id: 'CE-1' } } });
+        await service.addToPool(ticket);
+        await service.claimFromPool(AGENT);
+        await service.blockItem(ticket.id, { agentId: AGENT, reason: 'x' });
+        expect(noteBlocking).not.toHaveBeenCalled();
+      } finally {
+        setOwnerThreadSentinel(null);
+      }
+    });
+
     it('block → reconciler ticks (agent active) → still blocked, not claimable, never woken or redelivered', async () => {
       const id = await claimAndBlock();
       const provider = makeProvider(activeHealth());
@@ -4112,6 +4276,13 @@ describe('TaskPoolService', () => {
       const wi = makeWorkItem({ title: 'in progress', target: AGENT });
       await service.addToPool(wi);
       await service.claimFromPool(AGENT);
+      // CE-232: with a live lease a dead-looking agent is not blocked; the
+      // lease has to have run out as well.
+      for (const claim of await service.getActiveClaims()) {
+        await storage.updateClaim(claim.id, (c) => {
+          c.leaseExpiresAt = new Date(Date.now() - 60_000).toISOString();
+        });
+      }
 
       const inactive = new Map<string, AgentHealth>([[AGENT, { sessionName: AGENT, status: 'inactive' }]]);
       await new ReconcilerService(makeProvider(inactive)).runFull();
@@ -4235,6 +4406,58 @@ describe('TaskPoolService', () => {
       await service.completeItem(ce19, { summary: 'done' }, veraActor);
       expect((await service.findWorkItem(ce19))?.status).toBe('done_by_worker');
       expect((await service.getClaimService().getClaimById(claimId))?.status).toBe('released');
+    });
+
+    describe('CE-232 / CREW-439 — redelivery-failure block must not refuse the worker', () => {
+      const deadVera = (): Map<string, AgentHealth> =>
+        new Map([[VERA, { sessionName: VERA, status: 'inactive' } as AgentHealth]]);
+
+      it('reproduces CE-232: the worker blocks her own running item, then completes it', async () => {
+        const { ce19 } = await seed();
+        await service.claimSpecificItem(VERA, ce19);
+        await service.blockItem(ce19, { agentId: VERA, reason: 'waiting on Owen' });
+        expect((await service.findWorkItem(ce19))?.status).toBe('blocked');
+
+        await service.completeItem(ce19, { summary: 'done anyway' }, veraActor);
+        const done = await service.findWorkItem(ce19);
+        expect(done?.status).toBe('done_by_worker');
+        expect(typeof done?.metadata?.completedWhileBlockedAt).toBe('string');
+      });
+
+      it('a failed wake / dead-looking agent with a live claim lease does not flip the item to blocked', async () => {
+        const { ce19 } = await seed();
+        await service.claimSpecificItem(VERA, ce19);
+        const reconciler = new ReconcilerService(makeProvider(deadVera()));
+        await reconciler.runFast();
+        await reconciler.runFull();
+        expect((await service.findWorkItem(ce19))?.status).toBe('running');
+      });
+
+      it('a non-owner still cannot complete a blocked item', async () => {
+        const { ce19 } = await seed();
+        await service.claimSpecificItem(VERA, ce19);
+        await service.blockItem(ce19, { agentId: VERA, reason: 'waiting' });
+        await expect(
+          service.completeItem(ce19, { summary: 'not mine' }, { role: 'agent', session: OWEN, via: 'POST /task-pool/complete' }),
+        ).rejects.toThrow();
+        expect((await service.findWorkItem(ce19))?.status).toBe('blocked');
+      });
+
+      it('a waiting_on_human park is not resumed by a completion', async () => {
+        const { ce19 } = await seed();
+        await service.claimSpecificItem(VERA, ce19);
+        await service.updateItemStatus(ce19, 'blocked', 'system', 'parked', WORK_ITEM_BLOCK_SOURCES.WAITING_ON_HUMAN);
+        expect((await service.findWorkItem(ce19))?.blockSource).toBe(WORK_ITEM_BLOCK_SOURCES.WAITING_ON_HUMAN);
+        await expect(service.completeItem(ce19, { summary: 'x' }, veraActor)).rejects.toThrow();
+        expect((await service.findWorkItem(ce19))?.status).toBe('blocked');
+      });
+
+      it('a dependency-blocked item (never claimed) is not completable by its target', async () => {
+        const wi = makeWorkItem({ title: 'dep', target: VERA, status: 'blocked', dependsOn: ['unfinished-dep'] });
+        await service.addToPool(wi);
+        expect((await service.findWorkItem(wi.id))?.status).toBe('blocked');
+        await expect(service.completeItem(wi.id, { summary: 'x' }, veraActor)).rejects.toThrow();
+      });
     });
 
     it('accepts completion of a batched item its target worked without claiming it', async () => {

@@ -14,6 +14,8 @@ import type { ChatV2Config } from './config.js';
 import { ChannelStore } from './sqlite/channel.store.js';
 import { EventEmitter } from 'events';
 import { MessageStore } from './sqlite/message.store.js';
+import { redactOpenLinkTokens } from '../apps/app-open-link.js';
+import { CHAT_SEARCH_CONSTANTS } from '../../constants.js';
 import { openChatDatabase, type ChatDatabase } from './sqlite/chat-db.js';
 import { CloudOutboxStore } from './sqlite/cloud-outbox.store.js';
 import { reclassifyOwnerSlackRows, type OwnerIdentity } from './sqlite/unified-log.js';
@@ -245,6 +247,9 @@ export const RECORD_TURN_SOURCES = [
   // Crewly Cloud's Talk page.
   'whatsapp',
   'cloud-talk',
+  // Crewly App comments posted into the room (team / channel) that owns the
+  // app (crewly-services apps/SPEC.md §15), and agents' replies to them.
+  'app-comment',
 ] as const;
 
 /** Union type of the values in {@link RECORD_TURN_SOURCES}. */
@@ -328,6 +333,8 @@ export class ChatV2Service extends EventEmitter {
   private presence: ChatV2ServiceOptions['getPresence'];
   private readonly validateTeamMembership: ChatV2ServiceOptions['validateTeamMembership'];
   private readonly now: () => number;
+  /** Which system-owned huddles the owner may read and post in (Crewly channels). */
+  private sharedChannel: ((channelId: string) => boolean) | null = null;
 
   constructor(options: ChatV2ServiceOptions) {
     super();
@@ -353,6 +360,19 @@ export class ChatV2Service extends EventEmitter {
    */
   setPresenceProvider(getPresence: ChatV2ServiceOptions['getPresence']): void {
     this.presence = getPresence;
+  }
+
+  /**
+   * Wire which huddles are shared with the owner even though a bridge created
+   * them under the synthetic `'system'` owner: Crewly channels, including
+   * ones found in Slack. The owner (a principal without an agent session) may
+   * then open, read and post in them like in their own channels; agents still
+   * need to be members.
+   *
+   * @param isShared - True for a channel id that is a Crewly channel; null to unwire
+   */
+  setSharedChannelResolver(isShared: ((channelId: string) => boolean) | null): void {
+    this.sharedChannel = isShared;
   }
 
   /**
@@ -490,6 +510,102 @@ export class ChatV2Service extends EventEmitter {
     };
   }
 
+  /**
+   * Search the chat messages one agent can see (its DMs, the channels and
+   * rooms it is in, and messages that @-mention it) and return compact hits.
+   * An agent principal may only search as itself.
+   *
+   * @param args.agentSession - Whose view is searched
+   * @param args.principal - Caller
+   * @param args.query - Keywords (whitespace separated, all must appear)
+   * @param args.channel - Channel id or name
+   * @param args.from - Start (inclusive), epoch ms
+   * @param args.to - End (exclusive), epoch ms
+   * @param args.limit - Most hits
+   * @returns Hits, newest first
+   * @throws {ChatError} `validation_error` (400) without a session or a keyword; `forbidden` (403) for another agent's view
+   */
+  searchMessagesForAgent(args: {
+    agentSession: string;
+    principal: ChatPrincipal;
+    query: string;
+    channel?: string;
+    from?: number;
+    to?: number;
+    limit?: number;
+  }): Array<{ id: string; time: string; channelId: string; channel: string; sender: string; text: string; threadId: string | null }> {
+    const agentSession = (args.agentSession ?? '').trim();
+    if (!agentSession) throw new ChatError(CHAT_ERROR_CODES.VALIDATION, 400, 'agent session is required');
+    if (args.principal.agentSession && args.principal.agentSession !== agentSession) {
+      throw new ChatError(CHAT_ERROR_CODES.FORBIDDEN, 403, 'An agent can only search its own chat history');
+    }
+    const terms = (args.query ?? '')
+      .split(/\s+/)
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0)
+      .slice(0, CHAT_SEARCH_CONSTANTS.MAX_TERMS);
+    if (terms.length === 0) throw new ChatError(CHAT_ERROR_CODES.VALIDATION, 400, 'query is required');
+    const requested = typeof args.limit === 'number' && Number.isFinite(args.limit) && args.limit > 0 ? Math.floor(args.limit) : CHAT_SEARCH_CONSTANTS.DEFAULT_LIMIT;
+    const limit = Math.min(requested, CHAT_SEARCH_CONSTANTS.MAX_LIMIT);
+    const rows = this.messages.searchForAgent(agentSession, {
+      terms,
+      ...(args.channel ? { channel: args.channel.trim() } : {}),
+      ...(args.from !== undefined && Number.isFinite(args.from) ? { fromMs: args.from } : {}),
+      ...(args.to !== undefined && Number.isFinite(args.to) ? { toMs: args.to } : {}),
+      limit,
+    });
+    return rows.map((r) => {
+      const flat = redactOpenLinkTokens(ownerVisibleContent(r.sender_type, r.content)).replace(/\s+/g, ' ').trim();
+      return {
+        id: r.id,
+        time: new Date(r.created_at).toISOString(),
+        channelId: r.channel_id,
+        channel: r.channel_name,
+        sender: r.sender_id,
+        text: flat.length > CHAT_SEARCH_CONSTANTS.SNIPPET_CHARS ? `${flat.slice(0, CHAT_SEARCH_CONSTANTS.SNIPPET_CHARS)}…` : flat,
+        threadId: r.thread_id,
+      };
+    });
+  }
+
+  /**
+   * The owner's conversations since a time (Drive mode recall,
+   * specs/2026-10-08-drive-mode.md §7): every message in a live channel
+   * (oldest first, capped) plus when the owner last spoke in each
+   * conversation, all time. Server-internal (one owner per OSS backend).
+   *
+   * @param args.sinceMs - Window start (epoch ms)
+   * @param args.limit - Most messages returned (newest kept)
+   * @returns Messages and owner turn marks
+   */
+  getOwnerFeed(args: { sinceMs: number; limit: number }): {
+    messages: ChatTimelineItemDTO[];
+    ownerTurns: Array<{ channelId: string; root: string; lastAt: number }>;
+  } {
+    const rows = this.messages.listOwnerFeedRows(args.sinceMs, args.limit);
+    const messages: ChatTimelineItemDTO[] = rows.map((r) => ({
+      ...this.toMessageDTO(r, []),
+      source: r.source ?? 'crewly-chat',
+      direction: r.direction ?? (r.sender_type === 'agent' ? 'out' : r.sender_type === 'system' ? 'internal' : 'in'),
+      senderKind: r.sender_kind ?? (r.sender_type === 'user' ? 'owner' : r.sender_type),
+      agentSession: r.agent_session,
+      extRef: parseExtRef(r.ext_ref),
+      channelName: r.channel_name,
+      channelType: r.channel_type,
+    }));
+    return { messages, ownerTurns: this.messages.listOwnerTurnMarks() };
+  }
+
+  /**
+   * When the owner last wrote in each conversation (per DM channel, per
+   * channel thread), all time. Server-internal.
+   *
+   * @returns One mark per conversation
+   */
+  getOwnerTurnMarks(): Array<{ channelId: string; root: string; lastAt: number }> {
+    return this.messages.listOwnerTurnMarks();
+  }
+
   /** Release the DB handle. Safe to call during graceful shutdown / in tests. */
   close(): void {
     try {
@@ -513,6 +629,17 @@ export class ChatV2Service extends EventEmitter {
    */
   countAllMessages(): number {
     return this.messages.countAll();
+  }
+
+  /**
+   * Slack channels with stored inbound messages since `sinceMs` (backfill scope).
+   *
+   * @param sinceMs - Epoch ms lower bound
+   * @param limit - Most channels returned
+   * @returns Slack channel ids
+   */
+  listSlackInboundChannels(sinceMs: number, limit: number): string[] {
+    return this.messages.listSlackInboundChannels(sinceMs, limit);
   }
 
   /**
@@ -985,6 +1112,20 @@ export class ChatV2Service extends EventEmitter {
   }
 
   /**
+   * Rename a channel server-side (no principal) — keeps a Crewly channel's
+   * huddle in step with its Slack name. No-op for an unknown id or a blank name.
+   *
+   * @param channelId - The channel id
+   * @param name - The new name, as shown in the chat list
+   * @returns True when the row exists and was renamed
+   */
+  renameChannelForBridge(channelId: string, name: string): boolean {
+    const trimmed = (name ?? '').trim().slice(0, this.config.maxChannelNameChars);
+    if (!trimmed) return false;
+    return this.channels.rename(channelId, trimmed);
+  }
+
+  /**
    * Archive a channel server-side (no principal). Idempotent.
    *
    * @param channelId - The channel id
@@ -1070,6 +1211,14 @@ export class ChatV2Service extends EventEmitter {
   getMessageForBridge(messageId: string): ChatMessageDTO | null {
     const row = this.messages.getById(messageId);
     return row ? this.toMessageDTO(row, []) : null;
+  }
+
+  /**
+   * Internal: a Crewly channel (see {@link setSharedChannelResolver}) opened
+   * by the owner — a principal acting as no agent.
+   */
+  private isSharedWithOwner(row: ChatChannelRow, principal: ChatPrincipal): boolean {
+    return !principal.agentSession && row.type === 'huddle' && !!this.sharedChannel?.(row.id);
   }
 
   /** Internal: is `sessionName` on the huddle's roster? */
@@ -1481,6 +1630,8 @@ export class ChatV2Service extends EventEmitter {
    * @throws {ChatError} `channel_not_found` (404) if the caller doesn't own it
    */
   getChannel(channelId: string, principal: ChatPrincipal): ChatChannelDTO {
+    const shared = this.channels.getById(channelId);
+    if (shared && this.isSharedWithOwner(shared, principal)) return this.toChannelDTO(shared);
     const row = this.requireOwnedChannel(channelId, principal);
     return this.toChannelDTO(row);
   }
@@ -2080,7 +2231,7 @@ export class ChatV2Service extends EventEmitter {
       !!principal.agentSession &&
       row.type === 'huddle' &&
       this.isHuddleMember(row.id, principal.agentSession);
-    if (!isOwner && !isBoundAgent && !isSharedBridged && !isHuddleMember) {
+    if (!isOwner && !isBoundAgent && !isSharedBridged && !isHuddleMember && !this.isSharedWithOwner(row, principal)) {
       throw new ChatError(CHAT_ERROR_CODES.CHANNEL_NOT_FOUND, 404, 'Channel not found');
     }
     if (row.archived_at) {
@@ -2109,7 +2260,7 @@ export class ChatV2Service extends EventEmitter {
     ) {
       return { type: 'agent', id: principal.agentSession };
     }
-    if (principal.userId === channel.owner_user_id) {
+    if (principal.userId === channel.owner_user_id || this.isSharedWithOwner(channel, principal)) {
       return { type: 'user', id: principal.userId };
     }
     // Server-minted system messages go through an internal path, not this one.

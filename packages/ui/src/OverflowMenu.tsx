@@ -104,7 +104,7 @@ export const OverflowMenu: React.FC<OverflowMenuProps> = ({
       {open && (
         <div
           role="menu"
-          className={`absolute z-10 w-44 bg-surface-dark border border-border-dark rounded-2xl shadow-lg p-1 ${
+          className={`absolute z-10 w-44 cw-glass-strong rounded-2xl shadow-lg p-1 ${
             align === 'bottom-right' ? 'right-0 top-8' : 'right-0 bottom-8'
           } ${menuClassName}`}
         >
@@ -117,7 +117,7 @@ export const OverflowMenu: React.FC<OverflowMenuProps> = ({
                   type="button"
                   role="menuitem"
                   disabled={item.disabled}
-                  className={`flex w-full items-center gap-2 text-left px-3 py-2 text-sm rounded-[0.5rem] hover:bg-background-dark disabled:opacity-50 disabled:cursor-not-allowed ${item.danger ? 'text-red-300' : ''}`}
+                  className={`flex w-full items-center gap-2 text-left px-3 py-2 text-sm rounded-[0.5rem] hover:bg-background-dark disabled:opacity-50 disabled:cursor-not-allowed ${item.danger ? 'text-danger' : ''}`}
                   onClick={() => {
                     setOpen(false);
                     item.onClick();

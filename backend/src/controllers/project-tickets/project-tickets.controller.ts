@@ -31,7 +31,8 @@ import { resolveProjectDataDir } from '../../services/core/crewly-home.utils.js'
 import { existsSync } from 'fs';
 import { TokenUsageService } from '../../services/monitoring/token-usage.service.js';
 import { getCrewlyHomePath } from '../../services/core/crewly-home.utils.js';
-import { TICKET_AUTOPILOT_CONSTANTS } from '../../constants.js';
+import { TICKET_AUTOPILOT_CONSTANTS, TICKET_HYGIENE_CONSTANTS } from '../../constants.js';
+import { TicketHygieneService } from '../../services/project-tickets/ticket-hygiene.service.js';
 import { createHttpAssigneeWaker } from '../../services/project-tickets/ticket-assignee-waker.js';
 import { getRoleService } from '../../services/settings/role.service.js';
 import { DecisionError, DecisionService } from '../../services/decisions/decision.service.js';
@@ -58,6 +59,23 @@ export function projectTicketWorkflow(): ProjectTicketWorkflowService {
     ProjectTicketWorkflowService.setInstance(wf);
   }
   return wf;
+}
+
+/**
+ * Build the ticket hygiene service (hourly reconcile + daily lead review) from
+ * the process singletons.
+ *
+ * @returns A new service (not installed, not started)
+ */
+export function createDefaultTicketHygiene(): TicketHygieneService {
+  const workflow = projectTicketWorkflow();
+  return new TicketHygieneService({
+    tickets: ProjectTicketService.getInstance(),
+    pool: TaskPoolService.getInstance(),
+    directory: StorageService.getInstance(),
+    followChain: (id) => workflow.followChain(id),
+    stateFile: path.join(getCrewlyHomePath(), TICKET_HYGIENE_CONSTANTS.STATE_FILENAME),
+  });
 }
 
 /**
@@ -102,7 +120,13 @@ export function createDefaultTicketAutopilot(
     // members take ready tickets on the tick (not only on an idle event).
     redeliverWork: async (workItem) => {
       const { WorkItemDispatchSubscriber } = await import('../../services/v3/workitem-dispatch.subscriber.js');
-      return WorkItemDispatchSubscriber.getInstance().redispatch(workItem);
+      // The outcome, not a bare boolean: a brief that is still on the agent's
+      // queue (mid-turn) is not a miss, and one whose write failed is a
+      // delivery failure, not the member's stall (CREW-394).
+      const outcome = await WorkItemDispatchSubscriber.getInstance().redispatchOutcome(workItem);
+      if (outcome.status === 'delivered' || outcome.status === 'queued') return { status: 'delivered' as const };
+      if (outcome.status === 'waiting') return { status: 'waiting' as const, reason: outcome.reason };
+      return { status: 'failed' as const, reason: outcome.reason };
     },
     claimReadyFor: async (session) => {
       const { AgentAutoClaimService } = await import('../../services/v3/agent-auto-claim.service.js');

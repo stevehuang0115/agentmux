@@ -214,7 +214,7 @@ export function memberResponsibility(
 
 /**
  * Whether anyone could ever auto-claim a `ready` ticket: a member of an
- * eligible team (the ticket's `team`, else any project team) who is not a
+ * eligible team (the ticket's `team`, else the project's only team) who is not a
  * lead — or a lead who is the only member of its team. Mirrors the
  * AutoClaim rule (specs/2026-09-28-project-tickets.md §5).
  *
@@ -223,6 +223,8 @@ export function memberResponsibility(
  * @returns True when some member could take it
  */
 export function hasPossibleTaker(ticket: Pick<ProjectTicket, 'team'>, teams: Team[]): boolean {
+  // A team-less ticket has an unambiguous taker only when one team works the project (CREW-397).
+  if (!ticket.team && teams.length > 1) return false;
   return teams
     .filter((t) => !ticket.team || t.id === ticket.team)
     .some((t) => {
@@ -336,8 +338,16 @@ export interface ReplanDecisionInput {
   backedOff: boolean;
   /** Replans allowed per local day (the `replansPerDay` setting; 0 = off) */
   maxReplansPerDay: number;
-  /** Replans already created today (local day) */
+  /**
+   * Replans of today (local day) that count toward the daily cap: those that
+   * opened no tickets, plus one still in flight or not yet assessed
+   * (see {@link countReplans}). A replan that opened tickets does not count.
+   */
   replansToday: number;
+  /** Every replan created today, productive or not (for the hard ceiling) */
+  replansTotalToday?: number;
+  /** Safety ceiling on {@link replansTotalToday} (0 / absent = none) */
+  hardCeilingPerDay?: number;
   /** When the last replan was created (epoch ms), if any */
   lastReplanAt?: number;
   /** A replan never starts sooner than this after the last one (the speed mode's gap, ms; 0 = none) */
@@ -414,6 +424,9 @@ export function decideReplan(input: ReplanDecisionInput): ReplanDecision {
   if (!input.anyoneIdle) return { action: 'skip', reason: 'nobody_idle' };
   if (!input.idleWithRoom) return { action: 'skip', reason: 'at_capacity' };
   if (input.replansToday >= input.maxReplansPerDay) return { action: 'skip', reason: 'replanned_today' };
+  if (replanCeilingReached(input.replansTotalToday, input.maxReplansPerDay, input.hardCeilingPerDay)) {
+    return { action: 'skip', reason: 'replanned_today' };
+  }
   if (input.lastReplanAt !== undefined && input.now !== undefined) {
     const gap = effectiveReplanGapMs(input.minGapMs ?? 0, !!input.idleAndEmpty, input.idleReplanDebounceMs ?? 0);
     if (gap > 0 && input.now - input.lastReplanAt < gap) return { action: 'skip', reason: 'replan_too_soon' };
@@ -616,6 +629,43 @@ export interface StallRecord {
   count: number;
   /** Last action (epoch ms); the stall clock restarts from it */
   lastAt: number;
+  /**
+   * Pushes in a row that never reached the member (write failed / held).
+   * Not counted in `count`: a brief the member never saw is not a stall of
+   * the member's (CREW-394).
+   */
+  failures?: number;
+  /**
+   * Pushes in a row that found an earlier notice still on the member's queue
+   * (mid-turn). Not a stall and not a failure, but not endless either: past
+   * the bound the ticket is released as `busy`. Reset by a delivered or
+   * failed push.
+   */
+  waiting?: number;
+}
+
+/**
+ * What a brief re-push did, as the stall guard needs it: `delivered` (in
+ * front of the member, or on its queue just now), `waiting` (an earlier
+ * notice is still on its queue — mid-turn), `failed` (it did not reach the
+ * member).
+ */
+export interface RedeliverResult {
+  status: 'delivered' | 'waiting' | 'failed';
+  /** Why, for `failed` / `waiting` */
+  reason?: string;
+}
+
+/**
+ * Normalise a `redeliverWork` result: a bare boolean (`true` = written,
+ * `false` = not written) or a {@link RedeliverResult}.
+ *
+ * @param result - What the dependency returned
+ * @returns The status and reason
+ */
+export function normalizeRedeliver(result: boolean | RedeliverResult): RedeliverResult {
+  if (typeof result === 'boolean') return result ? { status: 'delivered' } : { status: 'failed', reason: 'not written' };
+  return result;
 }
 
 /** Inputs of {@link findStalledWork}. */
@@ -640,6 +690,17 @@ export interface StalledWork {
   workItemId: string;
   /** Re-deliver the brief, or give the ticket back to ready (re-deliveries used up) */
   action: 'redeliver' | 'release';
+  /**
+   * Why a `release` happens: `stalled` (briefs reached the member, nothing
+   * moved) or `delivery` (briefs never reached it — our failure, not the
+   * member's, CREW-394) or `busy` (the brief sat on the member's queue,
+   * never picked up, mid-turn). Unset for `redeliver`.
+   */
+  releaseCause?: 'stalled' | 'delivery' | 'busy';
+  /** Consecutive failed pushes behind a `delivery` release */
+  deliveryFailures?: number;
+  /** Consecutive pushes that found the brief still queued, behind a `busy` release */
+  waitingPushes?: number;
   /** How long nothing has moved (ms) */
   stalledMs: number;
 }
@@ -678,12 +739,27 @@ export function findStalledWork(input: StalledWorkInput): StalledWork[] {
     );
     const stalledMs = input.now - progressAt;
     if (stalledMs < input.stallAfterMs) continue;
-    const used = stall && stall.lastAt >= (Date.parse(t.updatedAt) || 0) ? stall.count : 0;
+    const fresh = !!stall && stall.lastAt >= (Date.parse(t.updatedAt) || 0);
+    const used = fresh ? stall!.count : 0;
+    const failures = fresh ? stall!.failures ?? 0 : 0;
+    // Delivered briefs that moved nothing -> the member stalled. Pushes that
+    // never landed -> our delivery is broken; give the ticket back either way
+    // instead of re-pushing forever, but name the right cause (CREW-394).
+    const waiting = fresh ? stall!.waiting ?? 0 : 0;
+    const action =
+      used >= input.maxRedeliveries || failures >= input.maxRedeliveries || waiting >= input.maxRedeliveries ? 'release' : 'redeliver';
     out.push({
       ticketId: t.id,
       session: t.assignee,
       workItemId: t.workItemId,
-      action: used >= input.maxRedeliveries ? 'release' : 'redeliver',
+      action,
+      ...(action === 'release'
+        ? used >= input.maxRedeliveries
+          ? { releaseCause: 'stalled' as const }
+          : failures >= input.maxRedeliveries
+            ? { releaseCause: 'delivery' as const, deliveryFailures: failures }
+            : { releaseCause: 'busy' as const, waitingPushes: waiting }
+        : {}),
       stalledMs,
     });
   }
@@ -834,3 +910,47 @@ export function inFlightByAssignee(tickets: ProjectTicket[]): Map<string, number
 export const OPEN_TICKET_STATUSES: ReadonlySet<string> = new Set(
   PROJECT_TICKET_CONSTANTS.STATUSES.filter((s) => s !== 'done' && s !== 'cancelled'),
 );
+
+/** Today's goal replans as the daily cap sees them. */
+export interface ReplanCounts {
+  /** Every replan created today */
+  total: number;
+  /** Replans that opened tickets (assessed) */
+  productive: number;
+  /** What counts toward the daily cap: `total - productive` */
+  counted: number;
+}
+
+/**
+ * Count today's goal replans for the daily cap (CREW-265). Only replans that
+ * opened no tickets count; a productive one is free, so an autopilot that
+ * keeps finding work is not stopped at the 4th replan of the day while the
+ * goal is still far off. A replan not yet assessed counts until it is.
+ *
+ * @param replans - The project's stored replan record
+ * @param today - Local day key
+ * @returns Total, productive and counted replans of today
+ */
+export function countReplans(
+  replans: { day: string; count: number; productive?: number } | undefined,
+  today: string,
+): ReplanCounts {
+  if (!replans || replans.day !== today) return { total: 0, productive: 0, counted: 0 };
+  const total = Math.max(0, replans.count);
+  const productive = Math.min(total, Math.max(0, replans.productive ?? 0));
+  return { total, productive, counted: total - productive };
+}
+
+/**
+ * Whether today's replans, productive ones included, reached the safety
+ * ceiling. The ceiling is never below the daily cap.
+ *
+ * @param totalToday - Every replan created today
+ * @param dailyCap - The daily cap on replans that opened nothing
+ * @param ceiling - The hard ceiling (0 / absent = none)
+ * @returns True when no further replan may run today
+ */
+export function replanCeilingReached(totalToday: number | undefined, dailyCap: number, ceiling: number | undefined): boolean {
+  if (totalToday === undefined || !ceiling || ceiling <= 0) return false;
+  return totalToday >= Math.max(ceiling, dailyCap);
+}

@@ -101,6 +101,12 @@ describe('SkillsReferenceModule', () => {
 			expect(result).not.toContain('team leader skills');
 			expect(result).not.toContain('orchestrator skill');
 			expect(result).not.toContain('delegate-task');
+			// Crewly channels span teams: every agent can find and post in its own.
+			expect(result).toContain('core/list-channels');
+			expect(result).toContain("reply-channel --channel '#name'");
+			// Before saying "I can't find it", look in the chat log.
+			expect(result).toContain('core/search-chat');
+			expect(result).toContain('search chat history');
 		});
 
 		it('sends the orchestrator to harness-login and forbids interactive logins in bash', async () => {
@@ -210,6 +216,18 @@ describe('SkillsReferenceModule', () => {
 		});
 	});
 
+	describe('reading Slack files', () => {
+		it('tells every role to fetch a Slack file it cannot open instead of asking for a paste', async () => {
+			// Rex could not read Ella's longform-en.md (posted in a channel his
+			// bot is not in) and asked her to paste the text (2026-10-08).
+			for (const role of ['orchestrator', 'team-leader', 'developer']) {
+				const out = await module.build({ ...baseConfig, role });
+				expect(out).toContain('slack-file get <link>');
+				expect(out).toMatch(/never ask a colleague to paste it/);
+			}
+		});
+	});
+
 	describe('connected accounts (Google Workspace)', () => {
 		it('names the Drive skills, which no agent could previously discover', async () => {
 			// These shipped weeks ago and the prompt never mentioned them, so an
@@ -221,6 +239,28 @@ describe('SkillsReferenceModule', () => {
 			expect(out).toContain('drive-search');
 			expect(out).toContain('drive-read');
 			expect(out).toContain('drive-upload');
+		});
+
+		it('points agents at send-file / receive-file for large files instead of Drive or Slack', async () => {
+			const out = await module.build(baseConfig);
+
+			expect(out).toContain('core/send-file');
+			expect(out).toContain('receive-file');
+			expect(out).toContain('prefer these over Drive or Slack');
+		});
+
+		it('points agents at request-file when the owner\'s file is too large, never at compression or Drive', async () => {
+			const out = await module.build(baseConfig);
+
+			expect(out).toContain('core/request-file');
+			expect(out).toContain('Never ask the owner to compress a file or put it in Drive');
+		});
+
+		it('points agents at share-file to give the owner a big deliverable as a private link', async () => {
+			const out = await module.build(baseConfig);
+
+			expect(out).toContain('core/share-file');
+			expect(out).toContain('watch it in the page and download it');
 		});
 
 		it('names every connector family, not just Drive', async () => {
@@ -239,6 +279,22 @@ describe('SkillsReferenceModule', () => {
 			expect(out).toContain('core/app-comments');
 			expect(out).toContain('[APP CHANGES]');
 			expect(out).toContain('--public` only ASKS the owner');
+		});
+
+		it('tells agents to look for a Marketplace template before building a new Crewly App', async () => {
+			const out = await module.build(baseConfig);
+
+			expect(out).toContain('Before building a new Crewly App, run `/path/to/skills/agent/core/find-app-template');
+			expect(out).toContain('core/use-app-template <templateId> --dir');
+			expect(out).toContain('tell the owner in\none line which template you started from');
+			expect(out).toContain('--as-template` only ASKS the owner');
+		});
+
+		it('says a Crewly App is always published with publish-app, never runtime hosting', async () => {
+			const out = await module.build(baseConfig);
+
+			expect(out).toContain('ALWAYS published with');
+			expect(out).toContain('chatgpt.site');
 		});
 
 		it('lists the WhatsApp inbox skills with the owner-confirmation rule', async () => {

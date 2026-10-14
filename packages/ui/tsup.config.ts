@@ -7,7 +7,7 @@ import { defineConfig } from 'tsup';
  * preset's users add dist/ to `content`).
  */
 export default defineConfig({
-  entry: ['src/index.ts'],
+  entry: { index: 'src/index.ts', 'theme-script': 'src/theme-script.ts' },
   format: ['esm', 'cjs'],
   dts: true,
   sourcemap: true,

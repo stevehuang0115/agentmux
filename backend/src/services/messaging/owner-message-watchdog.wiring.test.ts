@@ -121,6 +121,10 @@ describe('isOwnerChatTurn', () => {
     expect(isOwnerChatTurn(msg({ metadata: { source: 'web' } }), 'U_OWNER')).toBe(true);
   });
 
+  it('a Drive mode turn is the owner\'s (priority delivery + the tool-boundary hook)', () => {
+    expect(isOwnerChatTurn(msg({ metadata: { source: 'cloud-talk', inputMode: 'voice', via: 'drive-mode' } }), 'U_OWNER')).toBe(true);
+  });
+
   it('rejects other people, agents and agent replies', () => {
     expect(isOwnerChatTurn(msg(), 'U_SOMEONE_ELSE')).toBe(false);
     expect(isOwnerChatTurn(msg({ metadata: { source: 'slack', slackUserId: 'U_OWNER', remoteAgentSession: 'avery' } }), 'U_OWNER')).toBe(false);
@@ -222,7 +226,7 @@ describe('buildNudgeMessage', () => {
     expect(text.startsWith('[CHAT:dm-ella]')).toBe(true);
     expect(text).toContain('[SLACK-THREAD:D0DM:1790.1]');
     expect(text).toContain('CREWLY_SESSION_NAME=ella bash config/skills/agent/core/reply/execute.sh');
-    expect(text).toContain('10 分钟');
+    expect(text).toContain('10 minutes');
     expect(text).toContain('update the EFT sheet');
     // The reply router reads the header back as the turn origin.
     expect(parseInboundOrigin(text)).toEqual(expect.objectContaining({ conversationId: 'dm-ella' }));
@@ -261,6 +265,11 @@ describe('nudgeAgent', () => {
     const d = deps({ sessionExists: () => false, activate: async () => ({ success: false, error: 'team is dormant' }) });
     await expect(nudgeAgent(d, entry(), 10)).resolves.toEqual({ outcome: 'blocked', reason: 'asleep', detail: 'team is dormant' });
     expect(d.sent).toHaveLength(0);
+  });
+
+  it('a reminder the agent\'s queue took (busy, or input held) is reported as queued, not delivered (2026-10-08 Ella)', async () => {
+    const d = deps({ sendToAgent: async () => ({ success: true, queued: true }) });
+    await expect(nudgeAgent(d, entry(), 10)).resolves.toEqual({ outcome: 'sent', queued: true });
   });
 
   it('delivery failure → blocked (error)', async () => {

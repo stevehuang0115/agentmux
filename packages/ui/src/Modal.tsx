@@ -65,7 +65,7 @@ export const Modal: React.FC<ModalProps> = ({
 
   return (
     <div 
-      className="modal-overlay fixed inset-0 bg-background-dark/80 backdrop-blur-sm flex items-center justify-center p-4 z-50"
+      className="modal-overlay fixed inset-0 bg-bg/70 backdrop-blur-sm flex items-center justify-center p-4 z-50"
       onClick={handleBackdropClick}
       role="dialog"
       aria-modal="true"
@@ -74,7 +74,7 @@ export const Modal: React.FC<ModalProps> = ({
     >
       <div 
         ref={modalRef}
-        className={`modal-content modal-${size} bg-surface-dark border border-border-dark rounded-3xl shadow-lg w-full max-h-[90vh] overflow-y-auto ${MODAL_SIZE_CLASSES[size]} ${className}`}
+        className={`modal-content modal-${size} cw-glass-strong rounded-3xl shadow-lg w-full max-h-[90vh] overflow-y-auto ${MODAL_SIZE_CLASSES[size]} ${className}`}
         onClick={e => e.stopPropagation()}
       >
         {(title || closable) && (

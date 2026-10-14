@@ -1,14 +1,14 @@
 ---
 id: CREW-3
 title: REQ-X-A — Orc generates duplicate replies for `waiting_confirmation` rows on restart
-status: backlog
+status: cancelled
 priority: P2
 assignee: null
 team: null
 labels: [ milestone:backlog ]
 ownerReview: false
 createdAt: 2026-05-03T18:32:55.740Z
-updatedAt: 2026-09-28T16:49:52.979Z
+updatedAt: 2026-10-12T17:45:00.169Z
 workItemId: null
 requestId: null
 source: v1-migration
@@ -68,3 +68,4 @@ REQ-X investigation (commit `bc5d24ed`) proved that `active-work-briefing.servic
 ## Log
 
 - 2026-09-28T16:49:52.979Z · crewly-migration · created (backlog)
+- 2026-10-12T17:45:00.169Z · crewly-orc · backlog → cancelled — superseded: restarts on 10/12 produced no duplicate replies; the session handoff note now marks old/answered threads as context only and says not to message anyone.

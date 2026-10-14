@@ -28,6 +28,7 @@ class FakeSlack implements DecisionSlackApi {
   connected = true;
   failTokens = new Set<string>();
   failAll = false;
+  failUpdates = false;
   private n = 0;
   isConnected(): boolean {
     return this.connected;
@@ -40,6 +41,7 @@ class FakeSlack implements DecisionSlackApi {
     return `100.${String(this.n).padStart(4, '0')}`;
   }
   async updateMessage(channelId: string, ts: string, text: string, blocks?: SlackBlock[], botToken?: string): Promise<void> {
+    if (this.failUpdates) throw Object.assign(new Error('An API error occurred: ratelimited'), { data: { error: 'ratelimited' } });
     this.updates.push({ channelId, ts, text, blocks, botToken });
   }
 }
@@ -130,6 +132,35 @@ describe('listSince (Settings › Security)', () => {
     expect((await h.service.listSince(since)).map((d) => d.id).sort()).toEqual([old.id, fresh.id].sort());
     await h.service.cancelWhere((d) => d.id === old.id);
     expect((await h.service.listSince(since)).map((d) => d.id)).toEqual([fresh.id]);
+  });
+});
+
+describe('team move (crewly#1189)', () => {
+  it('withdraws and reopens decisions without touching their Slack cards', async () => {
+    const h = await harness();
+    const d = await h.service.ask('crewly-orc', ticketAsk);
+    const updatesBefore = h.slack.updates.length;
+    expect(await h.service.setMovedStatus([d.id, 'D-missing'])).toBe(1);
+    expect((await h.service.get(d.id))!.status).toBe('cancelled');
+    expect(await h.service.setMovedStatus([d.id])).toBe(0); // already withdrawn
+    expect(h.slack.updates).toHaveLength(updatesBefore);
+    expect(await h.service.setMovedStatus([d.id], true)).toBe(1);
+    expect(await h.service.get(d.id)).toMatchObject({ status: 'open' });
+    // A decision the owner settled themselves is not reopened.
+    await h.service.cancelWhere((x) => x.id === d.id, 'owner skipped');
+    expect(await h.service.setMovedStatus([d.id], true)).toBe(0);
+  });
+
+  it('takes over decisions from a moved team with new ids, keeps the card, skips known cards', async () => {
+    const h = await harness();
+    const incoming = [
+      { id: 'D-9', question: 'Ship?', options: [], defaultKey: 'wait', deadline: 'x', requestedBy: 's', asker: 's', status: 'open', card: { slackChannelId: 'C1', messageTs: '1.1', postedBy: 'crewly' }, createdAt: 'x', updatedAt: 'x' },
+    ];
+    expect(await h.service.importMoved(incoming)).toBe(1);
+    expect(await h.service.importMoved(incoming)).toBe(0);
+    const [only] = await h.service.list('all');
+    expect(only!.id).not.toBe('D-9');
+    expect(only).toMatchObject({ question: 'Ship?', card: { slackChannelId: 'C1', messageTs: '1.1' } });
   });
 });
 
@@ -227,6 +258,43 @@ describe('ask + routing', () => {
     expect(after?.postError).toBeUndefined();
   });
 
+  it("an asker with no team channel (the orc) asks in the owner's DM with its own bot (D-665/D-733)", async () => {
+    const plain = { question: 'Start Sam and re-run the release?', options: ['Yes, start Sam', 'Not now'], default: 'Not now' };
+    const h = await harness({ ownerDmOf: async (identity) => (identity.botToken === 'xoxb-orc' ? 'D-OWNER-DM' : null) });
+    const d = await h.service.ask('crewly-orc', plain);
+    expect(d.postError).toBeUndefined();
+    expect(d.card).toMatchObject({ slackChannelId: 'D-OWNER-DM' });
+    expect(h.slack.sent[0]).toMatchObject({ channelId: 'D-OWNER-DM', botToken: 'xoxb-orc' });
+
+    const none = await harness();
+    const waiting = await none.service.ask('crewly-orc', plain);
+    expect(waiting.card).toBeUndefined();
+    expect(waiting.postError).toMatch(/no team channel, no owner DM/);
+  });
+
+  it('a card first posted after its earlier posts failed gets its original window again, not an instant default', async () => {
+    const h = await harness();
+    h.slack.failAll = true;
+    const d = await h.service.ask('dev-ann', { ...ticketAsk, deadline: new Date(h.clock.now.getTime() + 2 * HOUR) });
+    expect(d.postError).toBeDefined();
+    h.slack.failAll = false;
+    h.clock.now = new Date(h.clock.now.getTime() + 5 * HOUR);
+    expect(await h.service.tick()).toEqual([d.id]);
+    const posted = await h.service.get(d.id);
+    expect(posted?.card).toBeDefined();
+    expect(Date.parse(posted!.deadline)).toBe(h.clock.now.getTime() + 2 * HOUR);
+    h.clock.now = new Date(h.clock.now.getTime() + DECISION_CONSTANTS.TICK_MS);
+    await h.service.tick();
+    expect((await h.service.get(d.id))?.status).toBe('open');
+  });
+
+  it('a card posted on its first try keeps its deadline', async () => {
+    const h = await harness();
+    const deadline = new Date(h.clock.now.getTime() + 2 * HOUR);
+    const d = await h.service.ask('dev-ann', { ...ticketAsk, deadline });
+    expect(d.deadline).toBe(deadline.toISOString());
+  });
+
   it('Slack not connected → postError', async () => {
     const h = await harness();
     h.slack.connected = false;
@@ -314,6 +382,10 @@ describe('button clicks', () => {
     const again = await h.service.handleInteraction(click(d, 'b'));
     expect(again).toMatchObject({ handled: false, reason: 'already resolved' });
     expect(h.delivered).toHaveLength(1);
+    // …and the card is redrawn as settled (Cloud may have shown "⏳ received" on it).
+    expect(h.slack.updates).toHaveLength(2);
+    expect(h.slack.updates[1]).toMatchObject({ channelId: 'C-TEAM', ts: d.card!.messageTs });
+    expect(hasActions(h.slack.updates[1].blocks)).toBe(false);
   });
 
   it('keeps needs-owner while another decision on the ticket is open', async () => {
@@ -328,6 +400,9 @@ describe('button clicks', () => {
     const h = await harness();
     const d = await h.service.ask('dev-ann', ticketAsk);
     expect(await h.service.handleInteraction(click(d, 'a', { user: { id: 'U-STRANGER' } }))).toMatchObject({ handled: false, reason: 'not the owner' });
+    // The rejected click redraws the still-open card (buttons back).
+    expect(h.slack.updates).toHaveLength(1);
+    expect(hasActions(h.slack.updates[0].blocks)).toBe(true);
     expect((await h.service.handleInteraction(click(d, 'a', {}, { d: d.id, o: 'a', i: 'inst-2' }))).reason).toMatch(/instance inst-2/);
     expect(await h.service.handleInteraction(click(d, 'a', { container: { channel_id: 'C-TEAM', message_ts: '999.9' } }))).toMatchObject({ handled: false, reason: 'click is not on the stored card' });
     expect(await h.service.handleInteraction({ actions: [{ action_id: 'content_approval_approve', value: 'x' }] })).toMatchObject({ handled: false });
@@ -474,9 +549,19 @@ describe('thread answers: voice notes, files, DM threads (specs/2026-10-02-decis
     ...extra,
   });
 
-  it('a voice message with no text answers the NEWEST open card "in thread"; the other stays open and its asker hears about the file in the same note', async () => {
+  it('D-51 / D-52: the same question asked again in the thread while its card is open reuses that card', async () => {
     const h = await harness();
     const d51 = await h.service.askPrebuilt({ ...d52, question: '上次说的在 CE 团队下加一个 Codex agent，你看这样安排行不行？', requestRef: { requestId: 'r', itemId: 'q-1' }, deadline: new Date(h.clock.now.getTime() + 26 * HOUR) });
+    const posted = h.slack.sent.length;
+    const again = await h.service.askPrebuilt({ ...d52, requestRef: { requestId: 'r', itemId: 'q-2' }, deadline: new Date(h.clock.now.getTime() + 26 * HOUR) });
+    expect(again.id).toBe(d51.id);
+    expect(again.reused).toBe(true);
+    expect(h.slack.sent).toHaveLength(posted);
+    expect((await h.service.list('all')).map((d) => d.id)).toEqual([d51.id]);
+  });
+  it('a voice message with no text answers the NEWEST open card "in thread"; the other stays open and its asker hears about the file in the same note', async () => {
+    const h = await harness();
+    const d51 = await h.service.askPrebuilt({ ...d52, question: '周报要不要改成每周一早上发？', requestRef: { requestId: 'r', itemId: 'q-1' }, deadline: new Date(h.clock.now.getTime() + 26 * HOUR) });
     const d = await h.service.askPrebuilt({ ...d52, requestRef: { requestId: 'r', itemId: 'q-2' }, deadline: new Date(h.clock.now.getTime() + 26 * HOUR) });
     const out = await h.service.handleThreadReply(voice());
     expect(out).toMatchObject({ handled: true, reason: 'resolved' });
@@ -573,10 +658,11 @@ describe('file replies in a thread with several cards (PR #957 review)', () => {
   afterEach(() => DecisionService.registerKindHandler('reply_question', null));
 
   const place = { slackChannelId: 'C-PRO', threadTs: '1790000000.000100' };
+  const QUESTIONS = ['Ship the pricing page today?', 'Should Vera redo the logo?', 'Keep the appendix in chapter 3?', 'Move the weekly report to Monday?', 'Invite Connie to the pilot?'];
   const card = (n: number, extra: Record<string, unknown> = {}) => ({
     kind: 'reply_question' as const,
     asker: n % 2 ? 'dev-ann' : 'tl-sam',
-    question: `Question number ${n} for the owner?`,
+    question: QUESTIONS[n - 1],
     options: [
       { key: 'a', label: 'Yes' },
       { key: 'b', label: 'No' },
@@ -645,7 +731,7 @@ describe('file replies in a thread with several cards (PR #957 review)', () => {
     expect(await h.service.get(d.id)).toMatchObject({ status: 'resolved', answeredVia: 'thread' });
   });
 
-  it('three wait cards in one thread get ONE reminder that lists them, and all are marked', async () => {
+  it('auto-extracted question cards never post "Still waiting on you" (2026-10-08)', async () => {
     const h = await harness();
     const cards: OwnerDecision[] = [];
     for (let n = 1; n <= 3; n++) cards.push(await h.service.askPrebuilt({ ...card(n), deadline: new Date(2026, 9, 2, 12, 0) }));
@@ -653,10 +739,34 @@ describe('file replies in a thread with several cards (PR #957 review)', () => {
     await h.service.tick();
     const sentBefore = h.slack.sent.length;
     h.clock.now = new Date(h.clock.now.getTime() + DECISION_CONSTANTS.WAIT_REMINDER_DELAY_MS);
+    expect(await h.service.tick()).toEqual([]);
+    h.clock.now = new Date(h.clock.now.getTime() + 12 * HOUR);
+    expect(await h.service.tick()).toEqual([]);
+    expect(h.slack.sent).toHaveLength(sentBefore);
+    expect(h.slack.sent.some((m) => /Still waiting on you/.test(m.text ?? ''))).toBe(false);
+    for (const c of cards) expect((await h.service.get(c.id))?.status).toBe('open');
+    // …but a day after the deadline notice they expire quietly instead of staying open for days (#1243).
+    h.clock.now = new Date(h.clock.now.getTime() + 13 * HOUR);
+    await h.service.tick();
+    expect(h.slack.sent).toHaveLength(sentBefore);
+    for (const c of cards) expect((await h.service.get(c.id))?.status).toBe('expired');
+  });
+
+  it('three explicit wait cards in one thread get ONE reminder that lists them, and all are marked', async () => {
+    const h = await harness({ workDestination: async () => ({ slackChannelId: 'C-PRO', threadTs: place.threadTs }) });
+    const cards: OwnerDecision[] = [];
+    for (let n = 1; n <= 3; n++) {
+      cards.push(await h.service.ask('dev-ann', { question: ['Ship the pricing page today?', 'Should Vera redo the logo?', 'Keep the appendix in chapter 3?'][n - 1], options: ['Yes', 'No'], default: 'wait', deadline: new Date(2026, 9, 2, 12, 0).toISOString() }));
+    }
+    expect(new Set(cards.map((c) => c.id)).size).toBe(3);
+    h.clock.now = new Date(2026, 9, 2, 12, 1);
+    await h.service.tick();
+    const sentBefore = h.slack.sent.length;
+    h.clock.now = new Date(h.clock.now.getTime() + DECISION_CONSTANTS.WAIT_REMINDER_DELAY_MS);
     expect((await h.service.tick()).sort()).toEqual(cards.map((c) => c.id).sort());
     expect(h.slack.sent).toHaveLength(sentBefore + 1);
     expect(h.slack.sent.at(-1)!.text).toBe(
-      '<@U-OWNER> Still waiting on you for 3 questions in this thread:\n• Question number 1 for the owner?\n• Question number 2 for the owner?\n• Question number 3 for the owner?\nTap an answer on each card above, or reply here.',
+      '<@U-OWNER> Still waiting on you for 3 questions in this thread:\n• Ship the pricing page today?\n• Should Vera redo the logo?\n• Keep the appendix in chapter 3?\nTap an answer on each card above, or reply here.',
     );
     for (const c of cards) expect((await h.service.get(c.id))?.waitReminderAt).toBeDefined();
     expect(await h.service.tick()).toEqual([]);
@@ -678,7 +788,7 @@ describe('first boot after the upgrade (PR #957 review)', () => {
     expect(await after.tick()).toEqual([]);
     expect(before.slack.sent).toHaveLength(sentBefore);
     expect((await after.get(d.id))?.waitReminderAt).toBeDefined();
-    clock.now = new Date(2026, 9, 3, 14, 0);
+    clock.now = new Date(2026, 9, 3, 13, 0);
     expect(await after.tick()).toEqual([]);
     expect(before.slack.sent).toHaveLength(sentBefore);
   });
@@ -768,6 +878,23 @@ describe('dashboard', () => {
     await expect(h.service.chooseFromDashboard(d.id, 'a')).rejects.toMatchObject({ status: 409 });
     await expect(h.service.chooseFromDashboard('D-404', 'a')).rejects.toMatchObject({ status: 404 });
   });
+
+  it('Drive mode: an option chosen by voice is recorded as voice', async () => {
+    const h = await harness();
+    const d = await h.service.ask('dev-ann', ticketAsk);
+    expect(await h.service.chooseFromDashboard(d.id, 'a', 'voice')).toMatchObject({ status: 'resolved', chosenKey: 'a', answeredVia: 'voice' });
+  });
+
+  it('Drive mode: words name an option, or become the answer itself', async () => {
+    const h = await harness();
+    const named = await h.service.ask('dev-ann', ticketAsk);
+    expect(await h.service.answerInWords(named.id, 'Hold')).toMatchObject({ status: 'resolved', chosenKey: 'b', answeredVia: 'voice' });
+    const free = await h.service.ask('dev-ann', { ...ticketAsk, question: 'Which partner first?' });
+    const settled = await h.service.answerInWords(free.id, 'start with the Berlin one, then the rest');
+    expect(settled).toMatchObject({ status: 'resolved', answerText: 'start with the Berlin one, then the rest', answeredVia: 'voice' });
+    expect(h.delivered.some((m) => m.text.includes('start with the Berlin one'))).toBe(true);
+    await expect(h.service.answerInWords(free.id, 'again')).rejects.toMatchObject({ status: 409 });
+  });
 });
 
 describe('deadlines', () => {
@@ -824,9 +951,41 @@ describe('deadlines', () => {
     });
     expect((await h.service.get(d.id))?.waitReminderAt).toBeDefined();
     // Only once.
-    h.clock.now = new Date(2026, 9, 4, 12, 0);
+    h.clock.now = new Date(2026, 9, 3, 11, 0);
     expect(await h.service.tick()).toEqual([]);
     expect(h.slack.sent).toHaveLength(sentBefore + 1);
+  });
+
+  it('wait default: unanswered 24h after the reminder, the card expires and the asker is told (#1243)', async () => {
+    const h = await harness();
+    const d = await h.service.ask('dev-ann', { ...ticketAsk, default: 'wait' });
+    h.clock.now = new Date(2026, 9, 2, 12, 1);
+    await h.service.tick();
+    h.clock.now = new Date(h.clock.now.getTime() + DECISION_CONSTANTS.WAIT_REMINDER_DELAY_MS);
+    await h.service.tick();
+    const remindedAt = h.clock.now.getTime();
+    h.clock.now = new Date(remindedAt + DECISION_CONSTANTS.WAIT_EXPIRE_AFTER_REMINDER_MS - 60_000);
+    expect(await h.service.tick()).toEqual([]);
+    expect((await h.service.get(d.id))?.status).toBe('open');
+    const deliveredBefore = h.delivered.length;
+    h.clock.now = new Date(remindedAt + DECISION_CONSTANTS.WAIT_EXPIRE_AFTER_REMINDER_MS);
+    expect(await h.service.tick()).toEqual([d.id]);
+    expect((await h.service.get(d.id))?.status).toBe('expired');
+    expect(h.delivered.length).toBeGreaterThan(deliveredBefore);
+    expect(h.delivered.at(-1)?.text).toContain('timed out');
+  });
+
+  it('wait default: a card the owner replied to in the thread is never expired (#1243)', async () => {
+    const h = await harness();
+    const d = await h.service.ask('dev-ann', { ...ticketAsk, default: 'wait' });
+    h.clock.now = new Date(2026, 9, 2, 12, 1);
+    await h.service.tick();
+    h.clock.now = new Date(h.clock.now.getTime() + DECISION_CONSTANTS.WAIT_REMINDER_DELAY_MS);
+    await h.service.tick();
+    await h.deps.store.update(d.id, () => ({ ownerRepliedAt: h.clock.now.toISOString() }));
+    h.clock.now = new Date(h.clock.now.getTime() + 3 * DECISION_CONSTANTS.WAIT_EXPIRE_AFTER_REMINDER_MS);
+    expect(await h.service.tick()).toEqual([]);
+    expect((await h.service.get(d.id))?.status).toBe('open');
   });
 
   it('wait default: no reminder when the owner already posted in the thread', async () => {
@@ -1266,6 +1425,211 @@ describe('stale card redraw (layout revisions)', () => {
     h.slack.connected = false;
     expect(await h.service.refreshStaleCards(0)).toBe(0);
     expect(h.slack.updates).toHaveLength(0);
+  });
+});
+
+
+describe('owner threads (specs/2026-10-08-owner-thread-sentinel.md)', () => {
+  const browserAsk = {
+    kind: 'browser_action' as const,
+    asker: 'dev-ann',
+    question: 'Ann wants to click "Download" on mail.google.com — it looks like a download and can\'t be undone.',
+    options: [
+      { key: 'a', label: 'Let it' },
+      { key: 'b', label: 'No' },
+    ],
+    defaultKey: 'b',
+    yesKey: 'a',
+    sensitive: 'browser_action' as const,
+  };
+
+  it('a browser card goes into the owner thread the asker owes when its work has no thread (D-476 went top-level)', async () => {
+    const h = await harness({
+      workDestination: async () => ({ slackChannelId: 'C-TEAM' }),
+      ownerThreadOf: async (s) => (s === 'dev-ann' ? { slackChannelId: 'C-TEAM', threadTs: '77.7' } : null),
+    });
+    const d = await h.service.askPrebuilt({ ...browserAsk, deadline: new Date(h.clock.now.getTime() + 2 * HOUR) });
+    expect(d.card).toMatchObject({ slackChannelId: 'C-TEAM', threadTs: '77.7' });
+  });
+
+  it('the owner thread wins over the work thread; no owner thread → the work thread; neither → top-level', async () => {
+    const withThread = await harness({
+      workDestination: async () => ({ slackChannelId: 'C-WORK', threadTs: '50.5' }),
+      ownerThreadOf: async () => ({ slackChannelId: 'C-TEAM', threadTs: '77.7' }),
+    });
+    const a = await withThread.service.askPrebuilt({ ...browserAsk, deadline: new Date(withThread.clock.now.getTime() + 2 * HOUR) });
+    expect(a.card).toMatchObject({ slackChannelId: 'C-TEAM', threadTs: '77.7' });
+    const work = await harness({ workDestination: async () => ({ slackChannelId: 'C-WORK', threadTs: '50.5' }), ownerThreadOf: async () => null });
+    const w = await work.service.askPrebuilt({ ...browserAsk, deadline: new Date(work.clock.now.getTime() + 2 * HOUR) });
+    expect(w.card).toMatchObject({ slackChannelId: 'C-WORK', threadTs: '50.5' });
+    const none = await harness({ workDestination: async () => ({ slackChannelId: 'C-TEAM' }), ownerThreadOf: async () => null });
+    const b = await none.service.askPrebuilt({ ...browserAsk, deadline: new Date(none.clock.now.getTime() + 2 * HOUR) });
+    expect(b.card?.slackChannelId).toBe('C-TEAM');
+    expect(b.card?.threadTs).toBeUndefined();
+  });
+
+  it('tells the sentinel when a card goes up and when it settles (expiry, withdrawal)', async () => {
+    const events: Array<[string, string, string]> = [];
+    const h = await harness({ onCardEvent: (d, what) => void events.push([d.id, what, d.status]) });
+    const d = await h.service.askPrebuilt({ ...browserAsk, deadline: new Date(h.clock.now.getTime() + 2 * HOUR) });
+    await h.service.expire(d.id);
+    const e = await h.service.askPrebuilt({ ...browserAsk, question: 'Ann wants to press Enter on mail.google.com.', deadline: new Date(h.clock.now.getTime() + 2 * HOUR) });
+    await h.service.cancelWhere((x) => x.id === e.id, 'hold dropped');
+    expect(events).toEqual([
+      [d.id, 'posted', 'open'],
+      [d.id, 'settled', 'expired'],
+      [e.id, 'posted', 'open'],
+      [e.id, 'settled', 'cancelled'],
+    ]);
+  });
+
+  it('a throwing listener never breaks the card', async () => {
+    const h = await harness({ onCardEvent: () => { throw new Error('boom'); } });
+    const d = await h.service.askPrebuilt({ ...browserAsk, deadline: new Date(h.clock.now.getTime() + 2 * HOUR) });
+    expect(d.card).toBeDefined();
+  });
+});
+
+describe('card hygiene (2026-10-08: duplicates, decided topics, closed cards)', () => {
+  const handled: OwnerDecision[] = [];
+  beforeEach(() => {
+    handled.length = 0;
+    DecisionService.registerKindHandler('reply_question', {
+      onSettled: async (d, fallback) => {
+        handled.push(d);
+        return d.status === 'cancelled' ? null : (fallback ?? null);
+      },
+    });
+  });
+  afterEach(() => DecisionService.registerKindHandler('reply_question', null));
+
+  const place = { slackChannelId: 'C-PRO', threadTs: '1790000000.000100' };
+  const question = (q: string, extra: Partial<OwnerDecision> = {}) => ({
+    kind: 'reply_question' as const,
+    asker: 'dev-ann',
+    question: q,
+    options: [
+      { key: 'a', label: 'Yes' },
+      { key: 'b', label: 'No' },
+    ],
+    defaultKey: 'wait',
+    yesKey: 'a',
+    place,
+    ...extra,
+  });
+  /** A card already in the store (e.g. posted before this release), with its Slack card. */
+  async function legacy(h: Harness, q: string, n: number, extra: Partial<OwnerDecision> = {}): Promise<OwnerDecision> {
+    return h.deps.store.create({
+      ...question(q),
+      deadline: new Date(h.clock.now.getTime() + 26 * HOUR).toISOString(),
+      requestedBy: 'dev-ann',
+      status: 'open',
+      card: { slackChannelId: place.slackChannelId, messageTs: `150.000${n}`, threadTs: place.threadTs, postedBy: 'dev-ann', ownBot: true },
+      ...extra,
+    });
+  }
+
+  it('an explicit ask that repeats an open card on the same ticket reuses it — no second post', async () => {
+    const h = await harness();
+    const first = await h.service.ask('dev-ann', ticketAsk);
+    const posted = h.slack.sent.length;
+    const again = await h.service.ask('dev-ann', { ...ticketAsk, question: 'Send the draft to the three partners?' });
+    expect(again).toMatchObject({ id: first.id, reused: true });
+    expect(h.slack.sent).toHaveLength(posted);
+    expect(await h.service.list('open')).toHaveLength(1);
+    expect((await h.service.get(first.id))?.reused).toBeUndefined();
+  });
+
+  it('a similar question in a different thread / ticket is a new card', async () => {
+    const h = await harness();
+    const a = await h.service.askPrebuilt({ ...question('Ship the pricing page today?'), deadline: new Date(h.clock.now.getTime() + 26 * HOUR) });
+    const b = await h.service.askPrebuilt({
+      ...question('Ship the pricing page today?', { place: { slackChannelId: 'C-PRO', threadTs: '1790000999.000100' } }),
+      deadline: new Date(h.clock.now.getTime() + 26 * HOUR),
+    });
+    expect(b.id).not.toBe(a.id);
+    expect(b.reused).toBeUndefined();
+  });
+
+  it('answering one card closes the same question still open from the same asker in that thread — the card loses its buttons', async () => {
+    const h = await harness();
+    const old = await legacy(h, '每周日晚 8 点（美东）自动发周报，可以吗？', 1);
+    const fresh = await legacy(h, '自动发周报的时间定在每周日晚 8 点（美东），可以吗？', 2);
+    const other = await legacy(h, '封面要不要换成蓝色？', 3);
+    const out = await h.service.handleInteraction(click(fresh, 'a'));
+    expect(out).toMatchObject({ handled: true, reason: 'resolved' });
+    expect(await h.service.get(old.id)).toMatchObject({ status: 'cancelled', closedReason: `answered in ${fresh.id}` });
+    expect((await h.service.get(other.id))?.status).toBe('open');
+    const update = h.slack.updates.find((u) => u.ts === old.card!.messageTs)!;
+    expect(hasActions(update.blocks)).toBe(false);
+    expect(update.text).toContain(`✓ Closed — answered in ${fresh.id}`);
+    const note = h.delivered.find((x) => x.text.includes(`[DECISION ${fresh.id}]`))!.text;
+    expect(note).toContain(`Crewly closed your other open card on this (${old.id})`);
+  });
+
+  it("the owner's words in the thread close the asker's older question cards there (answered by your reply)", async () => {
+    const h = await harness();
+    const someoneElse = await legacy(h, '封面要不要换成蓝色？', 1, { asker: 'tl-sam', requestedBy: 'tl-sam' });
+    h.clock.now = new Date(h.clock.now.getTime() + 60 * 1000);
+    const older = await legacy(h, '第一版要不要包括采购入库？', 2);
+    h.clock.now = new Date(h.clock.now.getTime() + 60 * 1000);
+    const newest = await legacy(h, '材料包和课程是一对一吗？', 3);
+    const out = await h.service.handleThreadReply({ channelId: 'C-PRO', threadTs: place.threadTs, ts: '300.1', text: '一门课可以有多个材料包；采购入库先不做', userId: OWNER });
+    expect(out.decision).toMatchObject({ id: newest.id, status: 'resolved', answeredVia: 'reply' });
+    expect(await h.service.get(older.id)).toMatchObject({ status: 'cancelled', closedReason: `answered by your reply to ${newest.id}` });
+    expect((await h.service.get(someoneElse.id))?.status).toBe('open');
+  });
+
+  it('a sensitive card is never closed as a duplicate', async () => {
+    const h = await harness();
+    const sensitive = await legacy(h, 'Publish the launch post on the blog now?', 1, { sensitive: 'publish' });
+    const plain = await legacy(h, 'Publish the launch post on the blog today?', 2);
+    await h.service.handleInteraction(click(plain, 'a'));
+    expect((await h.service.get(sensitive.id))?.status).toBe('open');
+  });
+
+  it('a closed card Slack refused to update is redrawn on a later tick until it has no buttons', async () => {
+    const h = await harness();
+    const d = await h.service.ask('dev-ann', ticketAsk);
+    h.slack.failUpdates = true;
+    await h.service.cancelWhere((x) => x.id === d.id, 'posted by mistake');
+    expect(await h.service.get(d.id)).toMatchObject({ status: 'cancelled', cardSyncPending: true });
+    h.slack.failUpdates = false;
+    h.clock.now = new Date(h.clock.now.getTime() + 60 * 1000);
+    expect(await h.service.tick()).not.toContain(d.id);
+    h.clock.now = new Date(h.clock.now.getTime() + DECISION_CONSTANTS.CARD_SYNC_RETRY_MS);
+    expect(await h.service.tick()).toContain(d.id);
+    const last = h.slack.updates.at(-1)!;
+    expect(last.ts).toBe(d.card!.messageTs);
+    expect(hasActions(last.blocks)).toBe(false);
+    expect(last.text).toContain('✓ Closed — posted by mistake');
+    expect((await h.service.get(d.id))?.cardSyncPending).toBeUndefined();
+  });
+
+  it('an open card whose question closed meanwhile is withdrawn on the tick: card closed, nothing posted, nobody woken', async () => {
+    let reason: string | null = null;
+    const h = await harness({ trackedClosed: async () => reason });
+    const d = await h.service.askPrebuilt({ ...question('Ship the pricing page today?', { requestRef: { requestId: 'r1', itemId: 'q-1' } }), deadline: new Date(h.clock.now.getTime() + 26 * HOUR) });
+    await h.service.tick();
+    expect((await h.service.get(d.id))?.status).toBe('open');
+    reason = DECISION_CONSTANTS.CLOSED_REASONS.STALE;
+    const sent = h.slack.sent.length;
+    const delivered = h.delivered.length;
+    h.clock.now = new Date(h.clock.now.getTime() + 60 * 1000);
+    expect(await h.service.tick()).not.toContain(d.id);
+    h.clock.now = new Date(h.clock.now.getTime() + DECISION_CONSTANTS.MOOT_CHECK_MS);
+    expect(await h.service.tick()).toContain(d.id);
+    expect(await h.service.get(d.id)).toMatchObject({ status: 'cancelled', closedReason: 'no longer needed' });
+    expect(hasActions(h.slack.updates.at(-1)!.blocks)).toBe(false);
+    expect(h.slack.sent).toHaveLength(sent);
+    expect(h.delivered).toHaveLength(delivered);
+  });
+
+  it('a ticket ask goes into the owner thread the asker owes, not the old ticket thread', async () => {
+    const h = await harness({ ownerThreadOf: async (s) => (s === 'dev-ann' ? { slackChannelId: 'C-OWNER', threadTs: '88.8' } : null) });
+    await h.threads.set('/proj', 'APP-12', { slackChannelId: 'C-TEAM', threadTs: '10.1', teamId: 'team-a' });
+    const d = await h.service.ask('crewly-orc', ticketAsk);
+    expect(d.card).toMatchObject({ slackChannelId: 'C-OWNER', threadTs: '88.8' });
   });
 });
 

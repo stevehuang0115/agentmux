@@ -32,6 +32,10 @@ export interface DirectoryEntry {
   team: string | null;
   /** Device name of the Crewly instance running it; 'this machine' for local agents. */
   machine: string | null;
+  /** Cloud instance id of the machine running it (agents of this account); room-join requests target it. */
+  instanceId?: string | null;
+  /** True when Cloud names this agent its team's leader (Cloud directory `leader`, when sent). */
+  isLeader?: boolean;
   /** Where the entry came from. */
   source: 'this-machine' | 'this-account' | 'channel';
   /** True when the colleague is a member of the requested channel. */
@@ -49,6 +53,8 @@ export interface CloudDirectoryInstance {
     teamId: string;
     name: string;
     channelId: string | null;
+    /** Session of the team's leader, when Cloud sends it */
+    leader?: string | null;
     agents: Array<{ agentSession: string; displayName: string; botUserId: string | null; installed: boolean }>;
   }>;
 }
@@ -114,6 +120,8 @@ export class SlackDirectoryService {
             agentSession: a.agentSession,
             team: team.name,
             machine: local ? 'this machine' : inst.deviceName,
+            instanceId: inst.instanceId,
+            ...(team.leader && team.leader === a.agentSession ? { isLeader: true } : {}),
             source: local ? 'this-machine' : 'this-account',
             inChannel: !!channelId && team.channelId === channelId,
             kind: 'agent',

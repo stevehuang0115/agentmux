@@ -24,6 +24,7 @@ import { getChatHighlightsService } from '../../services/chat/chat-highlights.se
 import { ORCHESTRATOR_SESSION_NAME, ORC_STATUS_FORWARDING, OWNER_EVIDENCE_METADATA, SLACK_TYPING_CONSTANTS, SLACK_THREAD_KEY_CONSTANTS } from '../../constants.js';
 import { extractSlackThreadKeys, formatSlackThreadKey, parseSlackThreadKey } from '../../services/slack/slack-thread-key.js';
 import { readAgentSessionHeader } from '../../utils/agent-caller.utils.js';
+import { getBoardActivity } from '../../services/board/board-activity.tracker.js';
 import { isOwnerCaller, sendOwnerAuthRequired } from '../../middleware/caller-identity.middleware.js';
 import { OrcReplyRouteService } from '../../services/orc/orc-reply-route.service.js';
 import { OrcStatusRouterService } from '../../services/orc/orc-status-router.service.js';
@@ -48,6 +49,7 @@ import type {
 } from '../../types/chat.types.js';
 import { isValidChannelType } from '../../types/chat.types.js';
 import { stripTraceMarkers } from '../../services/trace/trace-markers.js';
+import { awaitSlackDelivery } from '../../services/slack/slack-outbound-delivery.js';
 
 // Module-level message queue service instance
 let messageQueueService: MessageQueueService | null = null;
@@ -553,6 +555,21 @@ async function recordChatV2AgentReply(
 }
 
 /**
+ * Wait for the Slack mirror of a reply that was just recorded, and return
+ * Slack's error when it refused the post. A reply the mirror never tried (not
+ * Slack-mapped, owner on another surface) or one still in flight returns null
+ * — only a post that was attempted and failed is an error, so non-Slack
+ * channels behave as before (CREW-89).
+ *
+ * @param messageId - The recorded chat message
+ * @returns Slack's error, or null
+ */
+async function slackDeliveryFailure(messageId: string): Promise<string | null> {
+  const delivery = await awaitSlackDelivery(messageId);
+  return delivery && !delivery.delivered ? delivery.error ?? 'Slack post failed' : null;
+}
+
+/**
  * Whether an `agent-response` body is a report-status line for the
  * orchestrator ([DONE], [WORKING], [IDLE], [STATUS REPORT], …) rather than
  * content a person is waiting for.
@@ -635,6 +652,10 @@ async function recordSlackRoomAgentReply(input: {
     // latest message that @'d this agent here recently. No evidence the
     // agent was asked in this room → not ours to post.
     let threadId: string | undefined;
+    // A Slack thread of this room the agent named whose root has no chat row
+    // (a decision card posted straight to Slack — CREW-335): still a real
+    // Slack thread, so the reply is filed by its key and mirrored into it.
+    let unrecordedThreadKey: string | undefined;
     const raw = input.rawThread?.trim();
     if (raw) {
       const named = chatV2.getMessageForBridge(raw);
@@ -642,9 +663,10 @@ async function recordSlackRoomAgentReply(input: {
       const key = parseSlackThreadKey(raw);
       if (!threadId && key && key.slackChannelId === mapping.slackChannelId) {
         threadId = chatV2.findSlackThreadRoot(input.channelId, key.threadTs)?.id;
+        if (!threadId) unrecordedThreadKey = formatSlackThreadKey(key.slackChannelId, key.threadTs);
       }
     }
-    if (!threadId) {
+    if (!threadId && !unrecordedThreadKey) {
       const asked = chatV2.findLatestUserMessageMentioning(
         input.channelId,
         agentSession,
@@ -652,17 +674,18 @@ async function recordSlackRoomAgentReply(input: {
       );
       if (asked) threadId = asked.threadId ?? asked.id;
     }
-    if (!threadId) return null;
+    if (!threadId && !unrecordedThreadKey) return null;
 
     const { message } = chatV2.recordTurn({
       channelId: input.channelId,
       senderType: 'agent',
       senderId: agentSession,
       content: input.content,
-      threadId,
+      ...(threadId ? { threadId } : {}),
       metadata: {
         ...(input.metadata ?? {}),
         source: 'reply-tool',
+        ...(unrecordedThreadKey ? { [SLACK_THREAD_KEY_CONSTANTS.METADATA_KEY]: unrecordedThreadKey } : {}),
         ...(input.interim ? { [SLACK_TYPING_CONSTANTS.INTERIM_METADATA_KEY]: true } : {}),
       },
     });
@@ -930,6 +953,9 @@ export async function agentResponse(
     }
 
     const chatService = getChatService();
+    // Owner board: the agent is answering in the chat
+    const boardSession = readAgentSessionHeader(req);
+    if (boardSession) getBoardActivity().recordMessage(boardSession, 'owner chat');
 
     // Resolve conversation: use provided ID or get/create the current one.
     //
@@ -1115,6 +1141,16 @@ export async function agentResponse(
         slackThreadKey,
       );
       if (recorded) {
+        const slackError = await slackDeliveryFailure(recorded);
+        if (slackError) {
+          logger.error('Agent reply recorded but Slack refused it', { messageId: recorded, conversationId: resolvedConversationId, error: slackError });
+          res.status(502).json({
+            success: false,
+            error: `Slack delivery failed: ${slackError}`,
+            data: { messageId: recorded, conversationId: resolvedConversationId, slackDelivered: false },
+          });
+          return;
+        }
         res.status(201).json({ success: true, data: { messageId: recorded, conversationId: resolvedConversationId } });
         return;
       }
@@ -1130,6 +1166,16 @@ export async function agentResponse(
         rawThread: typeof req.body?.slackThread === 'string' ? req.body.slackThread : undefined,
       });
       if (roomReply) {
+        const slackError = await slackDeliveryFailure(roomReply);
+        if (slackError) {
+          logger.error('Agent reply recorded but Slack refused it', { messageId: roomReply, conversationId: resolvedConversationId, error: slackError });
+          res.status(502).json({
+            success: false,
+            error: `Slack delivery failed: ${slackError}`,
+            data: { messageId: roomReply, conversationId: resolvedConversationId, slackDelivered: false },
+          });
+          return;
+        }
         res.status(201).json({ success: true, data: { messageId: roomReply, conversationId: resolvedConversationId } });
         return;
       }

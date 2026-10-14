@@ -1,7 +1,10 @@
 /**
  * Who asks the owner about a ticket (specs/2026-10-01-decision-cards.md §2), and
  * whether what a card tracks is already closed
- * (specs/2026-10-02-decision-card-thread-answers.md §3). Pure.
+ * (specs/2026-10-02-decision-card-thread-answers.md §3). Pure. An explicit
+ * ask-owner card (no `requestRef`) is never withdrawn because its ticket is
+ * `done`; only the asker, an owner answer in the thread, or a cancelled ticket
+ * closes it.
  *
  * The responsible agent asks, never the orchestrator: the ticket's assignee
  * when it is a member of one of the project's teams, else the lead of the
@@ -100,11 +103,13 @@ export function trackedClosedReason(d: Pick<OwnerDecision, 'requestRef' | 'ticke
     if (request.status === 'done') return R.TICKET_DONE;
     if (request.status === 'cancelled') return R.TICKET_CANCELLED;
     const item = request.openItems?.find((i) => i.id === d.requestRef?.itemId);
-    if (item && !ACTIVE_OPEN_ITEM_STATUSES.has(item.status as never)) return R.HANDLED_IN_THREAD;
+    if (item && !ACTIVE_OPEN_ITEM_STATUSES.has(item.status as never)) return item.status === 'expired' ? R.STALE : R.HANDLED_IN_THREAD;
   }
-  if (d.ticket && state.ticketStatus) {
-    if (state.ticketStatus === 'done') return R.TICKET_DONE;
-    if (state.ticketStatus === 'cancelled') return R.TICKET_CANCELLED;
-  }
+  // A ticket flipping to `done` withdraws nothing here: an explicit ask-owner
+  // card ("can we ship it?") is asked AFTER the work is done, and the owner
+  // has not seen it yet. Cards derived from the ticket's own open items are
+  // closed by the requestRef branch above. Only a cancelled ticket makes an
+  // explicit card moot.
+  if (d.ticket && state.ticketStatus === 'cancelled') return R.TICKET_CANCELLED;
   return null;
 }

@@ -7,7 +7,7 @@ import * as fsSync from 'fs';
 import { existsSync } from 'fs';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { getRestoreQueue } from './restore-queue.js';
-import { ResourceModeService } from './resource-mode.service.js';
+import { ResourceModeService, RESOURCE_MODE_CONSTANTS } from './resource-mode.service.js';
 import {
 	SessionCommandHelper,
 	createSessionCommandHelper,
@@ -15,6 +15,7 @@ import {
 	createSessionBackend,
 	getSessionStatePersistence,
 } from '../session/index.js';
+import { DEFAULT_TERMINAL_COLS, DEFAULT_TERMINAL_ROWS } from '../session/session-backend.interface.js';
 import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
 import { RuntimeServiceFactory } from './runtime-service.factory.js';
 import { CrewlyAgentExternalRuntimeService } from './crewly-agent/crewly-agent-external-runtime.service.js';
@@ -46,16 +47,19 @@ import {
 	ORC_CONVERSATION_CONSTANTS,
 	SLACK_THREAD_KEY_CONSTANTS,
 	OPEN_ITEMS_CONSTANTS,
+	WORKTREE_JANITOR_CONSTANTS,
 	SPEND_CAP_CONSTANTS,
 	RUNTIME_INPUT_SAFETY,
 	TUI_INPUT_GUARD,
+	INPUT_BLOCKED_RETRY_CONSTANTS,
 } from '../../constants.js';
 import { TuiInputGuardError, TuiPasteHoldError, screenShowsTurnInProgress, type TuiInputReading } from '../session/tui-input-guard.js';
 import { InputBlockedRetryService } from '../messaging/input-blocked-retry.service.js';
 import { extractSlackThreadKeys, formatSlackThreadKey } from '../slack/slack-thread-key.js';
 import { delay } from '../../utils/async.utils.js';
 import { buildRuntimeModelFlags } from '../../utils/runtime-model-flags.utils.js';
-import { effectiveMemberModelId } from '../../utils/member-default-model.utils.js';
+import { buildRemoteMcpLaunchFlags } from '../connector/remote-mcp-launch.service.js';
+import { effectiveMemberModelId, fallbackRuntimeModelId } from '../../utils/member-default-model.utils.js';
 import { canMemberDelegate, getLeadSubordinates } from '../../utils/team.utils.js';
 import { stripToolCallMarkup } from '../../utils/tool-call-markup.utils.js';
 import { appendIncompleteNotice } from '../../utils/incomplete-turn.utils.js';
@@ -108,10 +112,14 @@ import {
 	buildHandoverSummary,
 	claudeTranscriptPath,
 	conversationExists,
+	defaultClaudeHome,
+	writeRestartHandover,
 	lastTurnContextTokens,
 	orcFreshContextTokens,
 	memberFreshContextTokens,
 	planRuntimeSessionFlags,
+	readLastConversation,
+	rememberedConversationToResume,
 	waitForAntigravityConversationId,
 	waitForCodexSessionId,
 	type RuntimeSessionPlan,
@@ -133,6 +141,7 @@ import { noteTurnDelivery, traceTurnActivity, traceTurnError } from '../trace/tr
 import { stripTraceMarkers } from '../trace/trace-markers.js';
 import { mintAgentBadge } from '../core/owner-auth.service.js';
 import { credentialGuardEnvFor } from './credential-guard.service.js';
+import { isDriveWarm } from '../drive/drive-keep-warm.js';
 
 /**
  * Whether a file exists (readable).
@@ -984,7 +993,30 @@ export class AgentRegistrationService {
 				error: err instanceof Error ? err.message : String(err),
 			});
 		}
-		const storedSessionId = persistence?.getSessionId(sessionName) ?? null;
+		let storedSessionId = persistence?.getSessionId(sessionName) ?? null;
+		// A stop (idle eviction, manual) unregisters the session and drops its
+		// stored id; the last-conversations file still has it. Without this a
+		// stopped agent started a fresh conversation on every start.
+		let storedFromLastConversation = false;
+		if (!storedSessionId && autoResume && cwd && persistence) {
+			try {
+				const claimed = new Set<string>();
+				for (const [name, info] of persistence.getRegisteredSessionsMap()) {
+					if (name !== sessionName && info.claudeSessionId) claimed.add(info.claudeSessionId);
+				}
+				const remembered = rememberedConversationToResume({
+					file: persistence.lastConversationsFile(),
+					sessionName,
+					claimedByOthers: claimed,
+				});
+				if (remembered) {
+					storedSessionId = remembered.sessionId;
+					storedFromLastConversation = true;
+				}
+			} catch {
+				// no remembered conversation available: start fresh as before
+			}
+		}
 		// A Claude Code agent (orchestrator or member) whose conversation has
 		// grown too big starts over here, at a launch, rather than re-reading it
 		// on every turn.
@@ -1001,6 +1033,20 @@ export class AgentRegistrationService {
 				storedSessionId && cwd ? conversationExists({ runtimeType, sessionId: storedSessionId, cwd, ...this.claudeHomeOverride(sessionName, runtimeType) }) : undefined,
 		});
 		effectiveFlags.push(...plan.flags);
+		if (storedFromLastConversation && plan.resumeSessionId && persistence) {
+			try {
+				persistence.updateSessionId(sessionName, plan.resumeSessionId);
+			} catch {
+				// best effort: the launch still resumes
+			}
+		}
+		// A fresh Claude Code conversation that nobody chose (stop, or a stored
+		// conversation that is gone) still gets the previous one handed over.
+		// Deliberate fresh starts (oversized, per-task, runtime switch) wrote
+		// their own handover, which prepareRestartHandover sees and respects.
+		if (plan.presetSessionId && !freshInstead && autoResume && cwd && runtimeType === RUNTIME_TYPES.CLAUDE_CODE) {
+			this.prepareRestartHandover(sessionName, cwd, persistence);
+		}
 		if (plan.presetSessionId && persistence) {
 			try {
 				persistence.updateSessionId(sessionName, plan.presetSessionId);
@@ -1018,6 +1064,52 @@ export class AgentRegistrationService {
 			sessionId: plan.presetSessionId ?? plan.resumeSessionId ?? null,
 		});
 		return plan;
+	}
+
+	/**
+	 * For a fresh Claude Code conversation, hand over the most recent previous
+	 * one (written within the last week) the way a runtime switch does: a
+	 * handover file plus a note on the kickoff. Skipped when a handover for the
+	 * session is already newer than that conversation (the oversized, per-task
+	 * and runtime-switch paths write their own). Never throws.
+	 *
+	 * @param sessionName - Session being launched
+	 * @param cwd - Its working directory
+	 * @param persistence - Session persistence, when available
+	 */
+	private prepareRestartHandover(
+		sessionName: string,
+		cwd: string,
+		persistence: ReturnType<typeof getSessionStatePersistence> | null,
+	): void {
+		try {
+			const override = this.claudeHomeOverride(sessionName, RUNTIME_TYPES.CLAUDE_CODE);
+			const claudeHomes = [...(override.claudeHome ? [override.claudeHome] : []), defaultClaudeHome()];
+			const claimed = new Set<string>();
+			for (const [name, info] of persistence?.getRegisteredSessionsMap() ?? []) {
+				if (name !== sessionName && info.claudeSessionId) claimed.add(info.claudeSessionId);
+			}
+			const result = writeRestartHandover({
+				sessionName,
+				cwd,
+				claudeHomes,
+				handoverDir: path.join(getCrewlyHomePath(), ORC_CONVERSATION_CONSTANTS.HANDOVER_DIR),
+				...(persistence ? { lastConversationsFile: persistence.lastConversationsFile() } : {}),
+				claimedByOthers: claimed,
+			});
+			if (!result) return;
+			this.pendingRestartNotes.set(sessionName, result.note);
+			this.logger.info('Fresh conversation after a restart — handing over the previous one', {
+				sessionName,
+				previous: result.previousSessionId,
+				handover: result.file,
+			});
+		} catch (err) {
+			this.logger.warn('Could not prepare the restart handover (starting without it)', {
+				sessionName,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
 	}
 
 	/**
@@ -1311,6 +1403,8 @@ export class AgentRegistrationService {
 	private readonly resumedSessions = new Map<string, string>();
 	/** Handover file for an orchestrator that was just given a fresh conversation, by session. */
 	private readonly pendingHandovers = new Map<string, { path: string; tokens: number }>();
+	/** Kickoff note for a session that restarted into a fresh conversation, with the handover to read (given the way a runtime-switch note is). */
+	private readonly pendingRestartNotes = new Map<string, string>();
 
 	/**
 	 * Assemble the orchestrator prompt at the *other* profile and log the
@@ -1585,6 +1679,8 @@ export class AgentRegistrationService {
 		// Conversation id: preset for Claude Code (--session-id), resumed on
 		// restore (--resume / `codex resume`), discovered after launch for Codex.
 		const effectiveFlags = runtimeFlags ? [...runtimeFlags] : [];
+		// Remote MCP servers (Zoho MCP …) the role may use — files under CREWLY_HOME, never the project.
+		effectiveFlags.push(...(await buildRemoteMcpLaunchFlags({ sessionName, role, runtimeType })).flags);
 		const sessionPlan = await this.planSessionRecovery(sessionName, runtimeType, effectiveFlags, projectPath);
 
 		// Write prompt file before launching runtime so --agent (Claude Code) or --append-system-prompt-file works
@@ -2128,6 +2224,8 @@ export class AgentRegistrationService {
 
 		// Conversation id (see planSessionRecovery): preset, resumed, or discovered.
 		const effectiveFlags = runtimeFlags ? [...runtimeFlags] : [];
+		// Remote MCP servers (Zoho MCP …) the role may use — files under CREWLY_HOME, never the project.
+		effectiveFlags.push(...(await buildRemoteMcpLaunchFlags({ sessionName, role, runtimeType })).flags);
 		const sessionPlan = await this.planSessionRecovery(sessionName, runtimeType, effectiveFlags, projectPath);
 
 		// Write prompt file before launching runtime so --agent (Claude Code) or --append-system-prompt-file works
@@ -2619,7 +2717,9 @@ export class AgentRegistrationService {
 				+ 'Browser skills (e.g. remote-browser) are the preferred way to perform browser tasks. '
 				+ 'Bash skills in the Crewly skills directory are available for team communication and status reporting.'
 				// specs/2026-10-01-reply-open-items.md — promises and questions in replies are tracked.
-				+ '\n\n' + OPEN_ITEMS_CONSTANTS.PROMPT_LINE;
+				+ '\n\n' + OPEN_ITEMS_CONSTANTS.PROMPT_LINE
+				// crewly#1078 — a 40 GB runaway file in a scratch dir filled a disk.
+				+ '\n\n' + WORKTREE_JANITOR_CONSTANTS.PROMPT_HINT;
 
 			// Inject Team Lead addon for members that may delegate (a lead by the
 			// team-lead rule, or canDelegate=true) and have members to direct.
@@ -3349,6 +3449,31 @@ Loop until done, blocked, or explicitly reassigned:
 	}
 
 	/**
+	 * The directory an agent last ran in, for a restart that does not say
+	 * where. Claude Code keeps conversations per directory, so launching in
+	 * the backend's own cwd instead made the stored conversation "not exist"
+	 * and handed over another agent's transcript.
+	 *
+	 * @param sessionName - Agent session
+	 * @returns The registered session's cwd, else the last-conversations entry's, if it is a directory
+	 */
+	private lastKnownCwd(sessionName: string): string | undefined {
+		try {
+			const persistence = getSessionStatePersistence();
+			const candidates = [
+				persistence.getSessionMetadata(sessionName)?.cwd,
+				readLastConversation(persistence.lastConversationsFile(), sessionName)?.cwd,
+			];
+			for (const dir of candidates) {
+				if (dir && existsSync(dir)) return dir;
+			}
+		} catch {
+			// persistence unavailable
+		}
+		return undefined;
+	}
+
+	/**
 	 * Where a Claude Code session keeps its conversations when it runs on
 	 * another of the owner's Claude Code accounts (issue #942).
 	 *
@@ -3593,7 +3718,7 @@ Loop until done, blocked, or explicitly reassigned:
 			const restoreQueue = getRestoreQueue();
 			if (restoreQueue.isPending(config.sessionName)) {
 				const { SubAgentMessageQueue } = await import('../messaging/sub-agent-message-queue.service.js');
-				const owner = SubAgentMessageQueue.getInstance().peek(config.sessionName).some((m) => m.meta?.owner === true);
+				const owner = SubAgentMessageQueue.getInstance().peek(config.sessionName).some((m) => m.meta?.owner === true) || isDriveWarm(config.sessionName);
 				if (restoreQueue.wake(config.sessionName, owner)) {
 					return { success: true, sessionName: config.sessionName, message: 'Agent is queued for the staggered restore and starts shortly' };
 				}
@@ -3605,13 +3730,14 @@ Loop until done, blocked, or explicitly reassigned:
 		// agent stays down and its messages stay queued. The orchestrator is exempt.
 		if (config.sessionName !== ORCHESTRATOR_SESSION_NAME && !this.sessionCreationLocks.has(config.sessionName)) {
 			const { SubAgentMessageQueue } = await import('../messaging/sub-agent-message-queue.service.js');
-			const owner = SubAgentMessageQueue.getInstance().peek(config.sessionName).some((m) => m.meta?.owner === true);
+			// An owner message, or the owner talking to it in Drive mode (kept warm), goes ahead of ordinary starts.
+			const owner = SubAgentMessageQueue.getInstance().peek(config.sessionName).some((m) => m.meta?.owner === true) || isDriveWarm(config.sessionName);
 			if (!(await ResourceModeService.getInstance().requestStart(config.sessionName, owner))) {
 				return {
 					success: false,
 					sessionName: config.sessionName,
 					error: 'Machine is under resource pressure and the running-agent cap is reached; the start is deferred and messages stay queued',
-					errorCode: 'RESOURCE_PRESSURE_CAP',
+					errorCode: RESOURCE_MODE_CONSTANTS.START_DEFERRED_ERROR_CODE,
 				};
 			}
 		}
@@ -3685,7 +3811,7 @@ Loop until done, blocked, or explicitly reassigned:
 		// three different directories (server-install finding 4).
 		const projectPath = role === ORCHESTRATOR_ROLE
 			? await this.resolveOrchestratorCwd()
-			: (config.projectPath ?? process.cwd());
+			: (config.projectPath ?? this.lastKnownCwd(sessionName) ?? process.cwd());
 		const forceRecreate = config.forceRecreate ?? false;
 
 		// Get runtime type from config or default to claude-code
@@ -3789,9 +3915,13 @@ Loop until done, blocked, or explicitly reassigned:
 				fallbackCrewlyAgentModel = launch.crewlyAgentModel;
 				try {
 					const found = role === ORCHESTRATOR_ROLE ? null : await this.storageService.findMemberBySessionName(sessionName);
+					// The model is resolved for the runtime that really runs: a
+					// model meant for the configured runtime is not passed on, and
+					// reviewed members get that runtime's default (Sonnet on Claude).
+					const fallbackModel = found ? fallbackRuntimeModelId(found.team, found.member, runtimeType) : undefined;
 					runtimeFlags = [
 						...(await this.resolveRuntimeFlags(role, runtimeType, found?.member.skillOverrides, found?.member.excludedRoleSkills)),
-						...this.resolveModelFlags(sessionName, runtimeType, undefined, undefined),
+						...this.resolveModelFlags(sessionName, runtimeType, fallbackModel, undefined),
 					];
 				} catch {
 					runtimeFlags = [];
@@ -3867,6 +3997,20 @@ Loop until done, blocked, or explicitly reassigned:
 					};
 				}
 
+				// A healthy agent that is mid-turn cannot answer the runtime probe, and
+				// the Ctrl+C fallback below would interrupt it and exit Claude Code
+				// (2026-10-12 Sage/Atlas/Milo runtime_exited, #1260). Leave it alone.
+				if (await this.isAgentWorkingNow(sessionName, INPUT_BLOCKED_RETRY_CONSTANTS.RESTART_QUIET_MS)) {
+					this.logger.info('Session already exists and its agent is mid-turn — leaving it running, no recovery probe', {
+						sessionName,
+					});
+					return {
+						success: true,
+						sessionName,
+						message: 'Agent session is already running; recovery skipped',
+					};
+				}
+
 				this.logger.info(
 					'Session already exists, attempting intelligent recovery instead of killing',
 					{
@@ -3922,6 +4066,17 @@ Loop until done, blocked, or explicitly reassigned:
 								{ sessionName, runtimeType }
 							);
 							throw new Error(`${runtimeType} recovery requires full recreation`);
+						}
+
+						// Never interrupt a session that is registered: Ctrl+C at a live
+						// Claude Code prompt exits the runtime (#1260).
+						if (await this.checkAgentRegistration(sessionName, role)) {
+							this.logger.info('Session is already registered — not sending Ctrl+C', { sessionName });
+							return {
+								success: true,
+								sessionName,
+								message: 'Agent session is already running and registered; recovery skipped',
+							};
 						}
 
 						this.logger.info(
@@ -5124,6 +5279,68 @@ Loop until done, blocked, or explicitly reassigned:
 	}
 
 	/**
+	 * Make a session's runtime redraw its screen (SIGWINCH): one column and
+	 * row larger, then back to its current size. Uses the backend's resize
+	 * (PTY and screen buffer together) at the session's real size, never a
+	 * fixed 80x24 — that would shrink an agent's terminal back to the size
+	 * whose too-short window hid the input box (2026-10-08 Ella).
+	 *
+	 * @param sessionHelper - The session helper
+	 * @param sessionName - The session
+	 */
+	private async repaintBySigwinch(sessionHelper: SessionCommandHelper, sessionName: string): Promise<void> {
+		const backend = typeof (sessionHelper as { getBackend?: unknown }).getBackend === 'function' ? sessionHelper.getBackend() : null;
+		const dims = backend?.getTerminalDimensions?.(sessionName) ?? { cols: DEFAULT_TERMINAL_COLS, rows: DEFAULT_TERMINAL_ROWS };
+		const resize = (cols: number, rows: number): void => {
+			if (backend?.resizeSession) backend.resizeSession(sessionName, cols, rows);
+			else sessionHelper.getSession(sessionName)?.resize(cols, rows);
+		};
+		resize(dims.cols + 1, dims.rows + 1);
+		await delay(200);
+		resize(dims.cols, dims.rows);
+	}
+
+	/**
+	 * Whether an agent is mid-turn, for the unreadable-input restart: a live
+	 * turn on screen (busy bar / spinner that is repainting), or agent output
+	 * within `quietMs` (Crewly's own resize redraws are not counted, see
+	 * PtyActivityTrackerService.ignoreOutputFor). Unsure counts as mid-turn.
+	 *
+	 * @param sessionName - The agent
+	 * @param quietMs - How long without output counts as not mid-turn
+	 * @returns True when the agent may be working
+	 */
+	async isMidTurnForRecovery(sessionName: string, quietMs: number): Promise<boolean> {
+		try {
+			const helper = await this.getSessionHelper();
+			if (!helper.sessionExists(sessionName)) return true;
+		} catch {
+			return true;
+		}
+		return this.isAgentWorkingNow(sessionName, quietMs);
+	}
+
+	/**
+	 * Whether an existing session shows a live turn or agent output within
+	 * `quietMs`. Unsure (any error) counts as working.
+	 *
+	 * @param sessionName - The agent
+	 * @param quietMs - How long without output counts as not working
+	 * @returns True when the agent may be working
+	 */
+	private async isAgentWorkingNow(sessionName: string, quietMs: number): Promise<boolean> {
+		try {
+			const helper = await this.getSessionHelper();
+			if (await helper.isAgentBusy(sessionName)) return true;
+			const tracker = PtyActivityTrackerService.getInstance();
+			if (!tracker.hasActivity(sessionName)) return false;
+			return tracker.getIdleTimeMs(sessionName) < quietMs;
+		} catch {
+			return true;
+		}
+	}
+
+	/**
 	 * For a Claude Code agent that is mid-turn, queue the message instead of
 	 * pasting it into the running turn (see {@link holdForBusyAgent}). Other
 	 * runtimes, and an agent that is not busy, are left to the caller.
@@ -5361,11 +5578,8 @@ Loop until done, blocked, or explicitly reassigned:
 					// This matches the manual workaround where pressing a key in the
 					// frontend terminal "wakes up" the input handler.
 					try {
-						const session = sessionHelper.getSession(sessionName);
-						if (session) {
-							session.resize(81, 25);
-							await delay(200);
-							session.resize(80, 24);
+						if (sessionHelper.getSession(sessionName)) {
+							await this.repaintBySigwinch(sessionHelper, sessionName);
 							await delay(300);
 						}
 					} catch { /* non-fatal */ }
@@ -5386,11 +5600,8 @@ Loop until done, blocked, or explicitly reassigned:
 					if (attempt > 1) {
 						// PTY resize to trigger SIGWINCH → Ink re-render
 						try {
-							const session = sessionHelper.getSession(sessionName);
-							if (session) {
-								session.resize(81, 25);
-								await delay(200);
-								session.resize(80, 24);
+							if (sessionHelper.getSession(sessionName)) {
+								await this.repaintBySigwinch(sessionHelper, sessionName);
 								await delay(300);
 							}
 						} catch { /* non-fatal */ }
@@ -5422,12 +5633,8 @@ Loop until done, blocked, or explicitly reassigned:
 					// re-render the TUI and potentially restore focus state.
 					if (needsResize) {
 						try {
-							const session = sessionHelper.getSession(sessionName);
-							if (session) {
-								// Resize slightly then back to trigger SIGWINCH
-								session.resize(81, 25);
-								await delay(200);
-								session.resize(80, 24);
+							if (sessionHelper.getSession(sessionName)) {
+								await this.repaintBySigwinch(sessionHelper, sessionName);
 								await delay(500);
 								this.logger.debug('PTY resize sent to trigger TUI re-render', {
 									sessionName,
@@ -6898,7 +7105,11 @@ Loop until done, blocked, or explicitly reassigned:
 		// carry on" message instead — for every runtime. A genuinely fresh
 		// conversation (new session, or the orc handover case, which is never
 		// marked resumed) keeps the full kickoff.
-		const switchNote = takeRuntimeSwitchKickoffNote(sessionName);
+		const restartNote = this.pendingRestartNotes.get(sessionName);
+		if (restartNote) this.pendingRestartNotes.delete(sessionName);
+		const switchNote = [takeRuntimeSwitchKickoffNote(sessionName), handover || resumedRole ? null : restartNote]
+			.filter(Boolean)
+			.join(' ') || null;
 		const baseMessage = resumedRole
 			? this.resumedKickoff(sessionName, resumedRole, isClaudeCode ? undefined : promptFilePath)
 			: isClaudeCode

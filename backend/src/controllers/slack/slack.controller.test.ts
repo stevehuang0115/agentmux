@@ -15,6 +15,11 @@ const mockChatV2RecordTurn = jest.fn().mockReturnValue({
 // The orchestrator bridge imports pdf-parse, whose pdfjs build needs DOM
 // globals (DOMMatrix) that some Node versions lack at load time. Nothing
 // here parses a PDF.
+jest.mock('../../services/file-handoff/file-handoff.wiring.js', () => ({
+  getFileHandoffService: jest.fn(),
+  projectDirForAgent: jest.fn(),
+  roomHasRemoteColleague: jest.fn(),
+}));
 jest.mock('pdf-parse', () => ({ PDFParse: jest.fn() }));
 
 // `POST /disconnect` deletes the saved Slack credentials and `/connect`
@@ -33,6 +38,8 @@ jest.mock('../../services/chat-v2/chat-v2.singleton.js', () => ({
   getChatV2Service: jest.fn(() => ({
     ensureChannelForLegacyConversation: mockChatV2EnsureChannel,
     recordTurn: mockChatV2RecordTurn,
+    getChannelForBridge: jest.fn((id: string) => (id === 'room-brief' ? { id } : null)),
+    findSlackThreadRoot: jest.fn(() => null),
   })),
 }));
 
@@ -167,6 +174,8 @@ import * as path from 'path';
 import request from 'supertest';
 import express, { Application, Request, Response, NextFunction } from 'express';
 import slackController from './slack.controller.js';
+import { setOwnerThreadSentinel } from '../../services/messaging/owner-thread-sentinel.service.js';
+import { setSlackFileFetchService, SlackFileGetError, type SlackFileFetchService } from '../../services/slack/slack-file-fetch.service.js';
 import { getSlackService, resetSlackService } from '../../services/slack/slack.service.js';
 import {
   getSlackOrchestratorBridge,
@@ -1410,6 +1419,53 @@ describe('Slack Controller', () => {
       expect(mockAgentPost.current.post).not.toHaveBeenCalled();
     });
 
+    describe('--file guard', () => {
+      let dir: string;
+      let outside: string;
+      let post: jest.Mock;
+      beforeEach(async () => {
+        const { FileHandoffService } = jest.requireActual('../../services/file-handoff/file-handoff.service.js');
+        dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'slack-post-proj-')));
+        outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'slack-post-out-')));
+        await fs.writeFile(path.join(dir, 'r.md'), 'draft');
+        await fs.writeFile(path.join(outside, 'cfg.json'), '{"a":1}');
+        await fs.symlink(path.join(outside, 'cfg.json'), path.join(dir, 'link.json'));
+        const wiring = jest.requireMock('../../services/file-handoff/file-handoff.wiring.js') as { getFileHandoffService: jest.Mock; projectDirForAgent: jest.Mock };
+        wiring.getFileHandoffService.mockReturnValue(new FileHandoffService({ api: () => null, crewlyHomes: () => [] }));
+        wiring.projectDirForAgent.mockResolvedValue(dir);
+        post = jest.fn().mockResolvedValue({ channelId: 'C1', messageTs: '1.1', kind: 'channel', postedAs: 'crewly', identity: 'Owen' });
+        mockAgentPost.current = { post };
+      });
+      const send = (files: string[]) => request(app).post('/api/slack/post').set('X-Agent-Session', 'owen').send({ target: '#room', text: 'x', files, projectPath: dir });
+
+      it('uploads a file inside the project (relative path)', async () => {
+        const res = await send(['r.md']);
+        expect(res.status).toBe(200);
+        expect(post).toHaveBeenCalledWith(expect.objectContaining({ files: [path.join(dir, 'r.md')] }));
+      });
+
+      it('refuses a path outside the project with file_outside_project, posting nothing', async () => {
+        const res = await send([path.join(outside, 'cfg.json')]);
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('file_outside_project');
+        expect(post).not.toHaveBeenCalled();
+      });
+
+      it('refuses a symlink inside the project that points outside', async () => {
+        const res = await send(['link.json']);
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('file_outside_project');
+        expect(post).not.toHaveBeenCalled();
+      });
+
+      it('404s a missing file before posting', async () => {
+        const res = await send(['nope.md']);
+        expect(res.status).toBe(404);
+        expect(res.body.code).toBe('file_not_found');
+        expect(post).not.toHaveBeenCalled();
+      });
+    });
+
     it('a --thread from another channel than --target goes where the resolver puts it, never top level here (2026-10-02)', async () => {
       const { SlackAgentPostError } = jest.requireMock('../../services/slack/slack-agent-post.service.js') as { SlackAgentPostError: new (c: string, m: string) => Error };
       mockAgentPost.current = { post: jest.fn().mockRejectedValue(new SlackAgentPostError('thread_mismatch', 'Thread C0CE:1.1 is in channel C0CE, not C0MKT')) };
@@ -1886,6 +1942,33 @@ describe('Slack Controller', () => {
       }));
     });
 
+    it('records the attach in chat history as an agent message that is not re-posted to Slack', async () => {
+      mockChatV2RecordTurn.mockClear();
+      mockChatV2RecordTurn.mockReturnValue({ message: { id: 'm1' }, deduped: false });
+      const attachFileForAgent = jest.fn(async () => ({ ok: true, slackChannelId: 'C0BRIEF', threadTs: '1.2', fileId: 'F123', asAgentBot: true }));
+      mockTeamChannels.current = { attachFileForAgent };
+      mockResolveSlackPlace.mockResolvedValue({ slackChannelId: 'C0BRIEF', threadTs: '1.2', conversationId: 'room-brief' });
+
+      const res = await request(app).post('/api/slack/attach').set('X-Agent-Session', 'atlas').send({ channelId: 'room-brief', filePath: tmpFile, comment: 'here you go' });
+
+      expect(res.status).toBe(200);
+      expect(mockChatV2RecordTurn).toHaveBeenCalledWith(expect.objectContaining({
+        channelId: 'room-brief',
+        senderType: 'agent',
+        senderId: 'atlas',
+        content: 'here you go',
+        metadata: expect.objectContaining({ slackAlreadyPosted: true, slackThreadTs: '1.2', files: [expect.objectContaining({ path: tmpFile, slackFileId: 'F123' })] }),
+      }));
+    });
+
+    it('a chat-history failure does not fail the attach', async () => {
+      mockChatV2RecordTurn.mockImplementationOnce(() => { throw new Error('db down'); });
+      mockTeamChannels.current = { attachFileForAgent: jest.fn(async () => ({ ok: true, slackChannelId: 'C0BRIEF', asAgentBot: true })) };
+      mockResolveSlackPlace.mockResolvedValue({ slackChannelId: 'C0BRIEF', conversationId: 'room-brief' });
+      const res = await request(app).post('/api/slack/attach').set('X-Agent-Session', 'atlas').send({ channelId: 'room-brief', filePath: tmpFile });
+      expect(res.status).toBe(200);
+    });
+
     it('a thread the agent named is a hint the resolver validates', async () => {
       const attachFileForAgent = jest.fn(async () => ({ ok: true, slackChannelId: 'C0BRIEF', asAgentBot: false }));
       mockTeamChannels.current = { attachFileForAgent };
@@ -1906,6 +1989,37 @@ describe('Slack Controller', () => {
       expect(res.status).toBe(409);
       expect(res.body.error).toMatch(/^File NOT sent/);
       expect(attachFileForAgent).not.toHaveBeenCalled();
+    });
+
+    it('a file in a thread counts as the agent\'s post there (the sentinel settles a promise it kept)', async () => {
+      const noteAgentPost = jest.fn();
+      setOwnerThreadSentinel({ noteAgentPost } as never);
+      try {
+        const attachFileForAgent = jest.fn(async () => ({ ok: true, slackChannelId: 'C0BRIEF', threadTs: '1790856242.596149', asAgentBot: true }));
+        mockTeamChannels.current = { attachFileForAgent };
+        mockResolveSlackPlace.mockResolvedValue({ slackChannelId: 'C0BRIEF', threadTs: '1790856242.596149', conversationId: 'room-brief' });
+
+        await request(app).post('/api/slack/attach').set('X-Agent-Session', 'atlas').send({ channelId: 'room-brief', filePath: tmpFile, comment: 'cover F2c' });
+
+        expect(noteAgentPost).toHaveBeenCalledTimes(1);
+        expect(noteAgentPost).toHaveBeenCalledWith(expect.objectContaining({ agent: 'atlas', slackChannelId: 'C0BRIEF', threadTs: '1790856242.596149', text: 'cover F2c' }));
+      } finally {
+        setOwnerThreadSentinel(null);
+      }
+    });
+
+    it('a failed upload is not a post', async () => {
+      const noteAgentPost = jest.fn();
+      setOwnerThreadSentinel({ noteAgentPost } as never);
+      try {
+        mockTeamChannels.current = { attachFileForAgent: jest.fn(async () => ({ ok: false, reason: 'boom' })) };
+        mockResolveSlackPlace.mockResolvedValue({ slackChannelId: 'C0BRIEF', threadTs: '1.2', conversationId: 'room-brief' });
+        const res = await request(app).post('/api/slack/attach').set('X-Agent-Session', 'atlas').send({ channelId: 'room-brief', filePath: tmpFile });
+        expect(res.status).toBe(502);
+        expect(noteAgentPost).not.toHaveBeenCalled();
+      } finally {
+        setOwnerThreadSentinel(null);
+      }
     });
 
     it('--ticket with no channel: the file goes to the ticket thread\'s conversation', async () => {
@@ -1960,6 +2074,47 @@ describe('Slack Controller', () => {
       const anonymous = await request(app).get('/api/slack/delivery-audit');
       expect(anonymous.status).toBe(401);
       expect(audit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /api/slack/files/fetch', () => {
+    let tmp: string;
+    beforeEach(async () => {
+      tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'slack-file-route-'));
+    });
+    afterEach(async () => {
+      setSlackFileFetchService(null);
+      await fs.rm(tmp, { recursive: true, force: true });
+    });
+
+    it('returns the saved path, metadata and a preview for a text file', async () => {
+      const saved = path.join(tmp, 'F0ABC12345-longform-en.md');
+      await fs.writeFile(saved, '# Longform\nline 2');
+      const get = jest.fn().mockResolvedValue({
+        meta: { id: 'F0ABC12345', name: 'longform-en.md', mimetype: 'text/markdown', size: 17, user: null, channels: [], permalink: null, isText: true, via: 'cloud:master' },
+        localPath: saved,
+      });
+      setSlackFileFetchService({ get } as unknown as SlackFileFetchService);
+      const res = await request(app).post('/api/slack/files/fetch').send({ fileRef: 'F0ABC12345' });
+      expect(res.status).toBe(200);
+      expect(res.body.data.path).toBe(saved);
+      expect(res.body.data.file.via).toBe('cloud:master');
+      expect(res.body.data.preview).toBe('# Longform\nline 2');
+      expect(get).toHaveBeenCalledWith('F0ABC12345', expect.objectContaining({}));
+    });
+
+    it('maps a refusal to its status and code', async () => {
+      setSlackFileFetchService({
+        get: jest.fn().mockRejectedValue(new SlackFileGetError('not_visible', 'No bot of your account can see that file')),
+      } as unknown as SlackFileFetchService);
+      const res = await request(app).post('/api/slack/files/fetch').send({ fileRef: 'F0ABC12345' });
+      expect(res.status).toBe(404);
+      expect(res.body).toMatchObject({ success: false, code: 'not_visible' });
+    });
+
+    it('400s without a fileRef', async () => {
+      const res = await request(app).post('/api/slack/files/fetch').send({});
+      expect(res.status).toBe(400);
     });
   });
 });

@@ -6,7 +6,7 @@
 
 // Jest globals are available automatically
 import { setTicketIntakeService, type TicketIntakeService } from '../v3/ticket-intake.service.js';
-import { SlackService, getSlackService, resetSlackService, resolveOutgoingText, hasOutgoingContent } from './slack.service.js';
+import { SlackService, getSlackService, resetSlackService, resolveOutgoingText, hasOutgoingContent, uploadedFileId } from './slack.service.js';
 import type { SlackConfig, SlackNotification } from '../../types/slack.types.js';
 import { EventEmitter } from 'events';
 
@@ -473,6 +473,13 @@ describe('SlackService', () => {
       expect(invite).toHaveBeenCalledWith({ channel: 'C1', users: 'U1,U2' });
     });
 
+    it('kickFromChannel removes one user, and says so when the client cannot', async () => {
+      const kick = jest.fn().mockResolvedValue({});
+      await withClient({ kick }).kickFromChannel('C1', 'UBOT');
+      expect(kick).toHaveBeenCalledWith({ channel: 'C1', user: 'UBOT' });
+      await expect(withClient({}).kickFromChannel('C1', 'UBOT')).rejects.toThrow('cannot remove channel members');
+    });
+
     it('helpers throw when the client has no conversations API', async () => {
       const service = new SlackService();
       (service as any).client = { chat: { postMessage: jest.fn() } };
@@ -791,6 +798,63 @@ describe('SlackService', () => {
         // And the token must not be smuggled through the arguments, where it
         // does nothing.
         expect(agentUploadV2.mock.calls[0][0].token).toBeUndefined();
+      });
+
+      describe('agent without its own bot (persona)', () => {
+        const persona = { username: 'Milo', iconEmoji: ':computer:' };
+        let timer: jest.SpyInstance;
+        beforeEach(() => {
+          timer = jest.spyOn(global, 'setTimeout').mockImplementation(((fn: () => void) => {
+            fn();
+            return 0 as unknown as NodeJS.Timeout;
+          }) as unknown as typeof setTimeout);
+        });
+        afterEach(() => timer.mockRestore());
+
+        it('uploads an image privately and posts it under the agent name in the thread', async () => {
+          mockUploadV2.mockResolvedValue({ ok: true, files: [{ ok: true, files: [{ id: 'F-img' }] }] });
+          const post = (service as any).client.chat.postMessage as jest.Mock;
+          post.mockResolvedValue({ ts: '1.2' });
+
+          const result = await service.uploadFile({
+            channelId: 'C123',
+            filePath: __filename,
+            filename: 'screen.png',
+            initialComment: 'Here it is',
+            threadTs: '111.222',
+            persona,
+          });
+
+          expect(result.fileId).toBe('F-img');
+          expect(mockUploadV2).toHaveBeenCalledTimes(1);
+          expect(mockUploadV2.mock.calls[0][0].channel_id).toBeUndefined();
+          const args = post.mock.calls[0][0];
+          expect(args).toEqual(expect.objectContaining({ channel: 'C123', thread_ts: '111.222', username: 'Milo', icon_emoji: ':computer:' }));
+          expect(args.blocks).toEqual([
+            { type: 'section', text: { type: 'mrkdwn', text: 'Here it is' } },
+            { type: 'image', slack_file: { id: 'F-img' }, alt_text: 'screen.png' },
+          ]);
+        });
+
+        it('falls back to the plain upload when the image post keeps failing', async () => {
+          mockUploadV2.mockResolvedValueOnce({ files: [{ id: 'F-private' }] }).mockResolvedValueOnce({ files: [{ id: 'F-plain' }] });
+          ((service as any).client.chat.postMessage as jest.Mock).mockRejectedValue(new Error('invalid_blocks'));
+
+          const result = await service.uploadFile({ channelId: 'C123', filePath: __filename, filename: 'a.jpg', persona });
+
+          expect(result.fileId).toBe('F-plain');
+          expect(mockUploadV2.mock.calls[1][0].channel_id).toBe('C123');
+        });
+
+        it('keeps the plain upload for files that are not images', async () => {
+          mockUploadV2.mockResolvedValue({ files: [{ id: 'F-pdf' }] });
+
+          const result = await service.uploadFile({ channelId: 'C123', filePath: __filename, filename: 'report.pdf', persona });
+
+          expect(result.fileId).toBe('F-pdf');
+          expect(mockUploadV2.mock.calls[0][0].channel_id).toBe('C123');
+          expect((service as any).client.chat.postMessage).not.toHaveBeenCalled();
+        });
       });
 
       it('uses the workspace client when no agent token is given', async () => {
@@ -1721,6 +1785,28 @@ describe('SlackService', () => {
       expect(service.getStatus().messagesSent).toBe(1);
     });
 
+    it('hands a Cloud room-join envelope to the handler and routes nothing', async () => {
+      const cloudService = new SlackService();
+      await cloudService.initialize({ ...cloudConfig, allowedUserIds: ['U123'] });
+      const handler = jest.fn().mockResolvedValue(undefined);
+      cloudService.roomJoinHandler = handler;
+      const emitted: unknown[] = [];
+      cloudService.on('message', (m) => emitted.push(m));
+      const roomJoin = { slackChannelId: 'C0ABC12345', slackChannelName: 'ce-growth', sessions: ['ce-owen'], requestedByInstanceId: 'inst-air' };
+      const result = cloudService.handleCloudEnvelope({
+        eventId: 'roomjoin-1',
+        slackTeamId: 'T1',
+        apiAppId: '',
+        source: 'master',
+        roomJoin,
+        event: { type: 'crewly_room_join', channel: 'C0ABC12345' } as never,
+        receivedAt: new Date().toISOString(),
+      });
+      expect(result).toBeNull();
+      expect(emitted).toHaveLength(0);
+      expect(handler).toHaveBeenCalledWith(roomJoin);
+    });
+
     it('the same Slack message event produces the same routing result via both transports', async () => {
       const { service: socketService, onMessage } = await bootSocket();
       const socketEmitted: any[] = [];
@@ -1863,6 +1949,27 @@ describe('SlackService', () => {
         event: { type: 'message', ts: '10.3', text: 'done', user: 'UIVY', channel: 'C42', channel_type: 'channel' },
         authorAgentSession: 'team-ivy', mentionedAgentSessions: ['team-ivy'],
       }))).toBeNull();
+    });
+
+    it('delivers an app-less agent\'s post (a master-app bot_message) that Cloud attributed to an agent', async () => {
+      // 2026-10-13: Dana (no Slack app) @'d Atlas; Slack delivers her post as
+      // subtype bot_message from the master bot, and the bot filters dropped it.
+      const service = new SlackService();
+      await service.initialize(cloudConfig);
+      service.isLocalAgent = (s) => s.startsWith('team-');
+      const post = (over: Record<string, unknown>, ts: string) => service.handleCloudEnvelope({
+        eventId: `e-${ts}`, slackTeamId: 'T1', apiAppId: 'A1', source: 'master' as const, receivedAt: '',
+        event: { type: 'message', subtype: 'bot_message', bot_id: 'BMASTER', ts, text: '@Atlas please review', channel: 'C42', channel_type: 'channel' },
+        ...over,
+      });
+      // Same machine: Dana @'d a local colleague.
+      expect(post({ authorAgentSession: 'team-dana', authorDisplayName: 'Dana', mentionedAgentSessions: ['team-atlas'] }, '20.1'))
+        .toMatchObject({ authorAgentSession: 'team-dana' });
+      // Another machine's agent.
+      expect(post({ authorAgentSession: 'air-lead', authorDisplayName: 'Lead', mentionedAgentSessions: ['team-atlas'] }, '20.2'))
+        .toMatchObject({ authorAgentSession: 'air-lead' });
+      // Not attributed by Cloud: still our own bot's post, dropped.
+      expect(post({}, '20.3')).toBeNull();
     });
 
     it('routes whichever copy of a channel message arrives first (agent app or master) and drops the rest', async () => {
@@ -2491,5 +2598,41 @@ describe('hasOutgoingContent', () => {
     expect(hasOutgoingContent({ text: 'hi' })).toBe(true);
     expect(hasOutgoingContent({ text: '', blocks: [{ type: 'divider' }] })).toBe(true);
     expect(hasOutgoingContent({ text: '', attachments: [{ color: '#f00' }] })).toBe(true);
+  });
+});
+
+describe('sharedMessageText (a message shared into another one)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { sharedMessageText } = require('./slack.service.js') as typeof import('./slack.service.js');
+
+  it('renders a shared message with its author, permalink and text', () => {
+    const out = sharedMessageText([
+      {
+        is_share: true,
+        author_name: 'Ella (Personal Assistant Team)',
+        from_url: 'https://x.slack.com/archives/D1/p1791379103320929',
+        text: 'EmbeddingGemma 2：谷歌开源的「搜索用」小模型',
+      },
+    ]);
+    expect(out).toContain('[Shared message from Ella (Personal Assistant Team) (https://x.slack.com/archives/D1/p1791379103320929)]');
+    expect(out).toContain('EmbeddingGemma 2');
+  });
+
+  it('ignores plain link previews and empty input', () => {
+    expect(sharedMessageText([{ title: 'Some page', title_link: 'https://example.com' }])).toBe('');
+    expect(sharedMessageText(undefined)).toBe('');
+  });
+});
+
+describe('uploadedFileId', () => {
+  it('reads the id from the files.uploadV2 shape (completion responses)', () => {
+    expect(uploadedFileId({ ok: true, files: [{ ok: true, files: [{ id: 'F1' }] }] })).toBe('F1');
+  });
+  it('accepts a flat files[0].id', () => {
+    expect(uploadedFileId({ files: [{ id: 'F2' }] })).toBe('F2');
+  });
+  it('returns undefined when there is no file', () => {
+    expect(uploadedFileId({ ok: true, files: [] })).toBeUndefined();
+    expect(uploadedFileId(undefined)).toBeUndefined();
   });
 });

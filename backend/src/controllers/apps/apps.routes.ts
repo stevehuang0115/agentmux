@@ -6,26 +6,55 @@
  * - GET    /                                       — apps of the caller (owner: all)
  * - POST   /thumbnails/refresh-all               — owner only: capture every app's portal thumbnail (202, background)
  * - POST   /:appId/thumbnail/refresh              — capture this app's portal thumbnail now
- * - POST   /:appId/transfer                        — `{ toSession }`: hand the app to another agent / team
+ * - DELETE /:appId                                — delete (unpublish) the app: owner, or an agent of the publishing team for a private app
+ * - POST   /:appId/transfer                        — `{ toSession }`: hand the app to another agent / team (owner or orchestrator only)
  * - POST   /:appId/rollback                        — `{ version }`
  * - GET    /:appId/versions                        — versions, newest first
  * - GET    /:appId/data/:collection                — `?limit&after`
  * - POST   /:appId/data/:collection                — add `{ data }`
  * - GET    /:appId/data/:collection/:docId         — one doc
+ * - GET    /:appId/data/:collection/:docId/field   — `?path=/pointer` full value of one field
  * - PUT    /:appId/data/:collection/:docId         — replace `{ data }`
  * - PATCH  /:appId/data/:collection/:docId         — merge `{ data, ifRev? }`
  * - DELETE /:appId/data/:collection/:docId         — delete
+ * - GET    /:appId/owner                           — who the app's comments go to (agent / team / channel)
+ * - PUT    /:appId/owner                           — `{ owner: 'channel:#name' | 'team:<name>' | 'agent:<name>' | 'default' }` (owner or an owner agent)
+ * - POST   /:appId/collaborators/agents            — `{ agent: 'Rex' | 'Rex@machine' }`: an owner agent adds an agent of any machine of the account
+ * - GET    /:appId/collaborators                   — who the owner let work in the app
+ * - POST   /:appId/collaborators/request           — `{ scope?: 'team'|'agent', reason? }`: ask the owner (a card); nothing is granted
+ * - POST   /:appId/collaborators                   — OWNER only: add `{ kind, team|session }`
+ * - DELETE /:appId/collaborators/:entryId          — OWNER only: remove (effective on the next call)
  * - POST   /:appId/share                           — fresh signed link, card to the owner DM (P3)
  * - GET    /:appId/links                           — open-links (never tokens)
  * - DELETE /:appId/links/:linkId                   — revoke one
  * - DELETE /:appId/links                           — revoke all
  * - POST   /:appId/visibility-request              — ask the owner to make it public
  * - DELETE /:appId/visibility-request              — withdraw the request
+ * - POST   /:appId/capability-request             — `{ capabilities: ['microphone'|'media_capture'], note? }`: ask the owner for device access
+ * - DELETE /:appId/capability-request             — withdraw it
  * - POST   /:appId/make-private                    — private again (instant)
+ * - POST   /:appId/files                           — upload a file (raw body, `X-File-Name`); answers its URL
+ * - GET    /:appId/files/:fileId                   — the bytes of a stored file (an owner upload); app-data --download
  * - GET    /:appId/comments                        — `?status=open|resolved|all` (crewly#1056)
  * - GET    /:appId/comments/:commentId             — one thread
  * - POST   /:appId/comments/:commentId/replies     — reply `{ text }`
  * - POST   /:appId/comments/:commentId/resolve     — resolve (`/reopen` reopens)
+ * - POST   /:appId/comments/:commentId/audio       — download its voice recordings here; answers local paths
+ * - POST   /handoffs                              — `{ fileName, sizeBytes, contentType?, note?, to? }`: reserve a large-file handoff; answers a presigned upload URL
+ * - POST   /handoffs/:handoffId/complete          — upload finished (Cloud checks the size)
+ * - GET    /handoffs/:handoffId                   — metadata + presigned download URL once ready (`GET /handoffs` lists)
+ * - POST   /upload-requests                      — `{ purpose, agentName?, maxFiles? }`: ask the owner for a (large) file; answers the upload link
+ * - GET    /upload-requests/:requestId            — status, limits and files (`DELETE` cancels the link)
+ * - POST   /shares                               — `{ fileName, sizeBytes, contentType?, note? }`: put a large file you made on a private link for the owner; answers the link and a presigned upload URL
+ * - POST   /shares/:shareId/complete              — upload finished (Cloud checks the size)
+ * - GET    /shares/:shareId                       — metadata (`GET /shares` lists; `DELETE /shares/:shareId` withdraws)
+ * - POST   /handoffs/:handoffId/ack               — received: Cloud deletes the file (`DELETE /handoffs/:handoffId` withdraws)
+ * - GET    /templates                              — `?q&tag&category&limit`: search Marketplace app templates
+ * - GET    /templates/mine                         — this account's own templates
+ * - POST   /templates/:templateId/use              — `{ name?, source? }`: a new app from a template (+ its files)
+ * - POST   /templates/:templateId/unlist           — take one of this account's templates off the Marketplace
+ * - POST   /:appId/template-request                — `{ description, … }`: ask the owner to publish the app as a template (card)
+ * - POST   /:appId/template-files                  — `{ source? }`: the template files of an app made from a template
  *
  * The publish body is skipped by the app-wide parsers (index.ts) and parsed
  * here, after the caller check, so an unauthenticated client cannot make the
@@ -35,17 +64,26 @@
  */
 
 import express, { Router, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
-import { ownerOrVerifiedAgent } from '../../middleware/caller-identity.middleware.js';
+import { ownerOrVerifiedAgent, rejectNonOwner } from '../../middleware/caller-identity.middleware.js';
 import { CREWLY_APPS_CONSTANTS } from '../../constants.js';
 import {
   publishApp,
   listApps,
   rollbackApp,
   transferApp,
+  deleteApp,
+  getAppOwner,
+  setAppOwner,
+  addAgentCollaborator,
+  requestCollaborator,
+  listCollaborators,
+  addCollaborator,
+  removeCollaborator,
   listVersions,
   listDocs,
   addDoc,
   getDoc,
+  getDocField,
   setDoc,
   updateDoc,
   deleteDoc,
@@ -56,13 +94,38 @@ import {
   requestPublic,
   cancelPublicRequest,
   makePrivate,
+  requestCapabilities,
+  cancelCapabilityRequest,
   listComments,
   getComment,
   replyComment,
   resolveComment,
   reopenComment,
+  downloadCommentAudio,
   refreshThumbnail,
   refreshAllThumbnails,
+  uploadFile,
+  downloadFile,
+  requestTemplate,
+  findTemplates,
+  myTemplates,
+  useTemplate,
+  unlistTemplate,
+  checkoutTemplateFiles,
+  createHandoff,
+  completeHandoff,
+  getHandoff,
+  listHandoffs,
+  ackHandoff,
+  cancelHandoff,
+  createUploadRequest,
+  getUploadRequest,
+  cancelUploadRequest,
+  createShare,
+  completeShare,
+  getShare,
+  listShares,
+  cancelShare,
 } from './apps.controller.js';
 
 const C = CREWLY_APPS_CONSTANTS;
@@ -116,6 +179,36 @@ export function rejectOversizedPublish(req: Request, res: Response, next: NextFu
 }
 
 /**
+ * Refuse an upload whose declared size is over the limit before reading it.
+ *
+ * @param req - Request
+ * @param res - Response
+ * @param next - Next
+ */
+export function rejectOversizedUpload(req: Request, res: Response, next: NextFunction): void {
+  const n = declaredLength(req);
+  if (n !== null && n > C.UPLOAD_BODY_MAX_BYTES) {
+    res.setHeader('Connection', 'close');
+    res.status(413).json({ success: false, error: 'too_large', message: `A file can be at most ${C.UPLOAD_BODY_LIMIT}.` });
+    return;
+  }
+  next();
+}
+
+/**
+ * Owner-only route guard: an agent gets 403 with `message`, a caller with no owner credential gets 401.
+ *
+ * @param message - What an agent is told
+ * @returns Middleware
+ */
+function ownerOnly(message: string): RequestHandler {
+  return (req, res, next) => {
+    if (rejectNonOwner(req, res, { success: false, error: 'owner_only', message })) return;
+    next();
+  };
+}
+
+/**
  * Creates the Crewly Apps router.
  *
  * @returns Express router
@@ -124,15 +217,50 @@ export function createAppsRouter(): Router {
   const router = Router();
   router.use(gateClosingLargeRejects(ownerOrVerifiedAgent('Crewly Apps')));
   router.post('/publish', rejectOversizedPublish, express.json({ limit: C.PUBLISH_BODY_LIMIT }), publishApp);
+  router.post('/:appId/files', rejectOversizedUpload, express.raw({ type: () => true, limit: C.UPLOAD_BODY_LIMIT }), uploadFile);
   router.get('/', listApps);
+  // Marketplace templates: registered before the /:appId routes.
+  router.get('/templates', findTemplates);
+  router.get('/templates/mine', myTemplates);
+  router.post('/templates/:templateId/use', useTemplate);
+  router.post('/templates/:templateId/unlist', unlistTemplate);
+  router.post('/:appId/template-request', requestTemplate);
+  router.post('/:appId/template-files', checkoutTemplateFiles);
+  // File handoff (large files between agents): registered before the /:appId routes.
+  router.post('/handoffs', createHandoff);
+  router.get('/handoffs', listHandoffs);
+  router.get('/handoffs/:handoffId', getHandoff);
+  router.post('/handoffs/:handoffId/complete', completeHandoff);
+  router.post('/handoffs/:handoffId/ack', ackHandoff);
+  router.delete('/handoffs/:handoffId', cancelHandoff);
+  // Owner upload link (request-file): registered before the /:appId routes too.
+  router.post('/upload-requests', createUploadRequest);
+  router.get('/upload-requests/:requestId', getUploadRequest);
+  router.delete('/upload-requests/:requestId', cancelUploadRequest);
+  // Shares (share-file): a large file for the owner, registered before the /:appId routes too.
+  router.post('/shares', createShare);
+  router.get('/shares', listShares);
+  router.get('/shares/:shareId', getShare);
+  router.post('/shares/:shareId/complete', completeShare);
+  router.delete('/shares/:shareId', cancelShare);
   router.post('/thumbnails/refresh-all', refreshAllThumbnails);
   router.post('/:appId/thumbnail/refresh', refreshThumbnail);
   router.post('/:appId/transfer', transferApp);
+  router.delete('/:appId', deleteApp);
+  router.get('/:appId/owner', getAppOwner);
+  router.put('/:appId/owner', setAppOwner);
+  router.post('/:appId/collaborators/agents', addAgentCollaborator);
+  router.get('/:appId/collaborators', listCollaborators);
+  router.post('/:appId/collaborators/request', requestCollaborator);
+  router.post('/:appId/collaborators', ownerOnly('Only the owner can add a collaborator. Agents can ask with POST /api/apps/:appId/collaborators/request.'), addCollaborator);
+  router.delete('/:appId/collaborators/:entryId', ownerOnly('Only the owner can remove a collaborator.'), removeCollaborator);
   router.post('/:appId/rollback', rollbackApp);
   router.get('/:appId/versions', listVersions);
+  router.get('/:appId/files/:fileId', downloadFile);
   router.get('/:appId/data/:collection', listDocs);
   router.post('/:appId/data/:collection', addDoc);
   router.get('/:appId/data/:collection/:docId', getDoc);
+  router.get('/:appId/data/:collection/:docId/field', getDocField);
   router.put('/:appId/data/:collection/:docId', setDoc);
   router.patch('/:appId/data/:collection/:docId', updateDoc);
   router.delete('/:appId/data/:collection/:docId', deleteDoc);
@@ -142,11 +270,14 @@ export function createAppsRouter(): Router {
   router.delete('/:appId/links', revokeLinks);
   router.post('/:appId/visibility-request', requestPublic);
   router.delete('/:appId/visibility-request', cancelPublicRequest);
+  router.post('/:appId/capability-request', requestCapabilities);
+  router.delete('/:appId/capability-request', cancelCapabilityRequest);
   router.post('/:appId/make-private', makePrivate);
   router.get('/:appId/comments', listComments);
   router.get('/:appId/comments/:commentId', getComment);
   router.post('/:appId/comments/:commentId/replies', replyComment);
   router.post('/:appId/comments/:commentId/resolve', resolveComment);
   router.post('/:appId/comments/:commentId/reopen', reopenComment);
+  router.post('/:appId/comments/:commentId/audio', downloadCommentAudio);
   return router;
 }

@@ -21,9 +21,17 @@ import { resetSlackService, getSlackService } from './slack.service.js';
 import { resetChatService } from '../chat/chat.service.js';
 import type { SlackIncomingMessage } from '../../types/slack.types.js';
 import { setSlackThreadContextService, type SlackThreadContextService } from './slack-thread-context.service.js';
+import { setSlackFileFetchService, SlackFileGetError, type SlackFileFetchService } from './slack-file-fetch.service.js';
+import { promises as nodeFs } from 'fs';
+import nodeOs from 'os';
+import nodePath from 'path';
+import { SLACK_FILE_FETCH_CONSTANTS } from '../../constants.js';
 
 // The direct-delivery fallback delivers in process (#1024).
 const mockDeliverForcedMessage = jest.fn().mockResolvedValue({ status: 'delivered', inProcess: false });
+jest.mock('../worktree/low-disk-guard.js', () => ({
+  readFreeBytes: jest.fn().mockResolvedValue(null),
+}));
 jest.mock('../messaging/forced-delivery.js', () => ({
   deliverForcedMessage: (...args: unknown[]) => mockDeliverForcedMessage(...args),
 }));
@@ -425,6 +433,78 @@ describe('SlackOrchestratorBridge', () => {
     });
   });
 
+  describe('linked Slack files (cross-machine hand-offs)', () => {
+    // Ella handed Rex (another machine, bot not in the channel) a file by
+    // link; he asked her to paste the text (2026-10-08). The link is now
+    // fetched like an attachment.
+    const LINK = 'https://acme.slack.com/files/U0ELLA1234/F0ABC12345/longform-en.md';
+    let dir: string;
+    let get: jest.Mock;
+
+    beforeEach(async () => {
+      dir = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), 'linked-files-'));
+      const saved = nodePath.join(dir, 'F0ABC12345-longform-en.md');
+      await nodeFs.writeFile(saved, '# Longform\nBody');
+      get = jest.fn().mockResolvedValue({
+        meta: { id: 'F0ABC12345', name: 'longform-en.md', mimetype: 'text/markdown', size: 16, user: 'U0ELLA1234', channels: [], permalink: LINK, isText: true, via: 'cloud:agent:team-ella' },
+        localPath: saved,
+      });
+      setSlackFileFetchService({ get } as unknown as SlackFileFetchService);
+    });
+    afterEach(async () => {
+      setSlackFileFetchService(null);
+      await nodeFs.rm(dir, { recursive: true, force: true });
+    });
+
+    const msg = (text: string, extra: Partial<SlackIncomingMessage> = {}): SlackIncomingMessage => ({
+      id: '1', type: 'message', text, userId: 'U0ELLA1234', channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1', ...extra,
+    });
+
+    it('fetches a linked file, capped, for the addressed agent and shows its content', async () => {
+      const bridge = new SlackOrchestratorBridge();
+      const message = msg(`Rex, please translate <${LINK}|longform-en.md>`, { agentSession: 'team-rex' });
+      await bridge.fetchLinkedFiles(message);
+      expect(get).toHaveBeenCalledWith(LINK, { requesterAgent: 'team-rex', maxBytes: SLACK_FILE_FETCH_CONSTANTS.MAX_LINKED_BYTES });
+      expect(message.linkedFiles?.[0]?.name).toBe('longform-en.md');
+      const enriched = (bridge as any).enrichTextWithFiles(message) as string;
+      expect(enriched).toContain('[Slack File (linked): ');
+      expect(enriched).toContain('# Longform\nBody');
+      // A linked file does not count as a delivered attachment.
+      expect(enriched).not.toContain('could not be read');
+    });
+
+    it('does not re-fetch a file that is already attached to the message', async () => {
+      const bridge = new SlackOrchestratorBridge();
+      const message = msg(`see ${LINK}`, { files: [{ id: 'F0ABC12345', name: 'longform-en.md', mimetype: 'text/markdown', size: 1 } as any] });
+      await bridge.fetchLinkedFiles(message);
+      expect(get).not.toHaveBeenCalled();
+    });
+
+    it('leaves message links alone (only file links are auto-fetched)', async () => {
+      const bridge = new SlackOrchestratorBridge();
+      await bridge.fetchLinkedFiles(msg('context: https://acme.slack.com/archives/C0MKTG1234/p1696771234567890'));
+      expect(get).not.toHaveBeenCalled();
+    });
+
+    it('caps the number of linked files fetched per message', async () => {
+      const bridge = new SlackOrchestratorBridge();
+      const links = ['F0AAAAAAA1', 'F0AAAAAAA2', 'F0AAAAAAA3', 'F0AAAAAAA4'].map((id) => `https://acme.slack.com/files/U0ELLA1234/${id}/x.md`);
+      await bridge.fetchLinkedFiles(msg(links.join(' ')));
+      expect(get).toHaveBeenCalledTimes(SLACK_FILE_FETCH_CONSTANTS.MAX_LINKED_PER_MESSAGE);
+    });
+
+    it('names a linked file it could not fetch and points at slack-file get', async () => {
+      get.mockRejectedValue(new SlackFileGetError('not_visible', 'No bot can see that file'));
+      const bridge = new SlackOrchestratorBridge();
+      const message = msg(`translate ${LINK}`);
+      await bridge.fetchLinkedFiles(message);
+      expect(message.linkedFiles).toBeUndefined();
+      const enriched = (bridge as any).enrichTextWithFiles(message) as string;
+      expect(enriched).toContain(`slack-file get ${LINK}`);
+      expect(enriched).toContain('No bot can see that file');
+    });
+  });
+
   describe('image handling', () => {
     it('should enrich text with image file references', () => {
       const bridge = new SlackOrchestratorBridge();
@@ -794,15 +874,11 @@ describe('SlackOrchestratorBridge', () => {
 
       // Should have no downloaded images
       expect(message.images).toBeUndefined();
-      // Should have sent a warning back to Slack
-      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-      expect(sendMessageSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channelId: 'C1',
-          threadTs: '1.000',
-          text: expect.stringContaining('could not be processed'),
-        })
-      );
+      // Told to the agent only: nothing is posted into the owner's thread
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      expect(message.fileFailures).toEqual([
+        expect.objectContaining({ name: 'huge.png', reason: expect.stringContaining('File too large:') }),
+      ]);
     });
 
     it('should not send warning for non-size/type failures', async () => {
@@ -854,7 +930,7 @@ describe('SlackOrchestratorBridge', () => {
       expect(message.attachments).toBeUndefined();
     });
 
-    it('should reject files exceeding max file size', async () => {
+    it('rejects files over the limit without posting into the thread, and tells the agent', async () => {
       const bridge = new SlackOrchestratorBridge();
       const slackService = (bridge as any).slackService;
       jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
@@ -869,19 +945,79 @@ describe('SlackOrchestratorBridge', () => {
         channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
         hasFiles: true,
       };
-      // 25MB exceeds the 20MB limit
-      const nonImageFiles = [{ id: 'F001', name: 'huge.zip', mimetype: 'application/zip', filetype: 'zip',
-        size: 25 * 1024 * 1024, url_private: 'x', url_private_download: 'x', permalink: 'x' }];
+      // Over the 1 GB default limit
+      const huge = 2 * 1024 * 1024 * 1024;
+      const nonImageFiles = [{ id: 'F001', name: 'huge.mov', mimetype: 'video/quicktime', filetype: 'mov',
+        size: huge, url_private: 'x', url_private_download: 'x', permalink: 'x' }];
 
       await downloadMessageFiles(message, nonImageFiles);
 
       expect(message.attachments).toBeUndefined();
-      // Should send a rejection warning
-      expect(sendMessageSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          text: expect.stringContaining('could not be downloaded'),
-        })
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      expect(message.fileFailures).toEqual([
+        expect.objectContaining({ name: 'huge.mov', reason: expect.stringContaining('File too large:') }),
+      ]);
+      message.files = nonImageFiles as any;
+      const text: string = (bridge as any).enrichTextWithFiles(message);
+      expect(text).toContain('huge.mov could not be downloaded');
+      expect(text).toContain('request-file');
+      // Named once, not again in the generic "could not be read" note
+      expect(text).not.toContain('could not be read');
+    });
+
+    it('accepts a 23 MB video (the old 20 MB limit no longer applies)', async () => {
+      const home = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), 'crewly-dl-test-'));
+      const homeSpy = jest.spyOn(nodeOs, "homedir").mockReturnValue(home);
+      const bridge = new SlackOrchestratorBridge();
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+      jest.spyOn(slackService, 'getFileInfo').mockResolvedValue({ url_private: 'x', url_private_download: 'x' });
+      const sendMessageSpy = jest.spyOn(slackService, 'sendMessage').mockResolvedValue('ok');
+      const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue(
+        new Response(new Uint8Array([1, 2, 3]), { status: 200 }),
       );
+      const downloadMessageFiles = (bridge as any).downloadMessageFiles.bind(bridge);
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: '', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        hasFiles: true,
+      };
+      const files = [{ id: 'F_MOV', name: 'IMG_5057.MOV', mimetype: 'video/quicktime', filetype: 'mov',
+        size: 23273672, url_private: 'https://x/a', url_private_download: 'https://x/a', permalink: 'x' }];
+      await downloadMessageFiles(message, files);
+      expect(message.fileFailures).toBeUndefined();
+      expect(message.attachments?.[0].name).toBe('IMG_5057.MOV');
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      fetchSpy.mockRestore();
+      homeSpy.mockRestore();
+      await nodeFs.rm(home, { recursive: true, force: true });
+    });
+
+    it('refuses a download that would leave the disk below the low-disk threshold', async () => {
+      const { readFreeBytes } = jest.requireMock('../worktree/low-disk-guard.js') as { readFreeBytes: jest.Mock };
+      readFreeBytes.mockResolvedValueOnce(15.5 * 1024 ** 3);
+      const home = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), 'crewly-dl-test-'));
+      const homeSpy = jest.spyOn(nodeOs, "homedir").mockReturnValue(home);
+      const bridge = new SlackOrchestratorBridge();
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+      jest.spyOn(slackService, 'getFileInfo').mockResolvedValue({ url_private: 'x', url_private_download: 'x' });
+      const sendMessageSpy = jest.spyOn(slackService, 'sendMessage').mockResolvedValue('ok');
+      const fetchSpy = jest.spyOn(global, 'fetch');
+      const downloadMessageFiles = (bridge as any).downloadMessageFiles.bind(bridge);
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: '', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        hasFiles: true,
+      };
+      await downloadMessageFiles(message, [{ id: 'F2', name: 'big.mov', mimetype: 'video/quicktime', filetype: 'mov',
+        size: 900 * 1024 ** 2, url_private: 'x', url_private_download: 'x', permalink: 'x' }]);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(message.fileFailures?.[0].reason).toContain('Not enough disk space:');
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      fetchSpy.mockRestore();
+      homeSpy.mockRestore();
+      await nodeFs.rm(home, { recursive: true, force: true });
     });
 
     it('should abort all downloads when files:read scope is missing', async () => {
@@ -1404,6 +1540,59 @@ describe('SlackOrchestratorBridge', () => {
 
       expect(routeInbound).toHaveBeenCalledTimes(1);
       expect(mockQueueService.enqueue).toHaveBeenCalled();
+    });
+
+    // 2026-10-13, #pro-crewly-marketing: another machine's agent @'d this
+    // machine's orchestrator in a thread of an ad-hoc room. The room service
+    // hands it back (routeInbound -> null); the whole bridge path after that
+    // (shared-room guard, auditor prefix, @name lookup on `<@U…>` text) must
+    // reach the orchestrator, set up to answer in the same thread.
+    it('delivers an agent-authored room @ of this orchestrator to it, tied to the same thread', async () => {
+      (isOrchestratorActive as jest.Mock).mockResolvedValue(true);
+      mockChatV2EnsureChannel.mockReturnValue({ id: 'conv-orc', agentSession: 'crewly-orc' });
+      mockChatV2RecordTurn.mockReturnValue({ message: { id: 'm-orc' }, deduped: false });
+      const routeInbound = jest.fn().mockResolvedValue(null);
+      const sharedRoomOwnedElsewhere = jest.fn().mockResolvedValue(true);
+      mockTeamChannels.current = { findBySlackChannelId: jest.fn(() => null), routeInbound, sharedRoomOwnedElsewhere };
+      const mockQueueService = {
+        enqueue: jest.fn((msg: any) => {
+          msg?.sourceMetadata?.slackResolve?.('');
+          return { id: 'q-1' };
+        }),
+      };
+      const bridge = new SlackOrchestratorBridge();
+      bridge.setMessageQueueService(mockQueueService as any);
+      const slackService = (bridge as any).slackService;
+      const sendMessage = jest.spyOn(slackService, 'sendMessage').mockResolvedValue(undefined);
+      jest.spyOn(slackService, 'addReaction').mockResolvedValue(undefined);
+      await bridge.initialize();
+
+      const handled = new Promise<any>((resolve) => bridge.on('message_handled', resolve));
+      slackService.emit('message', {
+        text: '<@UORCBOT> Steve approved a new team on your machine (air). Please create and start it.',
+        channelId: 'C0C2WMFB9EF',
+        userId: 'UELLABOT',
+        ts: '1700000500.000200',
+        threadTs: '1700000400.000100',
+        authorAgentSession: 'crewly-marketing-ella-e6a6b8ea',
+        authorDisplayName: 'Ella',
+        mentionedAgentSessions: ['crewly-orc'],
+        room: { members: [{ agentSession: 'crewly-marketing-ella-e6a6b8ea', displayName: 'Ella', instanceId: 'mac', deviceName: 'mac', awake: true }] },
+      });
+      await handled;
+
+      expect(routeInbound).toHaveBeenCalledTimes(1);
+      // Mentioned agents bypass the "another machine owns this room" guard.
+      expect(sharedRoomOwnedElsewhere).not.toHaveBeenCalled();
+      expect(mockQueueService.enqueue).toHaveBeenCalledTimes(1);
+      const queued = mockQueueService.enqueue.mock.calls[0][0] as any;
+      expect(queued.content).toContain('Steve approved a new team');
+      expect(queued.sourceMetadata.channelId).toBe('C0C2WMFB9EF');
+      expect(queued.sourceMetadata.threadTs).toBe('1700000400.000100');
+      // Whatever the bridge posts back goes to that thread.
+      for (const call of sendMessage.mock.calls) {
+        expect((call[0] as any).threadTs).toBe('1700000400.000100');
+      }
     });
 
     it('does not hand the orchestrator a shared-room message another machine owns (2026-10-03)', async () => {

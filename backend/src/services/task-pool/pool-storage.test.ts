@@ -262,6 +262,18 @@ describe('PoolStorage', () => {
     });
   });
 
+  describe('removeClaims (bulk)', () => {
+    it('removes the given claims in place and reports the count', async () => {
+      await storage.addClaim(sampleClaim('wi-1'));
+      await storage.addClaim(sampleClaim('wi-2'));
+      await storage.addClaim(sampleClaim('wi-3'));
+      const claims = await storage.getClaims();
+      const ids = new Set([claims[0].id, claims[2].id, 'unknown']);
+      expect(await storage.removeClaims(ids)).toBe(2);
+      expect(claims.map((c) => c.workItemId)).toEqual(['wi-2']);
+    });
+  });
+
   describe('getDataDir', () => {
     it('is the directory the pool file lives in', () => {
       expect(storage.getDataDir()).toBe(tempDir);
@@ -351,6 +363,29 @@ describe('PoolStorage', () => {
       await storage.load();
       // flush without changes should not throw
       await storage.flush();
+    });
+
+    // crewly#1108: the dirty flag was cleared after the write, swallowing a
+    // change made while the write ran.
+    it('a change made while a flush is writing is flushed afterwards', async () => {
+      const first = sampleWorkItem();
+      await storage.addWorkItem(first);
+      const flushing = storage.flush();
+      const second = { ...sampleWorkItem(), id: 'wi-second' };
+      await storage.addWorkItem(second); // lands while the write is in flight
+      await flushing;
+      await storage.flush();
+
+      const reread = new PoolStorage({ dataDir: tempDir });
+      expect((await reread.getWorkItems()).map((w) => w.id).sort()).toEqual([first.id, 'wi-second'].sort());
+      await reread.destroy();
+    });
+
+    it('writes compact JSON', async () => {
+      await storage.addWorkItem(sampleWorkItem());
+      await storage.flush();
+      const text = await fs.readFile(path.join(tempDir, 'pool.json'), 'utf-8');
+      expect(text).not.toContain('\n');
     });
   });
 

@@ -15,7 +15,7 @@ import type { Request, Response } from 'express';
 import { LoggerService } from '../../services/core/logger.service.js';
 import { callerAgentSession } from '../../middleware/caller-identity.middleware.js';
 import { AppsCloudError } from '../../services/apps/apps-cloud.client.js';
-import { getAppsParts } from '../../services/apps/apps.wiring.js';
+import { getAppCommentAudio, getAppsParts } from '../../services/apps/apps.wiring.js';
 import type { AppsCaller } from '../../services/apps/apps.service.js';
 import { CREWLY_APPS_CONSTANTS } from '../../constants.js';
 import { redactOpenLinkTokens } from '../../services/apps/app-open-link.js';
@@ -48,7 +48,9 @@ export function sendAppsError(res: Response, err: unknown): void {
         : err.code === 'not_found'
           ? 'No such app, document or version for this account.'
           : undefined;
-    res.status(err.status).json({ success: false, error: err.code, message: redactOpenLinkTokens(err.message), ...(hint ? { hint } : {}) });
+    // A template scan's findings (masked excerpts, never full values) go back so the agent can fix them.
+    const findings = err.code === CREWLY_APPS_CONSTANTS.ERROR_CODES.UNSAFE_CONTENT && Array.isArray(err.details?.['findings']) ? { findings: err.details['findings'] } : {};
+    res.status(err.status).json({ success: false, error: err.code, message: redactOpenLinkTokens(err.message), ...(hint ? { hint } : {}), ...findings });
     return;
   }
   const message = redactOpenLinkTokens(err instanceof Error ? err.message : String(err));
@@ -125,8 +127,26 @@ export const requestPublic = handle(async (req, caller) => {
 /** DELETE /api/apps/:appId/visibility-request */
 export const cancelPublicRequest = handle((req, caller) => getAppsParts().service.cancelPublicRequest(req.params.appId, caller));
 
+/** POST /api/apps/:appId/capability-request `{ capabilities, note? }` — ask the owner for microphone / camera access */
+export const requestCapabilities = handle(async (req, caller) => {
+  const b = body(req);
+  const result = await getAppsParts().service.requestCapabilities(req.params.appId, { capabilities: b.capabilities, note: b.note }, caller);
+  logger.info('App capabilities requested', { appId: result.appId, agent: caller.agentSession ?? 'owner' });
+  return result;
+});
+
+/** DELETE /api/apps/:appId/capability-request */
+export const cancelCapabilityRequest = handle((req, caller) => getAppsParts().service.cancelCapabilityRequest(req.params.appId, caller));
+
 /** POST /api/apps/:appId/make-private */
 export const makePrivate = handle((req, caller) => getAppsParts().service.makePrivate(req.params.appId, caller));
+
+/** DELETE /api/apps/:appId — delete (unpublish) an app: the owner, or an agent whose team published it and it is private */
+export const deleteApp = handle(async (req, caller) => {
+  const result = await getAppsParts().service.deleteApp(req.params.appId, caller);
+  logger.info('App deleted', { appId: result.appId, by: caller.agentSession ?? 'owner' });
+  return result;
+});
 
 /** POST /api/apps/:appId/transfer `{ toSession }` — hand the app to another agent / team */
 export const transferApp = handle(async (req, caller) => {
@@ -134,6 +154,22 @@ export const transferApp = handle(async (req, caller) => {
   logger.info('App transferred', { appId: result.appId, from: result.previous ?? 'none', to: result.publisher, by: caller.agentSession ?? 'owner', changed: result.changed, notified: result.notified });
   return result;
 });
+
+/** GET /api/apps/:appId/owner — who the app's comments go to (an agent, a team or a channel) */
+export const getAppOwner = handle((req, caller) => getAppsParts().service.getOwner(req.params.appId, caller));
+
+/**
+ * PUT /api/apps/:appId/owner `{ owner: 'agent:<name>' | 'team:<name>' | 'channel:#<name>' | 'default' }` —
+ * the owner, or one of the app's owner agents (Cloud refuses other agents)
+ */
+export const setAppOwner = handle(async (req, caller) => {
+  const result = await getAppsParts().service.setOwner(req.params.appId, body(req), caller);
+  logger.info('App owner changed', { appId: result.appId, to: result.owner?.kind ?? 'default', by: caller.agentSession ?? 'owner' });
+  return result;
+});
+
+/** POST /api/apps/:appId/collaborators/agents `{ agent }` — an owner agent (or the owner) adds an agent of any of the account's machines (`Rex` or `Rex@iriss-air`) */
+export const addAgentCollaborator = handle((req, caller) => getAppsParts().service.addAgentCollaborator(req.params.appId, body(req).agent, caller));
 
 /** POST /api/apps/:appId/rollback `{ version }` */
 export const rollbackApp = handle((req, caller) => getAppsParts().service.rollback(req.params.appId, body(req).version, caller));
@@ -155,6 +191,11 @@ export const addDoc = handle((req, caller) => getAppsParts().service.addDoc(req.
 /** GET /api/apps/:appId/data/:collection/:docId */
 export const getDoc = handle((req, caller) => getAppsParts().service.getDoc(req.params.appId, req.params.collection, req.params.docId, caller));
 
+/** GET /api/apps/:appId/data/:collection/:docId/field?path=/photo — the full, unshortened value of one field (crewly#1145) */
+export const getDocField = handle((req, caller) =>
+  getAppsParts().service.getDocField(req.params.appId, req.params.collection, req.params.docId, req.query.path, caller),
+);
+
 /** PUT /api/apps/:appId/data/:collection/:docId `{ data }` */
 export const setDoc = handle((req, caller) =>
   getAppsParts().service.setDoc(req.params.appId, req.params.collection, req.params.docId, body(req).data, caller),
@@ -168,6 +209,52 @@ export const updateDoc = handle((req, caller) => {
 
 /** DELETE /api/apps/:appId/data/:collection/:docId */
 export const deleteDoc = handle((req, caller) => getAppsParts().service.deleteDoc(req.params.appId, req.params.collection, req.params.docId, caller));
+
+/**
+ * POST /api/apps/:appId/files — raw body, `Content-Type`, `X-File-Name`
+ * (URI-encoded). Forwards to Cloud and answers `{ fileId, name, size,
+ * contentType, url }`; Cloud's refusals (not a collaborator, too large,
+ * quota) pass through with their own status and code.
+ */
+export const uploadFile = handle(async (req, caller) => {
+  if (!Buffer.isBuffer(req.body)) {
+    throw new AppsCloudError(415, 'unsupported_type', 'Send the file as the raw request body with a non-JSON Content-Type (application/octet-stream if unsure).');
+  }
+  const nameHeader = req.get('x-file-name');
+  let name: string | undefined;
+  try {
+    name = nameHeader ? decodeURIComponent(nameHeader) : undefined;
+  } catch {
+    name = nameHeader ?? undefined;
+  }
+  const contentType = (req.get('content-type') ?? 'application/octet-stream').split(';')[0].trim().toLowerCase() || 'application/octet-stream';
+  const result = (await getAppsParts().service.uploadFile(req.params.appId, { data: req.body, contentType, name }, caller)) as { fileId?: string; size?: number };
+  logger.info('App file uploaded', { appId: req.params.appId, fileId: result.fileId, size: result.size, agent: caller.agentSession ?? 'owner' });
+  return result;
+}, 201);
+
+/**
+ * GET /api/apps/:appId/files/:fileId — the bytes of a file stored in the app
+ * (an image the owner uploaded in it, say). Same access as the app's data;
+ * answers the raw file with its `Content-Type`, `Content-Disposition` and a
+ * URI-encoded `X-File-Name`. An app of another account answers 404.
+ */
+export async function downloadFile(req: Request, res: Response): Promise<void> {
+  try {
+    const caller = callerOf(req);
+    const file = await getAppsParts().service.downloadFile(req.params.appId, req.params.fileId, caller);
+    const name = (file.name ?? req.params.fileId).replace(/[^\w.\- ]/g, '_');
+    res.status(200);
+    res.setHeader('Content-Type', file.contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    res.setHeader('X-File-Name', encodeURIComponent(file.name ?? req.params.fileId));
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.send(file.data);
+    logger.info('App file downloaded', { appId: req.params.appId, fileId: req.params.fileId, size: file.data.length, agent: caller.agentSession ?? 'owner' });
+  } catch (err) {
+    sendAppsError(res, err);
+  }
+}
 
 /** GET /api/apps/:appId/comments?status=open|resolved|all (crewly#1056) */
 export const listComments = handle((req, caller) => getAppsParts().service.listComments(req.params.appId, req.query.status, caller));
@@ -186,6 +273,22 @@ export const resolveComment = handle((req, caller) => getAppsParts().service.set
 
 /** POST /api/apps/:appId/comments/:commentId/reopen */
 export const reopenComment = handle((req, caller) => getAppsParts().service.setCommentStatus(req.params.appId, req.params.commentId, 'reopen', caller));
+
+/**
+ * POST /api/apps/:appId/comments/:commentId/audio — download the thread's
+ * voice recordings to this machine (crewly-services apps/SPEC.md §16) and
+ * answer their local paths, for the agent to transcribe. Same access as
+ * reading the thread.
+ */
+export const downloadCommentAudio = handle(async (req, caller) => {
+  const appId = String(req.params.appId);
+  const commentId = String(req.params.commentId);
+  const thread = (await getAppsParts().service.getComment(appId, commentId, caller)) as { attachments?: unknown; replies?: Array<{ attachments?: unknown }> };
+  const files = await getAppCommentAudio().forThread(appId, commentId, thread);
+  return {
+    recordings: files.map((f) => ({ blobId: f.blobId, durationMs: f.durationMs, mime: f.mime, ...(f.path ? { path: f.path } : { error: f.error ?? 'not downloaded' }) })),
+  };
+});
 
 /**
  * POST /api/apps/:appId/thumbnail/refresh — capture the portal thumbnail now
@@ -231,3 +334,201 @@ export const refreshAllThumbnails = async (req: Request, res: Response): Promise
     sendAppsError(res, err);
   }
 };
+
+/** POST /api/apps/:appId/collaborators/request `{ scope?, reason? }` — an agent asks the owner to let its team (or only itself) work in the app */
+export const requestCollaborator = handle(async (req, caller) => {
+  const b = body(req);
+  return requireCollaborators().request(req.params.appId, caller.agentSession, { scope: b.scope, reason: b.reason });
+});
+
+/** GET /api/apps/:appId/collaborators — who the owner let work in the app */
+export const listCollaborators = handle(async (req, caller) => requireCollaborators().list(req.params.appId, caller.agentSession));
+
+/** POST /api/apps/:appId/collaborators — the OWNER adds a team/agent (an agent is refused in the route) */
+export const addCollaborator = handle(async (req) => requireCollaborators().add(req.params.appId, body(req)));
+
+/** DELETE /api/apps/:appId/collaborators/:entryId — the OWNER removes one; effective on the next call */
+export const removeCollaborator = handle(async (req) => requireCollaborators().remove(req.params.appId, req.params.entryId));
+
+/** The collaborators service of the shared parts. */
+function requireCollaborators() {
+  const svc = getAppsParts().collaborators;
+  if (!svc) throw new AppsCloudError(503, 'unavailable', 'Collaborators are not available on this machine.');
+  return svc;
+}
+
+// ---------------------------------------------------------------------------
+// Marketplace templates (specs/2026-10-08-app-templates.md)
+// ---------------------------------------------------------------------------
+
+/** The templates service of the shared parts. */
+function requireTemplates() {
+  const svc = getAppsParts().templates;
+  if (!svc) throw new AppsCloudError(503, 'unavailable', 'App templates are not available on this machine.');
+  return svc;
+}
+
+/** POST /api/apps/:appId/template-request `{ description, name?, category?, tags?, author?, sampleData? }` — Cloud drafts it, the owner gets a card */
+export const requestTemplate = handle(async (req, caller) => {
+  const b = body(req);
+  const result = await requireTemplates().requestPublish(req.params.appId, caller, {
+    description: b.description,
+    name: b.name,
+    category: b.category,
+    tags: b.tags,
+    author: b.author,
+    sampleData: b.sampleData,
+  });
+  logger.info('App template requested', { appId: req.params.appId, templateId: result.templateId, version: result.version, decisionId: result.decisionId, agent: caller.agentSession ?? 'owner' });
+  return result;
+});
+
+/** GET /api/apps/templates?q=&tag=&category=&limit= — search the Marketplace */
+export const findTemplates = handle(async (req, caller) =>
+  requireTemplates().find({ q: req.query.q, tag: req.query.tag, category: req.query.category, limit: req.query.limit }, caller),
+);
+
+/** GET /api/apps/templates/mine — this account's own templates */
+export const myTemplates = handle(async (_req, caller) => requireTemplates().mine(caller));
+
+/** POST /api/apps/templates/:templateId/use `{ name?, source? }` — a new app from the template; answers its files */
+export const useTemplate = handle(async (req, caller) => {
+  const b = body(req);
+  const result = await requireTemplates().use(req.params.templateId, caller, { name: b.name, source: b.source });
+  logger.info('App made from a template', { templateId: req.params.templateId, appId: result.appId, agent: caller.agentSession ?? 'owner' });
+  return result;
+}, 201);
+
+/** POST /api/apps/templates/:templateId/unlist — off the Marketplace (no approval needed to reduce exposure) */
+export const unlistTemplate = handle(async (req, caller) => requireTemplates().unlist(req.params.templateId, caller));
+
+/** POST /api/apps/:appId/template-files `{ source? }` — the template files of an app made from a template */
+export const checkoutTemplateFiles = handle(async (req, caller) => requireTemplates().checkout(req.params.appId, caller, { source: body(req).source }));
+
+// ---------------------------------------------------------------------------
+// File handoff (crewly-services apps/SPEC.md section 18): a temporary relay for one
+// large file between agents of the same account. The bytes never pass through
+// this backend: the skills PUT to / GET from the presigned URLs Cloud returns.
+// ---------------------------------------------------------------------------
+
+const HANDOFF_ID_RE = /^hf_[A-Za-z0-9_-]{22}$/;
+
+/** A handoff id from the URL, or a 404 that names nothing. */
+function handoffIdOf(req: Request): string {
+  const id = req.params.handoffId;
+  if (!HANDOFF_ID_RE.test(id)) throw new AppsCloudError(404, 'not_found', 'No such handoff.');
+  return id;
+}
+
+/** Call Cloud's handoff API as this agent (or the owner). */
+function handoffCall<T>(method: string, path: string, caller: AppsCaller, reqBody?: unknown): Promise<T> {
+  return getAppsParts().client.request<T>(method, path, {
+    ...(reqBody !== undefined ? { body: reqBody } : {}),
+    ...(caller.agentSession ? { agent: caller.agentSession } : { asOwner: true }),
+  });
+}
+
+/** POST /api/apps/handoffs `{ fileName, sizeBytes, contentType?, note?, to? }` — reserve a handoff; answers a presigned upload URL */
+export const createHandoff = handle(async (req, caller) => {
+  const b = body(req);
+  const result = await handoffCall<{ handoffId?: string; sizeBytes?: number }>(
+    'POST',
+    '/handoffs',
+    caller,
+    { fileName: b.fileName, sizeBytes: b.sizeBytes, contentType: b.contentType, note: b.note, to: b.to },
+  );
+  logger.info('File handoff created', { handoffId: result.handoffId, sizeBytes: result.sizeBytes, agent: caller.agentSession ?? 'owner' });
+  return result;
+}, 201);
+
+/** POST /api/apps/handoffs/:handoffId/complete — the upload finished; Cloud checks the size */
+export const completeHandoff = handle((req, caller) => handoffCall('POST', `/handoffs/${handoffIdOf(req)}/complete`, caller));
+
+/** GET /api/apps/handoffs/:handoffId — metadata, plus a presigned download URL once ready */
+export const getHandoff = handle((req, caller) => handoffCall('GET', `/handoffs/${handoffIdOf(req)}`, caller));
+
+/** GET /api/apps/handoffs — the account's waiting handoffs */
+export const listHandoffs = handle((_req, caller) => handoffCall('GET', '/handoffs', caller));
+
+/** POST /api/apps/handoffs/:handoffId/ack — received; Cloud deletes the file */
+export const ackHandoff = handle(async (req, caller) => {
+  const result = await handoffCall('POST', `/handoffs/${handoffIdOf(req)}/ack`, caller);
+  logger.info('File handoff acknowledged', { handoffId: req.params.handoffId, agent: caller.agentSession ?? 'owner' });
+  return result;
+});
+
+/** DELETE /api/apps/handoffs/:handoffId — withdraw */
+export const cancelHandoff = handle((req, caller) => handoffCall('DELETE', `/handoffs/${handoffIdOf(req)}`, caller));
+
+/** An upload request id from the URL, or a 404 that names nothing. */
+function uploadRequestIdOf(req: Request): string {
+  const id = req.params.requestId;
+  if (!/^ur_[A-Za-z0-9_-]{22}$/.test(id)) throw new AppsCloudError(404, 'not_found', 'No such upload request.');
+  return id;
+}
+
+/**
+ * POST /api/apps/upload-requests `{ purpose, agentName?, maxFiles? }` — ask the owner for a file.
+ * Cloud answers a link (`url`) the agent posts to the owner; the file arrives as a handoff.
+ */
+export const createUploadRequest = handle(async (req, caller) => {
+  const b = body(req);
+  const result = await handoffCall<{ requestId?: string }>(
+    'POST',
+    '/upload-requests',
+    caller,
+    { purpose: b.purpose, agentName: b.agentName, maxFiles: b.maxFiles },
+  );
+  logger.info('Owner upload requested', { requestId: result.requestId, agent: caller.agentSession ?? 'owner' });
+  return result;
+}, 201);
+
+/** GET /api/apps/upload-requests/:requestId — status, limits, files */
+export const getUploadRequest = handle((req, caller) => handoffCall('GET', `/upload-requests/${uploadRequestIdOf(req)}`, caller));
+
+/** DELETE /api/apps/upload-requests/:requestId — cancel the link */
+export const cancelUploadRequest = handle((req, caller) => handoffCall('DELETE', `/upload-requests/${uploadRequestIdOf(req)}`, caller));
+
+// ---------------------------------------------------------------------------
+// Shares (crewly-services apps/SPEC.md section 20): the reverse of request-file. An
+// agent puts a LARGE file it made on a private link for the owner. Like handoffs,
+// the bytes never pass through this backend: the skill PUTs to the presigned URL
+// Cloud returns. Agents get metadata only; the signed view/download URLs go to
+// the owner's portal page.
+// ---------------------------------------------------------------------------
+
+/** A share id from the URL, or a 404 that names nothing. */
+function shareIdOf(req: Request): string {
+  const id = req.params.shareId;
+  if (!/^sf_[A-Za-z0-9_-]{22}$/.test(id)) throw new AppsCloudError(404, 'not_found', 'No such file.');
+  return id;
+}
+
+/** POST /api/apps/shares `{ fileName, sizeBytes, contentType?, note? }` — reserve a share; answers the owner's link and a presigned upload URL */
+export const createShare = handle(async (req, caller) => {
+  const b = body(req);
+  const result = await handoffCall<{ shareId?: string; sizeBytes?: number }>(
+    'POST',
+    '/shares',
+    caller,
+    { fileName: b.fileName, sizeBytes: b.sizeBytes, contentType: b.contentType, note: b.note },
+  );
+  logger.info('File share created', { shareId: result.shareId, sizeBytes: result.sizeBytes, agent: caller.agentSession ?? 'owner' });
+  return result;
+}, 201);
+
+/** POST /api/apps/shares/:shareId/complete — the upload finished; Cloud checks the size and starts the 7 days */
+export const completeShare = handle((req, caller) => handoffCall('POST', `/shares/${shareIdOf(req)}/complete`, caller));
+
+/** GET /api/apps/shares/:shareId — metadata (signed URLs only for the owner) */
+export const getShare = handle((req, caller) => handoffCall('GET', `/shares/${shareIdOf(req)}`, caller));
+
+/** GET /api/apps/shares — the account's live shares, with their links */
+export const listShares = handle((_req, caller) => handoffCall('GET', '/shares', caller));
+
+/** DELETE /api/apps/shares/:shareId — withdraw; Cloud deletes the file */
+export const cancelShare = handle(async (req, caller) => {
+  const result = await handoffCall('DELETE', `/shares/${shareIdOf(req)}`, caller);
+  logger.info('File share cancelled', { shareId: req.params.shareId, agent: caller.agentSession ?? 'owner' });
+  return result;
+});

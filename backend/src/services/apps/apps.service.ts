@@ -13,7 +13,7 @@ import { CREWLY_APPS_CONSTANTS, ORCHESTRATOR_SESSION_NAME } from '../../constant
 import { AppsCloudClient, AppsCloudError, type AppsRequestOptions } from './apps-cloud.client.js';
 import type { AppRegistryEntry, AppsRegistryService } from './apps-registry.service.js';
 import { toOpenLinkInfos, usableMintedLink, type MintedOpenLink, type OpenLinkInfo } from './app-open-link.js';
-import { sanitizeAppData } from './app-wake-message.js';
+import { findTruncatedFields, resolveJsonPointer, sanitizeAppData } from './app-wake-message.js';
 
 const C = CREWLY_APPS_CONSTANTS;
 
@@ -214,6 +214,67 @@ export interface AppsServiceDeps {
   roster?: { pushIfChanged(): Promise<boolean> };
   /** This instance's Cloud id (a mention names the instance its agent runs on) */
   instanceId?: () => Promise<string | null>;
+  /** Look up what can own an app on this machine (app owners, SPEC §15) */
+  ownerTargets?: OwnerTargets;
+}
+
+/** An app's owner as Cloud reports it (crewly-services apps/SPEC.md §15). */
+export interface CloudOwnerView {
+  kind: 'agent' | 'team' | 'channel';
+  explicit: boolean;
+  session?: string;
+  teamId?: string;
+  channelId?: string;
+  name: string;
+  instanceId: string | null;
+  members?: string[];
+}
+
+/** What can own an app on this machine. */
+export interface OwnerTargets {
+  /** An agent by session or member name */
+  agent(ref: string): Promise<{ session: string; name: string } | null>;
+  /** A team by id or name */
+  team(ref: string): Promise<{ id: string; name: string } | null>;
+  /** A Crewly channel by id, `#name` or name */
+  channel(ref: string): Promise<{ id: string; name: string } | null>;
+}
+
+/** A parsed owner spec. */
+export type OwnerSpec = { kind: 'agent' | 'team' | 'channel'; ref: string } | { kind: 'default' };
+
+/**
+ * Parse an owner spec: `agent:<ref>`, `team:<ref>`, `channel:<ref>` (a bare
+ * `#name` is a channel), or `default`. Also accepts `{ owner: '<spec>' }`.
+ *
+ * @param raw - Spec
+ * @returns Parsed spec
+ * @throws AppsCloudError validation
+ */
+export function parseOwnerSpec(raw: unknown): OwnerSpec {
+  const value = raw && typeof raw === 'object' ? (raw as { owner?: unknown }).owner : raw;
+  if (typeof value !== 'string' || !value.trim()) throw validation("owner is 'agent:<name>', 'team:<name>', 'channel:#<name>' or 'default'.");
+  const s = value.trim();
+  if (s.toLowerCase() === 'default') return { kind: 'default' };
+  if (s.startsWith('#')) return { kind: 'channel', ref: s };
+  const m = /^(agent|team|channel):(.+)$/i.exec(s);
+  if (!m || !m[2].trim() || m[2].length > 128) throw validation("owner is 'agent:<name>', 'team:<name>', 'channel:#<name>' or 'default'.");
+  return { kind: m[1].toLowerCase() as 'agent' | 'team' | 'channel', ref: m[2].trim() };
+}
+
+/**
+ * Whether a session is the owning agent, or a member of the owning team /
+ * channel, on this instance.
+ *
+ * @param owner - Cloud's owner view
+ * @param session - Agent session
+ * @param instanceId - This instance
+ * @returns True for an owner member
+ */
+export function isOwnerMember(owner: CloudOwnerView | null, session: string, instanceId: string): boolean {
+  if (!owner || (owner.instanceId && owner.instanceId !== instanceId)) return false;
+  if (owner.kind === 'agent') return owner.session === session;
+  return (owner.members ?? []).includes(session);
 }
 
 const APP_ID_RE = /^[a-km-np-z2-9]{10}$/;
@@ -246,6 +307,22 @@ function requireDocId(id: unknown): string {
     throw validation('docId must be 1-128 of A-Z a-z 0-9 _ . : - (and not "." or "..").');
   }
   return id;
+}
+
+/**
+ * The file name in a `Content-Disposition: attachment; filename="…"` header.
+ *
+ * @param header - Header value (may be null)
+ * @returns The name, or undefined when there is none
+ */
+export function fileNameOf(header: string | null | undefined): string | undefined {
+  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(header ?? '');
+  if (!m) return undefined;
+  try {
+    return decodeURIComponent(m[1]!).trim() || undefined;
+  } catch {
+    return m[1]!.trim() || undefined;
+  }
 }
 
 function notYourApp(): AppsCloudError {
@@ -346,6 +423,30 @@ export function requireCollectionList(v: unknown, what: string): string[] {
   }
   if (names.length > C.PUBLIC_REQUEST.MAX_COLLECTIONS) throw validation(`${what} can name at most ${C.PUBLIC_REQUEST.MAX_COLLECTIONS} collections.`);
   return names as string[];
+}
+
+/** Capability names an agent may ask for (Cloud's `APP_CAPABILITIES`); Cloud validates again. */
+export const REQUESTABLE_CAPABILITIES = ['microphone', 'media_capture'] as const;
+
+/** What an agent tells the owner after asking for a capability. */
+const CAPABILITY_REQUEST_MESSAGE = 'Requested: the owner allows it in Crewly Cloud (Apps -> the app -> Permissions). Until then the app keeps the default sandbox and the browser refuses the device.';
+
+/**
+ * Validate an agent's capability request.
+ *
+ * @param input - `{ capabilities, note? }` (capabilities: array or comma-separated string)
+ * @returns The body to send to Cloud
+ */
+export function validateCapabilityRequest(input: unknown): { capabilities: string[]; note?: string } {
+  const b = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
+  const raw = typeof b.capabilities === 'string' ? b.capabilities.split(',') : b.capabilities;
+  if (!Array.isArray(raw) || raw.length === 0) throw validation('Name at least one capability (microphone or media_capture).');
+  const caps = [...new Set(raw.map((c) => (typeof c === 'string' ? c.trim() : '')))];
+  const bad = caps.find((c) => !(REQUESTABLE_CAPABILITIES as readonly string[]).includes(c));
+  if (bad !== undefined) throw validation(`Unknown capability ${JSON.stringify(bad.slice(0, 40))}. Use: ${REQUESTABLE_CAPABILITIES.join(', ')}.`);
+  const note = typeof b.note === 'string' ? b.note.trim() : '';
+  if (note.length > 500) throw validation('note must be at most 500 characters.');
+  return { capabilities: caps, ...(note ? { note } : {}) };
 }
 
 /**
@@ -460,6 +561,47 @@ export class AppsService {
    * @returns appId, url, version, whether it was created / notified
    * @throws AppsCloudError on validation or a Cloud failure
    */
+  /**
+   * Whether Cloud names this agent (or a team / channel it is in) as the app's
+   * owner, wherever that was recorded: after a team move to this machine the
+   * local registry has no entry, but the member's session — and so the app —
+   * is the same (2026-10-13, Milo could not publish AZ星球 on the new machine).
+   *
+   * @param appId - App
+   * @param agentSession - The publishing agent
+   * @returns True when the app is already this agent's
+   */
+  /**
+   * Adopt an app whose agent moved here with its team: Cloud names the agent
+   * as owner but this machine's registry has no entry. Cloud's publisher moves
+   * to this machine (its per-machine checks, comments and @mentions follow the
+   * agent) and the app is recorded locally, so publish, rollback and data
+   * calls all work from here.
+   *
+   * @param appId - App
+   * @param agentSession - The agent
+   * @returns True when adopted
+   */
+  private async adoptMovedApp(appId: string, agentSession: string): Promise<boolean> {
+    if (!(await this.ownedByMovedAgent(appId, agentSession))) return false;
+    const { client, registry } = this.deps;
+    await client.request('PUT', `/apps/${appId}/publisher`, { body: { session: agentSession }, agent: agentSession });
+    const app = await client.request<CloudAppView>('GET', `/apps/${appId}`, { agent: agentSession }).catch(() => null);
+    await registry.upsert(appId, { name: app?.name ?? appId, ...(app?.url ? { url: app.url } : {}), agentSession, deleted: false });
+    return true;
+  }
+
+  private async ownedByMovedAgent(appId: string, agentSession: string): Promise<boolean> {
+    try {
+      const res = await this.deps.client.request<{ owner?: CloudOwnerView | null }>('GET', `/apps/${appId}/owner`, { agent: agentSession });
+      const owner = res?.owner ?? null;
+      if (!owner) return false;
+      return owner.kind === 'agent' ? owner.session === agentSession : (owner.members ?? []).includes(agentSession);
+    } catch {
+      return false;
+    }
+  }
+
   async publish(input: PublishInput, caller: AppsCaller): Promise<PublishResult> {
     const files = this.validateFiles(input.files);
     const explicitId = input.appId !== undefined && input.appId !== null && input.appId !== '' ? requireAppId(input.appId) : undefined;
@@ -472,8 +614,12 @@ export class AppsService {
 
     const { registry, client } = this.deps;
     let entry: AppRegistryEntry | null = await registry.find({ appId: explicitId, agentSession, source, name });
-    // An agent publishes only to its own apps; adopting an app made elsewhere is the owner's call.
-    if (explicitId && agentSession && (!entry || entry.agentSession !== agentSession)) throw notYourApp();
+    // An agent publishes only to its own apps; adopting an app made elsewhere is the owner's call —
+    // unless Cloud says it already is this agent's (its team moved here from another machine).
+    if (explicitId && agentSession && (!entry || entry.agentSession !== agentSession)) {
+      if (entry || !(await this.adoptMovedApp(explicitId, agentSession))) throw notYourApp();
+      entry = await registry.get(explicitId);
+    }
     let app: CloudAppView | null = null;
     let created = false;
     if (entry && !explicitId) {
@@ -759,6 +905,38 @@ export class AppsService {
   }
 
   /**
+   * Ask the owner for extra browser permissions for an app (`microphone`, `media_capture`).
+   * Only records the request: Cloud grants a capability solely from the owner's own portal
+   * sign-in, so nothing here can turn one on. The owner sees a banner in the app.
+   *
+   * @param appId - App id
+   * @param input - `{ capabilities: string[] | comma string, note? }`
+   * @param caller - Agent (its own apps) or owner
+   * @returns Cloud's recorded request
+   */
+  async requestCapabilities(appId: unknown, input: unknown, caller: AppsCaller): Promise<{ appId: string; requested: true; capabilities: unknown; capabilityRequest: unknown; message: string }> {
+    const id = requireAppId(appId);
+    const body = validateCapabilityRequest(input);
+    await this.assertPublisher(id, caller);
+    const r = await this.deps.client.request<{ capabilities?: unknown; capabilityRequest?: unknown }>('POST', `/apps/${id}/capability-request`, { body, agent: caller.agentSession });
+    return { appId: id, requested: true, capabilities: r?.capabilities ?? [], capabilityRequest: r?.capabilityRequest ?? null, message: CAPABILITY_REQUEST_MESSAGE };
+  }
+
+  /**
+   * Withdraw a pending capability request.
+   *
+   * @param appId - App id
+   * @param caller - Agent (its own apps) or owner
+   * @returns `{ appId, cancelled: true }`
+   */
+  async cancelCapabilityRequest(appId: unknown, caller: AppsCaller): Promise<{ appId: string; cancelled: true }> {
+    const id = requireAppId(appId);
+    await this.assertPublisher(id, caller);
+    await this.deps.client.request('DELETE', `/apps/${id}/capability-request`, { agent: caller.agentSession });
+    return { appId: id, cancelled: true };
+  }
+
+  /**
    * Make an app private again (instant; always allowed).
    *
    * @param appId - App id
@@ -770,6 +948,35 @@ export class AppsService {
     await this.assertPublisher(id, caller);
     const r = await this.deps.client.request<{ visibility?: AppVisibility }>('POST', `/apps/${id}/make-private`, { agent: caller.agentSession });
     return { appId: id, visibility: r?.visibility ?? 'private' };
+  }
+
+  /**
+   * Delete an app (unpublish): its URL stops working at once and Cloud removes
+   * its versions, files and data. Agents may delete only PRIVATE apps their
+   * team published; a public app is the owner's to delete (make it private
+   * first or ask the owner). The owner may delete any.
+   *
+   * @param appId - App id
+   * @param caller - Agent (apps its team published) or owner
+   * @returns `{ appId, deleted: true }`
+   * @throws AppsCloudError 403 not_your_app / 403 forbidden (public app) / 404 not_found
+   */
+  async deleteApp(appId: unknown, caller: AppsCaller): Promise<{ appId: string; deleted: true }> {
+    const id = requireAppId(appId);
+    await this.assertPublisher(id, caller);
+    if (caller.agentSession) {
+      const app = await this.deps.client.request<CloudAppView>('GET', `/apps/${id}`, { agent: caller.agentSession });
+      if (app.visibility === 'public') {
+        throw new AppsCloudError(403, 'forbidden', 'This app is public, so only the owner can delete it. Make it private first (--private) or ask the owner.');
+      }
+    }
+    try {
+      await this.deps.client.request('DELETE', `/apps/${id}`, { agent: caller.agentSession });
+    } catch (err) {
+      if (!(err instanceof AppsCloudError && err.status === 404)) throw err;
+    }
+    await this.deps.registry.markDeleted(id);
+    return { appId: id, deleted: true };
   }
 
   /**
@@ -818,8 +1025,10 @@ export class AppsService {
   /**
    * Transfer an app to another agent, so a new team can publish it.
    *
-   * Allowed: the owner, the orchestrator, the current publisher, or a lead of
-   * the publisher's team. The target must be a member of an existing,
+   * Allowed: the owner or the orchestrator only (crewly#1116); a team's own
+   * agents and leads cannot hand an app away. Every hand-over is recorded on
+   * the registry entry (`transfers`: when, from, to, by) and logged. Versions,
+   * data, comments and visibility live in Cloud and are untouched. The target must be a member of an existing,
    * non-archived team on this machine. Cloud is updated first (the portal's
    * publisher), then the local registry, which wake deliveries, team ownership
    * checks and thumbnails all read. The old and new publisher are told.
@@ -839,22 +1048,15 @@ export class AppsService {
     if (!entry || entry.deleted) throw new AppsCloudError(404, 'not_found', 'No such app on this machine.');
     const me = caller.agentSession;
     const current = entry.agentSession ?? null;
-    if (me && me !== ORCHESTRATOR_SESSION_NAME && me !== current) {
-      const lead = !!current && !!this.deps.directory && (await this.deps.directory.leadsTeamOf(me, current).catch(() => false));
-      if (!lead) {
-        throw new AppsCloudError(
-          403,
-          C.ERROR_CODES.NOT_YOUR_APP,
-          'Only the owner, the orchestrator, the app\'s publisher or the lead of the publisher\'s team can transfer an app.',
-        );
-      }
+    if (me && me !== ORCHESTRATOR_SESSION_NAME) {
+      throw new AppsCloudError(403, C.ERROR_CODES.NOT_YOUR_APP, 'Only the owner or the orchestrator can transfer an app to another team. Ask the orchestrator.');
     }
     const target = this.deps.directory ? await this.deps.directory.member(toSession) : null;
     if (!target) throw validation(`${toSession} is not a member of an active team on this machine, so it cannot take over an app.`);
     if (current === toSession) return { appId: id, name: entry.name, publisher: toSession, previous: current, changed: false, notified: [] };
 
     await this.deps.client.request('PUT', `/apps/${id}/publisher`, { body: { session: toSession }, agent: me });
-    const moved = await this.deps.registry.setPublisher(id, toSession);
+    const moved = await this.deps.registry.setPublisher(id, toSession, me ?? 'owner');
     const previous = moved?.previous ?? current;
 
     const notified: string[] = [];
@@ -882,33 +1084,200 @@ export class AppsService {
    * Agents may manage (publish, roll back, list versions of) apps they or a
    * teammate published — so a lead can hand app work to a member (owner
    * 2026-10-05: Kai could not update Atlas's app and published a duplicate).
-   * The owner may manage any.
+   * The owner may manage any. Collaborators do NOT pass here: they get data
+   * and comments only, never the bundle (specs/2026-10-06-app-collaborators.md).
    *
    * @param appId - App id
    * @param caller - Agent or owner
    * @throws AppsCloudError 403 not_your_app
    */
   async assertPublisher(appId: string, caller: AppsCaller): Promise<void> {
-    return this.assertDataAccess(appId, caller);
+    if (!(await this.isPublisherSide(appId, caller))) throw notYourApp();
   }
 
   /**
    * Agents may read and write the data of apps they published, or that a
-   * teammate published. The owner may use any.
+   * teammate published, or that the owner added them (or their team) to as
+   * a collaborator. The owner may use any.
    *
    * @param appId - App id
    * @param caller - Agent or owner
    * @throws AppsCloudError 403 not_your_app
    */
   async assertDataAccess(appId: string, caller: AppsCaller): Promise<void> {
+    if (await this.isPublisherSide(appId, caller)) return;
+    if (caller.agentSession && (await this.isCollaborator(appId, caller.agentSession))) return;
+    throw notYourApp();
+  }
+
+  /** The owner, the publisher, or a teammate of the publisher (local registry). */
+  private async isPublisherSide(appId: string, caller: AppsCaller): Promise<boolean> {
     const me = caller.agentSession;
-    if (!me) return;
+    if (!me) return true;
     const entry = await this.deps.registry.get(appId);
     const publisher = entry?.agentSession;
-    if (!publisher) throw notYourApp();
-    if (publisher === me) return;
-    if (this.deps.sameTeam && (await this.deps.sameTeam(me, publisher).catch(() => false))) return;
-    throw notYourApp();
+    // No local record: the agent's team may have moved here (adopts it when Cloud agrees).
+    if (!entry) return this.adoptMovedApp(appId, me);
+    if (!publisher) return false;
+    if (publisher === me) return true;
+    return !!this.deps.sameTeam && (await this.deps.sameTeam(me, publisher).catch(() => false));
+  }
+
+  /**
+   * Whether the owner added this agent, or its team, to the app. Asks Cloud on
+   * every call (no cache) so a removal applies at once; any failure, a 404 (the
+   * app is not this account's) or an unreachable Cloud counts as no.
+   *
+   * @param appId - App id
+   * @param session - The agent
+   * @returns True when listed for this instance
+   */
+  async isCollaborator(appId: string, session: string): Promise<boolean> {
+    if (!this.deps.instanceId) return false;
+    try {
+      const [instanceId, list] = await Promise.all([
+        this.deps.instanceId(),
+        this.deps.client.request<{ collaborators?: Array<{ kind?: string; who?: string; instanceId?: string }>; owner?: CloudOwnerView | null }>('GET', `/apps/${appId}/collaborators`, { agent: session }),
+      ]);
+      // Members of the owning team / channel (and the owning agent) are collaborators without an entry.
+      if (instanceId && isOwnerMember(list.owner ?? null, session, instanceId)) return true;
+      const mine = (list.collaborators ?? []).filter((c) => !!instanceId && c.instanceId === instanceId);
+      if (mine.some((c) => c.kind === 'agent' && c.who === session)) return true;
+      const teams = mine.filter((c) => c.kind === 'team').map((c) => c.who);
+      if (teams.length === 0 || !this.deps.directory) return false;
+      const team = (await this.deps.directory.member(session))?.team;
+      return !!team && teams.includes(team);
+    } catch {
+      return false;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Owner (crewly-services apps/SPEC.md §15): who the app's comments go to —
+  // one agent, a team or a Crewly channel of this machine. Cloud decides who
+  // may change it (the owner, or the app's current owner agents).
+  // -------------------------------------------------------------------------
+
+  /**
+   * The app's owner.
+   *
+   * @param appId - App id
+   * @param caller - Agent or owner
+   * @returns `{ appId, owner }` from Cloud
+   */
+  async getOwner(appId: unknown, caller: AppsCaller): Promise<{ appId: string; owner: CloudOwnerView | null }> {
+    const id = requireAppId(appId);
+    return this.deps.client.request('GET', `/apps/${id}/owner`, caller.agentSession ? { agent: caller.agentSession } : { asOwner: true });
+  }
+
+  /**
+   * Set who owns the app's comments, from a spec: `agent:<session or name>`,
+   * `team:<name or id>`, `channel:#<name>` (or its id), or `default` (back to
+   * the publishing agent). The team / channel / agent is looked up on this
+   * machine and bound to this instance. The roster is pushed first so Cloud
+   * knows a channel made a moment ago. An agent caller must be one of the
+   * app's owner agents (Cloud refuses others with 403 `forbidden`).
+   *
+   * @param appId - App id
+   * @param spec - Owner spec (string) or `{ owner: string }`
+   * @param caller - Agent or owner
+   * @returns `{ appId, owner, previous }` from Cloud
+   * @throws AppsCloudError validation (unknown team / channel / agent, bad spec)
+   */
+  async setOwner(appId: unknown, spec: unknown, caller: AppsCaller): Promise<{ appId: string; owner: CloudOwnerView | null; previous: CloudOwnerView | null }> {
+    const id = requireAppId(appId);
+    const parsed = parseOwnerSpec(spec);
+    let body: Record<string, unknown> = { kind: 'default' };
+    if (parsed.kind !== 'default') {
+      const targets = this.deps.ownerTargets;
+      if (!targets) throw new AppsCloudError(503, 'unavailable', 'App owners are not available on this machine.');
+      if (parsed.kind === 'agent') {
+        const a = await targets.agent(parsed.ref);
+        if (!a) throw validation(`No agent "${parsed.ref}" on this machine.`);
+        body = { kind: 'agent', session: a.session };
+      } else if (parsed.kind === 'team') {
+        const t = await targets.team(parsed.ref);
+        if (!t) throw validation(`No team "${parsed.ref}" on this machine.`);
+        body = { kind: 'team', teamId: t.id };
+      } else {
+        const c = await targets.channel(parsed.ref);
+        if (!c) throw validation(`No channel "${parsed.ref}" on this machine. List them with list-channels.`);
+        body = { kind: 'channel', channelId: c.id };
+      }
+      const instanceId = this.deps.instanceId ? await this.deps.instanceId() : null;
+      if (!instanceId) throw new AppsCloudError(409, C.ERROR_CODES.NO_INSTANCE, 'This machine has no Crewly Cloud instance id yet. Try again in a minute.');
+      body['instanceId'] = instanceId;
+      // Cloud checks the owner against this machine's roster: make sure it is current.
+      await this.deps.roster?.pushIfChanged().catch(() => false);
+    }
+    return this.deps.client.request('PUT', `/apps/${id}/owner`, { body, ...(caller.agentSession ? { agent: caller.agentSession } : { asOwner: true }) });
+  }
+
+  /**
+   * An owner agent adds another agent as a collaborator (it may then read and
+   * write the app's data and comments). The agent may run on any machine of
+   * the account: `who` is a name or session (`Rex`), or `<name>@<machine>`
+   * (`Rex@iriss-air`). Cloud resolves it across every machine's roster and
+   * refuses a bare name that is on several machines, listing the choices.
+   * Cloud also refuses an agent that is not one of the app's owner agents; that
+   * agent can ask the owner with `request-access` instead. The owner may add
+   * anyone. A Cloud that cannot look across machines yet (older crewly-apps)
+   * falls back to this machine's agents, as before.
+   *
+   * @param appId - App id
+   * @param who - Agent name or session, optionally `@machine`
+   * @param caller - Agent or owner
+   * @returns Cloud's collaborator list, plus who was added and on which machine
+   */
+  async addAgentCollaborator(appId: unknown, who: unknown, caller: AppsCaller): Promise<unknown> {
+    const id = requireAppId(appId);
+    if (typeof who !== 'string' || !who.trim()) throw validation('agent is the name or session of the agent to add; for another machine use name@machine (e.g. Rex@iriss-air).');
+    const ref = who.trim();
+    const instanceId = this.deps.instanceId ? await this.deps.instanceId() : null;
+    if (!instanceId) throw new AppsCloudError(409, C.ERROR_CODES.NO_INSTANCE, 'This machine has no Crewly Cloud instance id yet. Try again in a minute.');
+    // Cloud looks the name up in every machine's roster: make sure this one's is current.
+    await this.deps.roster?.pushIfChanged().catch(() => false);
+    const as = caller.agentSession ? { agent: caller.agentSession } : { asOwner: true as const };
+    const target = await this.resolveCollaborator(id, ref, instanceId, as);
+    const list = await this.deps.client.request<Record<string, unknown>>('PUT', `/apps/${id}/collaborators`, {
+      body: { kind: 'agent', session: target.session, instanceId: target.instanceId },
+      ...as,
+    });
+    return { ...list, added: target };
+  }
+
+  /**
+   * Who `ref` is: Cloud's lookup across the account's machines, else (a Cloud
+   * without the lookup, or no match there) this machine's agents.
+   */
+  private async resolveCollaborator(
+    appId: string,
+    ref: string,
+    localInstance: string,
+    as: { agent: string } | { asOwner: true },
+  ): Promise<{ session: string; name?: string; instanceId: string; machine?: string }> {
+    let cloudError: AppsCloudError | null = null;
+    try {
+      const res = await this.deps.client.request<{ agent?: { session?: unknown; name?: unknown; instanceId?: unknown; machine?: unknown } }>(
+        'GET',
+        `/apps/${appId}/collaborators/resolve`,
+        { query: { agent: ref }, ...as },
+      );
+      const a = res?.agent;
+      if (a && typeof a.session === 'string' && typeof a.instanceId === 'string') {
+        return { session: a.session, instanceId: a.instanceId, ...(typeof a.name === 'string' ? { name: a.name } : {}), ...(typeof a.machine === 'string' ? { machine: a.machine } : {}) };
+      }
+    } catch (err) {
+      // 409: the name is on several machines (the message lists them) — the caller must choose.
+      // 404 "Not found": a Cloud without the lookup. 400: no match there. Both → this machine.
+      const oldCloud = err instanceof AppsCloudError && err.status === 404 && err.message === 'Not found';
+      const noMatch = err instanceof AppsCloudError && err.status === 400;
+      if (!oldCloud && !noMatch) throw err;
+      cloudError = noMatch ? (err as AppsCloudError) : null;
+    }
+    const local = ref.includes('@') ? null : this.deps.ownerTargets ? await this.deps.ownerTargets.agent(ref) : null;
+    if (local) return { session: local.session, name: local.name, instanceId: localInstance };
+    throw cloudError ?? validation(`No agent "${ref}" on this machine. (Crewly Cloud cannot look up your other machines yet.)`);
   }
 
   /**
@@ -916,15 +1285,20 @@ export class AppsService {
    *
    * @returns Entries without the poller cursor
    */
-  async list(caller: AppsCaller = {}): Promise<Array<Omit<AppRegistryEntry, 'cursor' | 'delivered' | 'wakes' | 'visitorWakes'>>> {
+  async list(caller: AppsCaller = {}): Promise<Array<Omit<AppRegistryEntry, 'cursor' | 'delivered' | 'wakes' | 'visitorWakes'> & { team: string | null }>> {
     const me = caller.agentSession;
     const entries = await this.deps.registry.list();
     const mine = await Promise.all(
       entries.map(async (e) => !me || e.agentSession === me || (!!this.deps.sameTeam && !!e.agentSession && (await this.deps.sameTeam(me, e.agentSession).catch(() => false)))),
     );
-    return entries
-      .filter((_e, i) => mine[i])
-      .map(({ cursor: _cursor, delivered: _delivered, wakes: _wakes, visitorWakes: _visitorWakes, ...rest }) => rest);
+    const visible = entries.filter((_e, i) => mine[i]);
+    // The owning team: the team of the app's publisher (null when unknown).
+    return Promise.all(
+      visible.map(async ({ cursor: _cursor, delivered: _delivered, wakes: _wakes, visitorWakes: _visitorWakes, ...rest }) => ({
+        ...rest,
+        team: rest.agentSession && this.deps.directory ? ((await this.deps.directory.member(rest.agentSession).catch(() => null))?.team ?? null) : null,
+      })),
+    );
   }
 
   /**
@@ -942,10 +1316,8 @@ export class AppsService {
     const after = opts.after !== undefined && opts.after !== '' ? requireDocId(opts.after) : undefined;
     const path = `/apps/${requireAppId(appId)}/data/${requireCollection(collection)}`;
     await this.assertDataAccess(appId as string, caller);
-    return this.dataRequest('GET', path, {
-      query: { limit, after },
-      agent: caller.agentSession,
-    });
+    const raw = await this.deps.client.request<unknown>('GET', path, { query: { limit, after }, agent: caller.agentSession });
+    return this.withTruncationFlags(raw, 'list');
   }
 
   /**
@@ -960,7 +1332,58 @@ export class AppsService {
   async getDoc(appId: unknown, collection: unknown, docId: unknown, caller: AppsCaller): Promise<unknown> {
     const path = this.docPath(appId, collection, docId);
     await this.assertDataAccess(appId as string, caller);
-    return this.dataRequest('GET', path, { agent: caller.agentSession });
+    const raw = await this.deps.client.request<unknown>('GET', path, { agent: caller.agentSession });
+    return this.withTruncationFlags(raw, 'doc');
+  }
+
+  /**
+   * The full, unshortened value of one field of a document (crewly#1145).
+   * Reads of a document cut strings over 64K characters for display and flag
+   * them in `truncated`; this returns the whole string so a caller (the
+   * app-data skill's `--get-field --out`) can write it to a file. The value
+   * is NOT sanitised: it is meant for a file, never for a terminal.
+   *
+   * @param appId - App id
+   * @param collection - Collection
+   * @param docId - Document id
+   * @param field - RFC 6901 JSON pointer into the document's `data` (`/photo`)
+   * @param caller - Agent or owner
+   * @returns `{ field, type, chars?, value }`
+   * @throws AppsCloudError validation (bad pointer), not_found (no such field)
+   */
+  async getDocField(appId: unknown, collection: unknown, docId: unknown, field: unknown, caller: AppsCaller): Promise<unknown> {
+    if (typeof field !== 'string' || !field.startsWith('/') || field.length > 1024) throw validation('field must be a JSON pointer into the document data, like /photo or /items/0/image.');
+    const path = this.docPath(appId, collection, docId);
+    await this.assertDataAccess(appId as string, caller);
+    const doc = (await this.deps.client.request<unknown>('GET', path, { agent: caller.agentSession })) as { data?: unknown } | null;
+    const hit = resolveJsonPointer(doc?.data, field);
+    if (!hit.found) throw new AppsCloudError(404, 'not_found', 'That document has no such field.');
+    const v = hit.value;
+    const type = v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v;
+    return { field, type, ...(typeof v === 'string' ? { chars: v.length } : {}), value: v };
+  }
+
+  /**
+   * Sanitise a document read for the agent and say which strings were cut.
+   * Adds `truncated: [{ field, chars }]` (per document for a list, with the
+   * doc `id`) only when something was cut, so a cropped base64 value is never
+   * mistaken for the whole.
+   */
+  private withTruncationFlags(raw: unknown, kind: 'doc' | 'list'): unknown {
+    const out = sanitizeAppData(raw) as Record<string, unknown> | null;
+    if (!out || typeof out !== 'object' || !raw || typeof raw !== 'object') return out;
+    const r = raw as Record<string, unknown>;
+    const hint = 'Strings over 65,536 characters are cut in this view. Fetch the whole value with app-data --get-field <collection> <docId> --field <field> --out <file>.';
+    if (kind === 'doc') {
+      const truncated = findTruncatedFields(r.data);
+      if (truncated.length > 0) Object.assign(out, { truncated, truncatedHint: hint });
+    } else if (Array.isArray(r.docs)) {
+      const truncated = (r.docs as Array<{ id?: unknown; data?: unknown }>).flatMap((d) =>
+        findTruncatedFields(d?.data).map((t) => ({ id: d?.id, ...t })),
+      );
+      if (truncated.length > 0) Object.assign(out, { truncated, truncatedHint: hint });
+    }
+    return out;
   }
 
   /**
@@ -1020,6 +1443,59 @@ export class AppsService {
       body,
       agent: caller.agentSession,
     });
+  }
+
+  /**
+   * Upload a file (an image for a post) into an app and get its URL. Same
+   * access as the app's data: the publisher side, a teammate, or a
+   * collaborator the owner allowed; anyone else is refused (403 not_your_app).
+   * Cloud applies its own size cap and quota and its answer is passed through.
+   *
+   * @param appId - App id
+   * @param file - Bytes, content type and the original file name
+   * @param caller - Agent or owner
+   * @returns Cloud's `{ fileId, name, size, contentType, url }`
+   * @throws AppsCloudError validation (empty body), not_your_app, Cloud's own errors
+   */
+  async uploadFile(appId: unknown, file: { data: Buffer; contentType: string; name?: string }, caller: AppsCaller): Promise<unknown> {
+    const path = `/apps/${requireAppId(appId)}/files`;
+    if (!Buffer.isBuffer(file.data) || file.data.length === 0) throw validation('The file is empty.');
+    await this.assertDataAccess(appId as string, caller);
+    // The file name is echoed into agents' terminals, so the answer is sanitized like the data routes.
+    return sanitizeAppData(
+      await this.deps.client.request<unknown>('POST', path, {
+        raw: { data: file.data, contentType: file.contentType },
+        ...(file.name ? { headers: { 'X-File-Name': encodeURIComponent(file.name) } } : {}),
+        agent: caller.agentSession,
+      }),
+    );
+  }
+
+  /**
+   * Download a file stored in an app (for example a screenshot the owner
+   * uploaded in the app) as raw bytes. Same access as the app's data. Cloud
+   * serves a file only to the account that owns the app, so an app owned by
+   * another account answers 404 `not_found` here (no cross-account reads).
+   *
+   * @param appId - App id
+   * @param fileId - File id (16 characters, as in the upload answer and the file URL)
+   * @param caller - Agent or owner
+   * @returns Bytes, content type and the original file name (when Cloud sent one)
+   * @throws AppsCloudError validation (bad file id), not_your_app, not_found, too_large
+   */
+  async downloadFile(appId: unknown, fileId: unknown, caller: AppsCaller): Promise<{ data: Buffer; contentType: string; name?: string }> {
+    const id = requireAppId(appId);
+    if (typeof fileId !== 'string' || !/^[a-z0-9]{16}$/.test(fileId)) throw validation('fileId must be the 16-character file id from the app data or the file URL.');
+    await this.assertDataAccess(id, caller);
+    try {
+      const got = await this.deps.client.download(`/apps/${id}/files/${fileId}`, { maxBytes: C.UPLOAD_BODY_MAX_BYTES, agent: caller.agentSession });
+      return { data: got.data, contentType: got.contentType, name: fileNameOf(got.headers.get('content-disposition')) };
+    } catch (err) {
+      if (err instanceof AppsCloudError && err.status === 404) {
+        throw new AppsCloudError(404, 'not_found', 'No such file in this app. If the app belongs to another Crewly account, its files cannot be read from this account.');
+      }
+      throw err;
+    }
   }
 
   /**

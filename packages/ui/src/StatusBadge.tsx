@@ -8,17 +8,23 @@ interface StatusBadgeProps {
   className?: string;
 }
 
+const GOOD = 'bg-success-soft text-success border-success/25';
+const BAD = 'bg-danger-soft text-danger border-danger/25';
+const WARN = 'bg-attention-soft text-attention border-attention/25';
+const INFO = 'bg-primary-soft text-primary-text border-primary/25';
+const QUIET = 'bg-surface-2 text-text-2 border-border-soft';
+
 const statusStyles: Record<StatusType, string> = {
-  active: 'bg-green-500/10 text-green-400 border-green-500/20',
-  running: 'bg-green-500/10 text-green-400 border-green-500/20',
-  stopped: 'bg-red-500/10 text-red-400 border-red-500/20',
-  inactive: 'bg-text-secondary-dark/10 text-text-secondary-dark border-text-secondary-dark/20',
-  paused: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20',
-  completed: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
-  blocked: 'bg-red-500/10 text-red-400 border-red-500/20',
-  pending: 'bg-text-secondary-dark/10 text-text-secondary-dark border-text-secondary-dark/20',
-  error: 'bg-red-500/10 text-red-400 border-red-500/20',
-  suspended: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20',
+  active: GOOD,
+  running: GOOD,
+  stopped: BAD,
+  inactive: QUIET,
+  paused: WARN,
+  completed: INFO,
+  blocked: BAD,
+  pending: QUIET,
+  error: BAD,
+  suspended: WARN,
 };
 
 export const StatusBadge: React.FC<StatusBadgeProps> = ({

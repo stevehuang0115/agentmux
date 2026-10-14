@@ -33,7 +33,7 @@ type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
  * @returns Section
  */
 export const SettingsSection: React.FC<{ title: string; meta?: string; children: React.ReactNode }> = ({ title, meta, children }) => (
-  <section>
+  <section className="cw-glass rounded-2xl px-5 py-4">
     <h2 className="text-[15px] font-semibold text-text">{title}</h2>
     {meta && <p className="mt-0.5 text-[13px] text-text-2">{meta}</p>}
     <div className="mt-2">{children}</div>
@@ -426,7 +426,7 @@ export const GeneralTab: React.FC = () => {
       </CollapsibleSection>
 
       {/* Action Buttons */}
-      <div className="sticky bottom-0 -mx-4 flex items-center justify-end gap-3 border-t border-border-soft bg-bg/95 px-4 py-4 backdrop-blur-sm">
+      <div className="sticky bottom-0 flex items-center justify-end gap-3 cw-bar rounded-2xl border px-4 py-3">
         <Button variant="secondary" onClick={handleReset} icon={RotateCcw}>
           Reset to defaults
         </Button>

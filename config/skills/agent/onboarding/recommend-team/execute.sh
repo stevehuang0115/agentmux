@@ -54,7 +54,7 @@ EOF
         INPUT_JSON="$1"
         shift
       else
-        error_exit "Unknown argument: $1"
+        unknown_arg_exit "$1"
       fi
       ;;
   esac

@@ -51,16 +51,16 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
 
     const inputClassName = [
       'w-full px-3 py-2',
-      'bg-background-dark',
+      'bg-surface',
       'border rounded-2xl',
-      'text-text-primary-dark text-sm',
-      'placeholder:text-text-secondary-dark/50',
+      'text-text text-sm',
+      'placeholder:text-text-3',
       'focus:outline-none focus:ring-1',
       'disabled:opacity-50 disabled:cursor-not-allowed',
       'transition-colors',
       error
-        ? 'border-red-500 focus:border-red-500 focus:ring-red-500'
-        : 'border-border-dark focus:border-primary focus:ring-primary',
+        ? 'border-danger focus:border-danger focus:ring-danger'
+        : 'border-border focus:border-primary focus:ring-primary',
       className,
     ]
       .filter(Boolean)
@@ -71,7 +71,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
         {label && (
           <label
             htmlFor={inputId}
-            className="block text-sm text-text-secondary-dark mb-2"
+            className="block text-sm text-text-2 mb-2"
           >
             {label}
           </label>
@@ -88,12 +88,12 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
           {...props}
         />
         {error && (
-          <p id={`${inputId}-error`} className="mt-1 text-xs text-red-400" role="alert">
+          <p id={`${inputId}-error`} className="mt-1 text-xs text-danger" role="alert">
             {error}
           </p>
         )}
         {helperText && !error && (
-          <p id={`${inputId}-helper`} className="mt-1 text-xs text-text-secondary-dark">
+          <p id={`${inputId}-helper`} className="mt-1 text-xs text-text-2">
             {helperText}
           </p>
         )}

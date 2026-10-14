@@ -28,6 +28,7 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from 'fs';
 import * as path from 'path';
 import { SAFE_RESTART, MESSAGE_SOURCES, type MessageSource } from '../../constants.js';
+import { isStaleCommitment, staleCommitmentNotice } from '../open-items/stale-commitment.js';
 import type { InFlightTurn } from './in-flight-turn-tracker.service.js';
 
 /** One interrupted message, as stored on disk. */
@@ -85,6 +86,13 @@ export interface ResumeDeps {
 	isSessionRunning: (sessionName: string) => boolean;
 	/** Enqueue on the persistent message queue */
 	enqueue: (input: ResumeEnqueueInput) => void;
+	/**
+	 * Hold text on the agent's persistent per-session queue. It is written out
+	 * when the agent registers, so it survives the agent not being up yet.
+	 */
+	queueForAgent: (sessionName: string, text: string) => void;
+	/** Whether the session belongs to a known team member; unknown sessions are skipped. Defaults to true. */
+	isKnownSession?: (sessionName: string) => boolean | Promise<boolean>;
 	/** Direct delivery (registration-gated) */
 	sendMessageToAgent: (sessionName: string, text: string) => Promise<{ success: boolean; error?: string; queued?: boolean }>;
 	/** Resolves true once the orchestrator is registered and active */
@@ -103,6 +111,8 @@ export interface OpenCommitmentRef {
 	ticket?: string;
 	/** The promise, as the agent wrote it */
 	text: string;
+	/** When it was promised (ISO); an old one gets the verify-first notice */
+	createdAt?: string;
 }
 
 /** A note to send to one restored agent. */
@@ -358,7 +368,14 @@ export function planCommitmentNotes(
 		const promises = list.map((c) => `- ${c.ticket ? `${c.ticket}: ` : ''}"${c.text.replace(/\s+/g, ' ').trim()}"`);
 		notes.push({
 			sessionName,
-			text: [buildResumeNote(tickets.length > 0 ? tickets.join(', ') : undefined), SAFE_RESTART.RESUME_PROMISE_HEADER, ...promises].join('\n'),
+			text: [
+				buildResumeNote(tickets.length > 0 ? tickets.join(', ') : undefined),
+				SAFE_RESTART.RESUME_PROMISE_HEADER,
+				...promises,
+				...(list.some((c) => c.createdAt && isStaleCommitment({ createdAt: c.createdAt }, new Date()))
+					? [staleCommitmentNotice({ createdAt: list.map((c) => c.createdAt ?? '').filter(Boolean).sort()[0] }, new Date()).trim()]
+					: []),
+			].join('\n'),
 		});
 	}
 	return notes;
@@ -412,11 +429,32 @@ export async function resumeInterruptedTurns(entries: readonly InterruptedTurnEn
 				continue;
 			}
 			if (!isOrc && !deps.isSessionRunning(entry.sessionName)) {
-				summary.skipped += 1;
-				deps.logger.warn('Interrupted turn not resumed: agent is not running after restart', {
-					sessionName: entry.sessionName,
-					messagePreview: entry.preview,
-				});
+				// The boot restore brings these agents back one by one, so at this
+				// point they are usually not up yet. Hold the note on the agent's
+				// persistent queue; registration flushes it. Only sessions that are
+				// not team members at all are dropped.
+				const known = deps.isKnownSession ? await deps.isKnownSession(entry.sessionName) : true;
+				if (!known) {
+					summary.skipped += 1;
+					deps.logger.warn('Interrupted turn not resumed: agent is not running after restart', {
+						sessionName: entry.sessionName,
+						messagePreview: entry.preview,
+					});
+				} else {
+					const isWork = entry.kind === 'work';
+					if (isWork) workNoted.add(entry.sessionName);
+					deps.queueForAgent(
+						entry.sessionName,
+						isWork
+							? buildResumeNote(entry.workLabel)
+							: buildResumeMessage(isQueueEntry(entry) ? entry.originalContent : entry.text, entry.workLabel ?? workLabelOf(entry.text)),
+					);
+					summary.redelivered += 1;
+					deps.logger.info('Interrupted turn queued for an agent that is not running yet', {
+						sessionName: entry.sessionName,
+						messagePreview: entry.preview,
+					});
+				}
 			} else if (entry.kind !== 'work' && isQueueEntry(entry)) {
 				deps.enqueue({
 					content: buildResumeMessage(entry.originalContent, entry.workLabel ?? workLabelOf(entry.text)),

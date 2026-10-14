@@ -91,7 +91,7 @@ run --to --message hi
 check "--to followed by another flag is refused" "Flag --to needs a value" "$OUT"
 
 run --bogus x
-check "unknown flag is refused" "Unknown option: --bogus" "$OUT"
+check "unknown flag is refused" "Unknown argument: --bogus" "$OUT"
 
 rm -rf "$STUB_DIR"
 echo ""

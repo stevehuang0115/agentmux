@@ -16,6 +16,7 @@ import type { OwnerDecision } from '../../types/decision.types.js';
 import { readProjectTicketLink } from '../../types/project-ticket.types.js';
 import { formatTicketNumber } from '../../types/v2/ticket.types.js';
 import { getTraceContext } from './trace-context.service.js';
+import { notifyRequest } from '../usage-ledger/ledger-hooks.js';
 import { appendTraceMarker, formatTraceMarker, skillLabel } from './trace-markers.js';
 import { TERMINAL_INPUT_MAX_LENGTH } from '../../utils/security.js';
 import { isTraceId, type TraceActor, type TraceEventType, type TraceOutcome, type TraceRefKind, type TraceRefs } from './trace.types.js';
@@ -299,6 +300,16 @@ export function assignRequestTrace(request: Request, opts: { traceId?: string; c
 		}
 		if (!traceId) return null;
 		request.traceId = traceId;
+		notifyRequest({
+			traceId,
+			requestId: request.id,
+			...(label ? { ticketId: label } : {}),
+			title: request.title,
+			description: request.description,
+			...(request.origin?.channel ? { channel: request.origin.channel } : {}),
+			...(request.origin?.threadRef ? { threadRef: request.origin.threadRef } : {}),
+			createdAt: request.createdAt,
+		});
 		store.linkRef('request', request.id, traceId);
 		if (label) store.linkRef('ticket', label, traceId);
 		ctx.record({
@@ -320,6 +331,18 @@ const REQUEST_STATUS_OUTCOME: Record<string, TraceOutcome> = {
 	waiting_confirmation: 'queued',
 	blocked: 'blocked',
 };
+
+/**
+ * Who an `awaiting_followup` ticket waits on: the owner when every active
+ * open item is a conditional promise waiting on them, else an agent.
+ *
+ * @param request - The Request
+ * @returns `owner` or `agent`
+ */
+export function followupWaitsOn(request: Pick<Request, 'openItems'>): 'owner' | 'agent' {
+	const active = (request.openItems ?? []).filter((i) => i.status === 'open' || i.status === 'waiting_owner' || i.status === 'ready' || i.status === 'overdue');
+	return active.length > 0 && active.every((i) => i.status === 'waiting_owner') ? 'owner' : 'agent';
+}
 
 /**
  * A Request (ticket) changed status: submitted for review, accepted, sent
@@ -348,6 +371,7 @@ export function traceRequestStatus(request: Request, previous: string): void {
 				to: request.status,
 				...(request.acceptedBy ? { acceptedBy: request.acceptedBy } : {}),
 				...(typeof request.rejectCount === 'number' ? { rejectCount: request.rejectCount } : {}),
+				...(request.status === 'awaiting_followup' ? { followupWaitsOn: followupWaitsOn(request) } : {}),
 			},
 		});
 	}, undefined);
@@ -522,14 +546,18 @@ export function withWorkItemTraceMarker(message: string, workItem: Pick<WorkItem
 
 /**
  * One agent messaged another through `/terminal/:to/*`: return the text with
- * the sender's trace appended so the receiving turn joins it, and record
- * `message.agent`.
+ * a trace appended so the receiving turn joins it, and record `message.agent`.
+ * An explicit link in the text (`[TRACE:…]`, work item id, `[TICKET:…]`) wins.
+ * Otherwise the sender's trace is appended, except when that trace is tagged
+ * with an autopilot project none of the recipient's teams works on: an
+ * orchestrator relay sent while its turn sat on another project's run would
+ * bill the recipient's work to that run (CREW-396).
  *
  * @param sender - Sending agent session
  * @param target - Receiving session
  * @param text - Message text
  * @param maxLength - Longest text the endpoint accepts; the marker is skipped when it would not fit
- * @returns The text to deliver (unchanged when the sender has no trace)
+ * @returns The text to deliver (unchanged when no trace applies)
  */
 export function carryAgentMessageTrace(
 	sender: string,
@@ -540,9 +568,13 @@ export function carryAgentMessageTrace(
 	return safely(() => {
 		if (!sender || sender === target) return text;
 		const ctx = getTraceContext();
-		if (ctx.resolveTracesFromText(text).length > 0) return text;
+		if (ctx.resolveTracesFromText(text, target).length > 0) {
+			const linked = ctx.resolveTracesFromText(text, target)[0];
+			ctx.record({ traceId: linked, type: 'message.agent', actor: agentActor(sender), summary: `${sender} → ${target}: ${text}`, refs: { session: target } });
+			return text;
+		}
 		const traceId = ensureTraceForSession(sender);
-		if (!traceId) return text;
+		if (!traceId || ctx.isForeignTo(traceId, target)) return text;
 		ctx.record({
 			traceId,
 			type: 'message.agent',

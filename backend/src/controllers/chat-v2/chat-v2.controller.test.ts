@@ -50,6 +50,18 @@ jest.mock('../../services/orc/reply-destination.wiring.js', () => ({
   deliverReply: (input: unknown) => mockDeliverReply(input),
 }));
 
+// Automatic file hand-off: the Cloud-facing service is swapped per test.
+const mockHandoff = {
+  attachToMessage: jest.fn(),
+  projectDirFor: jest.fn(),
+  crossMachine: jest.fn(),
+};
+jest.mock('../../services/file-handoff/file-handoff.wiring.js', () => ({
+  getFileHandoffService: () => ({ attachToMessage: (i: unknown) => mockHandoff.attachToMessage(i) }),
+  projectDirForAgent: (...a: unknown[]) => mockHandoff.projectDirFor(...a),
+  roomHasRemoteColleague: (...a: unknown[]) => mockHandoff.crossMachine(...a),
+}));
+
 /** Build a test app with the chat router mounted under /api/chat. */
 function buildApp() {
   const db = openChatDatabase({ dbPath: ':memory:', inMemory: true, skipIntegrityCheck: true });
@@ -67,6 +79,34 @@ function buildApp() {
 }
 
 describe('chat-v2 controller (REST)', () => {
+  it('GET /api/chat/search — a badged agent searches its own view; a bare session header or no query is refused', async () => {
+    const { app, service } = buildApp();
+    try {
+      const principal = { userId: 'dev-user-001', source: 'oss' as const };
+      const room = service.createHuddle({ name: 'awesome-videos', memberSessions: ['pia'], principal });
+      const other = service.createHuddle({ name: 'secret', memberSessions: ['bob'], principal });
+      service.recordTurn({ channelId: room.id, senderType: 'user', senderId: 'Steve', content: 'three-video plan', metadata: { source: 'slack' } });
+      service.recordTurn({ channelId: other.id, senderType: 'user', senderId: 'Steve', content: 'three-video budget', metadata: { source: 'slack' } });
+
+      const ok = await request(app).get('/api/chat/search?q=three-video').set(agentAuthHeaders('pia'));
+      expect(ok.status).toBe(200);
+      expect(ok.body.data.hits.map((h: { text: string }) => h.text)).toEqual(['three-video plan']);
+
+      // A session name without the badge proves nothing.
+      expect((await request(app).get('/api/chat/search?q=three-video').set('X-Agent-Session', 'pia')).status).toBe(403);
+      // The agent cannot widen its view with ?session=.
+      const widened = await request(app).get('/api/chat/search?q=three-video&session=bob').set(agentAuthHeaders('pia'));
+      expect(widened.body.data.hits).toHaveLength(1);
+      // The owner names the agent.
+      const asOwner = await request(app).get('/api/chat/search?q=budget&session=bob');
+      expect(asOwner.body.data.hits.map((h: { text: string }) => h.text)).toEqual(['three-video budget']);
+      expect((await request(app).get('/api/chat/search?session=bob')).status).toBe(400);
+      expect((await request(app).get('/api/chat/search?q=x&session=bob&from=nonsense')).status).toBe(400);
+    } finally {
+      service.close();
+    }
+  });
+
   it('GET /api/chat/agents/:session/timeline — merged timeline with source filter and cursor', async () => {
     const { app, service } = buildApp();
     try {
@@ -215,6 +255,36 @@ describe('chat-v2 controller (REST)', () => {
       // The realtime broadcast must have fired for the agent reply.
       const agentBroadcasts = calls.filter((c) => c.channelId === chId && c.event.payload?.message?.content === 'agent reply');
       expect(agentBroadcasts.length).toBe(1);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('POST /api/chat/channels/:id/messages — an agent reply the Slack mirror could not post answers 502 with the Slack error; user messages and delivered replies are unaffected (CREW-89)', async () => {
+    const { trackSlackDelivery } = await import('../../services/slack/slack-outbound-delivery.js');
+    const { app, service } = buildApp();
+    try {
+      const created = await request(app).post('/api/chat/channels').send({ agentSession: 'sess-a', name: 'Ch' });
+      const chId = created.body.data.id;
+      let outcome: 'fail' | 'ok' | 'none' = 'fail';
+      service.on('chat_message', (m: ChatMessageDTO) => {
+        if (m.senderType !== 'agent' || outcome === 'none') return;
+        trackSlackDelivery(m.id, Promise.resolve(outcome === 'fail'
+          ? { delivered: false, slackChannelId: 'C1', error: 'channel_not_found' }
+          : { delivered: true, slackChannelId: 'C1', ts: '1.1' }));
+      });
+      const failed = await request(app).post(`/api/chat/channels/${chId}/messages`).set('X-Agent-Session', 'sess-a').send({ content: 'r1' });
+      expect(failed.status).toBe(502);
+      expect(failed.body).toMatchObject({ success: false, data: { content: 'r1', slackDelivered: false } });
+      expect(failed.body.error).toContain('channel_not_found');
+      outcome = 'ok';
+      const ok = await request(app).post(`/api/chat/channels/${chId}/messages`).set('X-Agent-Session', 'sess-a').send({ content: 'r2' });
+      expect(ok.status).toBe(201);
+      outcome = 'none';
+      const plain = await request(app).post(`/api/chat/channels/${chId}/messages`).set('X-Agent-Session', 'sess-a').send({ content: 'r3' });
+      expect(plain.status).toBe(201);
+      const user = await request(app).post(`/api/chat/channels/${chId}/messages`).send({ content: 'hello' });
+      expect(user.status).toBe(201);
     } finally {
       service.close();
     }
@@ -1195,5 +1265,92 @@ describe('chat-v2 writes: sender comes from credentials, not a header (#1012)', 
     expect((await request(app).post('/api/chat/channels/dm/ensure').set(agentAuthHeaders(SAM)).send({ agentSession: SAM })).status).toBe(200);
     expect((await request(app).get('/api/chat/channels')).status).toBe(200);
     expect((await request(app).get(`/api/chat/channels/${orcDm.id}/messages`)).status).toBe(200);
+  });
+});
+
+describe('chat-v2 agent messages with files (automatic cross-machine hand-off)', () => {
+  const marker = '📎 report.pdf (2.1 MB) · crewly-file:hf_AAAAAAAAAAAAAAAAAAAAAA';
+
+  beforeEach(() => {
+    mockHandoff.attachToMessage.mockReset();
+    mockHandoff.projectDirFor.mockReset().mockResolvedValue('/proj');
+    mockHandoff.crossMachine.mockReset().mockResolvedValue(true);
+  });
+
+  async function setup() {
+    const { app, service } = buildApp();
+    const created = await request(app).post('/api/chat/channels').send({ agentSession: 'sess-a', name: 'Ch' });
+    return { app, service, chId: created.body.data.id as string };
+  }
+
+  it('stores the message with the marker line and reports the upload to the agent', async () => {
+    const { app, service, chId } = await setup();
+    try {
+      mockHandoff.attachToMessage.mockResolvedValue({
+        content: `Report ready\n${marker}`,
+        attached: [{ fileName: 'report.pdf', sizeBytes: 2202009, handoffId: 'hf_AAAAAAAAAAAAAAAAAAAAAA' }],
+        failed: [],
+      });
+      const res = await request(app)
+        .post(`/api/chat/channels/${chId}/messages`)
+        .set('X-Agent-Session', 'sess-a')
+        .send({ content: 'Report ready', files: ['./out/report.pdf'], projectPath: '/proj' });
+      expect(res.status).toBe(201);
+      expect(res.body.data.content).toBe(`Report ready\n${marker}`);
+      expect(res.body.fileHandoff.attached).toHaveLength(1);
+      expect(mockHandoff.attachToMessage).toHaveBeenCalledWith(expect.objectContaining({ explicit: ['./out/report.pdf'], projectDir: '/proj', agent: 'sess-a' }));
+    } finally {
+      service.close();
+    }
+  });
+
+  it('still posts the message when the upload fails, and says which file did not go', async () => {
+    const { app, service, chId } = await setup();
+    try {
+      mockHandoff.attachToMessage.mockResolvedValue({
+        content: 'Report ready',
+        attached: [],
+        failed: [{ file: './out/report.pdf', reason: 'This machine is not signed in to Crewly Cloud.' }],
+      });
+      const res = await request(app)
+        .post(`/api/chat/channels/${chId}/messages`)
+        .set('X-Agent-Session', 'sess-a')
+        .send({ content: 'Report ready', files: ['./out/report.pdf'] });
+      expect(res.status).toBe(201);
+      expect(res.body.data.content).toBe('Report ready');
+      expect(res.body.fileHandoff.failed[0].reason).toMatch(/not signed in/);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('a path in the text is attached only when the room reaches another machine', async () => {
+    const { app, service, chId } = await setup();
+    try {
+      mockHandoff.attachToMessage.mockResolvedValue({ content: `see /proj/a.pdf\n${marker}`, attached: [{ fileName: 'a.pdf', sizeBytes: 1, handoffId: 'hf_AAAAAAAAAAAAAAAAAAAAAA' }], failed: [] });
+      const yes = await request(app).post(`/api/chat/channels/${chId}/messages`).set('X-Agent-Session', 'sess-a').send({ content: 'see /proj/a.pdf' });
+      expect(yes.body.data.content).toContain('crewly-file:');
+      expect(mockHandoff.attachToMessage).toHaveBeenCalledWith(expect.objectContaining({ auto: true }));
+
+      mockHandoff.attachToMessage.mockClear();
+      mockHandoff.crossMachine.mockResolvedValue(false);
+      const no = await request(app).post(`/api/chat/channels/${chId}/messages`).set('X-Agent-Session', 'sess-a').send({ content: 'see /proj/b.pdf' });
+      expect(no.body.data.content).toBe('see /proj/b.pdf');
+      expect(mockHandoff.attachToMessage).not.toHaveBeenCalled();
+    } finally {
+      service.close();
+    }
+  });
+
+  it('never touches the owner\'s own messages', async () => {
+    const { app, service, chId } = await setup();
+    try {
+      const res = await request(app).post(`/api/chat/channels/${chId}/messages`).send({ content: 'look at /Users/me/a.pdf', files: ['/Users/me/a.pdf'] });
+      expect(res.status).toBe(201);
+      expect(res.body.data.content).toBe('look at /Users/me/a.pdf');
+      expect(mockHandoff.attachToMessage).not.toHaveBeenCalled();
+    } finally {
+      service.close();
+    }
   });
 });

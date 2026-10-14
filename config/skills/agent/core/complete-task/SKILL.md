@@ -37,7 +37,7 @@ execution:
 
 # Complete Task
 
-Mark a task as complete with a summary of the work done. If the task has an output schema, provide structured output that will be validated against the schema. Optionally skip quality gates if they have already been verified separately.
+Mark a task as complete with a summary of the work done. If the task has an output schema, provide structured output that will be validated against the schema. Unknown fields are refused, never silently dropped.
 
 ## Parameters
 
@@ -51,14 +51,20 @@ Mark a task as complete with a summary of the work done. If the task has an outp
 | `output` | No | Structured output object (required if task has an output schema) |
 | ~~`skipGates`~~ | **Rejected** | **Not supported.** This endpoint runs no quality gates, so there is nothing to skip. Passing it is a hard error. Use the `check-quality-gates` skill for gates. |
 
+**Any other field is an error.** The skill accepts only the fields in this table plus `verdict`/`feedback` (reviews) and `taskId`/`artifacts`/`testResults`/`structured` (verification requests). An unknown field (for example `projectPath`, `skipGates`, `force`) stops the call before anything is sent, and the error names the field. Put extra results inside `output`.
+
+On success the skill prints **one JSON line** that always names the `workItemId`, plus the server's reply (`success`, `message`, any `warning`).
+
 ### Which WorkItem gets completed
 
 Resolution order:
 
 1. `workItemId`, if you pass it — always wins.
-2. Otherwise, a lookup of the WorkItem currently `running` against your
+2. Otherwise, ONLY when you named no task (no `workItemId`, no `taskId`): a lookup of the WorkItem currently `running` against your
    `sessionName` (`GET /api/task-pool/items?status=running&target=<session>`).
-3. If neither resolves, the skill exits non-zero with an error naming the
+3. If you passed `taskId` without `workItemId`, the skill
+   refuses (non-zero exit): it never substitutes your running item for an id you named.
+4. If nothing resolves, the skill exits non-zero with an error naming the
    session it searched. It never reports success without completing something.
 
 Pass `workItemId` whenever you know it — the lookup in step 2 depends on the

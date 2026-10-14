@@ -29,7 +29,7 @@ describe('EmptyTerminalState', () => {
     
     const emptyState = screen.getByText('No terminal selected').closest('div');
     expect(emptyState).toHaveClass('text-center');
-    // Wrapped in the shared Card (surface token, rounded, shadow).
-    expect(emptyState?.parentElement).toHaveClass('bg-surface-dark', 'rounded-2xl', 'shadow-md');
+    // Wrapped in the shared Card (glass surface, rounded, shadow).
+    expect(emptyState?.parentElement).toHaveClass('cw-glass', 'rounded-2xl', 'shadow-md');
   });
 });

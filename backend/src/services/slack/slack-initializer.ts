@@ -7,7 +7,7 @@
  * @module services/slack/initializer
  */
 
-import { listChannelMembersWithToken } from './slack-channel-members.js';
+import { createChannelTokenOps, listChannelMembersWithToken } from './slack-channel-members.js';
 import { SlackDeliveryAuditService, getSlackDeliveryAuditService, setSlackDeliveryAuditService } from './slack-delivery-audit.service.js';
 import { getSlackService, type SlackService } from './slack.service.js';
 import { getSlackOrchestratorBridge } from './slack-orchestrator-bridge.js';
@@ -30,8 +30,11 @@ import {
 } from './slack-source-preference.service.js';
 import { getSlackTeamChannelService } from './slack-team-channel.service.js';
 import { cloudTalkCapabilities } from '../cloud/cloud-talk-inbound.service.js';
+import { driveCapabilities } from '../drive/drive-agent.service.js';
+import { canvasCapabilities } from '../board/canvas/canvas-inbound.service.js';
 import { talkTranscribeCapabilities } from '../talk/talk-transcribe.service.js';
 import { waitingActionCapabilities } from '../cloud/waiting-actions-inbound.service.js';
+import { teamMoveCapabilities } from '../team-move/team-move-driver.service.js';
 import { SlackConfig, SlackCloudConfig } from '../../types/slack.types.js';
 import { SLACK_CLOUD_CONSTANTS, CREWLY_CONSTANTS, SLACK_AGENT_DM_CONSTANTS, SLACK_TYPING_CONSTANTS } from '../../constants.js';
 import * as path from 'path';
@@ -39,7 +42,7 @@ import { getCrewlyHomePath } from '../core/crewly-home.utils.js';
 import { InFlightTurnTracker } from '../restart/in-flight-turn-tracker.service.js';
 import { OrcReplyRouteService } from '../orc/orc-reply-route.service.js';
 import { AgentTurnStateService } from '../monitoring/agent-turn-state.js';
-import { parseSlackThreadKey } from './slack-thread-key.js';
+import { parseSlackThreadKey, parseSlackChannelRef } from './slack-thread-key.js';
 import { getOwnerMessageWatchdog } from '../messaging/owner-message-watchdog.service.js';
 import type { MessageQueueService } from '../messaging/message-queue.service.js';
 import { LoggerService } from '../core/logger.service.js';
@@ -647,7 +650,7 @@ export async function ensureSlackInstanceRegistry(): Promise<SlackInstanceRegist
       getTeamChannels: () => getSlackTeamChannelService(),
       getBoundWorkspaceId: () => getSlackCloudConfigService()?.getConfig()?.workspace.slackTeamId || null,
       isAgentAwake: (agentSession) => sessionBackendExists(agentSession),
-      capabilities: () => [...cloudTalkCapabilities(), ...waitingActionCapabilities(), ...talkTranscribeCapabilities()],
+      capabilities: () => [...cloudTalkCapabilities(), ...waitingActionCapabilities(), ...canvasCapabilities(), ...talkTranscribeCapabilities(), ...driveCapabilities(), ...teamMoveCapabilities()],
     });
     setSlackInstanceRegistryService(registry);
   }
@@ -1002,6 +1005,10 @@ export async function startSlackTeamChannels(): Promise<void> {
           // Resolved lazily: the team-channel service is built just below.
           linkMentions: async (text, channelId) =>
             (await getSlackTeamChannelService()?.linkAgentMentions(text, channelId)) ?? text,
+          findMappedChannelByName: (name) => {
+            const m = getSlackTeamChannelService()?.findBySlackChannelName(name);
+            return m ? { id: m.slackChannelId, name: m.slackChannelName ?? name } : null;
+          },
         }),
       );
     }
@@ -1030,6 +1037,7 @@ export async function startSlackTeamChannels(): Promise<void> {
         resolveInstanceId: async () => getSlackInstanceRegistryService()?.resolveInstanceId() ?? null,
         onRoomsChanged: () => getSlackInstanceRegistryService()?.requestHeartbeat(),
         listChannelMembers: (channelId, botToken) => listChannelMembersWithToken(channelId, botToken),
+        channelOps: createChannelTokenOps(),
         refreshIdentities: () => identities.refreshFromCloud(),
         handoffViaCloud: async (body) => {
           const registry = getSlackInstanceRegistryService();
@@ -1076,6 +1084,15 @@ export async function startSlackTeamChannels(): Promise<void> {
       setSlackTeamChannelService(service);
     }
     await service.start();
+    // Another machine's orchestrator put some of our agents in a Slack channel
+    // (Cloud-pushed `roomJoin` envelope): link that channel here.
+    const joiningRooms = service;
+    getSlackService().roomJoinHandler = (join) =>
+      joiningRooms.joinRoomFromCloud({
+        slackChannelId: join.slackChannelId,
+        slackChannelName: join.slackChannelName,
+        sessions: join.sessions,
+      });
     // Owner messages in Slack that never reached any machine
     // (GET /api/slack/delivery-audit; specs/2026-10-04-room-delivery-audit.md).
     if (!getSlackDeliveryAuditService()) {
@@ -1160,20 +1177,33 @@ export async function startSlackTeamChannels(): Promise<void> {
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    // The Google authorization card needs three things this module owns:
-    // which Slack conversation a chat channel came from, a connect link that
-    // carries a ticket rather than the Cloud token, and a way to post so
-    // only the asker sees it.
+    // The Google authorization card needs two things this module owns: which
+    // Slack conversation a chat channel came from, and a way to post so only
+    // the asker sees it. Its link is the Cloud portal page (no token, no
+    // expiry), so no Cloud call is needed here.
     try {
       const { setConnectCardDeps } = await import('../../controllers/google/google-connect-card.js');
-      const { GoogleWorkspaceTokenService } = await import('../google/google-workspace-token.service.js');
+      const { GoogleReauthNotifier } = await import('../google/google-reauth-notifier.service.js');
       setConnectCardDeps({
-        originFor: async (chatChannelId) => {
-          const dm = getSlackAgentDmService()?.findByChatChannelId(chatChannelId);
+        originFor: async (ref) => {
+          const ownerId = getSlackService().getOwnerUserId?.() ?? null;
+          // The agent may pass the Slack side directly: a thread key, a
+          // `slack-<channel>-<ts>` chat channel, or a bare Slack channel id.
+          const slack = parseSlackChannelRef(ref);
+          if (slack) {
+            const mapped = getSlackAgentDmService()?.findBySlackChannelId(slack.slackChannelId);
+            const botToken = mapped ? identities?.getInstalled(mapped.agentSession)?.botToken : undefined;
+            return ownerId
+              ? { slackChannelId: slack.slackChannelId, slackUserId: ownerId, ...(slack.threadTs ? { threadTs: slack.threadTs } : {}), ...(botToken ? { botToken } : {}) }
+              : null;
+          }
+          const dm = getSlackAgentDmService()?.findByChatChannelId(ref);
           const slackChannelId = dm?.slackChannelId
-            ?? getSlackTeamChannelService()?.findByChatChannelId(chatChannelId)?.slackChannelId;
+            ?? getSlackTeamChannelService()?.findByChatChannelId(ref)?.slackChannelId;
           if (!slackChannelId) return null;
-          const slackUserId = lastSlackUserIn(getChatV2Service(), chatChannelId);
+          // The card is for the owner. Prefer whoever last wrote in the
+          // channel (a shared room may have other people), else the owner.
+          const slackUserId = lastSlackUserIn(getChatV2Service(), ref) ?? ownerId;
           if (!slackUserId) return null;
           const botToken = dm ? identities?.getInstalled(dm.agentSession)?.botToken : undefined;
           // The thread still waiting on the agent, not merely the newest one.
@@ -1185,12 +1215,39 @@ export async function startSlackTeamChannels(): Promise<void> {
             ...(botToken ? { botToken } : {}),
           };
         },
-        connectUrl: (args) => GoogleWorkspaceTokenService.getInstance().buildSlackConnectUrl(args),
-        postEphemeral: (channelId, userId, text, blocks, botToken) =>
-          getSlackService().sendEphemeral(channelId, userId, text, blocks, botToken),
+        postEphemeral: (channelId, userId, text, blocks, botToken, threadTs) =>
+          getSlackService().sendEphemeral(channelId, userId, text, blocks, botToken, threadTs),
+        // Origin unknown or refused: the reconnect notifier knows where the
+        // agent is answering the owner, else the owner's DM.
+        fallbackPost: async ({ product, account, agentSession }) => {
+          const result = await GoogleReauthNotifier.getInstance()?.notify({
+            product,
+            kind: 'not_connected',
+            resend: true,
+            ...(account ? { account } : {}),
+            ...(agentSession ? { agentSession } : {}),
+          });
+          return result?.status === 'posted';
+        },
       });
     } catch (err) {
       logger.warn('Google authorization cards unavailable', { error: err instanceof Error ? err.message : String(err) });
+    }
+    // Remote MCP sign-in cards (Zoho MCP …): the owner's DM with the agent
+    // whose call needed it, else the orchestrator's / workspace bot.
+    try {
+      const { setRemoteMcpAuthNotifier } = await import('../connector/remote-mcp-auth.service.js');
+      const { createSlackRemoteMcpNotifier } = await import('../connector/remote-mcp-auth-card.js');
+      setRemoteMcpAuthNotifier(createSlackRemoteMcpNotifier({
+        ownerUserId: () => getSlackService().getOwnerUserId?.() ?? null,
+        botTokenFor: (agentSession) =>
+          (agentSession ? identities?.getInstalled(agentSession)?.botToken : undefined)
+          ?? identities?.getInstalled(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME)?.botToken
+          ?? getSlackService().getBotToken()
+          ?? null,
+      }));
+    } catch (err) {
+      logger.warn('Remote MCP sign-in cards unavailable', { error: err instanceof Error ? err.message : String(err) });
     }
     // Team-channel threads and agent DMs belong to the agents, not the
     // orchestrator's resume briefing (which otherwise had the orchestrator

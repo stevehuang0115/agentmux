@@ -14,7 +14,7 @@
 
 import { GOOGLE_WORKSPACE_CONSTANTS } from '../../constants.js';
 import { GoogleWorkspaceError } from './google-workspace-token.service.js';
-import { buildGoogleUrl, googleRequest, type GoogleApiDeps } from './google-api.client.js';
+import { buildGoogleUrl, dropCachedToken, googleRequest, type GoogleApiDeps } from './google-api.client.js';
 import { requireId } from './drive.service.js';
 
 /** One reply under a comment. */
@@ -271,11 +271,12 @@ export class DocsCommentsService {
       if (await this.isScopeRefusal(err, docId)) {
         // The owner is about to widen the grant; the next call must not
         // reuse the narrow token cached for the next hour.
-        this.deps.tokens.clearCache(this.deps.account);
+        dropCachedToken(this.deps.tokens, this.deps.account);
         throw new GoogleWorkspaceError(
           403,
           GOOGLE_WORKSPACE_CONSTANTS.ERROR_CODES.REAUTH_REQUIRED,
           'Replying to or adding comments on this document needs Google Drive edit access, which this Google account has not granted yet.',
+          { reason: 'insufficient_scope', product: 'drive', ...(this.deps.account ? { account: this.deps.account } : {}) },
         );
       }
       throw err;
@@ -284,6 +285,8 @@ export class DocsCommentsService {
 
   private async isScopeRefusal(err: unknown, docId: string): Promise<boolean> {
     if (!(err instanceof GoogleWorkspaceError) || (err.status !== 403 && err.status !== 404)) return false;
+    // Google said outright that the token lacks a scope.
+    if (err.code === GOOGLE_WORKSPACE_CONSTANTS.ERROR_CODES.REAUTH_REQUIRED) return true;
     if (err.code !== GOOGLE_WORKSPACE_CONSTANTS.ERROR_CODES.GOOGLE_ERROR) return false;
     const scopes = this.deps.tokens.grantedScopes?.(this.deps.account ? { account: this.deps.account } : {});
     if (!scopes || scopes.includes(GOOGLE_WORKSPACE_CONSTANTS.DRIVE_FULL_SCOPE)) return false;

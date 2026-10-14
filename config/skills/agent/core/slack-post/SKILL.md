@@ -112,6 +112,7 @@ two are told apart. Write ids exactly as Slack shows them.
 | `--text-file` | | Read the text from a file |
 | `--thread` | `-t` | Slack thread timestamp to reply inside, or the `[SLACK-THREAD:<key>]` key from your prompt |
 | `--new-topic` | | A new top-level message. Use it for scheduled output (a briefing, a triage summary): without it, a post into a conversation where you still owe an answer from the last 30 minutes goes into that thread as the answer |
+| `--file` | `-f` | Upload a file into the channel/thread right after the text (repeatable, up to 5; relative paths resolve against your project). Sent by your own bot, or the workspace bot with your name when you have none. Output has `filesNotSent` with Slack's error code if one did not go |
 | `--json` | `-j` | Raw JSON payload |
 
 ## Environment

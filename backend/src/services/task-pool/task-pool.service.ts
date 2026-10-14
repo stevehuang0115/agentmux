@@ -56,7 +56,9 @@ import type { EventBusService } from '../event-bus/event-bus.service.js';
 import { orderForAgent, type ClaimTicketLookup } from './ticket-claim-policy.js';
 import { SUPERSEDED_BY_METADATA_KEY } from '../v3/request-completion.js';
 import { OrcReplyRouteService, type TurnOrigin } from '../orc/orc-reply-route.service.js';
-import { currentWorkItemOf, inheritedOrigin, isWorkItemOrigin, ownerOriginFromThreadKey, planWorkDestination } from '../orc/work-item-destination.js';
+import { currentWorkItemOf, inheritedOrigin, isWorkItemOrigin, originOfWorkItem, ownerOriginFromThreadKey, planWorkDestination } from '../orc/work-item-destination.js';
+import { reportOwnerThreadBlocking } from '../messaging/owner-thread-sentinel.service.js';
+import { getOwnerRequestContext, type OwnerRequestContext } from '../orc/owner-request-context.js';
 import { formatSlackThreadKey, parseSlackThreadKey } from '../slack/slack-thread-key.js';
 import { OPEN_ITEMS_CONSTANTS, TEAM_PAUSE_CONSTANTS, TL_DELEGATION_CONSTANTS, WORK_ITEM_DESTINATION_CONSTANTS } from '../../constants.js';
 import { assignWorkItemTrace } from '../trace/trace-recorder.js';
@@ -219,6 +221,12 @@ export interface AddToPoolOptions {
    * no `requestId`.
    */
   creatorSession?: string;
+  /**
+   * Inherit only an OWNER origin from the creator (never its current ticket /
+   * trigger work's): a lead assigning a project ticket while it handles the
+   * owner's request (the ticket's own link already says which ticket it is).
+   */
+  ownerOriginOnly?: boolean;
 }
 
 /**
@@ -226,8 +234,8 @@ export interface AddToPoolOptions {
  */
 /** Note put on an unassigned item when it is routed to a decider. */
 export const UNASSIGNED_ROUTE_NOTE =
-  '[没有指定执行人，交给你决定] 适合你就自己做；更适合别人就用 delegate-task 派给他（带上原内容），然后取消这一条。' +
-  '一段时间没人接会交给再上一级。';
+  '[No assignee set — yours to decide] If it suits you, do it yourself; if someone else is a better fit, hand it to them with delegate-task (include the original content), then cancel this item. ' +
+  'If nobody picks it up for a while, it goes to the next level up.';
 
 /** Who decides unassigned work (owner, 2026-09-24). */
 export interface UntargetedRouterDeps {
@@ -372,6 +380,23 @@ export class TaskPoolService {
    */
   private slackThreadConversationLookup: ((slackChannelId: string, threadTs: string) => Promise<string | null>) | null =
     defaultSlackThreadConversation;
+
+  /**
+   * The Slack thread of a chat message, for a delegation that names the
+   * owner's message by its chat id (`--thread <message id>`) instead of a
+   * Slack thread key. CE-199 (2026-10-07): Owen passed the owner's message id,
+   * it was ignored, and Vera's answer opened a new ticket thread instead of
+   * landing in the owner's thread. null disables it.
+   */
+  private chatMessageThreadLookup: ((messageId: string) => Promise<{ slackChannelId: string; threadTs: string; conversationId: string } | null>) | null =
+    defaultChatMessageThread;
+
+  /**
+   * The owner request the creating agent handles that is not a chat turn (an
+   * app comment, a colleague's hand-over). null disables it.
+   */
+  private ownerContextLookup: ((sessionName: string) => Promise<OwnerRequestContext | null>) | null = (session) =>
+    getOwnerRequestContext().resolve(session);
 
   /**
    * Serializes claim operations to prevent the race where two concurrent
@@ -529,6 +554,24 @@ export class TaskPoolService {
   }
 
   /**
+   * Replace (or disable with `null`) the owner request context lookup.
+   *
+   * @param lookup - Session → the owner request it handles
+   */
+  setOwnerContextLookup(lookup: ((sessionName: string) => Promise<OwnerRequestContext | null>) | null): void {
+    this.ownerContextLookup = lookup;
+  }
+
+  /**
+   * Override how a chat message id resolves to its Slack thread (tests).
+   *
+   * @param lookup - Lookup, or null to disable
+   */
+  setChatMessageThreadLookup(lookup: ((messageId: string) => Promise<{ slackChannelId: string; threadTs: string; conversationId: string } | null>) | null): void {
+    this.chatMessageThreadLookup = lookup;
+  }
+
+  /**
    * Wire the unassigned-work router: an item added with no target goes to
    * someone who decides (ticket owner → team lead → creator's lead →
    * orchestrator) instead of whoever is idle.
@@ -676,6 +719,45 @@ export class TaskPoolService {
   // -----------------------------------------------------------------------
 
   /**
+   * Add work items that came with a team from another machine (team move,
+   * crewly#1189), exactly as they were: ids, status and links are kept, no
+   * routing or request inference is applied. Items already in the pool are
+   * skipped, so a resumed import adds nothing twice.
+   *
+   * @param items - Work items from the package
+   * @returns How many were added
+   */
+  async importWorkItems(items: readonly WorkItem[]): Promise<number> {
+    let added = 0;
+    for (const item of items) {
+      if (!isWorkItem(item)) continue;
+      if (await this.storage.findWorkItem(item.id)) continue;
+      await this.storage.addWorkItem(item);
+      added += 1;
+    }
+    if (added > 0) await this.storage.flush();
+    return added;
+  }
+
+  /**
+   * Remove the work items of a team that moved to another machine (team move,
+   * crewly#1189) together with their claims, so nothing here tries to wake
+   * agents that live elsewhere now. The mover keeps copies for rollback.
+   *
+   * @param ids - Work item ids
+   * @returns How many items were removed
+   */
+  async removeWorkItemsForMove(ids: readonly string[]): Promise<number> {
+    if (ids.length === 0) return 0;
+    const idSet = new Set(ids);
+    const claimIds = new Set((await this.storage.getClaims()).filter((c) => idSet.has(c.workItemId)).map((c) => c.id));
+    const removed = await this.storage.removeWorkItems(idSet);
+    await this.storage.removeClaims(claimIds);
+    await this.storage.flush();
+    return removed;
+  }
+
+  /**
    * Adds an execution-ready WorkItem to the pool.
    *
    * Accepted statuses:
@@ -709,8 +791,9 @@ export class TaskPoolService {
       return;
     }
 
-    this.inferRequestIdFromTurn(workItem, options.creatorSession);
-    await this.inheritOrigin(workItem, options.creatorSession);
+    // An owner-origin-only add (a ticket assignment) keeps its own links.
+    if (!options.ownerOriginOnly) this.inferRequestIdFromTurn(workItem, options.creatorSession);
+    await this.inheritOrigin(workItem, options.creatorSession, options.ownerOriginOnly === true);
     await this.routeUntargeted(workItem, options.creatorSession);
     assignWorkItemTrace(workItem, options.creatorSession);
 
@@ -758,8 +841,9 @@ export class TaskPoolService {
    *
    * @param workItem - The item about to be stored
    * @param creatorSession - The agent creating it, when known
+   * @param ownerOnly - Stamp only an owner origin
    */
-  private async inheritOrigin(workItem: WorkItem, creatorSession?: string): Promise<void> {
+  private async inheritOrigin(workItem: WorkItem, creatorSession?: string, ownerOnly = false): Promise<void> {
     try {
       const meta = (workItem.metadata ?? {}) as Record<string, unknown>;
       const parentId = [workItem.parentWorkItemId, meta.verifyOf, meta.sourceWorkItemId].find(
@@ -775,12 +859,14 @@ export class TaskPoolService {
         ? await this.explicitOwnerOrigin(meta[TL_DELEGATION_CONSTANTS.OWNER_THREAD_FIELD], creator)
         : null;
       if (explicit) {
+        if (explicit.kind === 'owner' && creator && !explicit.receivedBy) explicit.receivedBy = creator;
         workItem.metadata = { ...meta, [WORK_ITEM_DESTINATION_CONSTANTS.METADATA_KEY]: explicit };
         this.logger.info('WorkItem took the owner thread its delegator named', { workItemId: workItem.id, creator });
         return;
       }
       let creatorWorkItem: WorkItem | null = null;
       let creatorDestination = null;
+      let creatorOwnerContext: OwnerRequestContext | null = null;
       if (!parent && creator) {
         creatorWorkItem = currentWorkItemOf(await this.storage.getWorkItems(), creator);
         creatorDestination = planWorkDestination({
@@ -788,9 +874,18 @@ export class TaskPoolService {
           ownerOrigin: this.turnOriginLookup?.(creator),
           now: Date.now(),
         });
+        creatorOwnerContext = this.ownerContextLookup ? await this.ownerContextLookup(creator).catch(() => null) : null;
       }
-      const origin = inheritedOrigin({ workItem, parent, creatorDestination, creatorWorkItem });
+      const origin = inheritedOrigin({
+        workItem,
+        parent,
+        creatorDestination,
+        creatorWorkItem,
+        ...(creator ? { creatorSession: creator } : {}),
+        creatorOwnerContext,
+      });
       if (!origin) return;
+      if (ownerOnly && origin.kind !== 'owner') return;
       workItem.metadata = { ...meta, [WORK_ITEM_DESTINATION_CONSTANTS.METADATA_KEY]: origin };
       this.logger.info('WorkItem inherited its origin', {
         workItemId: workItem.id,
@@ -816,7 +911,11 @@ export class TaskPoolService {
    */
   private async explicitOwnerOrigin(rawKey: unknown, creator?: string): Promise<ReturnType<typeof ownerOriginFromThreadKey>> {
     const key = parseSlackThreadKey(rawKey);
-    if (!key) return null;
+    if (!key) {
+      if (typeof rawKey !== 'string' || !CHAT_MESSAGE_ID_RE.test(rawKey.trim()) || !this.chatMessageThreadLookup) return null;
+      const found = await this.chatMessageThreadLookup(rawKey.trim()).catch(() => null);
+      return found ? ownerOriginFromThreadKey(formatSlackThreadKey(found.slackChannelId, found.threadTs), found.conversationId) : null;
+    }
     const turn = creator ? this.turnOriginLookup?.(creator) : undefined;
     const keyText = formatSlackThreadKey(key.slackChannelId, key.threadTs);
     const turnKey = turn?.slackThreadKey ?? (turn?.slackChannelId && turn.slackThreadTs ? formatSlackThreadKey(turn.slackChannelId, turn.slackThreadTs) : undefined);
@@ -1717,6 +1816,16 @@ export class TaskPoolService {
       reason,
     });
     await this.publishTaskStopped('task:blocked', updated, 'running', reason);
+    // The owner thread this work came from hears that it is blocked (work
+    // from a ticket or a trigger has its own place and says nothing there).
+    const origin = originOfWorkItem(updated);
+    if (!origin || origin.kind === 'owner') reportOwnerThreadBlocking(updated.target ?? options.agentId, {
+      kind: 'work_blocked',
+      ...(reason ? { reason } : {}),
+      ...(origin?.kind === 'owner' && origin.slackChannelId
+        ? { thread: { slackChannelId: origin.slackChannelId, ...(origin.threadTs ? { threadTs: origin.threadTs } : {}) } }
+        : {}),
+    });
   }
 
   /**
@@ -2093,6 +2202,7 @@ export class TaskPoolService {
     );
     if (verdict === 'verified') {
       await this.resolveBlockedDependents(workItemId);
+      await this.closeRejectedParentOfRetry(workItemId);
     }
     // #819: a verdict rendered THROUGH this method directly (POST /verdict,
     // or an escalation's owner resolution) never completes the tracking
@@ -2118,6 +2228,37 @@ export class TaskPoolService {
       }
     }
     return updated;
+  }
+
+  /**
+   * CREW-403: once a retry is verified, make sure the `rejected` parent it
+   * replaced is marked as dealt with.
+   *
+   * `rejected` only has a `→ queued` edge, so the parent can never be
+   * verified itself; its disposition (`succeeded_by` the retry) is what tells
+   * the escalation paths to leave it alone. The bridge stamps that when it
+   * creates the retry, but the stamp is best-effort. This re-applies it
+   * (idempotent: an existing disposition wins) so a lost stamp cannot leave a
+   * parent whose work is done sitting undisposed and escalating to the
+   * orchestrator, who cannot render a verdict on it.
+   *
+   * @param workItemId - The WorkItem that was just verified
+   */
+  private async closeRejectedParentOfRetry(workItemId: string): Promise<void> {
+    try {
+      const wi = await this.storage.findWorkItem(workItemId);
+      const parentId = wi?.metadata?.['sourceWorkItemId'];
+      if (!wi || typeof parentId !== 'string' || !workItemId.startsWith(`${parentId}:retry:`)) return;
+      await this.disposeFailedWorkItem(parentId, {
+        reason: `retry ${workItemId} verified`,
+        successorWorkItemId: workItemId,
+      });
+    } catch (err) {
+      this.logger.warn('Failed to close rejected parent after retry verified (non-fatal)', {
+        workItemId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**
@@ -2210,6 +2351,8 @@ export class TaskPoolService {
     }
     if (workItem.status === 'queued') {
       workItem = (await this.resumeOwnQueuedItemForCompletion(workItem, actor)) ?? workItem;
+    } else if (workItem.status === 'blocked') {
+      workItem = (await this.resumeOwnBlockedItemForCompletion(workItem, actor)) ?? workItem;
     }
     if (this.requiresVerification(workItem)) {
       await this.submitForVerification(workItemId, actor, result);
@@ -2263,6 +2406,59 @@ export class TaskPoolService {
         },
       );
       this.logger.info('Completion from the item\'s own agent landed while it was queued — resumed to finish it', {
+        workItemId: workItem.id,
+        agentId: session,
+      });
+      return resumed;
+    });
+  }
+
+  /**
+   * Puts a `blocked` WorkItem back to `running` when the agent that worked it
+   * reports it complete, so the completion lands instead of failing
+   * `blocked → done*` with a 409.
+   *
+   * CE-232 (CREW-439): Vera reported `[BLOCKED]` on her own running item
+   * (`blockItem`, which releases the claim), then finished the work and her
+   * `POST /task-pool/complete` was refused — there is no `blocked → done`
+   * transition and, unlike `queued`, no rescue. Only the item's owner gets
+   * one: the holder of its latest claim. A general `blocked → done` for anyone
+   * is deliberately not added. A `waiting_on_human` park (the reconciler
+   * resumes it itself) and a dependency block (never claimed, so it has no
+   * claim holder) are left alone.
+   *
+   * @param workItem - The blocked WorkItem
+   * @param actorInput - Who is completing it
+   * @returns The resumed (running) WorkItem, or null when the caller is not
+   *   the item's claim holder, the block is a human-wait park, or it is no
+   *   longer blocked
+   */
+  private async resumeOwnBlockedItemForCompletion(
+    workItem: WorkItem,
+    actorInput: TransitionActorInput,
+  ): Promise<WorkItem | null> {
+    if (workItem.blockSource === WORK_ITEM_BLOCK_SOURCES.WAITING_ON_HUMAN) return null;
+    const session = normalizeTransitionActor(actorInput)?.session;
+    if (!session) return null;
+    if ((await this.latestClaimHolder(workItem.id)) !== session) return null;
+
+    return this.withClaimLock(async () => {
+      const current = await this.storage.findWorkItem(workItem.id);
+      if (!current || current.status !== 'blocked') return current ?? null;
+      const resumed = await this.transitionStatus(
+        workItem.id,
+        'running',
+        { role: 'system', session, via: 'completeItem:resume-own-blocked' },
+        (wi) => {
+          wi.blockedReason = undefined;
+          wi.blockSource = undefined;
+          wi.metadata = {
+            ...(wi.metadata ?? {}),
+            completedWhileBlockedAt: new Date().toISOString(),
+          };
+        },
+      );
+      this.logger.info('Completion from the item\'s claim holder landed while it was blocked — resumed to finish it', {
         workItemId: workItem.id,
         agentId: session,
       });
@@ -3671,6 +3867,30 @@ function matchesFilters(wi: WorkItem, filters?: PoolFilters): boolean {
  * @param _threadTs - Thread root ts (the mapping is per channel)
  * @returns Conversation id, or null
  */
+/** A chat-v2 message id (UUID). */
+const CHAT_MESSAGE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Default {@link TaskPoolService.chatMessageThreadLookup}: the Slack thread a
+ * chat message was mirrored from or to (its thread root, else itself).
+ *
+ * @param messageId - chat-v2 message id
+ * @returns Slack thread + the chat conversation, or null when it has no Slack place
+ */
+async function defaultChatMessageThread(messageId: string): Promise<{ slackChannelId: string; threadTs: string; conversationId: string } | null> {
+  try {
+    const { getChatV2Service } = await import('../chat-v2/chat-v2.singleton.js');
+    const msg = getChatV2Service().getMessageForBridge(messageId);
+    const meta = (msg?.metadata ?? {}) as Record<string, unknown>;
+    const slackChannelId = typeof meta.slackChannelId === 'string' ? meta.slackChannelId : null;
+    const threadTs = [meta.slackThreadTs, meta.slackTs].find((v): v is string => typeof v === 'string' && v.length > 0) ?? null;
+    if (!msg || !slackChannelId || !threadTs) return null;
+    return { slackChannelId, threadTs, conversationId: msg.channelId };
+  } catch {
+    return null;
+  }
+}
+
 async function defaultSlackThreadConversation(slackChannelId: string, _threadTs: string): Promise<string | null> {
   try {
     const [{ getSlackTeamChannelService }, { getSlackAgentDmService }] = await Promise.all([

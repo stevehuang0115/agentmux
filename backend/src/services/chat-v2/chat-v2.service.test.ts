@@ -2068,6 +2068,31 @@ describe('ChatV2Service', () => {
       expect(service.queryHuddleMembersForDispatch(huddle.id).sort()).toEqual(['sess-b', 'sess-c']);
     });
 
+    it('a system-owned huddle marked shared (a Crewly channel) is open to the owner, not to non-member agents', () => {
+      const system: ChatPrincipal = { userId: 'system', source: 'oss' };
+      const room = service.createHuddle({ name: '#tech-brief', memberSessions: ['sess-a'], principal: system });
+      // Not shared yet: the owner cannot see it.
+      expect(() => service.getChannel(room.id, owner)).toThrow(ChatError);
+      service.setSharedChannelResolver((id) => id === room.id);
+      expect(service.getChannel(room.id, owner).id).toBe(room.id);
+      const msg = service.sendMessage({ channelId: room.id, principal: owner, content: 'morning', attachments: [] });
+      expect(msg.senderType).toBe('user');
+      expect(service.listMessages({ channelId: room.id, principal: owner }).messages).toHaveLength(1);
+      // An agent outside the roster is still refused.
+      const outsider: ChatPrincipal = { userId: 'user-a', agentSession: 'sess-zzz', source: 'oss' };
+      expect(() => service.sendMessage({ channelId: room.id, principal: outsider, content: 'x', attachments: [] })).toThrow(ChatError);
+      service.setSharedChannelResolver(null);
+      expect(() => service.getChannel(room.id, owner)).toThrow(ChatError);
+    });
+
+    it('renameChannelForBridge renames without a principal; blank names and unknown ids are no-ops', () => {
+      const huddle = makeTeamHuddle();
+      expect(service.renameChannelForBridge(huddle.id, '#daily-brief')).toBe(true);
+      expect(service.getChannelForBridge(huddle.id)?.name).toBe('#daily-brief');
+      expect(service.renameChannelForBridge(huddle.id, '  ')).toBe(false);
+      expect(service.renameChannelForBridge('ghost', '#x')).toBe(false);
+    });
+
     it('setHuddleMembers is a no-op on DMs and unknown ids', () => {
       const dm = createSam();
       expect(service.setHuddleMembers(dm.id, ['x'])).toEqual({ added: [], removed: [] });
@@ -2417,6 +2442,39 @@ describe('ChatV2Service', () => {
       expect(service.getCloudOutbox().count()).toBe(0);
       service.setOwnerIdentityProvider(() => ({ slackUserId: 'U-owner' }));
       expect(service.getCloudOutbox().count()).toBe(1);
+    });
+
+    describe('searchMessagesForAgent (search-chat skill)', () => {
+      beforeEach(() => {
+        service.close();
+        db = openChatDatabase({ dbPath: ':memory:', inMemory: true, skipIntegrityCheck: true });
+        service = new ChatV2Service({ config: loadChatV2Config({}), db });
+      });
+
+      function seedRoom() {
+        const room = service.createHuddle({ name: 'awesome-videos', memberSessions: ['pia', 'sam'], principal: owner });
+        const other = service.createHuddle({ name: 'secret', memberSessions: ['bob'], principal: owner });
+        service.recordTurn({ channelId: room.id, senderType: 'user', senderId: 'Steve', content: 'Three-video plan: intro, demo, wrap-up. ' + 'x'.repeat(400), metadata: { source: 'slack' } });
+        service.recordTurn({ channelId: other.id, senderType: 'user', senderId: 'Steve', content: 'Three-video budget', metadata: { source: 'slack' } });
+        return room;
+      }
+
+      it('returns compact hits only from what the agent can see', () => {
+        const room = seedRoom();
+        const hits = service.searchMessagesForAgent({ agentSession: 'pia', principal: { ...owner, agentSession: 'pia' }, query: 'three-video' });
+        expect(hits).toHaveLength(1);
+        expect(hits[0]).toMatchObject({ channelId: room.id, channel: 'awesome-videos', sender: 'Steve', threadId: null });
+        expect(hits[0].text.length).toBeLessThanOrEqual(301);
+        expect(hits[0].text.endsWith('…')).toBe(true);
+        expect(new Date(hits[0].time).toString()).not.toBe('Invalid Date');
+      });
+
+      it('refuses to search as another agent, and needs a keyword', () => {
+        seedRoom();
+        expect(() => service.searchMessagesForAgent({ agentSession: 'bob', principal: { ...owner, agentSession: 'pia' }, query: 'budget' })).toThrow(/own chat history/);
+        expect(() => service.searchMessagesForAgent({ agentSession: 'pia', principal: owner, query: '   ' })).toThrow(/query is required/);
+        expect(() => service.searchMessagesForAgent({ agentSession: '', principal: owner, query: 'x' })).toThrow(/agent session is required/);
+      });
     });
 
     describe('getAgentTimeline (§A.5)', () => {

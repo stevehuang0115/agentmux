@@ -1,4 +1,4 @@
-import { deriveMemberSessionName, resolveMemberSessionName, memberAgentId } from './member-session-name.utils.js';
+import { deriveMemberSessionName, resolveMemberSessionName, memberAgentId, memberNameFromSession } from './member-session-name.utils.js';
 
 describe('deriveMemberSessionName', () => {
   it('matches the team controller formula', () => {
@@ -27,5 +27,15 @@ describe('memberAgentId (permanent agent id)', () => {
 
   it('resolveMemberSessionName uses the agent id when the member is not running', () => {
     expect(resolveMemberSessionName('Crewly Marketing', { sessionName: '', agentId: 'mkt-dana-45506487', name: 'Dana Renamed', id: '45506487-1b63' })).toBe('mkt-dana-45506487');
+  });
+});
+
+describe('memberNameFromSession', () => {
+  it('turns a member session into its name', () => {
+    expect(memberNameFromSession('edu-game-milo-13e8d3ca')).toBe('Milo');
+    expect(memberNameFromSession('think-tank-atlas-b4e166f6')).toBe('Atlas');
+  });
+  it('leaves other names alone', () => {
+    expect(memberNameFromSession('crewly-orc')).toBe('crewly-orc');
   });
 });

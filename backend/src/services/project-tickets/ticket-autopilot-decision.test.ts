@@ -9,6 +9,8 @@ import {
   closedTicketsSince,
   decideDigest,
   decideReplan,
+  countReplans,
+  replanCeilingReached,
   effectiveReplanGapMs,
   decideTriage,
   nextReplanBackoff,
@@ -158,6 +160,26 @@ describe('decideReplan (specs/2026-10-04-autopilot-goal-replan.md)', () => {
     // Work in flight: the gap holds.
     expect(decideReplan(replan({ ...idle, idleAndEmpty: false, lastReplanAt: NOW - 2 * HOUR }))).toEqual({ action: 'skip', reason: 'replan_too_soon' });
     expect(effectiveReplanGapMs(0, true, 10 * MIN)).toBe(0);
+  });
+
+  it('caps all replans of the day at the hard ceiling, never below the daily cap (CREW-265)', () => {
+    expect(decideReplan(replan({ maxReplansPerDay: 4, replansToday: 1, replansTotalToday: 15, hardCeilingPerDay: 16 }))).toEqual({ action: 'replan' });
+    expect(decideReplan(replan({ maxReplansPerDay: 4, replansToday: 1, replansTotalToday: 16, hardCeilingPerDay: 16 }))).toEqual({ action: 'skip', reason: 'replanned_today' });
+    // A cap above the ceiling wins.
+    expect(replanCeilingReached(16, 20, 16)).toBe(false);
+    expect(replanCeilingReached(20, 20, 16)).toBe(true);
+    // No ceiling, no total: only the cap applies.
+    expect(replanCeilingReached(99, 4, 0)).toBe(false);
+    expect(replanCeilingReached(undefined, 4, 16)).toBe(false);
+  });
+
+  it('counts only replans that opened no tickets toward the daily cap (CREW-265)', () => {
+    expect(countReplans(undefined, '2026-10-05')).toEqual({ total: 0, productive: 0, counted: 0 });
+    expect(countReplans({ day: '2026-10-04', count: 4, productive: 3 }, '2026-10-05')).toEqual({ total: 0, productive: 0, counted: 0 });
+    expect(countReplans({ day: '2026-10-05', count: 4 }, '2026-10-05')).toEqual({ total: 4, productive: 0, counted: 4 });
+    expect(countReplans({ day: '2026-10-05', count: 4, productive: 4 }, '2026-10-05')).toEqual({ total: 4, productive: 4, counted: 0 });
+    // Never more productive than total.
+    expect(countReplans({ day: '2026-10-05', count: 2, productive: 5 }, '2026-10-05')).toEqual({ total: 2, productive: 2, counted: 0 });
   });
 
   it('honours a configurable daily limit, and an unlimited-today budget', () => {
@@ -350,9 +372,9 @@ describe('selectTriageCandidates', () => {
   it('lists ready tickets nobody can take, and ready tickets untouched for a day', () => {
     const { candidates } = selectTriageCandidates({
       tickets: [
-        ticket('CE-1', { status: 'ready' }),
+        ticket('CE-1', { status: 'ready', team: 't1' }),
         ticket('CE-2', { status: 'ready', team: 't-solo-lead' }),
-        ticket('CE-3', { status: 'ready', updatedAt: new Date(NOW - C.READY_STALE_MS).toISOString() }),
+        ticket('CE-3', { status: 'ready', team: 't1', updatedAt: new Date(NOW - C.READY_STALE_MS).toISOString() }),
       ],
       teams,
       now: NOW,
@@ -390,7 +412,10 @@ describe('helpers', () => {
   });
 
   it('knows who could take a ready ticket', () => {
-    expect(hasPossibleTaker({ team: null }, teams)).toBe(true);
+    // Team-less: only unambiguous when one team works the project (CREW-397)
+    expect(hasPossibleTaker({ team: null }, teams)).toBe(teams.length === 1);
+    expect(hasPossibleTaker({ team: null }, [teams[0], teams[0]])).toBe(false);
+    expect(hasPossibleTaker({ team: null }, [teams[0]])).toBe(true);
     expect(hasPossibleTaker({ team: 't-solo-lead' }, teams)).toBe(false);
     expect(hasPossibleTaker({ team: 'gone' }, teams)).toBe(false);
   });
@@ -564,6 +589,29 @@ describe('findStalledWork (CE 2026-10-05: in progress, assignee idle, nothing mo
     ]);
     const stalls = { 'CE-128': { count: 2, lastAt: now - 21 * 60_000 } };
     expect(findStalledWork({ ...base, tickets: [ticket()], members: [vera()], items, stalls })[0].action).toBe('release');
+  });
+
+  it('CREW-394: releases on consecutive failed pushes with the delivery cause, not the stall cause', () => {
+    const t0 = now - 21 * 60_000;
+    const run = (stall: { count: number; lastAt: number; failures?: number }) =>
+      findStalledWork({ ...base, tickets: [ticket()], members: [vera()], items, stalls: { 'CE-128': stall } })[0];
+    expect(run({ count: 0, lastAt: t0, failures: 1 })).toMatchObject({ action: 'redeliver' });
+    expect(run({ count: 0, lastAt: t0, failures: 2 })).toMatchObject({ action: 'release', releaseCause: 'delivery', deliveryFailures: 2 });
+    expect(run({ count: 2, lastAt: t0 })).toMatchObject({ action: 'release', releaseCause: 'stalled' });
+    // a delivered push resets failures to 0 (the service drops the field): back to counting stalls only
+    expect(run({ count: 1, lastAt: t0 })).toMatchObject({ action: 'redeliver' });
+    // failures recorded before the ticket last moved do not count
+    expect(run({ count: 0, lastAt: Date.parse('2026-10-05T15:30:00Z'), failures: 5 })).toMatchObject({ action: 'redeliver' });
+  });
+
+  it('CREW-394: a brief that keeps waiting on the queue is released as busy, not endless and not a stall', () => {
+    const t0 = now - 21 * 60_000;
+    const run = (stall: { count: number; lastAt: number; failures?: number; waiting?: number }) =>
+      findStalledWork({ ...base, tickets: [ticket()], members: [vera()], items, stalls: { 'CE-128': stall } })[0];
+    expect(run({ count: 0, lastAt: t0, waiting: 1 })).toMatchObject({ action: 'redeliver' });
+    expect(run({ count: 0, lastAt: t0, waiting: 2 })).toMatchObject({ action: 'release', releaseCause: 'busy', waitingPushes: 2 });
+    // waiting recorded before the ticket last moved does not count
+    expect(run({ count: 0, lastAt: Date.parse('2026-10-05T15:30:00Z'), waiting: 5 })).toMatchObject({ action: 'redeliver' });
   });
 
   it('skips a busy, registering or stopped assignee, a finished WorkItem and a parked ticket', () => {

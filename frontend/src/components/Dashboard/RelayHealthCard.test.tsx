@@ -328,7 +328,7 @@ describe('RelayHealthCard', () => {
       const connectedElements = screen.getAllByText('Connected');
       expect(connectedElements.length).toBeGreaterThanOrEqual(1);
       // The first one should be the status badge
-      expect(connectedElements[0].className).toContain('emerald');
+      expect(connectedElements[0].className).toContain('success');
     });
   });
 

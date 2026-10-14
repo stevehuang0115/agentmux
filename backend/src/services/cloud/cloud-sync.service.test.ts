@@ -28,6 +28,16 @@ jest.mock('../core/logger.service.js', () => ({
   },
 }));
 
+// The remembered queue id is written atomically (tmp + fsync + rename: several real I/O ticks).
+// These tests run on fake timers and poll with flushPromises, so use a one-step write here;
+// the atomic writer itself is covered in file-io.atomic-repair.test.ts.
+jest.mock('../../utils/file-io.utils.js', () => ({
+  ...jest.requireActual('../../utils/file-io.utils.js'),
+  atomicWriteJson: async (file: string, data: unknown) => {
+    await jest.requireActual('fs').promises.writeFile(file, JSON.stringify(data, null, 2), 'utf-8');
+  },
+}));
+
 jest.mock('../core/storage.service.js', () => ({
   StorageService: {
     getInstance: () => ({
@@ -649,6 +659,80 @@ describe('CloudSyncService', () => {
     });
   });
 
+  // CREW-89: a 429 quota_exceeded at restart left the machine without a queue
+  // for ~30 min; an owner Slack message sent meanwhile was lost for good.
+  describe('queue registration outage (CREW-89)', () => {
+    const token = buildJwt({ sub: 'user-abc-123' });
+    let failRegister = true;
+    const registerCalls = () => mockFetch.mock.calls.filter(([url]) => typeof url === 'string' && url.includes('/queue/register'));
+    /** Registration reads the fallback file (real I/O): settle over several turns. */
+    const untilRegisterCalls = async (n: number): Promise<void> => {
+      for (let i = 0; i < 100 && registerCalls().length < n; i++) await flushPromises();
+      for (let i = 0; i < 10; i++) await flushPromises();
+    };
+
+    beforeEach(() => {
+      failRegister = true;
+      mockFetch.mockImplementation(async (url: any) => {
+        if (typeof url === 'string' && url.includes('/queue/register')) {
+          return failRegister
+            ? mockResponse({ success: false, error: 'quota_exceeded', limit: 8, current: 8 }, 429)
+            : mockResponse({ success: true, queueId: 'q-new', peerQueueId: null });
+        }
+        return mockResponse({ success: true });
+      });
+    });
+    afterEach(async () => {
+      service.stop();
+      await fsp.rm(path.dirname(queueFile), { recursive: true, force: true });
+    });
+
+    it('emits inbound-gap-recovered with the gap start when registration comes back', async () => {
+      const recovered = jest.fn();
+      service.on('inbound-gap-recovered', recovered);
+      const t0 = Date.now();
+      service.start({ ...testConfig, token });
+      await untilRegisterCalls(1);
+      expect(recovered).not.toHaveBeenCalled();
+
+      failRegister = false;
+      jest.advanceTimersByTime(CLOUD_SYNC_CONSTANTS.REGISTER_INTERVAL_MS);
+      await untilRegisterCalls(2);
+
+      expect(recovered).toHaveBeenCalledTimes(1);
+      expect(recovered.mock.calls[0][0].since).toBeGreaterThanOrEqual(t0);
+      expect(service.getQueueId()).toBe('q-new');
+    });
+
+    it('does not emit inbound-gap-recovered when registration never failed', async () => {
+      failRegister = false;
+      const recovered = jest.fn();
+      service.on('inbound-gap-recovered', recovered);
+      service.start({ ...testConfig, token });
+      await untilRegisterCalls(1);
+      jest.advanceTimersByTime(CLOUD_SYNC_CONSTANTS.REGISTER_INTERVAL_MS);
+      await untilRegisterCalls(2);
+      expect(service.getQueueId()).toBe('q-new');
+      expect(recovered).not.toHaveBeenCalled();
+    });
+
+    it('emits queue-outage once after the threshold, not every minute', async () => {
+      const outage = jest.fn();
+      service.on('queue-outage', outage);
+      service.start({ ...testConfig, token });
+      await untilRegisterCalls(1);
+      // Retries back off (30 s … 5 min), so step by the longest gap each round.
+      const step = Math.max(...CLOUD_SYNC_CONSTANTS.REGISTER_RETRY_BACKOFF_MS);
+      const rounds = Math.ceil(CLOUD_SYNC_CONSTANTS.QUEUE_OUTAGE_NOTIFY_AFTER_MS / step) + 3;
+      for (let i = 0; i < rounds; i++) {
+        jest.advanceTimersByTime(step);
+        await untilRegisterCalls(i + 2);
+      }
+      expect(outage).toHaveBeenCalledTimes(1);
+      expect(outage.mock.calls[0][0].error).toContain('quota_exceeded');
+    });
+  });
+
   // A machine whose owner signs in under a second Crewly account keeps
   // asking for a queue named after its deviceId, which the relay still
   // attributes to the first account. The 403 repeats on every boot, the
@@ -950,6 +1034,23 @@ describe('CloudSyncService', () => {
     it('backs off 30 s, 1 min, 2 min, 5 min, then every 5 min', () => {
       expect([1, 2, 3, 4, 5, 6, 50].map(registerRetryDelay))
         .toEqual([30_000, 60_000, 120_000, 300_000, 300_000, 300_000, 300_000]);
+    });
+
+    it.each([
+      ['the Retry-After header', { 'retry-after': '90' }, { error: 'rate_limited' }, 90_000],
+      ['the body retryAfter', {}, { error: 'rate_limited', retryAfter: 120 }, 120_000],
+      ['a cap on very long waits (daily limit)', { 'retry-after': '40000' }, { error: 'daily_limit' }, CLOUD_SYNC_CONSTANTS.RETRY_AFTER_MAX_MS],
+    ])('honours the relay 429 retry hint: %s', async (_name, headers, body, expectedMs) => {
+      mockFetch.mockImplementation(async () => {
+        const res = mockResponse({ success: false, ...body }, 429) as unknown as { headers: unknown };
+        res.headers = { get: (k: string) => (headers as Record<string, string>)[k.toLowerCase()] ?? null };
+        return res as unknown as Response;
+      });
+      service.start(configWithJwt);
+      await settle();
+      const health = service.getHealth().relayQueue!;
+      expect(health.queueId).toBeNull();
+      expect(health.nextAttemptAt! - Date.now()).toBe(expectedMs);
     });
 
     it('retries a 429 on the backoff schedule, reports it in health, then starts polling once accepted', async () => {

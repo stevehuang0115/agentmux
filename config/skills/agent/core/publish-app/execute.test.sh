@@ -57,12 +57,35 @@ class H(BaseHTTPRequestHandler):
                 'message': 'x', 'notified': True, 'card': 'signed', 'cardPlace': 'owner-dm', 'linkId': 'lnk_3'}})
         if self.path == '/api/apps/28au74d9cj/visibility-request' and method == 'DELETE':
             return send(200, {'success': True, 'data': {'appId': '28au74d9cj', 'cancelled': True, 'visibility': 'private'}})
+        if self.path == '/api/apps/28au74d9cj/capability-request' and method == 'POST':
+            return send(200, {'success': True, 'data': {'appId': '28au74d9cj', 'requested': True, 'message': 'Requested: x', 'capabilities': [], 'capabilityRequest': dict(data)}})
+        if self.path == '/api/apps/28au74d9cj/capability-request' and method == 'DELETE':
+            return send(200, {'success': True, 'data': {'appId': '28au74d9cj', 'cancelled': True}})
         if self.path == '/api/apps/28au74d9cj/thumbnail/refresh':
             return send(200, {'success': True, 'data': {'appId': '28au74d9cj', 'captured': True, 'bytes': 1234}})
         if self.path == '/api/apps/bcdfghjkmn/thumbnail/refresh':
             return send(200, {'success': True, 'data': {'appId': 'bcdfghjkmn', 'captured': False, 'reason': 'no_browser', 'message': 'No Chrome'}})
         if self.path == '/api/apps/28au74d9cj/make-private':
             return send(200, {'success': True, 'data': {'appId': '28au74d9cj', 'visibility': 'private'}})
+        if self.path == '/api/apps/28au74d9cj/template-request':
+            if data.get('description') == 'leaky':
+                return send(422, {'success': False, 'error': 'unsafe_content', 'message': 'Not made into a template: app.js:3 — Google API key (AIza…(39 chars))',
+                    'findings': [{'path': 'app.js', 'line': 3, 'kind': 'secret', 'what': 'Google API key', 'excerpt': 'AIza…(39 chars)'}]})
+            return send(200, {'success': True, 'data': {'requested': True, 'decisionId': 'D-7', 'templateId': 'tpl-abcdefghij', 'version': 1,
+                'previewUrl': 'https://apps.crewlyai.com/_t/tpl-abcdefghij?d=t', 'listedVersion': None, 'files': 3, 'excluded': ['data records'], 'message': 'Asked the owner'}})
+        if self.path == '/api/apps/templates/mine':
+            return send(200, {'success': True, 'data': {'templates': [{'templateId': 'tpl-abcdefghij', 'name': 'Chores', 'status': 'listed', 'installs': 4, 'authorName': None,
+                'listed': {'version': 2}, 'draft': None, 'sourceAppId': 'x'}]}})
+        if self.path == '/api/apps/templates/tpl-abcdefghij/unlist':
+            return send(200, {'success': True, 'data': {'templateId': 'tpl-abcdefghij', 'status': 'unlisted'}})
+        if self.path.endswith('/owner') and method == 'PUT':
+            if data.get('owner') == 'channel:#nope':
+                return send(400, {'success': False, 'error': 'validation', 'message': 'No channel "#nope" on this machine.'})
+            return send(200, {'success': True, 'data': {'appId': '28au74d9cj', 'owner': {'kind': 'channel', 'explicit': True, 'name': '#daily-brief'}, 'previous': None}})
+        if method == 'DELETE' and self.path == '/api/apps/28au74d9cj':
+            return send(200, {'success': True, 'data': {'appId': '28au74d9cj', 'deleted': True}})
+        if method == 'DELETE' and self.path == '/api/apps/bcdfghjkmn':
+            return send(403, {'success': False, 'error': 'forbidden', 'message': 'This app is public, so only the owner can delete it.'})
         if self.path == '/api/apps/28au74d9cj/transfer':
             return send(200, {'success': True, 'data': {'appId': '28au74d9cj', 'name': 'G', 'publisher': data['toSession'], 'previous': 'dev-ella', 'changed': True, 'notified': [data['toSession']]}})
         if self.path.endswith('/rollback'):
@@ -71,7 +94,7 @@ class H(BaseHTTPRequestHandler):
         if self.path.endswith('/versions'):
             return send(200, {'success': True, 'data': [{'version': 2, 'current': True, 'note': None, 'files': 1, 'totalBytes': 9, 'createdAt': 't', 'entry': 'index.html'}]})
         if self.path == '/api/apps':
-            return send(200, {'success': True, 'data': [{'appId': 'a', 'name': 'A', 'url': 'u', 'agentSession': 's', 'currentVersion': 1, 'source': '/x'},
+            return send(200, {'success': True, 'data': [{'appId': 'a', 'name': 'A', 'url': 'u', 'agentSession': 's', 'team': 'Alpha', 'currentVersion': 1, 'source': '/x'},
                 {'appId': 'b', 'name': 'B', 'deleted': True}]})
         send(404, {'success': False, 'error': 'not_found'})
     def do_GET(self): self._reply('GET')
@@ -79,6 +102,9 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get('content-length', '0')); body = self.rfile.read(n).decode() if n else ''
         self._reply('POST', json.loads(body or '{}'))
+    def do_PUT(self):
+        n = int(self.headers.get('content-length', '0')); body = self.rfile.read(n).decode() if n else ''
+        self._reply('PUT', json.loads(body or '{}'))
     def log_message(self, *a, **k): pass
 HTTPServer(('127.0.0.1', PORT), H).serve_forever()
 PY
@@ -145,10 +171,17 @@ check "transfer: output" "$OUT" '{"success":true,"appId":"28au74d9cj","publisher
 check "transfer: request" "$(jq -c '{path, body}' "$STUB_LOG")" '{"path":"/api/apps/28au74d9cj/transfer","body":{"toSession":"edu-game-milo-13e8d3ca"}}'
 check "transfer needs --app" "$(run_err --transfer-to x | grep -c -- '--app is required with --transfer-to')" "1"
 
+OUT=$(run --app 28au74d9cj --delete)
+check "delete: output" "$OUT" '{"success":true,"appId":"28au74d9cj","deleted":true}'
+check "delete: request" "$(jq -c '{method, path}' "$STUB_LOG")" '{"method":"DELETE","path":"/api/apps/28au74d9cj"}'
+check "delete needs --app" "$(run_err --delete | grep -c -- '--app is required with --delete')" "1"
+OUT=$(run --app bcdfghjkmn --delete || true)
+check "delete: public app refused" "$(printf '%s' "$OUT" | jq -r '.success, .reason' | tr '\n' ' ')" "false forbidden "
+
 OUT=$(run --app 28au74d9cj --versions)
 check "versions" "$OUT" '{"success":true,"versions":[{"version":2,"current":true,"note":null,"files":1,"totalBytes":9,"createdAt":"t"}]}'
 OUT=$(run --list)
-check "list hides deleted" "$OUT" '{"success":true,"apps":[{"appId":"a","name":"A","url":"u","agent":"s","currentVersion":1,"source":"/x"}]}'
+check "list hides deleted" "$OUT" '{"success":true,"apps":[{"appId":"a","name":"A","url":"u","agent":"s","team":"Alpha","currentVersion":1,"source":"/x"}]}'
 
 OUT=$(run --dir "$APPDIR" --name nologin; true)
 check "backend error mapped" "$OUT" '{"success":false,"status":409,"reason":"not_logged_in","message":"not signed in","hint":"crewly cloud login"}'
@@ -204,6 +237,11 @@ check "publish + public with a refused name: message" "$(printf '%s' "$OUT" | jq
 OUT=$(run --app 28au74d9cj --cancel-public)
 check "cancel-public" "$OUT" '{"success":true,"appId":"28au74d9cj","cancelled":true,"visibility":"private"}'
 check "cancel-public: request" "$(jq -c '{method, path}' "$STUB_LOG")" '{"method":"DELETE","path":"/api/apps/28au74d9cj/visibility-request"}'
+OUT=$(run --app 28au74d9cj --capability microphone --capability-note "noise meter")
+check "capability: output" "$OUT" '{"success":true,"appId":"28au74d9cj","requested":true,"message":"Requested: x","capabilityRequest":{"capabilities":"microphone","note":"noise meter"}}'
+check "capability: request" "$(jq -c '{method, path, body}' "$STUB_LOG")" '{"method":"POST","path":"/api/apps/28au74d9cj/capability-request","body":{"capabilities":"microphone","note":"noise meter"}}'
+OUT=$(run --app 28au74d9cj --cancel-capability)
+check "cancel-capability" "$OUT" '{"success":true,"appId":"28au74d9cj","cancelled":true}'
 OUT=$(run --app 28au74d9cj --private)
 check "private" "$OUT" '{"success":true,"appId":"28au74d9cj","visibility":"private"}'
 check "private: request" "$(jq -c '{method, path}' "$STUB_LOG")" '{"method":"POST","path":"/api/apps/28au74d9cj/make-private"}'
@@ -219,6 +257,35 @@ OUT=$(run --app bcdfghjkmn --refresh-thumbnail || true)
 check "refresh-thumbnail without a browser" "$OUT" '{"success":false,"appId":"bcdfghjkmn","captured":false,"reason":"no_browser","message":"No Chrome"}'
 OUT=$(run_err --dir "$APPDIR" --refresh-thumbnail || true)
 check "--refresh-thumbnail is not a publish option" "$(printf '%s' "$OUT" | grep -c 'act on an app')" "1"
+
+# --owner (crewly-services apps/SPEC.md §15)
+OUT=$(run --app 28au74d9cj --owner 'channel:#daily-brief')
+check "owner alone: output" "$OUT" '{"success":true,"appId":"28au74d9cj","owner":{"kind":"channel","name":"#daily-brief","default":false}}'
+check "owner alone: request" "$(jq -c '{method, path, body}' "$STUB_LOG")" '{"method":"PUT","path":"/api/apps/28au74d9cj/owner","body":{"owner":"channel:#daily-brief"}}'
+check "owner alone needs --app" "$(run_err --owner 'team:dev' | grep -c -- '--app is required with --owner')" "1"
+OUT=$(run --dir "$APPDIR" --owner 'channel:#daily-brief')
+check "publish + owner: set after the publish" "$(printf '%s' "$OUT" | jq -c '{success, owner}')" '{"success":true,"owner":{"kind":"channel","name":"#daily-brief","default":false}}'
+check "publish + owner: last request is the owner change" "$(jq -r '.method + " " + .path' "$STUB_LOG")" "PUT /api/apps/28au74d9cj/owner"
+OUT=$(run --dir "$APPDIR" --owner 'channel:#nope')
+check "publish + bad owner: publish still succeeds, ownerError says why" "$(printf '%s' "$OUT" | jq -c '{success, ownerError}')" '{"success":true,"ownerError":"No channel \"#nope\" on this machine."}'
+
+# --- Marketplace templates ----------------------------------------------------
+printf '{"chores":[{"title":"Feed the cat"}]}' > "$WORK/sample.json"
+OUT=$(run --app 28au74d9cj --as-template --description "Kids' chores" --tags chores,kids --category family --author Steve --sample-data "$WORK/sample.json")
+check "as-template: asks the owner (output)" "$OUT" '{"success":true,"requested":true,"appId":"28au74d9cj","templateId":"tpl-abcdefghij","version":1,"decisionId":"D-7","previewUrl":"https://apps.crewlyai.com/_t/tpl-abcdefghij?d=t","listedVersion":null,"files":3,"excluded":["data records"],"message":"Asked the owner"}'
+check "as-template: request" "$(jq -c '{method, path, body, session}' "$STUB_LOG")" '{"method":"POST","path":"/api/apps/28au74d9cj/template-request","body":{"description":"Kids'"'"' chores","category":"family","tags":"chores,kids","author":"Steve","sampleData":{"chores":[{"title":"Feed the cat"}]}},"session":"dev-ella"}'
+OUT=$(run --app 28au74d9cj --as-template --description leaky; true)
+check "as-template: a refused scan lists the findings" "$OUT" '{"success":false,"status":422,"reason":"unsafe_content","message":"Not made into a template: app.js:3 — Google API key (AIza…(39 chars))","hint":"","findings":[{"path":"app.js","line":3,"kind":"secret","what":"Google API key","excerpt":"AIza…(39 chars)"}]}'
+check "as-template needs --description" "$(run_err --app 28au74d9cj --as-template | grep -c -- 'needs --description')" "1"
+check "as-template needs --app" "$(run_err --as-template --description x | grep -c -- 'needs --app')" "1"
+check "as-template is not a publish option" "$(run_err --dir "$APPDIR" --as-template --description x | grep -c -- 'publish it first')" "1"
+printf '[1]' > "$WORK/bad.json"
+check "as-template: sample data must be an object" "$(run_err --app 28au74d9cj --as-template --description x --sample-data "$WORK/bad.json" | grep -c -- 'must be a JSON object')" "1"
+OUT=$(run --my-templates)
+check "my-templates" "$OUT" '{"success":true,"templates":[{"templateId":"tpl-abcdefghij","name":"Chores","status":"listed","installs":4,"authorName":null,"listedVersion":2,"draftVersion":null}]}'
+OUT=$(run --unlist-template tpl-abcdefghij)
+check "unlist-template" "$OUT" '{"success":true,"templateId":"tpl-abcdefghij","status":"unlisted"}'
+check "unlist-template: bad id refused" "$(run_err --unlist-template ../x | grep -c 'template id')" "1"
 
 echo "publish-app: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

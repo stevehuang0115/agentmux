@@ -166,4 +166,82 @@ describe('AppCommentsSlackService', () => {
     expect(posts).toHaveLength(1);
     expect(relayed).toHaveLength(0);
   });
+
+  describe('room-owned threads (crewly-services apps/SPEC.md §15)', () => {
+    const roomLink = {
+      appId: 'app1',
+      commentId: 'c1',
+      agentSession: 'ella',
+      channel: 'C55',
+      threadTs: '300.1',
+      room: { kind: 'channel' as const, id: 'huddle-1', name: 'daily-brief' },
+      chatChannelId: 'huddle-1',
+      chatRootId: 'm1',
+      replyIds: [],
+      createdAt: 't',
+    };
+
+    it('the owner\'s Slack reply is relayed to the app AND left for the room (not consumed, no handled note)', async () => {
+      const svc = make();
+      await svc.saveLink({ ...roomLink });
+      const consumed = svc.interceptInbound({ channelId: 'C55', ts: '300.2', threadTs: '300.1', userId: 'UOWNER', text: 'also the footer' });
+      expect(consumed).toBe(false);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(relayed).toEqual([['app1', 'c1', 'also the footer', 'UOWNER']]);
+      expect(handled).toEqual([]);
+      expect(svc.linkOfChatRoot('m1')).toMatchObject({ commentId: 'c1' });
+    });
+
+    it('the DM mirror leaves room threads alone (owner comments, agent replies, status lines)', async () => {
+      const svc = make();
+      await svc.saveLink({ ...roomLink });
+      await svc.mirrorOwnerComments('ella', 'app1', 'A', [replyChange('r9', 'hi')]);
+      await svc.agentReplied('app1', 'c1', 'kai', 'done');
+      await svc.statusChanged('app1', 'c1', 'kai', 'resolve');
+      await svc.mirrorOwnerComments('ella', 'app1', 'A', [{ ...addChange(), comment: { id: 'c2', op: 'add', thread: thread() as never }, roomOwned: true }]);
+      expect(posts).toEqual([]);
+    });
+
+    it('links survive a restart (room fields kept, thread index only with a Slack thread)', async () => {
+      const svc = make();
+      await svc.saveLink({ ...roomLink, commentId: 'c3', channel: '', threadTs: '', chatRootId: 'm3' });
+      await svc.saveLink({ ...roomLink });
+      const again = make();
+      await again.load();
+      expect(again.linkOf('app1', 'c3')).toMatchObject({ room: roomLink.room, chatRootId: 'm3', channel: '' });
+      expect(again.linkOfChatRoot('m1')).toMatchObject({ commentId: 'c1' });
+    });
+  });
+  describe('voice comments (SPEC §16)', () => {
+    const AUDIO = { kind: 'audio', blobId: 'abcdefgh12345678', mime: 'audio/webm', durationMs: 42_000, size: 9000 };
+    const FILE = '/h/.crewly/tmp/app-comment-audio/app1-abcdefgh12345678.webm';
+    const files = { [AUDIO.blobId]: { blobId: AUDIO.blobId, commentId: 'c1', durationMs: 42_000, mime: 'audio/webm', path: FILE } };
+    const voiceAdd = (): AppChange => ({ seq: 1, kind: 'comment', actor: { kind: 'owner' }, comment: { id: 'c1', op: 'add', thread: { ...thread(), body: '', attachments: [AUDIO] } as never } });
+
+    it('uploads the recording into the DM thread as the agent\'s bot, after the root', async () => {
+      const uploads: Array<Record<string, string>> = [];
+      const svc = make({ uploadAudio: async (req) => void uploads.push(req) });
+      await svc.mirrorOwnerComments('ella', 'app1', 'Groceries', [voiceAdd()], files);
+      expect(posts).toHaveLength(1);
+      expect(posts[0].text).toContain('🎤 voice comment (0:42)');
+      expect(uploads).toEqual([{ agentSession: 'ella', channel: 'D1', threadTs: '100.1', filePath: FILE, filename: 'app1-abcdefgh12345678.webm', title: 'Voice comment (0:42)' }]);
+    });
+
+    it('without the file (or an uploader) it posts a link to the app in the thread instead', async () => {
+      const svc = make();
+      await svc.mirrorOwnerComments('ella', 'app1', 'Groceries', [voiceAdd()], {});
+      expect(posts).toHaveLength(2);
+      expect(posts[1]).toMatchObject({ threadTs: '100.1', text: '🎤 Voice comment (0:42) — listen in the app: <https://apps.test/app1|Open app>' });
+    });
+
+    it('a voice reply: a reply line, then the recording', async () => {
+      const uploads: string[] = [];
+      const svc = make({ uploadAudio: async (req) => void uploads.push(req.filePath) });
+      await svc.mirrorOwnerComments('ella', 'app1', 'Groceries', [addChange()]);
+      const reply: AppChange = { seq: 2, kind: 'comment', actor: { kind: 'owner' }, comment: { id: 'c1', op: 'reply', replyId: 'r1', thread: thread([{ id: 'r1', body: '', author: { kind: 'owner' }, attachments: [AUDIO] }]) as never } };
+      await svc.mirrorOwnerComments('ella', 'app1', 'Groceries', [reply], files);
+      expect(posts[1]).toMatchObject({ text: '💬 (voice comment)', threadTs: '100.1' });
+      expect(uploads).toEqual([FILE]);
+    });
+  });
 });

@@ -52,7 +52,7 @@ import { autopilotTicketTraceForStart, traceAutopilotTicketStarted } from './tic
 import type { AssigneeWakeResult, AssigneeWaker } from './ticket-assignee-waker.js';
 
 /** WorkItem statuses that still carry the ticket's work. */
-const LIVE_STATUSES: ReadonlySet<WorkItemStatus> = new Set([
+export const LIVE_STATUSES: ReadonlySet<WorkItemStatus> = new Set([
   'queued',
   'scheduled',
   'proposed',
@@ -85,7 +85,7 @@ export type ProjectTicketAccess = 'owner' | 'orchestrator' | 'lead' | 'member' |
 
 /** The subset of the task pool this service uses. */
 export interface ProjectTicketPool {
-  addToPool(workItem: WorkItem, options?: { creatorSession?: string }): Promise<void>;
+  addToPool(workItem: WorkItem, options?: { creatorSession?: string; ownerOriginOnly?: boolean }): Promise<void>;
   claimSpecificItem(agentId: string, workItemId: string): Promise<{ workItem: WorkItem } | null>;
   findWorkItem(workItemId: string): Promise<WorkItem | null>;
   getAllItems(): Promise<WorkItem[]>;
@@ -170,7 +170,7 @@ interface StartWorkOptions {
   /** Use this WorkItem (a delegation) instead of building one from the ticket */
   prepared?: (t: ProjectTicket) => WorkItem;
   /** Passed through to the pool's add */
-  addOptions?: { creatorSession?: string };
+  addOptions?: { creatorSession?: string; ownerOriginOnly?: boolean };
   /** Log lines written before the assignment line */
   logFirst?: string[];
 }
@@ -179,7 +179,7 @@ interface StartWorkOptions {
 export type TicketSyncOutcome = 'unchanged' | 'done' | 'review' | 'relinked' | 'returned';
 
 /** Where a ticket's WorkItem chain ends. */
-type ChainEnd =
+export type ChainEnd =
   | { kind: 'success'; wi: WorkItem }
   | { kind: 'live'; wi: WorkItem }
   | { kind: 'returned'; id: string; why: string }
@@ -207,6 +207,25 @@ export { isTeamLead };
  */
 function isSession(member: TeamMember, session: string): boolean {
   return member.sessionName === session || member.agentId === session;
+}
+
+/** A cancel note that says the work was finished ("verified", "done", "merged", ...). */
+const CANCEL_DONE_NOTE = /\b(verified|accepted|completed?|done|merged|shipped)\b/i;
+/** ...unless it negates that ("not done", "unverified", "never merged"). */
+const CANCEL_NOT_DONE_NOTE = /\b(not|never|n't|isn't|wasn't|un(?:verified|finished)|incomplete|before)\b|\bno\s+(?:work|evidence)/i;
+
+/**
+ * Whether a cancelled WorkItem had in fact finished its work: the cancel note
+ * says verified / done, or the item completed with evidence on record.
+ *
+ * @param wi - Cancelled work item
+ * @returns True when the ticket should move on (done / review), not back to ready
+ */
+export function cancelledAfterDoneWork(wi: WorkItem): boolean {
+  const note = wi.cancelReason ?? '';
+  if (note && CANCEL_DONE_NOTE.test(note) && !CANCEL_NOT_DONE_NOTE.test(note)) return true;
+  const evidence = (wi.result as { evidence?: unknown } | undefined)?.evidence;
+  return !!wi.completedAt && Array.isArray(evidence) && evidence.length > 0;
 }
 
 /**
@@ -628,7 +647,14 @@ export class ProjectTicketWorkflowService {
     if (isAgent && !teamId) throw new ProjectTicketError(403, `${who} is not on a team that works on ${ticket.id}`);
     if (teamId && options.start !== false) {
       await this.assertInFlightCap(project, who, caller);
-      const started = await this.startWork(project, id, who, this.actorName(caller), teamId, { self: false, allowed: ['backlog', 'ready'] });
+      // A lead assigning while it handles the owner's request: the work keeps
+      // the owner origin (2026-10-07: CREW-305/309/310 lost it and the
+      // finished work was never reported to the owner).
+      const started = await this.startWork(project, id, who, this.actorName(caller), teamId, {
+        self: false,
+        allowed: ['backlog', 'ready'],
+        ...(caller.session ? { addOptions: { creatorSession: caller.session, ownerOriginOnly: true } } : {}),
+      });
       const wake = await this.startStoppedAssignee(project, id, teamId, who, started.workItem, caller);
       return { ticket: started.ticket, workItem: started.workItem, ...(wake ? { wake } : {}) };
     }
@@ -728,7 +754,8 @@ export class ProjectTicketWorkflowService {
    */
   async claimNextForAgent(session: string): Promise<StartedTicketWork | null> {
     if (!session || session === ORCHESTRATOR_SESSION_NAME) return null;
-    const teams = (await this.directory.getTeams()).filter((t) => {
+    const allTeams = await this.directory.getTeams();
+    const teams = allTeams.filter((t) => {
       if (t.archived) return false;
       // A paused team is fed no tickets (specs/2026-10-04-team-pause.md).
       if (isTeamPausedNow(t)) return false;
@@ -749,9 +776,13 @@ export class ProjectTicketWorkflowService {
       if (tickets.some((t) => t.status === 'in_progress' && t.assignee === session)) return null;
       // Ticket autopilot brake: a project paused on its daily budget feeds nobody.
       if (this.autopilotPolicy && (await this.autopilotPolicy.isAutoClaimPaused(project).catch(() => false))) continue;
+      // Same set the autopilot's hasPossibleTaker sees (non-archived, not paused), or the two disagree.
+      const projectTeamCount = allTeams.filter((t) => !t.archived && !isTeamPausedNow(t) && (t.projectIds ?? []).includes(project.id)).length;
       for (const ticket of tickets) {
         if (ticket.status !== 'ready') continue;
-        const team = teams.find((t) => (t.projectIds ?? []).includes(project.id) && (!ticket.team || ticket.team === t.id));
+        // A team-less ticket is only unambiguous when ONE team works the project; with several it waits
+        // for a lead's triage (CREW-397: a Marketing writer auto-claimed a backend ticket).
+        const team = teams.find((t) => (t.projectIds ?? []).includes(project.id) && (ticket.team ? ticket.team === t.id : projectTeamCount === 1));
         if (team) candidates.push({ project, ticket, teamId: team.id });
       }
     }
@@ -1258,7 +1289,7 @@ export class ProjectTicketWorkflowService {
    * @param startId - The ticket's WorkItem
    * @returns Where the chain ends
    */
-  private async followChain(startId: string): Promise<ChainEnd> {
+  async followChain(startId: string): Promise<ChainEnd> {
     let current = startId;
     for (let hop = 0; hop < PROJECT_TICKET_CONSTANTS.MAX_SUCCESSOR_HOPS; hop++) {
       const wi = await this.pool.findWorkItem(current);
@@ -1273,6 +1304,9 @@ export class ProjectTicketWorkflowService {
         current = successor;
         continue;
       }
+      // A cancel that says the work was verified / done (or whose item carries
+      // done evidence) is a mis-closed success, not a request to redo it (#1125).
+      if (wi.status === 'cancelled' && cancelledAfterDoneWork(wi)) return { kind: 'success', wi };
       if (wi.status === 'cancelled') return { kind: 'returned', id: wi.id, why: `cancelled${wi.cancelReason ? `: ${wi.cancelReason}` : ''}` };
       if (disposition?.kind === 'terminal') return { kind: 'returned', id: wi.id, why: `${wi.status}${wi.error ? `: ${wi.error}` : ''}` };
       // failed / rejected with no decision yet: the harness is still choosing

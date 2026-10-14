@@ -17,6 +17,8 @@
  * @module controllers/chat-v2/chat-v2.controller
  */
 
+import type { AttachResult } from '../../services/file-handoff/file-handoff.service.js';
+import { awaitSlackDelivery } from '../../services/slack/slack-outbound-delivery.js';
 import type { Request, Response } from 'express';
 import type { AuthenticatedRequest } from '../../middleware/require-auth.middleware.js';
 import type { ChatV2Service } from '../../services/chat-v2/chat-v2.service.js';
@@ -39,7 +41,7 @@ import {
   type ChatPrincipal,
 } from '../../services/chat-v2/types.js';
 import { stripTraceMarkers } from '../../services/trace/trace-markers.js';
-import { getCallerIdentity, sendOwnerAuthRequired } from '../../middleware/caller-identity.middleware.js';
+import { getCallerIdentity, rejectUnverifiedCaller, sendOwnerAuthRequired } from '../../middleware/caller-identity.middleware.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -166,6 +168,36 @@ async function rerouteMismatchedAgentThread(req: Request, res: Response): Promis
     },
   });
   return true;
+}
+
+/**
+ * Upload the files of an agent's message and rewrite `req.body.content` with
+ * the marker lines. Never throws and never blocks the post: a failure is
+ * reported back to the agent in the response.
+ *
+ * @param req - The send request (body is updated in place)
+ * @returns The upload report, or null when no file was involved
+ */
+async function attachAgentFiles(req: Request): Promise<AttachResult | null> {
+  try {
+    const agentSession = principalFromRequest(req).agentSession ?? undefined;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (!agentSession || typeof body.content !== 'string') return null;
+    const [{ attachOutboundFiles }, wiring] = await Promise.all([
+      import('../../services/file-handoff/file-handoff.outbound.js'),
+      import('../../services/file-handoff/file-handoff.wiring.js'),
+    ]);
+    const result = await attachOutboundFiles(
+      { content: body.content, files: body.files, projectPath: body.projectPath, interim: body.interim === true },
+      agentSession,
+      String(req.params.id),
+      { service: wiring.getFileHandoffService(), projectDirFor: wiring.projectDirForAgent, crossMachine: wiring.roomHasRemoteColleague },
+    );
+    if (result) body.content = result.content;
+    return result;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -332,6 +364,7 @@ export interface ChatV2ControllerHandlers {
   listAgents: (req: Request, res: Response) => void | Promise<void>;
   getAgentPresence: (req: Request, res: Response) => void | Promise<void>;
   getAgentTimeline: (req: Request, res: Response) => void;
+  searchMessages: (req: Request, res: Response) => void;
 }
 
 /**
@@ -559,10 +592,14 @@ export function createChatV2Controller(
       // A colleague already answered the owner's latest message in this
       // thread: hold this one (specs/2026-10-03-one-responder-per-message.md §2).
       if (await holdAlreadyAnsweredReply(req, res)) return;
+      // Files an agent attached (`--file`) or mentioned by path travel as Cloud
+      // handoffs; their marker lines are appended to the text before it is stored.
+      const fileHandoff = await attachAgentFiles(req);
       // Persist + 201 — on error, runHandler serializes it and we bail
       // without running any post-ack side-effects. On success, the
       // closure populates `persisted` + `channelForDispatch`.
       let persisted: ChatMessageDTO | undefined;
+      let ackDeferred = false;
       let channelForDispatch: Awaited<ReturnType<typeof service.getChannel>> | null = null;
 
       runHandler(res, () => {
@@ -589,7 +626,10 @@ export function createChatV2Controller(
           threadId: body.threadId,
           interim: body.interim === true,
         });
-        res.status(201).json({ success: true, data: message });
+        // An agent's reply waits for its Slack mirror before it is acked
+        // (below), so a refused Slack post is not reported as delivered.
+        if (message.senderType === 'agent') ackDeferred = true;
+        else res.status(201).json({ success: true, data: message, ...(fileHandoff ? { fileHandoff: { attached: fileHandoff.attached, failed: fileHandoff.failed } } : {}) });
         persisted = message;
         // Look up channel for gateway + dispatcher wiring. `getChannel`
         // requires `principal.userId === channel.owner_user_id` — which
@@ -608,6 +648,20 @@ export function createChatV2Controller(
       // If `persisted` is still undefined, runHandler already serialized an
       // error response — skip the realtime fan-out.
       if (!persisted) return;
+
+      if (ackDeferred) {
+        const delivery = await awaitSlackDelivery(persisted.id);
+        if (delivery && !delivery.delivered) {
+          const error = delivery.error ?? 'Slack post failed';
+          res.status(502).json({
+            success: false,
+            error: `Slack delivery failed: ${error}`,
+            data: { ...persisted, slackDelivered: false },
+          });
+        } else {
+          res.status(201).json({ success: true, data: persisted, ...(fileHandoff ? { fileHandoff: { attached: fileHandoff.attached, failed: fileHandoff.failed } } : {}) });
+        }
+      }
 
       // -------- post-ack realtime side-effects --------
       const { gateway, dispatcher } = resolveDeps();
@@ -842,6 +896,42 @@ export function createChatV2Controller(
      * (specs/unified-conversations-cloud-store.md §A.5). `source` (or
      * `sources`) is a comma-separated filter.
      */
+    /**
+     * `GET /search?q=<keywords>&channel=&from=&to=&limit=&session=` — search the
+     * chat history the caller can see. An agent searches as itself (its badge);
+     * the owner names the agent with `session`. `from` / `to` take a date
+     * (`2026-10-09`) or a timestamp.
+     */
+    searchMessages: (req, res) =>
+      runHandler(res, () => {
+        const identity = getCallerIdentity(req);
+        if (identity.kind !== 'owner' && identity.kind !== 'relay-owner' && rejectUnverifiedCaller(req, res, 'Searching chat history')) return;
+        const principal = principalFromRequest(req);
+        const q = req.query;
+        const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+        const when = (v: unknown, endOfDay: boolean): number | undefined => {
+          const raw = str(v);
+          if (!raw) return undefined;
+          const ms = Date.parse(raw);
+          if (!Number.isFinite(ms)) {
+            throw new ChatError(CHAT_ERROR_CODES.VALIDATION, 400, `bad date: ${raw}`);
+          }
+          // A bare date means the whole day.
+          return endOfDay && /^\d{4}-\d{2}-\d{2}$/.test(raw) ? ms + 24 * 60 * 60 * 1000 : ms;
+        };
+        const limitRaw = typeof q.limit === 'string' ? Number.parseInt(q.limit, 10) : undefined;
+        const hits = service.searchMessagesForAgent({
+          agentSession: principal.agentSession ?? str(q.session) ?? '',
+          principal,
+          query: str(q.q) ?? '',
+          channel: str(q.channel),
+          from: when(q.from, false),
+          to: when(q.to, true),
+          limit: Number.isFinite(limitRaw) ? limitRaw : undefined,
+        });
+        res.json({ success: true, data: { count: hits.length, hits } });
+      }),
+
     getAgentTimeline: (req, res) =>
       runHandler(res, () => {
         const principal = principalFromRequest(req);

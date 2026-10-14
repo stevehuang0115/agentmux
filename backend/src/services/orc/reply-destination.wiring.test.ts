@@ -1,7 +1,7 @@
 import type { WorkItem } from '../../types/v2/work-item.types.js';
 import type { WorkDestinationDeps } from './work-item-destination.wiring.js';
 import type { ReplyResolverDeps } from './reply-destination-resolver.js';
-import { deliverReply, notDelivered, resolveSlackPlace, type ReplyDeliveryDeps } from './reply-destination.wiring.js';
+import { deliverReply, notDelivered, resetReplyDeliveryGuardForTesting, resolveSlackPlace, type ReplyDeliveryDeps } from './reply-destination.wiring.js';
 import { AgentPromptReferenceService } from './agent-prompt-reference.service.js';
 
 function resolver(over: Partial<ReplyResolverDeps> = {}): ReplyResolverDeps {
@@ -43,7 +43,10 @@ function deps(over: Partial<ReplyDeliveryDeps> = {}, r: Partial<ReplyResolverDep
 }
 
 describe('deliverReply', () => {
-  beforeEach(() => AgentPromptReferenceService.resetInstance());
+  beforeEach(() => {
+    AgentPromptReferenceService.resetInstance();
+    resetReplyDeliveryGuardForTesting();
+  });
 
   it('reply --ticket: delivered in the ticket thread and marked as its delivery', async () => {
     const d = deps();
@@ -59,17 +62,53 @@ describe('deliverReply', () => {
   });
 
   it('a conversation that does not take it → ok:false with the command, never a guess', async () => {
-    const d = deps({ deliverToConversation: jest.fn(async () => null) });
+    const failingPost = jest.fn(async () => { throw new Error('channel_not_found'); });
+    const d = deps({ deliverToConversation: jest.fn(async () => null), workDestination: async () => work(failingPost as never) });
     const r = await deliverReply({ session: 'owen', content: 'x', reference: { ticket: 'TKT-187' } }, d);
     expect(r).toEqual(expect.objectContaining({ ok: false }));
     expect(!r.ok && r.error).toMatch(/^Your message was NOT delivered: .*Run: reply "<your message>"$/);
   });
 
-  it('a hint that does not take it → resolved again without the hints', async () => {
+  it('a hint that does not take it → error, never a guessed place (#1136)', async () => {
     const deliver = jest.fn(async (i: { conversationId: string }) => (i.conversationId === 'room-ce' ? null : `msg-${i.conversationId}`));
     const d = deps({ deliverToConversation: deliver });
     const r = await deliverReply({ session: 'owen', content: 'x', hints: { conversationId: 'room-ce' } }, d);
-    expect(r.ok && r.conversationId).toBe('dm-owen');
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.error).toMatch(/NOT delivered/);
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it('a --thread in a channel the sender is not in fails loudly instead of posting elsewhere (#1136)', async () => {
+    const d = deps();
+    const r = await deliverReply({ session: 'quinn', content: 'x', hints: { thread: 'C0C46TTBNNP:1791284732.141309' } }, d);
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.error).toMatch(/NOT delivered: .*C0C46TTBNNP:1791284732.141309/);
+    expect(d.deliver).not.toHaveBeenCalled();
+  });
+
+  it('a delegated member answers in the delegated Slack thread, not in a new DM (#1109)', async () => {
+    const post = jest.fn(async (r: { target: string }) => ({ channelId: r.target, messageTs: '9.9' }));
+    const delegatedThread = jest.fn(async (_s: string, ch: string, ts: string) => ch === 'C0C46TTBNNP' && ts === '1791199260.411259');
+    const d = deps({ workDestination: async () => work(post) }, { delegatedThread });
+    const r = await deliverReply({ session: 'lyra', content: 'done', hints: { thread: 'C0C46TTBNNP:1791199260.411259' } }, d);
+    expect(r.ok).toBe(true);
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({ target: 'C0C46TTBNNP', threadTs: '1791199260.411259', agentSession: 'lyra' }));
+    expect(d.deliver).not.toHaveBeenCalled();
+  });
+
+  it('a thread that was not delegated to the member still fails (#1109)', async () => {
+    const d = deps({}, { delegatedThread: async () => false });
+    const r = await deliverReply({ session: 'lyra', content: 'done', hints: { thread: 'C0C46TTBNNP:1791199260.411259' } }, d);
+    expect(r.ok).toBe(false);
+  });
+
+  it('the same reply sent twice within the guard window is posted once (#1109)', async () => {
+    const d = deps();
+    const input = { session: 'owen', content: 'same text', reference: { ticket: 'TKT-187' } };
+    const a = await deliverReply(input, d);
+    const b = await deliverReply(input, d);
+    expect(a.ok && b.ok).toBe(true);
+    expect(d.deliver).toHaveBeenCalledTimes(1);
   });
 
   it('answering the prompted reference clears it', async () => {
@@ -78,6 +117,51 @@ describe('deliverReply', () => {
     const r = await deliverReply({ session: 'owen', content: 'here' }, d);
     expect(r.ok && r.conversationId).toBe('room-ce');
     expect(AgentPromptReferenceService.getInstance().get('owen')).toBeUndefined();
+  });
+});
+
+describe('deliverReply — CREW-335: a reply to a decision whose card has no chat row', () => {
+  const CARD = 'C0CE00001:1791427303.380879';
+  const decisionResolver = { decision: async () => ({ id: 'D-457', asker: 'nova', slackChannelId: 'C0CE00001', threadTs: '1791427303.380879' }) } as unknown as Partial<ReplyResolverDeps>;
+
+  beforeEach(() => AgentPromptReferenceService.resetInstance());
+
+  it('the room refuses (no thread root) → posted straight into the card\'s Slack thread', async () => {
+    const post = jest.fn(async (r: { target: string }) => ({ channelId: r.target, messageTs: '9.9' }));
+    const d = deps({ deliverToConversation: jest.fn(async () => null), workDestination: async () => work(post as never) }, decisionResolver);
+    const r = await deliverReply({ session: 'nova', content: 'done, (a) executed', reference: { decisionId: 'D-457' } }, d);
+    expect(r.ok).toBe(true);
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({ target: 'C0CE00001', threadTs: '1791427303.380879' }));
+  });
+
+  it('the Slack thread refuses too → a new top-level post in the room channel', async () => {
+    const post = jest.fn(async (r: { target: string; threadTs?: string }) => {
+      if (r.threadTs) throw new Error('thread_not_found');
+      return { channelId: r.target, messageTs: '9.9' };
+    });
+    const d = deps({ deliverToConversation: jest.fn(async () => null), workDestination: async () => work(post as never) }, decisionResolver);
+    const r = await deliverReply({ session: 'nova', content: 'done', reference: { decisionId: 'D-457' } }, d);
+    expect(r.ok).toBe(true);
+    expect(post).toHaveBeenLastCalledWith(expect.objectContaining({ newTopLevel: true }));
+  });
+
+  it('a member whose post failed is not told it may not be a member, nor to run the command that just failed', async () => {
+    const post = jest.fn(async () => { throw new Error('boom'); });
+    const d = deps({ deliverToConversation: jest.fn(async () => null), workDestination: async () => work(post as never) }, decisionResolver);
+    AgentPromptReferenceService.getInstance().note('nova', { decisionId: 'D-457' }, '[DECISION D-457]');
+    const r = await deliverReply({ session: 'nova', content: 'x', reference: { decisionId: 'D-457' } }, { ...d, resolver: { ...d.resolver, promptReference: (s: string) => AgentPromptReferenceService.getInstance().get(s) } } as never);
+    expect(r.ok).toBe(false);
+    const error = !r.ok ? r.error : '';
+    expect(error).not.toMatch(/may not be a member/);
+    expect(error).toMatch(/could not post it into its Slack thread/);
+    expect(error).not.toMatch(/reply --decision D-457/);
+  });
+
+  it('a genuine membership failure still says so', async () => {
+    const post = jest.fn(async () => { throw new Error('boom'); });
+    const d = deps({ deliverToConversation: jest.fn(async () => null), workDestination: async () => work(post as never) }, { ...decisionResolver, ownsConversation: async () => false });
+    const r = await deliverReply({ session: 'nova', content: 'x', reference: { ticket: 'TKT-187' } }, d);
+    expect(!r.ok && r.error).toMatch(/not a member there/);
   });
 });
 
@@ -167,9 +251,39 @@ describe('deliverReply — work delegated from the owner\'s DM with another agen
 
   it('a team-channel destination is never swapped for a DM', async () => {
     const deliver = jest.fn(async () => null);
-    const d = deps({ deliverToConversation: deliver });
+    const failingPost = jest.fn(async () => { throw new Error('channel_not_found'); });
+    const d = deps({ deliverToConversation: deliver, workDestination: async () => work(failingPost as never) });
     const res = await deliverReply({ session: 'owen', content: 'x', reference: { ticket: 'TKT-187' } }, d);
     expect(res.ok).toBe(false);
     expect(deliver).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('deliverReply — decision-card threads (CREW-438)', () => {
+  beforeEach(() => AgentPromptReferenceService.resetInstance());
+
+  const refuse = () => jest.fn(async () => null);
+
+  it('a refused --conversation + Slack-thread hint in a mapped channel is posted straight to that Slack thread', async () => {
+    const post = jest.fn(async (r: { target: string }) => ({ channelId: r.target, messageTs: '9.9' }));
+    const d = deps({ deliverToConversation: refuse(), workDestination: async () => work(post) });
+    const r = await deliverReply({ session: 'owen', content: 'my answer', hints: { conversationId: 'room-ce', thread: 'C0CE00001:1790000000.000001' } }, d);
+    expect(r.ok).toBe(true);
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({ target: 'C0CE00001', threadTs: '1790000000.000001', text: 'my answer' }));
+    expect(r).toMatchObject({ ok: true, slackChannelId: 'C0CE00001', threadTs: '1790000000.000001' });
+  });
+
+  it('does not post to a Slack thread of a different channel than the conversation is mapped to', async () => {
+    const post = jest.fn(async (r: { target: string }) => ({ channelId: r.target, messageTs: '9.9' }));
+    const d = deps({ deliverToConversation: refuse(), workDestination: async () => work(post) });
+    await deliverReply({ session: 'owen', content: 'x', hints: { conversationId: 'room-ce', thread: 'C0OTHER99:1790000000.000001' } }, d);
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ target: 'C0OTHER99' }));
+  });
+
+  it('the refusal names reply --decision D-n when the thread is a decision card', async () => {
+    const d = deps({ deliverToConversation: refuse(), workDestination: async () => work(jest.fn(async (_r: { target: string }) => { throw new Error('slack down'); })), decisionOfCardThread: async (ch, ts) => (ch === 'C0CE00001' && ts === '1790000000.000001' ? 'D-42' : null) });
+    const r = await deliverReply({ session: 'owen', content: 'x', hints: { conversationId: 'room-ce', thread: 'C0CE00001:1790000000.000001' } }, d);
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.error).toContain('reply --decision D-42');
   });
 });

@@ -1072,3 +1072,223 @@ describe('AppWakeService — @mentions in comments (crewly-services apps/SPEC.md
     expect(deliver).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('AppWakeService — app owners (crewly-services apps/SPEC.md §15)', () => {
+  const KAI = 'crewly-dev-kai-11111111';
+  const ATLAS = 'crewly-research-atlas-0a1b2c3d';
+  const ROOM = { kind: 'channel' as const, id: 'huddle-brief', name: 'daily-brief' };
+  const thread = (mentions: Array<{ session: string; name: string; instanceId: string }> = []): AppCommentThread => ({
+    id: 'c1',
+    number: 1,
+    anchor: { tag: 'div', text: 'Today' },
+    body: 'Shorter please',
+    mentions,
+    replies: [],
+    status: 'open',
+  });
+  let deliverRoom: jest.Mock;
+  let roomMembers: jest.Mock;
+  let roomFallback: jest.Mock;
+  let local: Set<string>;
+
+  function ownerService(): AppWakeService {
+    return new AppWakeService({
+      client: cloud,
+      registry: registry as unknown as AppsRegistryService,
+      deliver,
+      resolveAgent,
+      isRunning: (s) => running.has(s),
+      isLocalAgent: async (s) => local.has(s),
+      instanceId: async () => 'inst-1',
+      roomMembers,
+      deliverRoom,
+      roomFallback,
+      skillsPath: '/skills/agent',
+    });
+  }
+
+  beforeEach(async () => {
+    deliverRoom = jest.fn().mockResolvedValue(true);
+    roomMembers = jest.fn().mockResolvedValue(['dev-ella', KAI]);
+    roomFallback = jest.fn().mockResolvedValue(null);
+    local = new Set(['dev-ella', KAI, ATLAS]);
+    svc.stop();
+    svc = ownerService();
+    registry.add(ID);
+    await svc.tick(); // inbox head + app head
+  });
+
+  it('a comment Cloud routed to the explicit owner is skipped in the publisher\'s feed', async () => {
+    cloud.push(ID, { kind: 'comment', comment: { id: 'c1', op: 'add', thread: thread() }, ownerRouted: true, actor: { kind: 'owner', id: 'u1' } } as unknown as Omit<AppChange, 'seq'>);
+    await svc.tick();
+    await jest.advanceTimersByTimeAsync(10 * MIN);
+    expect(deliver).not.toHaveBeenCalled();
+    expect(registry.apps.get(ID)?.cursor).toBe(1);
+  });
+
+  it('a channel owner\'s entry is posted into the room after a short window (no agent wake); a resend is not doubled', async () => {
+    cloud.mention({ appId: ID, appName: 'Daily brief', session: '', name: 'daily-brief', reason: 'owner', room: ROOM, op: 'add', commentId: 'c1', thread: thread() });
+    await svc.tick();
+    expect(deliverRoom).not.toHaveBeenCalled();
+    await jest.advanceTimersByTimeAsync(CREWLY_APPS_CONSTANTS.COMMENTS.ROOM_BATCH_WINDOW_MS);
+    expect(deliverRoom).toHaveBeenCalledTimes(1);
+    expect(deliverRoom.mock.calls[0][0]).toMatchObject({ appId: ID, appName: 'Groceries', room: ROOM, comments: [{ kind: 'comment', comment: { id: 'c1', op: 'add' } }] });
+    expect(deliver).not.toHaveBeenCalled();
+    expect(registry.mentionProgress.cursor).toBe(1);
+    await svc.tick();
+    await jest.advanceTimersByTimeAsync(10 * MIN);
+    expect(deliverRoom).toHaveBeenCalledTimes(1);
+  });
+
+  it('a reply the owner wrote in Slack reaches the room marked via slack (the room service skips it there)', async () => {
+    cloud.mention({ appId: ID, session: '', name: 'daily-brief', reason: 'owner', room: ROOM, op: 'reply', replyId: 'r1', via: 'slack', commentId: 'c1', thread: thread() });
+    await svc.tick();
+    await jest.advanceTimersByTimeAsync(CREWLY_APPS_CONSTANTS.COMMENTS.ROOM_BATCH_WINDOW_MS);
+    expect(deliverRoom.mock.calls[0][0].comments[0].actor).toEqual({ kind: 'owner', via: 'slack' });
+  });
+
+  it('a failed room post is retried; the inbox cursor stays before it until it lands', async () => {
+    deliverRoom.mockResolvedValueOnce(false);
+    cloud.mention({ appId: ID, session: '', name: 'daily-brief', reason: 'owner', room: ROOM, op: 'add', commentId: 'c1', thread: thread() });
+    await svc.tick();
+    await jest.advanceTimersByTimeAsync(CREWLY_APPS_CONSTANTS.COMMENTS.ROOM_BATCH_WINDOW_MS);
+    expect(deliverRoom).toHaveBeenCalledTimes(1);
+    expect(registry.mentionProgress.cursor).toBe(0);
+    await jest.advanceTimersByTimeAsync(CREWLY_APPS_CONSTANTS.WAKE_RETRY_BASE_MS);
+    expect(deliverRoom).toHaveBeenCalledTimes(2);
+    await svc.tick();
+    expect(registry.mentionProgress.cursor).toBe(1);
+  });
+
+  it('an @mentioned agent of this machine outside the room is woken too; members are left to the room', async () => {
+    const atlas = { session: ATLAS, name: 'Atlas', instanceId: 'inst-1' };
+    const kai = { session: KAI, name: 'Kai', instanceId: 'inst-1' };
+    cloud.mention({ appId: ID, session: '', name: 'daily-brief', reason: 'owner', room: ROOM, op: 'add', commentId: 'c1', thread: thread([kai, atlas]) });
+    await svc.tick();
+    await jest.advanceTimersByTimeAsync(90_000);
+    expect(deliverRoom).toHaveBeenCalledTimes(1);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver.mock.calls[0][0]).toBe(ATLAS);
+    expect(deliver.mock.calls[0][1]).toContain('mentioned you');
+  });
+
+  it('a team without a room here falls back to its lead; a missing channel to the orchestrator', async () => {
+    roomMembers.mockResolvedValue(null);
+    roomFallback.mockImplementation(async (r: { kind: string }) => (r.kind === 'team' ? KAI : null));
+    cloud.mention({ appId: ID, session: '', name: 'Dev', reason: 'owner', room: { kind: 'team', id: 't-dev', name: 'Dev' }, op: 'add', commentId: 'c1', thread: thread() });
+    cloud.mention({ appId: ID2, appName: 'Other', session: '', name: 'gone', reason: 'owner', room: { kind: 'channel', id: 'h-x', name: 'gone' }, op: 'add', commentId: 'c2', thread: { ...thread(), id: 'c2' } });
+    await svc.tick();
+    await jest.advanceTimersByTimeAsync(90_000);
+    const who = deliver.mock.calls.map(([s]) => s).sort();
+    expect(who).toEqual([KAI, null].sort());
+    expect(deliverRoom).not.toHaveBeenCalled();
+  });
+
+  it('an agent owner is woken as the owner, not as a mention', async () => {
+    cloud.mention({ appId: ID, session: KAI, name: 'Kai', reason: 'owner', op: 'add', commentId: 'c1', thread: thread() });
+    await svc.tick();
+    await jest.advanceTimersByTimeAsync(90_000);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    const [session, text, opts] = deliver.mock.calls[0];
+    expect(session).toBe(KAI);
+    expect(opts).toMatchObject({ activate: true, owner: true });
+    expect(text).toContain('you own its comments');
+    expect(text).not.toContain('mentioned you');
+    expect(text).toContain('--list');
+  });
+
+  it('a collaborator notice (added to an app published on another machine) is one message, no wake, no thread needed', async () => {
+    cloud.mention({ appId: ID2, appName: 'RedNote plan', session: KAI, name: 'Kai', reason: 'collaborator', addedBy: 'crewly-marketing-ella-9c0d1e2f', op: 'add', commentId: '', thread: null });
+    await svc.tick();
+    expect(deliver).toHaveBeenCalledTimes(1);
+    const [session, text, opts] = deliver.mock.calls[0];
+    expect(session).toBe(KAI);
+    expect(opts).toEqual({ activate: false });
+    expect(text).toContain('[APP ACCESS] crewly-marketing-ella-9c0d1e2f added you as a collaborator to the app "RedNote plan"');
+    expect(text).toContain(`/skills/agent/core/app-data/execute.sh --app ${ID2}`);
+    expect(text).toContain('cannot republish');
+    await svc.tick();
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it('a collaborator notice for an agent that is not on this machine is skipped', async () => {
+    cloud.mention({ appId: ID2, session: 'gone-agent-1', name: 'Gone', reason: 'collaborator', addedBy: 'owner', op: 'add', commentId: '', thread: null });
+    await svc.tick();
+    expect(deliver).not.toHaveBeenCalled();
+  });
+});
+
+describe('AppWakeService — voice comments (crewly-services apps/SPEC.md §16)', () => {
+  const AUDIO = { kind: 'audio', blobId: 'abcdefgh12345678', mime: 'audio/webm', durationMs: 42_000, size: 9000 };
+  const ROOM = { kind: 'team' as const, id: 'team-1', name: 'Dev team' };
+  const voiceThread = { id: 'c1', number: 1, version: 1, anchor: { tag: 'button', text: 'Save' }, body: '', attachments: [AUDIO], replies: [], status: 'open' };
+  const FILES = { [AUDIO.blobId]: { blobId: AUDIO.blobId, commentId: 'c1', durationMs: 42_000, mime: 'audio/webm', path: '/home/u/.crewly/tmp/app-comment-audio/28au74d9cj-abcdefgh12345678.webm' } };
+  let fetchVoice: jest.Mock;
+  let delivered: jest.Mock;
+  let deliverRoom: jest.Mock;
+
+  function voiceService(): AppWakeService {
+    return new AppWakeService({
+      client: cloud,
+      registry: registry as unknown as AppsRegistryService,
+      deliver,
+      resolveAgent,
+      isRunning: (s) => running.has(s),
+      isLocalAgent: async () => true,
+      instanceId: async () => 'inst-1',
+      fetchVoice,
+      onCommentsDelivered: delivered,
+      roomMembers: async () => ['dev-ella'],
+      deliverRoom,
+      skillsPath: '/skills/agent',
+    });
+  }
+
+  beforeEach(async () => {
+    fetchVoice = jest.fn().mockResolvedValue(FILES);
+    delivered = jest.fn();
+    deliverRoom = jest.fn().mockResolvedValue(true);
+    svc.stop();
+    svc = voiceService();
+    registry.add(ID);
+    await svc.tick();
+  });
+
+  it('agent DM path: the recording is downloaded first and the wake names the local file to transcribe', async () => {
+    cloud.push(ID, { kind: 'comment', comment: { id: 'c1', op: 'add', thread: voiceThread }, actor: { kind: 'owner', id: 'u1' } } as unknown as Omit<AppChange, 'seq'>);
+    await svc.tick();
+    await jest.advanceTimersByTimeAsync(90_000);
+    expect(fetchVoice).toHaveBeenCalledWith(ID, [expect.objectContaining({ comment: expect.objectContaining({ id: 'c1' }) })]);
+    const text = deliver.mock.calls[0][1] as string;
+    expect(text).toContain('(no text: a voice comment)');
+    expect(text).toContain(`Voice comment (0:42): ${FILES[AUDIO.blobId].path} — transcribe it with the transcribe-audio skill before acting`);
+    // The Slack mirror gets the same files (it uploads them into the thread).
+    expect(delivered).toHaveBeenCalledWith(expect.objectContaining({ session: 'dev-ella', voiceFiles: FILES }));
+  });
+
+  it('a download that fails still delivers, naming the command that fetches it', async () => {
+    fetchVoice.mockResolvedValue({ [AUDIO.blobId]: { blobId: AUDIO.blobId, commentId: 'c1', durationMs: 42_000, mime: 'audio/webm', error: 'network' } });
+    cloud.push(ID, { kind: 'comment', comment: { id: 'c1', op: 'add', thread: voiceThread }, actor: { kind: 'owner', id: 'u1' } } as unknown as Omit<AppChange, 'seq'>);
+    await svc.tick();
+    await jest.advanceTimersByTimeAsync(90_000);
+    const text = deliver.mock.calls[0][1] as string;
+    expect(text).toContain(`Voice comment (0:42): not downloaded yet (network). Fetch it with: bash /skills/agent/core/app-comments/execute.sh --app ${ID} --audio c1`);
+  });
+
+  it('agent owner (inbox) and room owner paths carry the recordings too', async () => {
+    cloud.mention({ appId: ID, appName: 'Groceries', session: 'dev-ella', name: 'Ella', reason: 'owner', op: 'add', commentId: 'c1', thread: voiceThread as unknown as AppCommentThread });
+    cloud.mention({ appId: ID, appName: 'Groceries', session: '', name: 'Dev team', reason: 'owner', room: ROOM, op: 'add', commentId: 'c1', thread: voiceThread as unknown as AppCommentThread });
+    await svc.tick();
+    await jest.advanceTimersByTimeAsync(90_000);
+    expect(deliver.mock.calls[0][1]).toContain(`Voice comment (0:42): ${FILES[AUDIO.blobId].path}`);
+    expect(deliverRoom).toHaveBeenCalledWith(expect.objectContaining({ room: ROOM, voiceFiles: FILES }));
+  });
+
+  it('batches without comments never download anything', async () => {
+    cloud.push(ID, ownerData());
+    await svc.tick();
+    await jest.advanceTimersByTimeAsync(90_000);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(fetchVoice).not.toHaveBeenCalled();
+  });
+});

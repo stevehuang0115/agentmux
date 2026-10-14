@@ -132,6 +132,12 @@ export interface ReplyResolverDeps {
   turnOrigin(session: string): TurnOrigin | undefined;
   /** What the harness last prompted the agent about */
   promptReference(session: string): PromptReference | undefined;
+  /**
+   * Whether the agent has open work delegated INTO this Slack thread (a lead's
+   * `delegate-task --thread`): such an agent may answer there under its own
+   * name although it is not a member of the thread's conversation (#1109).
+   */
+  delegatedThread?(session: string, slackChannelId: string, threadTs: string): Promise<boolean>;
   /** Whether the agent owes the owner an answer (owner-message watchdog) */
   owesOwner(session: string): boolean;
   /** Head of the last message delivered to the agent */
@@ -365,6 +371,14 @@ export async function validateHints(
     if (mapped && (await deps.ownsConversation(session, mapped.conversationId))) {
       return { destination: { kind: 'conversation', conversationId: mapped.conversationId, thread: keyText, source: 'hint', reason: `Slack thread ${keyText} mapped to its conversation` }, ignored };
     }
+    // Work delegated into this thread: the delegate answers there itself.
+    if (await deps.delegatedThread?.(session, key.slackChannelId, key.threadTs).catch(() => false)) {
+      const reason = `Slack thread ${keyText} was delegated to you`;
+      return {
+        destination: { kind: 'work', destination: { kind: 'slack', target: key.slackChannelId, threadTs: key.threadTs, reason }, source: 'hint', reason },
+        ignored,
+      };
+    }
     ignored.push({ hint: `thread ${keyText}`, why: mapped ? 'you are not in the conversation of that thread' : 'no known conversation has that Slack thread' });
     return { destination: null, ignored };
   }
@@ -437,6 +451,16 @@ export async function resolveReplyDestination(input: ReplyResolveInput, deps: Re
     const v = await validateHints(session, input.hints, origin, deps);
     ignoredHints.push(...v.ignored);
     if (v.destination) return { destination: v.destination, ignoredHints };
+    // An explicit --thread / --conversation that names nothing this agent may
+    // post in fails loudly: it is never swapped for a guessed place (#1136).
+    return {
+      destination: {
+        kind: 'unresolved',
+        reason: `the ${v.ignored.length > 0 ? v.ignored.map((i) => `${i.hint} was not used: ${i.why}`).join('; ') : 'conversation / thread you named cannot be used'}`,
+        fix: 'reply "<your message>" (to answer where your current work came from), or ask your team lead to post it in that thread',
+      },
+      ignoredHints,
+    };
   }
 
   // 5. What the harness last prompted the agent about — only when the agent
