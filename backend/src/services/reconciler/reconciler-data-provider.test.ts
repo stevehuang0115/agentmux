@@ -1329,6 +1329,23 @@ describe('LiveReconcilerDataProvider', () => {
         globalThis.fetch = originalFetch;
       });
 
+      it('a refused agent under memory pressure is skipped before the eviction gate (no idle agent evicted for it)', async () => {
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = blockedFetch();
+        await wakeOk(provider, blockedAction('wi-1'));
+
+        jest.spyOn(provider as unknown as { countActiveAgentSessions: () => Promise<number> }, 'countActiveAgentSessions').mockResolvedValue(99);
+        const evict = jest.spyOn(provider as unknown as { findEvictableIdleAgent: () => Promise<null> }, 'findEvictableIdleAgent').mockResolvedValue(null);
+        mockTotalmem.mockReturnValue(16 * 1024 * 1024 * 1024);
+        mockFreemem.mockReturnValue(50 * 1024 * 1024);
+        const result = await provider.executeWakeAction(blockedAction('wi-1'));
+        expect(result).toEqual({ outcome: 'skipped', reason: 'approval gate cooldown' });
+        expect(evict).not.toHaveBeenCalled();
+        expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+
+        globalThis.fetch = originalFetch;
+      });
+
       it('backs off per agent, not per WorkItem', async () => {
         // The gate decides per team. Keying the cooldown by WorkItem would let
         // a dormant team with several queued items spin once per item.

@@ -258,6 +258,43 @@ describe('ask + routing', () => {
     expect(after?.postError).toBeUndefined();
   });
 
+  it("an asker with no team channel (the orc) asks in the owner's DM with its own bot (D-665/D-733)", async () => {
+    const plain = { question: 'Start Sam and re-run the release?', options: ['Yes, start Sam', 'Not now'], default: 'Not now' };
+    const h = await harness({ ownerDmOf: async (identity) => (identity.botToken === 'xoxb-orc' ? 'D-OWNER-DM' : null) });
+    const d = await h.service.ask('crewly-orc', plain);
+    expect(d.postError).toBeUndefined();
+    expect(d.card).toMatchObject({ slackChannelId: 'D-OWNER-DM' });
+    expect(h.slack.sent[0]).toMatchObject({ channelId: 'D-OWNER-DM', botToken: 'xoxb-orc' });
+
+    const none = await harness();
+    const waiting = await none.service.ask('crewly-orc', plain);
+    expect(waiting.card).toBeUndefined();
+    expect(waiting.postError).toMatch(/no team channel, no owner DM/);
+  });
+
+  it('a card first posted after its earlier posts failed gets its original window again, not an instant default', async () => {
+    const h = await harness();
+    h.slack.failAll = true;
+    const d = await h.service.ask('dev-ann', { ...ticketAsk, deadline: new Date(h.clock.now.getTime() + 2 * HOUR) });
+    expect(d.postError).toBeDefined();
+    h.slack.failAll = false;
+    h.clock.now = new Date(h.clock.now.getTime() + 5 * HOUR);
+    expect(await h.service.tick()).toEqual([d.id]);
+    const posted = await h.service.get(d.id);
+    expect(posted?.card).toBeDefined();
+    expect(Date.parse(posted!.deadline)).toBe(h.clock.now.getTime() + 2 * HOUR);
+    h.clock.now = new Date(h.clock.now.getTime() + DECISION_CONSTANTS.TICK_MS);
+    await h.service.tick();
+    expect((await h.service.get(d.id))?.status).toBe('open');
+  });
+
+  it('a card posted on its first try keeps its deadline', async () => {
+    const h = await harness();
+    const deadline = new Date(h.clock.now.getTime() + 2 * HOUR);
+    const d = await h.service.ask('dev-ann', { ...ticketAsk, deadline });
+    expect(d.deadline).toBe(deadline.toISOString());
+  });
+
   it('Slack not connected → postError', async () => {
     const h = await harness();
     h.slack.connected = false;

@@ -749,7 +749,8 @@ export class DecisionService {
     try {
       const identity = await this.deps.identityOf(decision.asker);
       const place = await this.placeFor(decision, identity, slack);
-      const blocks = renderOpenCard(decision, this.deps.instanceId(), this.now());
+      const deadline = this.deadlineWhenPosted(decision);
+      const blocks = renderOpenCard({ ...decision, deadline }, this.deps.instanceId(), this.now());
       const { ts, ownBot } = await this.send(slack, identity, {
         channelId: place.slackChannelId,
         text: cardFallbackText(decision),
@@ -766,6 +767,7 @@ export class DecisionService {
           renderRev: DECISION_CONSTANTS.CARD_RENDER_REV,
         },
         ...(place.teamId && !decision.teamId ? { teamId: place.teamId } : {}),
+        ...(deadline !== decision.deadline ? { deadline } : {}),
         postError: undefined,
       }));
       this.logger.info('Decision card posted', { decisionId: decision.id, channel: place.slackChannelId, threaded: !!place.threadTs, ownBot });
@@ -779,6 +781,23 @@ export class DecisionService {
   }
 
   /**
+   * The deadline a card carries once it is actually posted. A card whose
+   * earlier posts failed gets its original window again from now, so the
+   * default is never applied to a question the owner has not seen in time
+   * (D-665 could only be posted a day after its deadline).
+   *
+   * @param decision - Decision about to be posted
+   * @returns ISO deadline to store and render
+   */
+  private deadlineWhenPosted(decision: OwnerDecision): string {
+    if (!decision.postError) return decision.deadline;
+    const window = Date.parse(decision.deadline) - Date.parse(decision.createdAt);
+    const now = this.now().getTime();
+    if (!(window > 0) || Date.parse(decision.deadline) - now >= window) return decision.deadline;
+    return new Date(now + window).toISOString();
+  }
+
+  /**
    * Where the card goes — always the conversation the question belongs to:
    *
    * 1. the thread the question was asked in (`place`: reply questions);
@@ -786,7 +805,8 @@ export class DecisionService {
    * 3. the ticket's thread, when it has one;
    * 4. the thread of the asker's current work;
    * 5. a new ticket thread (ticket asks);
-   * 6. top-level, only when there is no thread at all.
+   * 6. top-level in the team channel, only when there is no thread at all;
+   * 7. the owner's DM, when the asker has no team channel (the orc).
    *
    * The owner's conversation used to lose to the ticket thread: a ticket ask
    * landed in an old ticket thread while the owner waited elsewhere
@@ -815,8 +835,12 @@ export class DecisionService {
     const work = await this.deps.workDestination?.(decision.asker).catch(() => null);
     if (work?.slackChannelId) return work;
     const channel = decision.teamId ? await this.deps.teamChannelOf(decision.teamId) : null;
-    if (!channel) throw new DecisionError(409, `No Slack place to ask in: ${decision.asker} has no team channel and no Slack conversation in hand`);
-    return { slackChannelId: channel, ...team };
+    if (channel) return { slackChannelId: channel, ...team };
+    // No team channel (the orc has no team): ask in the owner's DM with the
+    // asker's bot rather than never asking (D-665/D-733 waited for days).
+    const dm = await this.deps.ownerDmOf?.(identity).catch(() => null);
+    if (!dm) throw new DecisionError(409, `No Slack place to ask in: ${decision.asker} has no team channel, no owner DM and no Slack conversation in hand`);
+    return { slackChannelId: dm, ...team };
   }
 
   /**
