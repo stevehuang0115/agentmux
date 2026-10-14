@@ -205,6 +205,15 @@ export class CloudSyncService extends EventEmitter {
   private queueFailures = 0;
   /** Epoch ms of the first failure in the current registration failure streak */
   private queueFailingSince: number | null = null;
+  /**
+   * When this machine began having NO queue at all (epoch ms); null while it
+   * has one. Unlike {@link queueFailingSince}, a failed re-registration while
+   * an earlier queue is still being polled does not start a gap — nothing is
+   * missed then.
+   */
+  private inboundGapSince: number | null = null;
+  /** The current inbound gap was already announced (`queue-outage`). */
+  private queueOutageNotified = false;
   /** Epoch ms of the next scheduled registration */
   private nextQueueAttemptAt: number | null = null;
   /**
@@ -313,6 +322,8 @@ export class CloudSyncService extends EventEmitter {
     this.queueError = null;
     this.queueFailures = 0;
     this.queueFailingSince = null;
+    this.inboundGapSince = null;
+    this.queueOutageNotified = false;
     this.lastLoggedPeer = null;
     this.authRejected = false;
     this.heartbeatFailures = 0;
@@ -600,12 +611,14 @@ export class CloudSyncService extends EventEmitter {
       }
       this.queueFailures = 0;
       this.queueFailingSince = null;
+      this.noteQueueRecovered();
     } catch (err) {
       if (gen !== this.generation) return;
       this.queueError = err instanceof Error ? err.message : String(err);
       this.queueFailures += 1;
       this.queueFailingSince ??= Date.now();
       delay = registerRetryDelay(this.queueFailures);
+      this.noteQueueFailed();
       // The relay told us when to come back (per-account limit): never earlier.
       if (err instanceof RelayRateLimitedError) delay = Math.max(delay, err.retryAfterMs);
       // Not "may not work": without a queue id the Slack instance heartbeat
@@ -620,6 +633,36 @@ export class CloudSyncService extends EventEmitter {
       );
     }
     this.scheduleRegister(gen, delay);
+  }
+
+  /**
+   * Outage bookkeeping after a failed registration. Only a machine with no
+   * queue at all is deaf (Slack events pile up in Cloud); `queue-outage` fires
+   * once when that outlasts QUEUE_OUTAGE_NOTIFY_AFTER_MS.
+   *
+   * Events: `queue-outage` ({ since, error }), `inbound-gap-recovered` ({ since }).
+   */
+  private noteQueueFailed(): void {
+    if (this.queueId !== null) return;
+    const now = Date.now();
+    this.inboundGapSince ??= now;
+    if (!this.queueOutageNotified && now - this.inboundGapSince >= CLOUD_SYNC_CONSTANTS.QUEUE_OUTAGE_NOTIFY_AFTER_MS) {
+      this.queueOutageNotified = true;
+      this.emit('queue-outage', { since: this.inboundGapSince, error: this.queueError });
+    }
+  }
+
+  /**
+   * The first success after an inbound gap: tell the Slack backfill where the
+   * gap began so it can read what Cloud could not deliver.
+   */
+  private noteQueueRecovered(): void {
+    if (this.inboundGapSince === null || !this.queueId) return;
+    const since = this.inboundGapSince;
+    this.inboundGapSince = null;
+    this.queueOutageNotified = false;
+    this.logger.info('Queue registration recovered after an inbound gap', { since: new Date(since).toISOString() });
+    this.emit('inbound-gap-recovered', { since });
   }
 
   /**

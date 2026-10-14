@@ -1117,6 +1117,27 @@ export class MessageStore {
     ).map((r) => ({ channelId: r.channelId, root: r.root, lastAt: Number(r.lastAt) }));
   }
 
+  /**
+   * Slack channels where an inbound (owner/user) Slack message was stored
+   * since `sinceMs`, most recently active first.
+   *
+   * @param sinceMs - Epoch ms lower bound
+   * @param limit - Most channels returned
+   * @returns Slack channel ids
+   */
+  listSlackInboundChannels(sinceMs: number, limit: number): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT json_extract(ext_ref, '$.slackChannelId') AS ch, MAX(created_at) AS last
+         FROM chat_messages
+         WHERE source = 'slack' AND direction = 'in' AND created_at >= ?
+           AND json_extract(ext_ref, '$.slackChannelId') IS NOT NULL
+         GROUP BY ch ORDER BY last DESC LIMIT ?`,
+      )
+      .all(sinceMs, limit) as Array<{ ch: string }>;
+    return rows.map((r) => r.ch);
+  }
+
   findPendingSlackDelivery(maxAgeMs: number, nowMs?: number): ChatMessageRow[] {
     const cutoff = (nowMs ?? Date.now()) - maxAgeMs;
     const rows = this.db
