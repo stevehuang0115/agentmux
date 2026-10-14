@@ -78,6 +78,8 @@ export interface RequestOpenItem {
   wokeAt?: string;
   /** Commitment: when the agent was nudged after the due time (ISO) */
   nudgedAt?: string;
+  /** The team lead was told this item is too old to remind the agent about (once) */
+  leadNotifiedAt?: string;
   /** Commitment: made in an interim note; the agent's next substantive reply in the thread delivers it */
   fromInterim?: boolean;
   /** Commitment: when a restart reminder was sent for it (ISO); sent at most once, and it counts as the nudge */

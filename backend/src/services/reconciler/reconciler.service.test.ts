@@ -5,7 +5,7 @@
  */
 
 import { inputCircuitStats, noteInputRefused, resetInputCircuitsForTesting } from '../session/input-circuit-breaker.js';
-import { ReconcilerService } from './reconciler.service.js';
+import { ReconcilerService, DEFAULT_WAKE_TUNING } from './reconciler.service.js';
 import { RestartDrainService } from '../restart/restart-drain.service.js';
 import type { ReconcilerDataProvider } from './reconciler.service.js';
 import { createWorkItem, createRequest, createTaskClaim, isValidWorkItemTransition } from '../../types/v2/index.js';
@@ -1104,6 +1104,8 @@ describe('ReconcilerService', () => {
         executeWakeAction,
       });
       service = new ReconcilerService(provider);
+      // This test is about the input circuit, not the success pacing.
+      service.setWakeTuning({ successBackoffBaseMs: 0, successBackoffMaxMs: 0 });
 
       // Closed: redelivered every pass.
       await service.runFast();
@@ -1670,9 +1672,61 @@ describe('ReconcilerService', () => {
 
       executeWakeAction.mockResolvedValueOnce(true).mockResolvedValue(false);
       await service.runFast(); // ok → backoff cleared
+      jest.advanceTimersByTime(3 * MIN); // past the success pacing of the same item
       await service.runFast(); // fails again → first step (60s)
       const fresh = wakeTraces('failed').pop()![1] as { data: Record<string, unknown> };
       expect(fresh.data).toMatchObject({ attempt: 1, retryInMs: MIN });
+    });
+
+    it('a successful wake is not repeated every tick while the item stays queued (doubling pacing)', async () => {
+      const wi = queuedFor();
+      const executeWakeAction = jest.fn().mockResolvedValue(true);
+      provider = createMockProvider({
+        getActiveWorkItems: jest.fn().mockResolvedValue([wi]),
+        getAgentHealthMap: jest.fn().mockResolvedValue(stoppedAgent()),
+        executeWakeAction,
+      });
+      service = new ReconcilerService(provider);
+
+      // Ten ticks in the first 90s: one wake.
+      for (let i = 0; i < 10; i++) {
+        await service.runFast();
+        jest.advanceTimersByTime(9_000);
+      }
+      expect(executeWakeAction).toHaveBeenCalledTimes(1);
+
+      // Past the 2-minute base: second wake, then a 4-minute wait.
+      jest.advanceTimersByTime(40_000);
+      await service.runFast();
+      expect(executeWakeAction).toHaveBeenCalledTimes(2);
+      jest.advanceTimersByTime(3 * MIN);
+      await service.runFast();
+      expect(executeWakeAction).toHaveBeenCalledTimes(2);
+      jest.advanceTimersByTime(2 * MIN);
+      await service.runFast();
+      expect(executeWakeAction).toHaveBeenCalledTimes(3);
+    });
+
+    it('one session is woken at most N times per window, whatever the item pacing', async () => {
+      const cap = DEFAULT_WAKE_TUNING.maxWakesPerSessionPerWindow;
+      const executeWakeAction = jest.fn().mockResolvedValue(true);
+      provider = createMockProvider({
+        getActiveWorkItems: jest.fn().mockResolvedValue([queuedFor()]),
+        getAgentHealthMap: jest.fn().mockResolvedValue(stoppedAgent()),
+        executeWakeAction,
+      });
+      service = new ReconcilerService(provider);
+      service.setWakeTuning({ successBackoffBaseMs: 1, successBackoffMaxMs: 1 });
+      // 15 ticks, 3 minutes apart (45 min, inside the 60 min window).
+      for (let i = 0; i < 15; i++) {
+        await service.runFast();
+        jest.advanceTimersByTime(3 * MIN);
+      }
+      expect(executeWakeAction).toHaveBeenCalledTimes(cap);
+      // The window passes: woken again.
+      jest.advanceTimersByTime(DEFAULT_WAKE_TUNING.sessionWakeWindowMs);
+      await service.runFast();
+      expect(executeWakeAction).toHaveBeenCalledTimes(cap + 1);
     });
 
     it('a skipped attempt (cooldown, item gone) is neither traced nor backed off', async () => {

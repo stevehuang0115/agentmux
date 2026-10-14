@@ -49,6 +49,7 @@ import { withQueueMeta } from '../messaging/queue-priority.js';
 import { parseSlackThreadKey } from '../slack/slack-thread-key.js';
 import { slackArchiveLink } from '../decisions/ticket-thread-store.js';
 import { isStaleCommitment, staleCommitmentNotice, supersededReason } from './stale-commitment.js';
+import { isPastReminderCutoff, leadStaleNotice, reminderFooter } from '../orc/harness-reminder.js';
 import { gateVerdict, siblingQuestion, type GateVerdict } from './open-item-gate.js';
 
 // ---------------------------------------------------------------------------
@@ -121,6 +122,8 @@ export interface OpenItemsDeps {
   deliverToAgent: (session: string, text: string) => Promise<boolean>;
   /** Post a note for the owner in the request's conversation */
   postOwnerNote: (request: Request, text: string) => Promise<boolean>;
+  /** Tell an agent's team lead something (an item too old to remind the agent about); false when it could not */
+  notifyLead?: (agentSession: string, text: string) => Promise<boolean>;
   /** Display name of an agent ("Atlas") */
   displayName?: (session: string) => Promise<string>;
   /** Names of the agent's colleagues (questions to them are not for the owner) */
@@ -1292,15 +1295,38 @@ export class OpenItemsService {
   private async markReady(request: Request, item: RequestOpenItem, finishedAt: string | undefined, done: WorkItem[]): Promise<RequestOpenItem> {
     const now = this.now();
     const what = done.map((w) => `"${short(w.title, 80)}"`).join(', ');
+    // Too old to wake the agent about: the lead decides, the owner hears nothing.
+    if (isPastReminderCutoff(item.createdAt, now.getTime())) {
+      const told = await this.tellLeadItemIsStale(request, item, now);
+      return { ...item, status: 'ready', readyAt: finishedAt ?? now.toISOString(), ...(told ? { leadNotifiedAt: now.toISOString() } : {}) };
+    }
     const ref = followUpReference(request, item);
     const text =
       `[FOLLOW-UP ${ticketLabel(request)}] The work you promised the owner is ready (${what}) — deliver it now. ` +
       `You said: "${short(item.text, 200)}". Run: ${followUpCommand(ref)} — Crewly posts it in the ticket's thread; that closes the follow-up.` +
-      staleCommitmentNotice(item, now);
+      staleCommitmentNotice(item, now) +
+      reminderFooter(1, item.createdAt, now.getTime());
     const ok = await this.remindAgent(request, item.agent, text);
     if (ok) AgentPromptReferenceService.getInstance().note(item.agent, ref, `[FOLLOW-UP ${ticketLabel(request)}]`);
     this.logger.info('Promised work is ready — agent woken to deliver', { tkt: ticketLabel(request), item: item.id, agent: item.agent, delivered: ok });
     return { ...item, status: 'ready', readyAt: finishedAt ?? now.toISOString(), ...(ok ? { wokeAt: now.toISOString() } : {}) };
+  }
+
+  /**
+   * An item is too old to remind its agent about: tell the agent's team lead
+   * once (never the owner).
+   *
+   * @param request - Request
+   * @param item - Commitment
+   * @param now - Clock
+   * @returns Whether the lead was told
+   */
+  private async tellLeadItemIsStale(request: Request, item: RequestOpenItem, now: Date): Promise<boolean> {
+    if (item.leadNotifiedAt) return false;
+    const text = `${leadStaleNotice(`${ticketLabel(request)}: ${item.text}`, item.agent, item.createdAt, now.getTime())}`;
+    const ok = (await this.deps.notifyLead?.(item.agent, text).catch(() => false)) ?? false;
+    this.logger.info('Item too old to remind — team lead told instead of the agent', { tkt: ticketLabel(request), item: item.id, agent: item.agent, told: ok });
+    return ok;
   }
 
   // -------------------------------------------------------------------------
@@ -1722,18 +1748,27 @@ export class OpenItemsService {
     }
     const due = current.due ? Date.parse(current.due) : NaN;
     if (!Number.isFinite(due) || now.getTime() < due) return current;
+    if (!current.nudgedAt && isPastReminderCutoff(current.createdAt, now.getTime())) {
+      // Too old to nudge: the lead is told once, the item then waits for the weekly expiry.
+      const told = await this.tellLeadItemIsStale(request, current, now);
+      counts.nudged += 1;
+      return { ...current, status: 'overdue', nudgedAt: nowIso, ...(told ? { leadNotifiedAt: nowIso } : {}) };
+    }
     if (!current.nudgedAt) {
       const ref = followUpReference(request, current);
       const text =
         `[FOLLOW-UP ${ticketLabel(request)}] You promised the owner: "${short(current.text, 200)}" — due ${formatWhen(new Date(due), now)}, and it hasn't been delivered. ` +
         `Deliver it now, or tell the owner plainly when it will come and why. Run: ${followUpCommand(ref)} — Crewly posts it in the ticket's thread.` +
-        staleCommitmentNotice(current, now);
+        staleCommitmentNotice(current, now) +
+        reminderFooter(current.wokeAt ? 2 : 1, current.createdAt, now.getTime());
       const ok = await this.remindAgent(request, current.agent, text);
       if (ok) AgentPromptReferenceService.getInstance().note(current.agent, ref, `[FOLLOW-UP ${ticketLabel(request)}]`);
       counts.nudged += 1;
       this.logger.info('Overdue promise — agent nudged', { tkt: ticketLabel(request), item: current.id, agent: current.agent, delivered: ok });
       return { ...current, status: 'overdue', nudgedAt: nowIso };
     }
+    // A request past the reminder cutoff is the lead's to close, not an owner note.
+    if (isPastReminderCutoff(current.createdAt, now.getTime())) return current;
     if (!current.ownerNotifiedAt && now.getTime() - Date.parse(current.nudgedAt) >= OPEN_ITEMS_CONSTANTS.OWNER_NOTE_AFTER_NUDGE_MS) {
       const note = await this.ownerNote(request, current, pool, now);
       const ok = await this.deps.postOwnerNote(request, note).catch(() => false);

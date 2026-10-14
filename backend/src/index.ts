@@ -6966,6 +6966,17 @@ void (async () => {
 						return false;
 					}
 				},
+				notifyLead: async (agent, text) => {
+					const { findLeadSessionFor } = await import('./utils/team.utils.js');
+					const lead = findLeadSessionFor(await this.storageService.getTeams().catch(() => []), agent);
+					if (!lead) return false;
+					try {
+						const res = await this.apiController.agentRegistrationService.sendMessageToAgent(lead, text);
+						return (res as { success?: boolean } | undefined)?.success !== false;
+					} catch {
+						return false;
+					}
+				},
 				resolvePlace: (origin) => wiring.resolveReportPlace(origin, commentLink),
 				postFallback: (place, agent, text) =>
 					wiring.postReportFallback(place, agent, text, {

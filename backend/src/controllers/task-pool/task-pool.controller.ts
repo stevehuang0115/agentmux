@@ -51,6 +51,7 @@ import { isInProcessRuntimeActive } from '../../services/agent/crewly-agent/in-p
 import { getActingFor } from '../../services/people/acting-for.service.js';
 import { pausedRefusalMessage, pausedTeamById, pausedTeamOfSession } from '../../services/team/team-pause.registry.js';
 import { isOwnerCaller } from '../../middleware/caller-identity.middleware.js';
+import { findDuplicateWorkItem } from '../../utils/duplicate-creation.utils.js';
 
 const logger = LoggerService.getInstance().createComponentLogger('TaskPoolController');
 
@@ -502,6 +503,23 @@ export async function addItem(req: Request, res: Response): Promise<void> {
     const rejection = await maybeEnforceContract(workItem as unknown as Record<string, unknown>);
     if (rejection) {
       res.status(rejection.status).json(rejection.payload);
+      return;
+    }
+
+    // The same creator adding the same item for the same target within minutes gets the first one back
+    // (ten identical "Follow through" and four duplicate briefs, audit 2026-10-14).
+    const twin = findDuplicateWorkItem(
+      { creator: delegatorOf(req, workItem), target: workItem.target, title: workItem.title, now: Date.now() },
+      await getService().getAllItems(),
+    );
+    if (twin) {
+      logger.info('Duplicate WorkItem not created; existing one returned', { workItemId: twin.id, target: twin.target, creator: delegatorOf(req, workItem) });
+      res.status(200).json({
+        success: true,
+        duplicate: true,
+        message: `Duplicate: you already added "${twin.title}" for ${twin.target ?? 'nobody'} a moment ago (${twin.id}); not added again.`,
+        data: { workItemId: twin.id, id: twin.id, duplicate: true },
+      });
       return;
     }
 

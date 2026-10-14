@@ -6995,6 +6995,13 @@ export const DECISION_CONSTANTS = {
 	MAX_OPTIONS: 5,
 	/** Two yes/no asks on one ticket this close together that read as either/or are rejected (ms) */
 	EITHER_OR_WINDOW_MS: 60 * 1000,
+	/** A ticket's question shorter than this (characters) gets the ticket title prepended so the card says what is decided */
+	CONTEXT_FREE_QUESTION_CHARS: 20,
+	/**
+	 * A new card for a ticket withdraws the ticket's older open cards (one open card per ticket; TKT-357 had
+	 * 11 in 105 min). Cards made less than this long before the new one belong to the same reply and stay (ms)
+	 */
+	SAME_REPLY_WINDOW_MS: 2 * 60 * 1000,
 	/** Max characters of an option label (Slack button text max is 75) */
 	OPTION_LABEL_MAX_CHARS: 40,
 	/** Max characters of an option's optional detail line */
@@ -7969,6 +7976,54 @@ export const RECONCILER_WAKE_CONSTANTS = {
 	 * the reconciler must not stall every other rule meanwhile, nor ask again.
 	 */
 	START_AWAIT_MS: 15_000,
+	/**
+	 * Wait after a SUCCESSFUL wake before the same session + WorkItem is woken again (ms). Failed wakes
+	 * were paced (CREW-304) but successful ones were not: a WorkItem that stayed queued after its
+	 * wake "worked" got a wake every pass (637 wakes for one agent in ~2h, 2026-10-07).
+	 */
+	SUCCESS_BACKOFF_BASE_MS: 2 * 60_000,
+	/** Ceiling of the doubling success backoff (ms) */
+	SUCCESS_BACKOFF_MAX_MS: 60 * 60_000,
+	/** At most this many successful wakes per session inside {@link SESSION_WAKE_WINDOW_MS}, whatever the WorkItem */
+	MAX_WAKES_PER_SESSION_PER_WINDOW: 6,
+	/** Rolling window of {@link MAX_WAKES_PER_SESSION_PER_WINDOW} (ms) */
+	SESSION_WAKE_WINDOW_MS: 60 * 60_000,
+} as const;
+
+/**
+ * Creation-time dedupe (audit 2026-10-14): tickets CE-169..176 were created as four pairs within 90s,
+ * one promise became ten "Follow through" WorkItems, and 93 identical agent-to-agent messages were
+ * resent within 5 minutes. The same creator making the same thing again inside the window gets the
+ * existing one back.
+ */
+export const DUPLICATE_CREATION_CONSTANTS = {
+	/** Same creator + same normalized title for a project ticket within this long is the same ticket (ms) */
+	TICKET_WINDOW_MS: 10 * 60 * 1000,
+	/** Same creator + target + normalized title for a WorkItem within this long is the same WorkItem (ms) */
+	WORK_ITEM_WINDOW_MS: 10 * 60 * 1000,
+	/** One harness "Follow through" WorkItem per target + promise text within this long, whatever its status (ms) */
+	FOLLOW_THROUGH_WINDOW_MS: 24 * 60 * 60 * 1000,
+	/** An identical agent message to the same target within this long is dropped (ms) */
+	AGENT_MESSAGE_WINDOW_MS: 5 * 60 * 1000,
+	/** Messages shorter than this (characters, normalized) are never treated as duplicates ("ok", "thanks") */
+	AGENT_MESSAGE_MIN_CHARS: 20,
+	/** Senders whose repeats are deliberate redeliveries paced elsewhere (the reconciler) */
+	AGENT_MESSAGE_EXEMPT_SENDERS: ['WorkItemDispatch'] as readonly string[],
+	/** Most message fingerprints kept in memory */
+	AGENT_MESSAGE_MAX_TRACKED: 2000,
+} as const;
+
+/**
+ * Harness reminders (follow-up, owner report due, follow-through). A reminder says which attempt it
+ * is and how old the original request is, tells the agent not to re-post what the owner already has,
+ * and stops once the request is too old (audit 2026-10-14: 317 reminders in 7 days, 77 sent more
+ * than 24h after the request).
+ */
+export const HARNESS_REMINDER_CONSTANTS = {
+	/** Reminders sent for one item before the harness stops (the first prompt counts as attempt 1) */
+	MAX_REMINDERS_PER_ITEM: 2,
+	/** A request older than this is not reminded about; the team lead is told once instead (ms) */
+	CUTOFF_MS: 48 * 60 * 60 * 1000,
 } as const;
 
 /**

@@ -279,3 +279,20 @@ export function eitherOrMessage(earlierId: string): string {
     `ask-owner --question "Change the dinner card now, or try the current version for a week first?" --option "Change it now" --option "Try a week first" --default wait. ${ASK_OWNER_EXAMPLE}`
   );
 }
+
+/**
+ * Make a ticket's question say what is being decided: a short question
+ * ("这版可以吗？") gets the ticket title in front of it. Longer ones are
+ * left alone.
+ *
+ * @param question - One-line question
+ * @param title - The ticket's title
+ * @returns The question the card shows (never longer than the maximum)
+ */
+export function withTicketContext(question: string, title: string | undefined): string {
+  const subject = (title ?? '').replace(/\s+/g, ' ').trim();
+  if (!subject || question.length >= DECISION_CONSTANTS.CONTEXT_FREE_QUESTION_CHARS || question.includes(subject)) return question;
+  const joined = `${subject} — ${question}`;
+  const max = DECISION_CONSTANTS.QUESTION_MAX_CHARS;
+  return joined.length > max ? `${joined.slice(0, max - 1)}…` : joined;
+}

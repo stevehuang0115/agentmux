@@ -21,7 +21,8 @@
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { PROJECT_TICKET_CONSTANTS } from '../../constants.js';
+import { DUPLICATE_CREATION_CONSTANTS, PROJECT_TICKET_CONSTANTS } from '../../constants.js';
+import { normalizeForDedupe } from '../../utils/duplicate-creation.utils.js';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
 import { resolveProjectDataDir } from '../core/crewly-home.utils.js';
 import { atomicWriteFile } from '../../utils/file-io.utils.js';
@@ -318,6 +319,23 @@ export class ProjectTicketService {
     const now = this.now();
 
     const created = await withTicketFolderLock(dir, async () => {
+      // The same creator making the same ticket again within minutes gets the first one back (CE-169..176
+      // were created as four pairs within 90s). Checked under the folder lock so concurrent calls cannot
+      // both miss. Imports and back-dated tickets are never merged.
+      if (input.source && !input.createdAt && !input.migratedFrom) {
+        const nowMs = Date.parse(now);
+        const key = normalizeForDedupe(title);
+        const twin = (await this.list(root)).tickets.find(
+          (t) =>
+            t.source === input.source &&
+            t.status !== 'done' &&
+            t.status !== 'cancelled' &&
+            normalizeForDedupe(t.title) === key &&
+            nowMs - Date.parse(t.createdAt) >= 0 &&
+            nowMs - Date.parse(t.createdAt) <= DUPLICATE_CREATION_CONSTANTS.TICKET_WINDOW_MS,
+        );
+        if (twin) return { twin, fileName: '', filePath: '', content: '' };
+      }
       const id = await allocateTicketId(dir, projectName);
       const fields: ProjectTicketFields = {
         id,
@@ -344,9 +362,13 @@ export class ProjectTicketService {
         logLines: [formatLogLine(actor, `created (${status})`, now)],
       });
       await atomicWriteFile(filePath, content);
-      return { fileName, filePath, content };
+      return { twin: undefined, fileName, filePath, content };
     });
 
+    if (created.twin) {
+      this.logger.info('Duplicate project ticket not created; existing one returned', { projectPath: root, id: created.twin.id, actor });
+      return created.twin;
+    }
     await this.checkTracking(root);
     const parsed = parseTicketFile(created.content);
     if (!parsed.ok) throw new ProjectTicketError(500, `created ticket did not parse: ${parsed.error}`);
