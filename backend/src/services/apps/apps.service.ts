@@ -545,6 +545,27 @@ export class AppsService {
    * @returns appId, url, version, whether it was created / notified
    * @throws AppsCloudError on validation or a Cloud failure
    */
+  /**
+   * Whether Cloud names this agent (or a team / channel it is in) as the app's
+   * owner, wherever that was recorded: after a team move to this machine the
+   * local registry has no entry, but the member's session — and so the app —
+   * is the same (2026-10-13, Milo could not publish AZ星球 on the new machine).
+   *
+   * @param appId - App
+   * @param agentSession - The publishing agent
+   * @returns True when the app is already this agent's
+   */
+  private async ownedByMovedAgent(appId: string, agentSession: string): Promise<boolean> {
+    try {
+      const res = await this.deps.client.request<{ owner?: CloudOwnerView | null }>('GET', `/apps/${appId}/owner`, { agent: agentSession });
+      const owner = res?.owner ?? null;
+      if (!owner) return false;
+      return owner.kind === 'agent' ? owner.session === agentSession : (owner.members ?? []).includes(agentSession);
+    } catch {
+      return false;
+    }
+  }
+
   async publish(input: PublishInput, caller: AppsCaller): Promise<PublishResult> {
     const files = this.validateFiles(input.files);
     const explicitId = input.appId !== undefined && input.appId !== null && input.appId !== '' ? requireAppId(input.appId) : undefined;
@@ -557,8 +578,14 @@ export class AppsService {
 
     const { registry, client } = this.deps;
     let entry: AppRegistryEntry | null = await registry.find({ appId: explicitId, agentSession, source, name });
-    // An agent publishes only to its own apps; adopting an app made elsewhere is the owner's call.
-    if (explicitId && agentSession && (!entry || entry.agentSession !== agentSession)) throw notYourApp();
+    // An agent publishes only to its own apps; adopting an app made elsewhere is the owner's call —
+    // unless Cloud says it already is this agent's (its team moved here from another machine).
+    if (explicitId && agentSession && (!entry || entry.agentSession !== agentSession)) {
+      if (entry || !(await this.ownedByMovedAgent(explicitId, agentSession))) throw notYourApp();
+      // Cloud's publisher moves to this machine before the upload, so its
+      // per-machine checks, comments and @mentions follow the agent here.
+      await client.request('PUT', `/apps/${explicitId}/publisher`, { body: { session: agentSession }, agent: agentSession });
+    }
     let app: CloudAppView | null = null;
     let created = false;
     if (entry && !explicitId) {

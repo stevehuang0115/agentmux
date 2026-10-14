@@ -129,7 +129,8 @@ describe('AppsService.publish', () => {
     await expect(service.publish({ files: FILES, appId: ID2 }, { agentSession: 'dev-ella' })).rejects.toMatchObject({ status: 403, code: 'not_your_app' });
     await registry.upsert(ID2, { name: 'Bob', agentSession: 'dev-bob' });
     await expect(service.publish({ files: FILES, appId: ID2 }, { agentSession: 'dev-ella' })).rejects.toMatchObject({ status: 403, code: 'not_your_app' });
-    expect(request).not.toHaveBeenCalled();
+    // Only the owner lookup for the unknown app (a team moved here would be named there); nothing published.
+    expect(request.mock.calls.map((c) => `${c[0]} ${c[1]}`)).toEqual([`GET /apps/${ID2}/owner`]);
   });
 
   it('lets the publisher republish by explicit id', async () => {
@@ -1002,6 +1003,22 @@ describe('AppsService collaborators (the owner let another team work in an app)'
     await expect(svc.rollback(ID, 1, { agentSession: ELLA })).rejects.toMatchObject({ code: 'not_your_app' });
     await expect(svc.publish({ files: FILES, appId: ID }, { agentSession: ELLA })).rejects.toMatchObject({ status: 403, code: 'not_your_app' });
     expect(request.mock.calls.filter((c) => c[0] === 'POST')).toHaveLength(0);
+  });
+
+  it('a team moved from another machine: Cloud names this agent as owner → it publishes and the publisher moves here', async () => {
+    const MILO = 'edu-game-milo-13e8d3ca';
+    request.mockImplementation(async (m: string, p: string) => {
+      if (p === `/apps/${ID}/owner`) return { appId: ID, owner: { kind: 'agent', explicit: false, session: MILO, name: 'Milo', instanceId: 'old-mac' } };
+      if (p === `/apps/${ID}` && m === 'GET') return { appId: ID, name: 'AZ', url: 'u', visibility: 'private' };
+      if (p === `/apps/${ID}/versions`) return { version: 7 };
+      return {};
+    });
+    await svc.publish({ files: FILES, appId: ID }, { agentSession: MILO });
+    expect(request.mock.calls.some((c) => c[0] === 'POST' && c[1] === `/apps/${ID}/versions`)).toBe(true);
+    expect(request.mock.calls.some((c) => c[0] === 'PUT' && c[1] === `/apps/${ID}/publisher`)).toBe(true);
+    // An agent Cloud does not name is still refused.
+    await registry.markDeleted(ID).catch(() => undefined);
+    await expect(svc.publish({ files: FILES, appId: 'zzzzzzzzzz' }, { agentSession: 'someone-else-12345678' })).rejects.toMatchObject({ code: 'not_your_app' });
   });
 
   it('the owner and the publisher\'s team need no Cloud lookup', async () => {
