@@ -153,30 +153,21 @@ export function readableAgentName(name: string): string {
   return m[1].charAt(0).toUpperCase() + m[1].slice(1);
 }
 
-const PLACEHOLDER_TEXT_PATTERNS: RegExp[] = [
-  SLACK_TYPING_CONSTANTS.TYPING_TEXT,
-  SLACK_TYPING_CONSTANTS.WAKING_TEXT,
-  SLACK_TYPING_CONSTANTS.WAKING_SLOW_TEXT,
-  SLACK_TYPING_CONSTANTS.QUEUED_TEXT,
-  SLACK_TYPING_CONSTANTS.FAILED_TEXT,
-  SLACK_TYPING_CONSTANTS.TIMEOUT_TEXT,
-].map((tpl) => {
-  const escaped = tpl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\\{name\\\}/g, '.+');
-  return new RegExp(`^${escaped}$`);
-});
+const FAILED_TEXT_PATTERN = new RegExp(
+  '^' + SLACK_TYPING_CONSTANTS.FAILED_TEXT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\\{name\\\}/g, '.+') + '$',
+);
 
 /**
- * Whether a Slack message is one of Crewly's own typing placeholders in any
- * phase (waking, queued, working, failed, timed out). A placeholder is a
- * status line, not an agent's reply, so it must never count as the message
- * having been answered.
+ * Whether a Slack message is a typing placeholder that was turned into the
+ * "couldn't take this message" notice. The agent never got the message, so
+ * it must not count as the message having been answered. (The other phases —
+ * waking, queued, working, timed out — mean the agent holds it.)
  *
  * @param text - Slack message text
- * @returns True when the text is a placeholder
+ * @returns True when the text is the failed-placeholder notice
  */
-export function isPlaceholderText(text: string): boolean {
-  const t = text.trim();
-  return PLACEHOLDER_TEXT_PATTERNS.some((re) => re.test(t));
+export function isFailedPlaceholderText(text: string): boolean {
+  return FAILED_TEXT_PATTERN.test(text.trim());
 }
 
 export class SlackTypingPlaceholderService {
