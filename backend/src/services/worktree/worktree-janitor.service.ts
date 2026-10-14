@@ -83,6 +83,14 @@
  * the janitor left and why; below 5 GB the notice is urgent and repeats at
  * most every 6 h.
  *
+ * ## Unmerged work
+ * A worktree kept as `not-merged` whose newest commit is older than 24 h is
+ * reported to the lead of the team that owns it (project path -> team ->
+ * lead; the orchestrator when no team is found), once per worktree per 3
+ * days: path, branch, commits not on the default branch, pushed or not, size,
+ * and the ask to merge, make main match what is live, and remove it. Never
+ * sent to the owner. See {@link module:services/worktree/worktree-unmerged-notice}.
+ *
  * ## Runaway files
  * Once a minute a watcher scans agent scratch dirs and worktrees for a single
  * file that grows without bound (a 40 GB `all.md` filled a disk, crewly#1078):
@@ -102,7 +110,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { WORKTREE_JANITOR_CONSTANTS } from '../../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, WORKTREE_JANITOR_CONSTANTS } from '../../constants.js';
 import { LoggerService } from '../core/logger.service.js';
 import { getCrewlyHomePath } from '../core/crewly-home.utils.js';
 import { safeReadJson, modifyJsonFile } from '../../utils/file-io.utils.js';
@@ -136,6 +144,14 @@ import {
 	type PorcelainWorktree,
 	type RunCommandOptions,
 } from './worktree-janitor.git.js';
+import {
+	buildUnmergedNotice,
+	defaultResolveLeadSessions,
+	pruneUnmergedState,
+	shouldNotifyUnmerged,
+	type UnmergedNoticeState,
+	type UnmergedWorktreeFacts,
+} from './worktree-unmerged-notice.js';
 import { contentLandedSignal, isNonGithubRemote, type LandedRepoState } from './worktree-landed.js';
 import { dirtyStatusLines, reclaimRegenerableDirs } from './worktree-dirty.js';
 
@@ -294,6 +310,10 @@ export interface WorktreeJanitorOptions {
 	statePath?: string | null;
 	/** Docker reclaim on low disk (default: the real one, except under jest); null = never */
 	reclaimDocker?: (() => Promise<DockerReclaimResult>) | null;
+	/** Who leads the team owning a worktree (session names); empty = tell the orchestrator (default: project -> team -> lead) */
+	resolveLeadSessions?: (repoMain: string, worktreePath: string) => Promise<string[]>;
+	/** Unmerged-worktree notice state file (default `<CREWLY_HOME>/unmerged-worktree-notices.json`); null = in memory */
+	unmergedNoticePath?: string | null;
 	/** Debounce before a completion-triggered pass (default COMPLETION_TIDY_DELAY_MS) */
 	tidyDelayMs?: number;
 	/** Environment for the kill switch (default process.env) */
@@ -346,6 +366,7 @@ export class WorktreeJanitorService {
 	private tidyTimer: NodeJS.Timeout | null = null;
 	private runawayWatcher: RunawayFileWatcher | null = null;
 	private runawayInFlight = false;
+	private memoryUnmergedState: UnmergedNoticeState = {};
 
 	/**
 	 * @param options - Injectable dependencies; defaults use the live backend
@@ -751,6 +772,7 @@ export class WorktreeJanitorService {
 			const busy = await this.safeBusyCwds();
 			for (const repo of repos) {
 				let removedHere = 0;
+				const unmerged: WorktreeOutcome[] = [];
 				for (const entry of repo.entries) {
 					const verdict = await this.evaluate(repo, entry, busy, summary.lowDisk, idleOverrideMs);
 					if (summary.lowDisk && verdict.decision === 'keep' && (verdict.reason === 'dirty' || verdict.reason === 'not-merged')) {
@@ -766,6 +788,7 @@ export class WorktreeJanitorService {
 						if (outcome.removed) removedHere++;
 					}
 					summary.worktrees.push(outcome);
+					if (!dryRun && verdict.decision === 'keep' && verdict.reason === 'not-merged') unmerged.push(outcome);
 					if (outcome.removed) summary.removed++;
 					else if (dryRun && verdict.decision === 'remove') summary.wouldRemove++;
 					else {
@@ -774,6 +797,7 @@ export class WorktreeJanitorService {
 						summary.keptReasons[key] = (summary.keptReasons[key] ?? 0) + 1;
 					}
 				}
+				if (unmerged.length > 0) await this.noticeUnmerged(repo, unmerged);
 				if (!dryRun) {
 					const pr = await this.git(['-C', repo.main, 'worktree', 'prune']);
 					if (pr.code !== 0 && removedHere > 0) {
@@ -824,6 +848,83 @@ export class WorktreeJanitorService {
 			}
 		}
 		return summary;
+	}
+
+	/**
+	 * Tell the owning team's lead (else the orchestrator) about kept worktrees
+	 * with unmerged work, once per worktree per interval. Never throws.
+	 */
+	private async noticeUnmerged(repo: RepoContext, kept: WorktreeOutcome[]): Promise<void> {
+		const notifier = this.agentNotifier;
+		if (!notifier) return;
+		try {
+			const defaultRef = await this.defaultRef(repo);
+			if (!defaultRef) return;
+			const now = this.now();
+			let state = await this.readUnmergedState();
+			let changed = false;
+			for (const w of kept) {
+				if (!w.head) continue;
+				const ts = await this.git(['-C', w.path, 'log', '-1', '--format=%ct', w.head]);
+				const newest = ts.code === 0 && /^\d+$/.test(ts.stdout.trim()) ? Number(ts.stdout.trim()) * 1000 : null;
+				if (!shouldNotifyUnmerged(state, w.path, newest, now)) continue;
+				const count = await this.git(['-C', w.path, 'rev-list', '--count', w.head, `^${defaultRef}`]);
+				const commits = count.code === 0 ? Number(count.stdout.trim()) : NaN;
+				if (!Number.isFinite(commits) || commits <= 0) continue;
+				let pushed = false;
+				if (w.branch) {
+					const ahead = await this.git(['-C', w.path, 'rev-list', '--count', w.head, `^refs/remotes/origin/${w.branch}`]);
+					pushed = ahead.code === 0 && ahead.stdout.trim() === '0';
+				}
+				const facts: UnmergedWorktreeFacts = {
+					path: w.path,
+					branch: w.branch,
+					commitsNotOnMain: commits,
+					defaultRef,
+					pushed,
+					sizeBytes: await (this.opts.sizeOf ?? diskUsageBytes)(w.path).catch(() => null),
+				};
+				const leads = await (this.opts.resolveLeadSessions ?? defaultResolveLeadSessions)(repo.main, w.path).catch(() => [] as string[]);
+				const targets = leads.length > 0 ? leads : [ORCHESTRATOR_SESSION_NAME];
+				const message = buildUnmergedNotice(facts);
+				let delivered = false;
+				for (const session of targets) {
+					if (await notifier(session, message).catch(() => false)) delivered = true;
+				}
+				if (delivered) {
+					state = { ...state, [w.path]: now };
+					changed = true;
+					this.logger.info('Told lead about unmerged worktree', { path: w.path, to: targets, commits });
+				}
+			}
+			if (changed) await this.writeUnmergedState(pruneUnmergedState(state, now));
+		} catch (err) {
+			this.logger.warn('Unmerged worktree notice failed (non-fatal)', { error: err instanceof Error ? err.message : String(err) });
+		}
+	}
+
+	private async readUnmergedState(): Promise<UnmergedNoticeState> {
+		const p = this.opts.unmergedNoticePath === undefined
+			? path.join(getCrewlyHomePath(), WORKTREE_JANITOR_CONSTANTS.UNMERGED_NOTICE_STATE_FILENAME)
+			: this.opts.unmergedNoticePath;
+		if (!p) return this.memoryUnmergedState;
+		const file = (await safeReadJson<UnmergedNoticeState | null>(p, null)) ?? {};
+		const merged: UnmergedNoticeState = { ...file };
+		for (const [k, v] of Object.entries(this.memoryUnmergedState)) merged[k] = Math.max(merged[k] ?? 0, v);
+		return merged;
+	}
+
+	private async writeUnmergedState(state: UnmergedNoticeState): Promise<void> {
+		this.memoryUnmergedState = state;
+		const p = this.opts.unmergedNoticePath === undefined
+			? path.join(getCrewlyHomePath(), WORKTREE_JANITOR_CONSTANTS.UNMERGED_NOTICE_STATE_FILENAME)
+			: this.opts.unmergedNoticePath;
+		if (!p) return;
+		try {
+			await modifyJsonFile<UnmergedNoticeState | null, UnmergedNoticeState>(p, null, () => state);
+		} catch (err) {
+			this.logger.warn('Could not save unmerged worktree notice state', { error: err instanceof Error ? err.message : String(err) });
+		}
 	}
 
 	private async resolveRepos(): Promise<RepoContext[]> {
