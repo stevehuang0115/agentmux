@@ -1170,6 +1170,19 @@ describe('ChatV2DispatcherService', () => {
       expect(held[0].session).toBe('crewly-product-sam-dd2b46f7');
     });
 
+    it('holds the message when the start succeeded but the session is not up yet', async () => {
+      const { sink } = makeSink({ success: false, error: "Session 'x' does not exist" });
+      const held: string[] = [];
+      const dispatcher = new ChatV2DispatcherService({
+        agentSink: sink,
+        activateAgent: async () => true,
+        holdForStart: (session) => held.push(session),
+        activateRetryDelayMs: 0,
+      });
+      expect(await dispatcher.dispatchToAgent(makeChannel(), makeMessage())).toEqual({ dispatched: true, deferred: true });
+      expect(held).toEqual(['crewly-product-sam-dd2b46f7']);
+    });
+
     it('a deferred start with no queue to hold on is still a failure', async () => {
       const { sink } = makeSink({ success: false, error: 'Session does not exist' });
       const dispatcher = new ChatV2DispatcherService({ agentSink: sink, activateAgent: async () => 'deferred', activateRetryDelayMs: 0 });
@@ -1747,6 +1760,22 @@ describe('ChatV2DispatcherService', () => {
           agentSink: sink,
           huddleMembersFor: () => ['ella'],
           activateAgent: async () => 'deferred',
+          holdForStart: (session) => held.push(session),
+          activateRetryDelayMs: 0,
+        });
+        const r = await dispatcher.dispatchMessage(makeHuddle(), makeMessage({ mentions: ['ella'] }));
+        expect(held).toEqual(['ella']);
+        expect(r.dispatched).toBe(true);
+        expect(r.huddleOutcomes).toEqual([{ sessionName: 'ella', responseMode: 'required', dispatched: true, queued: true, deferred: true }]);
+      });
+
+      it('a member started but not yet registered has the prompt held and reports dispatched + deferred', async () => {
+        const sink: AgentMessageSink = { async sendMessageToAgent() { return { success: false, error: "Session 'ella' does not exist" }; } };
+        const held: string[] = [];
+        const dispatcher = new ChatV2DispatcherService({
+          agentSink: sink,
+          huddleMembersFor: () => ['ella'],
+          activateAgent: async () => true,
           holdForStart: (session) => held.push(session),
           activateRetryDelayMs: 0,
         });

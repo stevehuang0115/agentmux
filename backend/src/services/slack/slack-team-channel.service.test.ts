@@ -4863,6 +4863,11 @@ describe('one responder per owner message (specs/2026-10-03-one-responder-per-me
       expect(await topLevelThenWait({ slackRepliesAfter })).toEqual([ATLAS]);
     });
 
+    it('a failed placeholder is not a reply → the lead gets it', async () => {
+      const failed = [{ ts: '1020.5', text: "⚠️ Nova couldn't take this message just now — Crewly will keep trying and the reply will follow here if it gets through.", isBot: true, authorName: 'Nova', userId: 'UNOVA' }];
+      expect(await topLevelThenWait({ slackRepliesAfter: async () => failed })).toEqual([ATLAS, ELLA]);
+    });
+
     it('baseline: nobody answered in Slack → the lead gets it', async () => {
       expect(await topLevelThenWait({ slackRepliesAfter: async () => [] })).toEqual([ATLAS, ELLA]);
     });

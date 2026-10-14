@@ -783,3 +783,15 @@ describe('readableAgentName', () => {
     expect(readableAgentName('Ella')).toBe('Ella');
   });
 });
+
+describe('isFailedPlaceholderText', () => {
+  it('recognises only the failed notice, not the phases where the agent holds the message', () => {
+    const { isFailedPlaceholderText } = jest.requireActual('./slack-typing-placeholder.service.js') as typeof import('./slack-typing-placeholder.service.js');
+    const C = jest.requireActual('../../constants.js').SLACK_TYPING_CONSTANTS;
+    expect(isFailedPlaceholderText(C.FAILED_TEXT.replace('{name}', 'Nova'))).toBe(true);
+    for (const t of [C.TYPING_TEXT, C.WAKING_TEXT, C.WAKING_SLOW_TEXT, C.QUEUED_TEXT, C.TIMEOUT_TEXT]) {
+      expect(isFailedPlaceholderText(t.replace('{name}', 'Nova'))).toBe(false);
+    }
+    expect(isFailedPlaceholderText('On it')).toBe(false);
+  });
+});

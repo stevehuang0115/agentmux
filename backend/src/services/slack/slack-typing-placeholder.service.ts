@@ -153,6 +153,23 @@ export function readableAgentName(name: string): string {
   return m[1].charAt(0).toUpperCase() + m[1].slice(1);
 }
 
+const FAILED_TEXT_PATTERN = new RegExp(
+  '^' + SLACK_TYPING_CONSTANTS.FAILED_TEXT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\\{name\\\}/g, '.+') + '$',
+);
+
+/**
+ * Whether a Slack message is a typing placeholder that was turned into the
+ * "couldn't take this message" notice. The agent never got the message, so
+ * it must not count as the message having been answered. (The other phases —
+ * waking, queued, working, timed out — mean the agent holds it.)
+ *
+ * @param text - Slack message text
+ * @returns True when the text is the failed-placeholder notice
+ */
+export function isFailedPlaceholderText(text: string): boolean {
+  return FAILED_TEXT_PATTERN.test(text.trim());
+}
+
 export class SlackTypingPlaceholderService {
   private readonly logger: ComponentLogger;
   private readonly pending = new Map<string, { placeholder: TypingPlaceholder; timer: ReturnType<typeof setTimeout>; slowTimer?: ReturnType<typeof setTimeout>; startedAt: number }>();
