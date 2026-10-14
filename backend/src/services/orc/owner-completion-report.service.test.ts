@@ -197,6 +197,36 @@ describe('OwnerCompletionReportService', () => {
     expect(postFallback).toHaveBeenCalledTimes(1);
   });
 
+  it('the asks carry attempt and age, and never ask the agent to re-post what the owner has', async () => {
+    const svc = make();
+    items = incidentChain('verified');
+    now = T0 + 20 * MIN;
+    await svc.tick();
+    now += C.SETTLE_MS;
+    await svc.tick();
+    now += C.REPORT_WAIT_MS;
+    await svc.tick();
+    expect(deliver.mock.calls[0][1]).toContain('Automatic reminder 1 of 2');
+    expect(deliver.mock.calls[1][1]).toContain('Automatic reminder 2 of 2');
+    expect(deliver.mock.calls[1][1]).toContain('send NOTHING to the owner');
+  });
+
+  it('finished work discovered past the cutoff (outage): no ask, no cover post; the team lead is told once', async () => {
+    const notifyLead = jest.fn(async (_a: string, _t: string) => true);
+    const svc = make({ notifyLead });
+    items = incidentChain('verified');
+    now = T0 + 20 * MIN;
+    await svc.tick();
+    now += 3 * 24 * 60 * MIN; // the backend was down for three days
+    await svc.tick();
+    await svc.tick();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(postFallback).not.toHaveBeenCalled();
+    expect(notifyLead).toHaveBeenCalledTimes(1);
+    expect(notifyLead.mock.calls[0][0]).toBe('lyra');
+    expect(svc.activeRecords).toHaveLength(0);
+  });
+
   it('reply --work-item settles the chain wherever it was posted: no reminder, no cover message (CREW-503)', async () => {
     const svc = make();
     items = [item('s1', { origin: SLACK_ORIGIN, target: 'atlas', at: now, doneAt: now + MIN })];

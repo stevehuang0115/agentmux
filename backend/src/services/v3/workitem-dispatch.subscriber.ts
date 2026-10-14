@@ -45,6 +45,7 @@
  * @module services/v3/workitem-dispatch.subscriber
  */
 
+import { formatReminderAge } from '../orc/harness-reminder.js';
 import { isSessionPaused } from '../team/team-pause.registry.js';
 import axios from 'axios';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
@@ -1054,6 +1055,7 @@ export class WorkItemDispatchSubscriber {
       '',
       `[CREWLY-DISPATCH] ${workItems.length} WorkItems are still queued for you — this one message covers all of them.`,
       ...lines,
+      `  (Reminder: the oldest of these was queued ${formatReminderAge(Math.max(0, Date.now() - Math.min(...workItems.map((wi) => Date.parse(wi.createdAt) || Date.now()))))} ago. If you already finished or answered any of them, tell the owner nothing new: just complete the item. Never re-post content the owner already has.)`,
       '  Take them ONE AT A TIME, in this order: claim one, finish it and complete it, then claim the next.',
       '  Do not start an item you have not claimed. Run poll-tasks to claim the next one:',
       `    bash $AGENT_SKILLS_PATH/core/poll-tasks/execute.sh '{"sessionName":"${target}"}'`,

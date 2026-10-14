@@ -19,6 +19,8 @@ import { getOwnerThreadSentinel } from '../messaging/owner-thread-sentinel.servi
 import { AgentTurnStateService } from '../monitoring/agent-turn-state.js';
 import { isOwnerStopped } from './owner-stopped.registry.js';
 import { pausedTeamOfSession } from '../team/team-pause.registry.js';
+import { findExistingFollowThrough } from '../../utils/duplicate-creation.utils.js';
+import { formatReminderAge, isPastReminderCutoff, reminderAgeMs } from '../orc/harness-reminder.js';
 import { PtyActivityTrackerService } from './pty-activity-tracker.service.js';
 import { AgentFollowThroughService, FOLLOW_THROUGH_CONSTANTS, getFollowThrough, setFollowThrough } from './follow-through.service.js';
 import { holdReasonFor, releaseHeldWork, type IdleWorkGuardDeps, type ReleaseWorkDeps } from './idle-work-guard.js';
@@ -111,15 +113,19 @@ export const STATED_INTENT_MARKER = 'stated-intent';
  */
 export async function commitStatedIntent(session: string, sentence: string): Promise<string | null> {
 	const pool = TaskPoolService.getInstance();
-	const open = (await pool.getAllItems()).find(
+	const all = await pool.getAllItems();
+	const open = all.find(
 		(wi) => wi.target === session && (wi.metadata as Record<string, unknown> | undefined)?.['harnessCreated'] === STATED_INTENT_MARKER && !TERMINAL_WORK_ITEM_STATUSES.has(wi.status),
 	);
 	if (open) return open.id;
+	const title = `Follow through: ${sentence.slice(0, 70)}`;
+	// The same sentence already had its item (finished or not) within a day: one item per promise.
+	if (findExistingFollowThrough(all, session, title, STATED_INTENT_MARKER, Date.now())) return null;
 	const wi = createWorkItem({
 		type: 'delegate',
 		owner: 'agent',
 		target: session,
-		title: `Follow through: ${sentence.slice(0, 70)}`,
+		title,
 		description: stateIntentBrief(sentence),
 		metadata: { harnessCreated: STATED_INTENT_MARKER },
 	});
@@ -219,6 +225,11 @@ export function releaseWorkDeps(): ReleaseWorkDeps {
 			if (!intent) return null;
 			// Already a WorkItem since the statement: nothing more to park.
 			if (intent.workItemId) return intent.workItemId;
+			// One "Follow through" item per target + sentence, whatever its status now: parked once, not
+			// after every stop (ten identical items for one agent, 2026-10-12).
+			const title = `Follow through: ${intent.sentence.slice(0, 70)}`;
+			const twin = findExistingFollowThrough(await pool.getAllItems(), session, title, 'stated-intent', Date.now());
+			if (twin) return TERMINAL_WORK_ITEM_STATUSES.has(twin.status) ? null : twin.id;
 			const wi = createWorkItem({
 				type: 'delegate',
 				owner: 'system',
@@ -247,11 +258,12 @@ export function releaseWorkDeps(): ReleaseWorkDeps {
 				// back as a new item after every stop or restart. Items made before
 				// promiseKey existed are matched by target + harness origin + title.
 				const title = `Follow through: ${promise.text.slice(0, 70)}`;
-				const existing = (await pool.getAllItems()).find((wi) => {
+				const allItems = await pool.getAllItems();
+				const existing = allItems.find((wi) => {
 					const meta = wi.metadata as Record<string, unknown> | undefined;
 					return meta?.['promiseKey'] === promise.key
 						|| (meta?.['promiseKey'] === undefined && meta?.['harnessCreated'] === 'owner-promise' && wi.target === session && wi.title === title);
-				});
+				}) ?? findExistingFollowThrough(allItems, session, title, 'owner-promise', Date.now());
 				if (existing) {
 					promise.markParked(existing.id);
 					return TERMINAL_WORK_ITEM_STATUSES.has(existing.status) ? null : existing.id;
@@ -284,12 +296,18 @@ export function releaseWorkDeps(): ReleaseWorkDeps {
  * @returns Reminder text, or null
  */
 export function owedWorkReminder(items: readonly WorkItem[], session: string): string | null {
-	const queued = items.filter((wi) => wi.target === session && wi.status === 'queued');
+	const nowMs = Date.now();
+	// Work queued past the reminder cutoff is not pushed at the agent again; the lead's stale-item path owns it.
+	const queued = items.filter((wi) => wi.target === session && wi.status === 'queued' && !isPastReminderCutoff(wi.createdAt, nowMs));
 	if (queued.length === 0) return null;
-	const lines = queued.slice(0, 5).map((wi) => `- ${wi.title}`);
+	const lines = queued.slice(0, 5).map((wi) => {
+		const age = reminderAgeMs(wi.createdAt, nowMs);
+		return `- ${wi.title}${age === null ? '' : ` (asked ${formatReminderAge(age)} ago)`}`;
+	});
 	return (
 		'[FOLLOW-THROUGH] Crewly stopped your session (to free a slot or memory, or your runtime exited) while you still owed the owner this. It is still yours; start it now and reply in the owner thread with the result:\n' +
-		lines.join('\n')
+		lines.join('\n') +
+		'\nIf you already delivered or answered any of these, send NOTHING to the owner: close the item with the usual command. Never re-post content the owner already has.'
 	);
 }
 

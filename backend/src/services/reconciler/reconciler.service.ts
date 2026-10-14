@@ -75,6 +75,14 @@ export interface WakeTuning {
   stalledIdleMs: number;
   /** One stalled-agent recovery per session at most this often (ms) */
   recoveryCooldownMs: number;
+  /** First wait after a successful wake for one session + WorkItem (ms) */
+  successBackoffBaseMs: number;
+  /** Ceiling of the doubling success backoff (ms) */
+  successBackoffMaxMs: number;
+  /** Max successful wakes per session inside the window */
+  maxWakesPerSessionPerWindow: number;
+  /** Window of the per-session wake cap (ms) */
+  sessionWakeWindowMs: number;
 }
 
 /** Defaults from the backend constants. */
@@ -86,6 +94,10 @@ export const DEFAULT_WAKE_TUNING: Readonly<WakeTuning> = {
   stalledHeldMs: STALLED_AGENT_RECOVERY_CONSTANTS.HELD_WORK_STOPPED_MS,
   stalledIdleMs: STALLED_AGENT_RECOVERY_CONSTANTS.IDLE_NO_PROGRESS_MS,
   recoveryCooldownMs: STALLED_AGENT_RECOVERY_CONSTANTS.RECOVERY_COOLDOWN_MS,
+  successBackoffBaseMs: RECONCILER_WAKE_CONSTANTS.SUCCESS_BACKOFF_BASE_MS,
+  successBackoffMaxMs: RECONCILER_WAKE_CONSTANTS.SUCCESS_BACKOFF_MAX_MS,
+  maxWakesPerSessionPerWindow: RECONCILER_WAKE_CONSTANTS.MAX_WAKES_PER_SESSION_PER_WINDOW,
+  sessionWakeWindowMs: RECONCILER_WAKE_CONSTANTS.SESSION_WAKE_WINDOW_MS,
 };
 
 /**
@@ -225,6 +237,13 @@ export class ReconcilerService {
    * the queue.
    */
   private readonly wakeFailures = new Map<string, { failures: number; nextAt: number; session: string; workItemId: string }>();
+  /**
+   * Successful wakes per `session + WorkItem`: the next wake of the same pair waits a doubling
+   * backoff while the item stays queued (the wake "worked" but the agent did not take the item).
+   */
+  private readonly wakeSuccesses = new Map<string, { count: number; nextAt: number; workItemId: string }>();
+  /** Times of recent successful wakes per session (rolling window of the per-session cap) */
+  private readonly sessionWakeTimes = new Map<string, number[]>();
   /** Starts still in flight (pending) per session: not requested again meanwhile */
   private readonly pendingStarts = new Map<string, { workItemId: string; since: number }>();
   /** Sessions whose current pending wake was already traced (one trace per episode) */
@@ -1017,6 +1036,11 @@ export class ReconcilerService {
       if (!queuedIds.has(entry.workItemId)) this.wakeFailures.delete(key);
     }
 
+    // A WorkItem that left the queue drops its success pacing too.
+    for (const [key, entry] of this.wakeSuccesses) {
+      if (!queuedIds.has(entry.workItemId)) this.wakeSuccesses.delete(key);
+    }
+
     // One wake per session per pass, whatever the number of items (CREW-304).
     const actedOn = new Set<string>();
     this.wokenThisPass = actedOn;
@@ -1036,6 +1060,11 @@ export class ReconcilerService {
       // A failed wake waits its backoff before the next attempt.
       const backoff = this.wakeFailures.get(this.wakeKey(session, action.workItemId));
       if (backoff && now < backoff.nextAt) continue;
+      // A wake that worked is not repeated every pass while the item stays queued, and one agent
+      // is woken only so often whatever the items.
+      const paced = this.wakeSuccesses.get(this.wakeKey(session, action.workItemId));
+      if (paced && now < paced.nextAt) continue;
+      if (this.sessionWakeCapReached(session, now)) continue;
       actedOn.add(session);
       try {
         const outcome = await this.attemptWake(action);
@@ -1057,6 +1086,20 @@ export class ReconcilerService {
    */
   setWakeTuning(tuning: Partial<WakeTuning>): void {
     this.wakeTuning = { ...this.wakeTuning, ...tuning };
+  }
+
+  /**
+   * Whether the session already had its fill of successful wakes in the window.
+   *
+   * @param session - Agent session
+   * @param now - Epoch ms
+   * @returns True when the cap is reached
+   */
+  private sessionWakeCapReached(session: string, now: number): boolean {
+    const recent = (this.sessionWakeTimes.get(session) ?? []).filter((t) => now - t < this.wakeTuning.sessionWakeWindowMs);
+    if (recent.length === 0) this.sessionWakeTimes.delete(session);
+    else this.sessionWakeTimes.set(session, recent);
+    return recent.length >= this.wakeTuning.maxWakesPerSessionPerWindow;
   }
 
   /** Map key of a session + WorkItem failure backoff. */
@@ -1132,6 +1175,12 @@ export class ReconcilerService {
       for (const [key, entry] of this.wakeFailures) {
         if (entry.session === session) this.wakeFailures.delete(key);
       }
+      const nowMs = Date.now();
+      const successKey = this.wakeKey(session, action.workItemId);
+      const count = (this.wakeSuccesses.get(successKey)?.count ?? 0) + 1;
+      const waitMs = Math.min(this.wakeTuning.successBackoffBaseMs * 2 ** Math.min(count - 1, 30), this.wakeTuning.successBackoffMaxMs);
+      this.wakeSuccesses.set(successKey, { count, nextAt: nowMs + waitMs, workItemId: action.workItemId });
+      this.sessionWakeTimes.set(session, [...(this.sessionWakeTimes.get(session) ?? []), nowMs]);
       traceHarness('harness.wake', {
         workItemId: action.workItemId,
         session,

@@ -8,7 +8,7 @@ jest.mock('../core/logger.service.js', () => ({
 }));
 
 const SINCE = Date.parse('2026-10-10T19:12:00Z');
-const wi = (over: Partial<WorkItem>): WorkItem => ({ id: 'w', createdAt: '2026-10-10T19:13:00Z', status: 'queued', ...over }) as WorkItem;
+const wi = (over: Partial<WorkItem>): WorkItem => ({ id: 'w', createdAt: new Date(Date.now() - 60 * 60_000).toISOString(), status: 'queued', ...over }) as WorkItem;
 
 describe('handedOffSince', () => {
 	it('a WorkItem for the agent itself or one it delegated, created after the statement, covers it', () => {
@@ -38,6 +38,13 @@ describe('owedWorkReminder', () => {
 		expect(text).not.toContain('other');
 		expect(text).not.toContain('old');
 		expect(owedWorkReminder(items, 'nobody')).toBeNull();
+		expect(text).toContain('(asked 1 h ago)');
+		expect(text).toContain('send NOTHING to the owner');
+	});
+
+	it('leaves out work queued past the reminder cutoff', () => {
+		const old = new Date(Date.now() - 3 * 24 * 60 * 60_000).toISOString();
+		expect(owedWorkReminder([wi({ target: 'pia', title: 'ancient', createdAt: old })], 'pia')).toBeNull();
 	});
 });
 

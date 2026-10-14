@@ -10,6 +10,7 @@
 import { Router } from 'express';
 import { ApiController } from '../../controllers/api.controller.js';
 import * as terminalHandlers from '../../controllers/monitoring/terminal.controller.js';
+import { agentMessageDedupe } from '../../middleware/agent-message-dedupe.middleware.js';
 import { ownerOrVerifiedAgent, ownerOrVerifiedAgentOrScheduler } from '../../middleware/caller-identity.middleware.js';
 
 /**
@@ -66,13 +67,13 @@ export function registerTerminalRoutes(router: Router, apiController?: ApiContro
 	// Write data to session (new PTY-based endpoint)
 	// With the ApiController, another agent's message to a mid-turn agent is
 	// queued rather than pasted into its running turn.
-	router.post('/terminal/:sessionName/write', terminalMessageWriter, (req, res) =>
+	router.post('/terminal/:sessionName/write', terminalMessageWriter, agentMessageDedupe, (req, res) =>
 		terminalHandlers.writeToSession.call(apiController, req, res)
 	);
 
 	// Reliable message delivery with retry and verification (requires ApiController)
 	if (apiController) {
-		router.post('/terminal/:sessionName/deliver', terminalWriter, (req, res) =>
+		router.post('/terminal/:sessionName/deliver', terminalWriter, agentMessageDedupe, (req, res) =>
 			terminalHandlers.deliverMessage.call(apiController, req, res)
 		);
 	}

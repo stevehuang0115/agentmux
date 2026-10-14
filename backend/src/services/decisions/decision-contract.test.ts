@@ -1,7 +1,7 @@
 /**
  * Tests for the ask-owner contract (specs/2026-10-01-decision-cards.md §1).
  */
-import { DecisionContractError, defaultDeadline, isYesNoOptions, readsAsEitherOr, isVagueQuestion, parseOptions, resolveDefault, validateAskOwner } from './decision-contract.js';
+import { DecisionContractError, defaultDeadline, isYesNoOptions, readsAsEitherOr, isVagueQuestion, parseOptions, resolveDefault, validateAskOwner, withTicketContext } from './decision-contract.js';
 
 const NOW = new Date(2026, 9, 1, 10, 30, 0); // Oct 1 2026 10:30 local
 
@@ -130,5 +130,14 @@ describe('either/or detection', () => {
   it('leaves unrelated question pairs alone', () => {
     expect(readsAsEitherOr('Send the partner email on Monday?', 'Use the short version of the draft?')).toBe(false);
     expect(readsAsEitherOr('Order the box for the lab?', 'Orders go out Friday, ok?')).toBe(false);
+  });
+});
+
+describe('withTicketContext', () => {
+  it('puts the ticket title in front of a short question only', () => {
+    expect(withTicketContext('这版可以吗？', 'TKT-357 Atlas contract')).toBe('TKT-357 Atlas contract — 这版可以吗？');
+    expect(withTicketContext('Send the draft to the 3 partners on Monday?', 'Partner email')).toBe('Send the draft to the 3 partners on Monday?');
+    expect(withTicketContext('这版可以吗？', undefined)).toBe('这版可以吗？');
+    expect(withTicketContext('Partner email ok?', 'Partner email')).toBe('Partner email ok?');
   });
 });
