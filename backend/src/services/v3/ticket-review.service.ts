@@ -106,6 +106,13 @@ export interface TicketReviewServiceDeps {
   nudgeAgent?: (agentSession: string, text: string) => Promise<void>;
   /** Session the rework goes to when nobody answered (the orchestrator) */
   fallbackAgent: string;
+  /**
+   * Agent messages this agent sent that are still unanswered: an agent that
+   * handed the work on has not answered the ticket yet. Absent → 0.
+   */
+  openAsksBy?: (session: string) => number;
+  /** Names of the agents (display names), to tell a hand-off from an answer. Absent → no hand-off check. */
+  agentNames?: () => Promise<string[]>;
   now?: () => Date;
 }
 
@@ -128,6 +135,33 @@ export interface TicketPatch {
 /** The agent still owes the owner something (a question or a promise): the done gate would park the ticket. */
 function hasActiveOpenItem(t: Request): boolean {
   return (t.openItems ?? []).some((i) => ACTIVE_OPEN_ITEM_STATUSES.has(i.status));
+}
+
+/**
+ * Whether an agent message passes the work to a colleague: it @-mentions
+ * another agent by name ("@Pia please take this"). The sender's own name
+ * and anyone who is not an agent (the owner) do not count.
+ *
+ * @param content - Message text
+ * @param agentNames - Display names of the agents
+ * @param senderId - The posting agent's session (its own name is ignored)
+ * @returns True when another agent is addressed
+ *
+ * @example
+ * handsWorkOn('@Pia 请你接这件', ['Pia', 'Ella'], 'crewly-marketing-ella-e6a6b8ea') // true
+ */
+export function handsWorkOn(content: string, agentNames: readonly string[], senderId: string): boolean {
+  if (!content.includes('@') || agentNames.length === 0) return false;
+  const sender = senderId.toLowerCase();
+  const names = agentNames
+    .map((n) => n.trim())
+    .filter((n) => n.length > 0 && !sender.includes(`-${n.toLowerCase()}-`) && sender !== n.toLowerCase());
+  return names.some((n) => new RegExp(`@${escapeRegExp(n)}(?![A-Za-z0-9_])`, 'i').test(content));
+}
+
+/** Escape a string for use inside a RegExp. */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /** Statuses in which an agent answer can submit a ticket. */
@@ -201,6 +235,12 @@ export class TicketReviewService {
     // on it let a request die as 待验收 with nothing made (2026-10-10).
     if (detectStatedIntent(message.content)) return null;
     return this.serial(async () => {
+      // "@Pia please take this" passes the work on: the answer is still to
+      // come (TKT-524, 2026-10-14: closed two minutes after it was asked).
+      if (this.deps.agentNames && handsWorkOn(message.content, await this.deps.agentNames().catch(() => []), message.senderId)) {
+        this.logger.debug('Agent message hands the work on; not an answer', { by: message.senderId });
+        return null;
+      }
       const all = await this.deps.requests.listAll();
       const inChannel = all.filter(
         (r) =>
@@ -343,6 +383,8 @@ export class TicketReviewService {
       if (t.submittedAt && Date.parse(t.reply.at) <= Date.parse(t.submittedAt)) continue;
       if (!match(t)) continue;
       if (this.deps.openWorkItemCount && (await this.deps.openWorkItemCount(t.id)) > 0) continue;
+      // It asked a colleague and is still waiting: not answered yet.
+      if ((this.deps.openAsksBy?.(t.reply.by) ?? 0) > 0) continue;
       try {
         // `done` without `accepted`: the RequestService gate turns it into
         // 待验收 when the ticket needs review. A plain answer (nothing for the

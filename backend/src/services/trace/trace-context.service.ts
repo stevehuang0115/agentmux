@@ -42,6 +42,7 @@ import {
 	type TraceRootKind,
 } from './trace.types.js';
 import { getTurnTriggerTracker } from './turn-trigger.js';
+import { getAgentAskLedger } from '../messaging/agent-ask-ledger.service.js';
 
 /** How a delivered message reached the turn. */
 export type DeliveryKind =
@@ -515,6 +516,15 @@ export class TraceContext {
 			const current = this.currentTrace(session);
 			const traceId = traces.length === 0 ? null : current && traces.includes(current) ? current : traces[0];
 			const trigger = getTurnTriggerTracker().noteDelivery(session, text, { traceId }, now);
+			// Another agent's message reached this turn: remember it, so an answer
+			// the receiver never sends back can be returned for it.
+			if (trigger.triggerKind === 'agent_message' && trigger.sender) {
+				try {
+					getAgentAskLedger()?.noteDelivered(session, trigger.sender, text);
+				} catch {
+					/* best effort */
+				}
+			}
 			if (traces.length === 0) {
 				// Nothing in the text names a run. An owner message may start one
 				// (pending root); anything else — a cron / scheduled prompt, a system
