@@ -161,14 +161,17 @@ export interface RunCommandDeps {
 }
 
 /**
- * Whether a pid is still present in the process table.
+ * Whether anything from a run is still alive. Runs are spawned as their own
+ * process group (pgid = the child's pid), and the process that hangs is
+ * usually the native binary a wrapper started, not the wrapper itself, so on
+ * POSIX the whole group is checked.
  *
- * @param pid - Process id
- * @returns True when signal 0 succeeds (EPERM still means alive)
+ * @param pid - Pid of the spawned child (its process group id on POSIX)
+ * @returns True when signal 0 to the group (or pid) succeeds; EPERM still means alive
  */
 function defaultIsAlive(pid: number): boolean {
 	try {
-		process.kill(pid, 0);
+		process.kill(process.platform === 'win32' ? pid : -pid, 0);
 		return true;
 	} catch (error) {
 		return (error as NodeJS.ErrnoException).code === 'EPERM';
@@ -266,7 +269,10 @@ export function createRunCommand(deps: RunCommandDeps = {}): RunCommand {
 			if (options.timeoutMs) {
 				timer = setTimeout(() => {
 					killTree(child);
-					if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
+					// Remember the group even if the wrapper itself dies: its native
+					// child may be the one that cannot be reaped. stuckCount() drops it
+					// once nothing in the group is left.
+					if (child.pid !== undefined) {
 						const pids = stuck.get(key) ?? new Set<number>();
 						pids.add(child.pid);
 						stuck.set(key, pids);
@@ -286,12 +292,6 @@ export function createRunCommand(deps: RunCommandDeps = {}): RunCommand {
 				options.onOutput?.(text);
 			});
 			child.on('error', (error) => finish({ code: null, stdout, stderr, error: error.message }));
-			child.on('exit', () => {
-				if (child.pid === undefined) return;
-				const pids = stuck.get(key);
-				pids?.delete(child.pid);
-				if (pids?.size === 0) stuck.delete(key);
-			});
 			child.on('close', (code) => finish({ code, stdout, stderr }));
 
 			child.stdin?.on('error', () => undefined);

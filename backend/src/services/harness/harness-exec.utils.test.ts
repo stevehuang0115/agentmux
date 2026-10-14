@@ -183,12 +183,15 @@ describe('runCommand pile-up guard', () => {
 		expect(sp.spawned).toHaveBeenCalledTimes(3);
 	});
 
-	it('resumes when the stuck child emits exit', async () => {
-		const { sp, run } = setup(new Set([1000]));
+	it('keeps refusing after the wrapper exits while its process group is still alive', async () => {
+		const alive = new Set([1000]);
+		const { sp, run } = setup(alive);
 		const first = run('/bin/codex', [], { timeoutMs: 50 });
 		jest.advanceTimersByTime(50);
 		await first;
 		sp.children[0].emit('exit', null, 'SIGKILL');
+		expect((await run('/bin/codex', [], { timeoutMs: 50 })).error).toMatch(/still stuck/);
+		alive.delete(1000);
 		void run('/bin/codex', [], { timeoutMs: 50 });
 		expect(sp.spawned).toHaveBeenCalledTimes(2);
 	});
