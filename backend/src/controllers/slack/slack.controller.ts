@@ -1630,24 +1630,33 @@ router.post('/post', async (req: Request, res: Response, next: NextFunction) => 
       return;
     }
     const { target, text: rawPostText, threadTs, newTopLevel } = req.body ?? {};
-    // Files named with `--file` are uploaded into the channel next to the text,
-    // by the identity that posts it. Relative paths resolve against the project.
-    const projectPath = typeof req.body?.projectPath === 'string' ? req.body.projectPath : '';
-    const files: string[] = Array.isArray(req.body?.files)
-      ? (req.body.files as unknown[])
-          .filter((f): f is string => typeof f === 'string' && f.length > 0)
-          .slice(0, 5)
-          .map((f) => (path.isAbsolute(f) ? f : path.resolve(projectPath || process.cwd(), f)))
+    // Files named with `--file` are uploaded into the channel next to the text.
+    // They pass the same guard as the Cloud handoff: inside the agent's project
+    // (realpath, so symlinks cannot escape), not in Crewly's home, no secret
+    // names or contents. Nothing is posted if any file is refused.
+    const requested: string[] = Array.isArray(req.body?.files)
+      ? (req.body.files as unknown[]).filter((f): f is string => typeof f === 'string' && f.length > 0).slice(0, 5)
       : [];
-    const text: unknown = rawPostText;
-    for (const f of files) {
-      try {
-        await fs.stat(f);
-      } catch {
-        res.status(404).json({ success: false, error: `No such file: ${f}`, code: 'file_not_found' });
+    const files: string[] = [];
+    if (requested.length > 0) {
+      const wiring = await import('../../services/file-handoff/file-handoff.wiring.js');
+      const projectDir = await wiring.projectDirForAgent(agentSession, typeof req.body?.projectPath === 'string' ? req.body.projectPath : undefined);
+      if (!projectDir) {
+        res.status(400).json({ success: false, code: 'file_outside_project', error: 'Cannot tell which project directory you work in, so no file can be attached' });
         return;
       }
+      const guard = wiring.getFileHandoffService();
+      for (const f of requested) {
+        const vetted = guard.vetFile(f, projectDir);
+        if (!vetted.ok) {
+          const code = vetted.reason === 'file not found' ? 'file_not_found' : 'file_outside_project';
+          res.status(code === 'file_not_found' ? 404 : 400).json({ success: false, code, error: `${f}: ${vetted.reason}` });
+          return;
+        }
+        files.push(vetted.real);
+      }
     }
+    const text: unknown = rawPostText;
     // Owner board: the agent is messaging a channel (an id shows as plain "Slack")
     getBoardActivity().recordMessage(agentSession, typeof target === 'string' && /^[#@]?[A-Za-z][\w.-]{0,38}$/.test(target) ? target.replace(/^@/, '') : 'Slack');
     try {

@@ -1419,24 +1419,51 @@ describe('Slack Controller', () => {
       expect(mockAgentPost.current.post).not.toHaveBeenCalled();
     });
 
-    it('--file: relative paths resolve against the project and go to the service as uploads', async () => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'slack-post-'));
-      await fs.writeFile(path.join(dir, 'r.md'), 'draft');
-      const post = jest.fn().mockResolvedValue({ channelId: 'C1', messageTs: '1.1', kind: 'channel', postedAs: 'crewly', identity: 'Owen', filesSent: [path.join(dir, 'r.md')] });
-      mockAgentPost.current = { post };
-      const res = await request(app).post('/api/slack/post').set('X-Agent-Session', 'owen').send({ target: '#room', text: 'the report', files: ['r.md'], projectPath: dir });
-      expect(res.status).toBe(200);
-      expect(post).toHaveBeenCalledWith(expect.objectContaining({ files: [path.join(dir, 'r.md')] }));
-      expect(res.body.data.filesSent).toHaveLength(1);
-    });
+    describe('--file guard', () => {
+      let dir: string;
+      let outside: string;
+      let post: jest.Mock;
+      beforeEach(async () => {
+        const { FileHandoffService } = jest.requireActual('../../services/file-handoff/file-handoff.service.js');
+        dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'slack-post-proj-')));
+        outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'slack-post-out-')));
+        await fs.writeFile(path.join(dir, 'r.md'), 'draft');
+        await fs.writeFile(path.join(outside, 'cfg.json'), '{"a":1}');
+        await fs.symlink(path.join(outside, 'cfg.json'), path.join(dir, 'link.json'));
+        const wiring = jest.requireMock('../../services/file-handoff/file-handoff.wiring.js') as { getFileHandoffService: jest.Mock; projectDirForAgent: jest.Mock };
+        wiring.getFileHandoffService.mockReturnValue(new FileHandoffService({ api: () => null, crewlyHomes: () => [] }));
+        wiring.projectDirForAgent.mockResolvedValue(dir);
+        post = jest.fn().mockResolvedValue({ channelId: 'C1', messageTs: '1.1', kind: 'channel', postedAs: 'crewly', identity: 'Owen' });
+        mockAgentPost.current = { post };
+      });
+      const send = (files: string[]) => request(app).post('/api/slack/post').set('X-Agent-Session', 'owen').send({ target: '#room', text: 'x', files, projectPath: dir });
 
-    it('--file: a missing file is a 404 naming the path, before anything is posted', async () => {
-      const post = jest.fn();
-      mockAgentPost.current = { post };
-      const res = await request(app).post('/api/slack/post').set('X-Agent-Session', 'owen').send({ target: '#room', text: 'x', files: ['/nope/zzz.md'] });
-      expect(res.status).toBe(404);
-      expect(res.body.error).toContain('/nope/zzz.md');
-      expect(post).not.toHaveBeenCalled();
+      it('uploads a file inside the project (relative path)', async () => {
+        const res = await send(['r.md']);
+        expect(res.status).toBe(200);
+        expect(post).toHaveBeenCalledWith(expect.objectContaining({ files: [path.join(dir, 'r.md')] }));
+      });
+
+      it('refuses a path outside the project with file_outside_project, posting nothing', async () => {
+        const res = await send([path.join(outside, 'cfg.json')]);
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('file_outside_project');
+        expect(post).not.toHaveBeenCalled();
+      });
+
+      it('refuses a symlink inside the project that points outside', async () => {
+        const res = await send(['link.json']);
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('file_outside_project');
+        expect(post).not.toHaveBeenCalled();
+      });
+
+      it('404s a missing file before posting', async () => {
+        const res = await send(['nope.md']);
+        expect(res.status).toBe(404);
+        expect(res.body.code).toBe('file_not_found');
+        expect(post).not.toHaveBeenCalled();
+      });
     });
 
     it('a --thread from another channel than --target goes where the resolver puts it, never top level here (2026-10-02)', async () => {
