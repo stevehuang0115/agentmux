@@ -7316,6 +7316,37 @@ export const REPLY_ROUTING_CONSTANTS = {
 } as const;
 
 /**
+ * "Triggered by" provenance on agent messages (agent-provenance audit
+ * 2026-10-14): what started the turn an agent posted from, stored on the chat
+ * row and shown as one muted line when the post is not a direct answer to the
+ * owner's message in the same conversation.
+ */
+export const TURN_TRIGGER_CONSTANTS = {
+	/** chat-v2 message metadata key holding the provenance record */
+	METADATA_KEY: 'triggeredBy',
+	/** A turn's trigger is used for posts this long after the delivery (ms); older posts get no line */
+	FRESH_MS: 6 * 60 * 60 * 1000,
+	/** An agent-to-agent send is matched to its delivery for this long (queued messages arrive later) (ms) */
+	SENDER_MATCH_MS: 24 * 60 * 60 * 1000,
+	/** A post into a conversation where the owner wrote to the agent this recently is an answer: no line (ms) */
+	OWNER_ANSWER_WINDOW_MS: 30 * 60 * 1000,
+	/** Agent-to-agent sends remembered per target */
+	MAX_SENDERS_PER_TARGET: 20,
+	/** Characters of a sent text used to recognise it in the delivered prompt */
+	SENDER_MATCH_CHARS: 160,
+	/** A sender counts as an agent only with a session-shaped name (harness services send `WorkItemDispatch` etc.) */
+	AGENT_SESSION_PATTERN: /^[a-z0-9][a-z0-9_-]*$/,
+	/** Agents listed in a hand-off chain */
+	MAX_VIA_AGENTS: 4,
+	/** Characters of a work-item title quoted in the line */
+	MAX_TITLE_CHARS: 60,
+	/** Opening of the rendered line (Slack mrkdwn / chat markdown italics) */
+	LINE_PREFIX: '_↳ Triggered by ',
+	/** Closing of the rendered line */
+	LINE_SUFFIX: '_',
+} as const;
+
+/**
  * Usage ledger backfill (`POST /api/system/usage/backfill`, owner only).
  * specs/2026-10-03-usage-ledger-durability.md §Backfill
  */

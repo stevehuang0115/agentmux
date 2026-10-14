@@ -287,3 +287,59 @@ describe('deliverReply — decision-card threads (CREW-438)', () => {
     expect(!r.ok && r.error).toContain('reply --decision D-42');
   });
 });
+
+describe('deliverReply — "Triggered by" provenance (agent-provenance audit 2026-10-14)', () => {
+  beforeEach(() => {
+    AgentPromptReferenceService.resetInstance();
+    resetReplyDeliveryGuardForTesting();
+  });
+
+  const reminder = { triggerKind: 'follow_up' as const, ticket: 'TKT-187', rootKind: 'follow_up' as const, rootRef: 'TKT-187', viaAgents: [], at: 0 };
+
+  it('a reminder-started post gets the line and the record', async () => {
+    const d = deps({ turnTrigger: () => reminder, currentTrace: () => 'tr-20261014-0123abcd' });
+    await deliverReply({ session: 'owen', content: 'preview: https://x', reference: { ticket: 'TKT-187' } }, d);
+    expect(d.deliver).toHaveBeenCalledWith(expect.objectContaining({
+      content: 'preview: https://x\n\n_↳ Triggered by an automatic reminder (TKT-187) of something promised to you_',
+      metadata: {
+        deliversTicket: 'TKT-187',
+        triggeredBy: expect.objectContaining({ traceId: 'tr-20261014-0123abcd', triggerKind: 'follow_up', rootRef: 'TKT-187', label: 'Triggered by an automatic reminder (TKT-187) of something promised to you' }),
+      },
+    }));
+  });
+
+  it('no line when the owner asked the agent in this conversation recently; the record is still kept', async () => {
+    const d = deps({ turnTrigger: () => reminder, ownerAskedRecently: (_s, c) => c === 'room-ce' });
+    await deliverReply({ session: 'owen', content: 'preview: https://x', reference: { ticket: 'TKT-187' } }, d);
+    const call = d.deliver.mock.calls[0][0] as { content: string; metadata: Record<string, { label?: string }> };
+    expect(call.content).toBe('preview: https://x');
+    expect(call.metadata.triggeredBy).toBeDefined();
+    expect(call.metadata.triggeredBy.label).toBeUndefined();
+  });
+
+  it('an interim note carries no line', async () => {
+    const d = deps({ turnTrigger: () => reminder });
+    await deliverReply({ session: 'owen', content: 'on it', interim: true, reference: { ticket: 'TKT-187' } }, d);
+    expect(d.deliver).toHaveBeenCalledWith(expect.objectContaining({ content: 'on it' }));
+  });
+
+  it('no trigger known: unchanged', async () => {
+    const d = deps({ turnTrigger: () => null });
+    await deliverReply({ session: 'owen', content: 'preview: https://x', reference: { ticket: 'TKT-187' } }, d);
+    expect(d.deliver).toHaveBeenCalledWith(expect.objectContaining({ content: 'preview: https://x', metadata: { deliversTicket: 'TKT-187' } }));
+  });
+});
+
+describe('chatConversationPlace', () => {
+  it('names channels and DMs as the owner knows them', async () => {
+    const { chatConversationPlace } = await import('./reply-destination.wiring.js');
+    const chat = {
+      getChannelForBridge: (id: string) =>
+        id === 'c1' ? { name: 'content-team', type: 'channel' } : id === 'd1' ? { name: 'x', type: 'dm', agentSession: 'crewly-marketing-ella-e6a6b8ea' } : null,
+    };
+    expect(chatConversationPlace(chat, 'c1')).toBe('#content-team');
+    expect(chatConversationPlace(chat, 'd1')).toBe('the DM with Ella');
+    expect(chatConversationPlace(chat, 'zz')).toBeNull();
+    expect(chatConversationPlace(null, 'c1')).toBeNull();
+  });
+});

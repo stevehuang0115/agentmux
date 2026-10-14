@@ -9,7 +9,7 @@
 
 import { createHash } from 'node:crypto';
 import { SubAgentMessageQueue } from '../messaging/sub-agent-message-queue.service.js';
-import { REPLY_ROUTING_CONSTANTS } from '../../constants.js';
+import { REPLY_ROUTING_CONSTANTS, TURN_TRIGGER_CONSTANTS } from '../../constants.js';
 import type { WorkItem } from '../../types/v2/work-item.types.js';
 import { parseSlackThreadKey } from '../slack/slack-thread-key.js';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
@@ -28,6 +28,10 @@ import { currentWorkItemOf, shortTopic, withTopicLine } from './work-item-destin
 import { isSlackDm } from './orc-reply-route.service.js';
 import { traceOutboundReply } from '../trace/trace-recorder.js';
 import { stripTraceMarkers } from '../trace/trace-markers.js';
+import { getTraceContext } from '../trace/trace-context.service.js';
+import { getTurnTriggerTracker, type TurnTrigger } from '../trace/turn-trigger.js';
+import { triggeredByMetadata, triggeredByPhrase, withTriggeredByLine } from './triggered-by.js';
+import { memberNameFromSession } from '../../utils/member-session-name.utils.js';
 
 /** How long an identical reply from one agent counts as a duplicate send. */
 const REPLY_DUPLICATE_WINDOW_MS = 120_000;
@@ -68,6 +72,17 @@ export interface ReplyDeliveryDeps {
    * with `reply --decision D-n`. Omitted: no card lookup.
    */
   decisionOfCardThread?: (slackChannelId: string, threadTs: string) => Promise<string | null>;
+  /**
+   * What started the agent's current turn (turn-trigger.ts), for the
+   * "Triggered by" line and the provenance stored on the row. Omitted: none.
+   */
+  turnTrigger?: (session: string) => TurnTrigger | null;
+  /** The owner wrote to the agent in this conversation recently (its post there is an answer). Omitted: no. */
+  ownerAskedRecently?: (session: string, conversationId: string) => boolean;
+  /** The session's current run trace id. Omitted: none. */
+  currentTrace?: (session: string) => string | null;
+  /** A conversation as the owner knows it (`#content-team`, `the DM with Ella`). Omitted: unnamed. */
+  conversationPlace?: (conversationId: string) => string | null;
 }
 
 /** What a delivery did. */
@@ -448,6 +463,68 @@ async function currentWorkFallback(
 }
 
 /**
+ * Why the agent is posting: the provenance record for the row and the text
+ * with the "Triggered by" line, when the post is not a direct answer to the
+ * owner's message in the same conversation. Interim notes get the record but
+ * no line (the final answer carries it). Never throws.
+ *
+ * @param input - Agent, text, interim flag
+ * @param postedConversationId - Conversation the post lands in (undefined: a Slack place outside chat)
+ * @param d - Collaborators
+ * @returns Metadata and the text to post, or null when no trigger is known
+ */
+async function provenanceOf(
+  input: Pick<DeliverReplyInput, 'session' | 'content' | 'interim'>,
+  postedConversationId: string | undefined,
+  d: Pick<ReplyDeliveryDeps, 'resolver' | 'turnTrigger' | 'ownerAskedRecently' | 'currentTrace' | 'conversationPlace'>,
+): Promise<{ metadata: Record<string, unknown>; content?: string } | null> {
+  try {
+    const trigger = d.turnTrigger?.(input.session) ?? null;
+    if (!trigger) return null;
+    const workItem = trigger.workItemId ? await d.resolver.workItem(trigger.workItemId).catch(() => null) : null;
+    const phrase = triggeredByPhrase(trigger, {
+      ...(postedConversationId ? { postedConversationId } : {}),
+      ownerAskedHere: !!postedConversationId && (d.ownerAskedRecently?.(input.session, postedConversationId) ?? false),
+      workItem,
+      ...(d.conversationPlace ? { conversationPlace: d.conversationPlace } : {}),
+    });
+    const shown = input.interim === true ? null : phrase;
+    return {
+      metadata: { [TURN_TRIGGER_CONSTANTS.METADATA_KEY]: triggeredByMetadata(trigger, shown, d.currentTrace?.(input.session)) },
+      ...(shown ? { content: withTriggeredByLine(input.content, shown) } : {}),
+    };
+  } catch (err) {
+    logger.debug('Reply provenance not added', { session: input.session, error: err instanceof Error ? err.message : String(err) });
+    return null;
+  }
+}
+
+/**
+ * Provenance for a post an agent makes straight into a conversation
+ * (`reply-channel`, `POST /chat/channels/:id/messages`), outside
+ * {@link deliverReply}: the record to store and the text with the
+ * "Triggered by" line when one is shown. Never throws.
+ *
+ * @param input - Agent, conversation, text, interim flag
+ * @param deps - Collaborators (default: the real ones)
+ * @returns The text to store and the record, if any
+ */
+export async function provenanceForAgentPost(
+  input: { session: string; conversationId: string; content: string; interim?: boolean },
+  deps?: Pick<ReplyDeliveryDeps, 'resolver' | 'turnTrigger' | 'ownerAskedRecently' | 'currentTrace' | 'conversationPlace'>,
+): Promise<{ content: string; triggeredBy?: Record<string, unknown> }> {
+  try {
+    const d = deps ?? (await defaultReplyDeliveryDeps());
+    const p = await provenanceOf({ session: input.session, content: input.content, interim: input.interim }, input.conversationId, d);
+    if (!p) return { content: input.content };
+    const record = p.metadata[TURN_TRIGGER_CONSTANTS.METADATA_KEY] as Record<string, unknown> | undefined;
+    return { content: p.content ?? input.content, ...(record ? { triggeredBy: record } : {}) };
+  } catch {
+    return { content: input.content };
+  }
+}
+
+/**
  * Deliver to one resolved destination.
  *
  * @param input - Agent, text
@@ -466,6 +543,9 @@ async function attempt(
   const ticket = dest.source === 'ticket' ? input.reference?.ticket : dest.source === 'prompt' ? prompt?.ticket : undefined;
   const deliversTicket = ticket ? { [REPLY_ROUTING_CONSTANTS.DELIVERS_TICKET_METADATA_KEY]: ticket } : undefined;
   const answeredReference = dest.source === 'prompt' || dest.source === 'ticket' || dest.source === 'decision' || dest.source === 'work-item' || dest.source === 'message';
+  const provenance = await provenanceOf(input, dest.kind === 'conversation' ? dest.conversationId : undefined, d);
+  const metadata = { ...(deliversTicket ?? {}), ...(provenance?.metadata ?? {}) };
+  if (provenance?.content !== undefined) input = { ...input, content: provenance.content };
   if (dest.kind === 'conversation') {
     if (input.interim !== true && input.addsNew !== true && dest.thread && d.priorRoomAnswer) {
       const prior = await d.priorRoomAnswer({ conversationId: dest.conversationId, thread: dest.thread, agentSession: input.session }).catch(() => null);
@@ -485,7 +565,7 @@ async function attempt(
       agentSession: input.session,
       content: input.content,
       interim: input.interim === true,
-      ...(deliversTicket ? { metadata: deliversTicket } : {}),
+      ...(Object.keys(metadata).length ? { metadata } : {}),
     });
     if (!messageId) {
       const member = await d.resolver.ownsConversation(input.session, dest.conversationId).catch(() => false);
@@ -728,6 +808,7 @@ export async function defaultReplyDeliveryDeps(): Promise<ReplyDeliveryDeps> {
     now: () => Date.now(),
   };
   const { deliverAgentReplyToConversation } = await import('../../controllers/chat/chat.controller.js');
+  const chatLookup = await loadChatChannelLookup();
   return {
     resolver,
     deliverToConversation: deliverAgentReplyToConversation,
@@ -741,5 +822,47 @@ export async function defaultReplyDeliveryDeps(): Promise<ReplyDeliveryDeps> {
       const hit = all.find((x) => x.card && x.card.slackChannelId === slackChannelId && (x.card.threadTs ?? x.card.messageTs) === threadTs);
       return hit?.id ?? null;
     },
+    turnTrigger: (session) => getTurnTriggerTracker().trigger(session),
+    ownerAskedRecently: (session, conversationId) => getTurnTriggerTracker().ownerAskedRecently(session, conversationId),
+    currentTrace: (session) => getTraceContext().currentTrace(session),
+    conversationPlace: (id) => chatConversationPlace(chatLookup, id),
   };
+}
+
+/** The chat-v2 lookups {@link chatConversationPlace} uses. */
+interface ChatChannelLookup {
+  getChannelForBridge(id: string): { name: string; type?: string; agentSession?: string } | null;
+}
+
+/**
+ * The chat-v2 service, when it is up.
+ *
+ * @returns The service, or null
+ */
+async function loadChatChannelLookup(): Promise<ChatChannelLookup | null> {
+  try {
+    const { getChatV2Service } = await import('../chat-v2/chat-v2.singleton.js');
+    return getChatV2Service();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A chat conversation as the owner knows it: `#name` for a channel or room,
+ * `the DM with <agent>` for a direct conversation.
+ *
+ * @param chat - chat-v2 lookups, or null
+ * @param conversationId - chat-v2 channel id
+ * @returns The place, or null when unknown
+ */
+export function chatConversationPlace(chat: ChatChannelLookup | null, conversationId: string): string | null {
+  try {
+    const ch = chat?.getChannelForBridge(conversationId);
+    if (!ch) return null;
+    if (ch.type === 'dm') return `the DM with ${memberNameFromSession(ch.agentSession || ch.name)}`;
+    return ch.name ? `#${ch.name.replace(/^#/, '')}` : null;
+  } catch {
+    return null;
+  }
 }
