@@ -110,8 +110,22 @@ describe('TraceContext', () => {
 		expect(ctx.currentTrace('dev-1')).toBe(id);
 		const page = await store.read(id);
 		const delivered = page!.events.find((e) => e.type === 'turn.delivered');
-		expect(delivered?.data).toMatchObject({ kind: 'dispatch', runtime: 'pty' });
+		expect(delivered?.data).toMatchObject({ kind: 'dispatch', subkind: 'dispatch', runtime: 'pty' });
 		expect(delivered?.refs.session).toBe('dev-1');
+	});
+
+	it('turn.delivered carries the fine trigger kind and the sending agent (audit 2026-10-14)', async () => {
+		const { getTurnTriggerTracker } = await import('./turn-trigger.js');
+		getTurnTriggerTracker().reset();
+		const id = ctx.startTrace({ kind: 'request', summary: 'TKT-0002', actor: { kind: 'owner' } })!;
+		getTurnTriggerTracker().noteSender('dev-1', 'Can you re-check the footer before I ship?', 'lead-1');
+		ctx.noteTurnDelivery('dev-1', `Can you re-check the footer before I ship?\n[TRACE:${id}]`);
+		ctx.noteTurnDelivery('dev-2', `[FOLLOW-UP TKT-0002] due\n[TRACE:${id}]`);
+		const events = (await store.read(id))!.events.filter((e) => e.type === 'turn.delivered');
+		expect(events[0]).toMatchObject({ actor: { kind: 'agent', session: 'lead-1' }, data: { kind: 'system', subkind: 'agent_message', sender: 'lead-1' } });
+		expect(events[1].data).toMatchObject({ kind: 'follow_up', subkind: 'follow_up' });
+		expect(getTurnTriggerTracker().trigger('dev-1', clock)).toMatchObject({ triggerKind: 'agent_message', traceId: id });
+		getTurnTriggerTracker().reset();
 	});
 
 	it('resolves ticket markers and work item ids through the index', () => {

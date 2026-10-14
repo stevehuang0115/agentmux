@@ -108,6 +108,9 @@ jest.mock('../../constants.js', () => ({
 		CREWLY_AGENT: 'crewly-agent',
 	},
 	OWNER_COMPLETION_REPORT_CONSTANTS: jest.requireActual<typeof import('../../constants.js')>('../../constants.js').OWNER_COMPLETION_REPORT_CONSTANTS,
+	// Read by the turn-trigger tracker noteAgentToAgent feeds ("Triggered by" line).
+	TURN_TRIGGER_CONSTANTS: jest.requireActual<typeof import('../../constants.js')>('../../constants.js').TURN_TRIGGER_CONSTANTS,
+	ORC_REPLY_ROUTE_CONSTANTS: jest.requireActual<typeof import('../../constants.js')>('../../constants.js').ORC_REPLY_ROUTE_CONSTANTS,
 }));
 
 // Mock security utils
@@ -2043,6 +2046,15 @@ describe('noteAgentToAgent (issue #968)', () => {
 	it('never throws, whatever the request carries', () => {
 		expect(() => terminalController.noteAgentToAgent('dev-2', { headers: { 'x-agent-session': 'lead-1' } })).not.toThrow();
 		expect(() => terminalController.noteAgentToAgent('dev-2', { headers: undefined as never })).not.toThrow();
+	});
+
+	it('notes the sender of the text, so the target\'s delivery is known to come from it', async () => {
+		const { getTurnTriggerTracker } = await import('../../services/trace/turn-trigger.js');
+		getTurnTriggerTracker().reset();
+		terminalController.noteAgentToAgent('dev-2', { headers: { 'x-agent-session': 'lead-1' }, body: { mode: 'message', data: 'Please re-run the build and tell me what fails' } });
+		const t = getTurnTriggerTracker().noteDelivery('dev-2', 'Please re-run the build and tell me what fails');
+		expect(t).toMatchObject({ triggerKind: 'agent_message', sender: 'lead-1', viaAgents: ['lead-1'] });
+		getTurnTriggerTracker().reset();
 	});
 
 	// 2026-10-07: Lyra got the owner's app comment and handed it to Ella by message.

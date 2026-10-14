@@ -256,6 +256,25 @@ function principalFromRequestSafe(req: Request): ChatPrincipal {
   }
 }
 
+/**
+ * Provenance for an agent's post into a conversation (reply-channel): null
+ * for anyone but an agent, or when the body has no text. Never throws.
+ *
+ * @param req - The POST /channels/:id/messages request
+ * @returns The text to store and the record, or null
+ */
+async function agentPostProvenance(req: Request): Promise<{ content: string; triggeredBy?: Record<string, unknown> } | null> {
+  try {
+    const session = principalFromRequestSafe(req).agentSession;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (!session || typeof body.content !== 'string' || !req.params?.id) return null;
+    const { provenanceForAgentPost } = await import('../../services/orc/reply-destination.wiring.js');
+    return await provenanceForAgentPost({ session, conversationId: req.params.id, content: body.content, interim: body.interim === true });
+  } catch {
+    return null;
+  }
+}
+
 /** Serialize a `ChatError` into the canonical wire shape. */
 export function sendChatError(res: Response, err: ChatError): void {
   res.status(err.httpStatus).json({
@@ -595,6 +614,9 @@ export function createChatV2Controller(
       // Files an agent attached (`--file`) or mentioned by path travel as Cloud
       // handoffs; their marker lines are appended to the text before it is stored.
       const fileHandoff = await attachAgentFiles(req);
+      // Why an agent is posting: the provenance record and, when the post is
+      // not its answer to the owner here, a muted "Triggered by" line.
+      const provenance = await agentPostProvenance(req);
       // Persist + 201 — on error, runHandler serializes it and we bail
       // without running any post-ack side-effects. On success, the
       // closure populates `persisted` + `channelForDispatch`.
@@ -616,7 +638,7 @@ export function createChatV2Controller(
           channelId: req.params.id,
           principal,
           // Trace ids are harness plumbing: never shown in a conversation.
-          content: typeof body.content === 'string' ? stripTraceMarkers(body.content) : body.content,
+          content: typeof body.content === 'string' ? stripTraceMarkers(provenance?.content ?? body.content) : body.content,
           contentType: body.contentType,
           clientMessageId: body.clientMessageId,
           attachments: [],
@@ -625,6 +647,7 @@ export function createChatV2Controller(
           mentions: body.mentions,
           threadId: body.threadId,
           interim: body.interim === true,
+          ...(provenance?.triggeredBy ? { triggeredBy: provenance.triggeredBy } : {}),
         });
         // An agent's reply waits for its Slack mirror before it is acked
         // (below), so a refused Slack post is not reported as delivered.
