@@ -2,10 +2,12 @@
  * Tests for the harness PATH helpers and the command runner.
  */
 
+import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { buildHarnessPath, buildNpmPath, getUserNpmBinDir, getUserNpmPrefix, resolveExecutable, runCommand, withHarnessPath } from './harness-exec.utils.js';
+import { HARNESS_CONSTANTS } from '../../constants.js';
+import { buildHarnessPath, buildNpmPath, createRunCommand, getUserNpmBinDir, getUserNpmPrefix, resolveExecutable, runCommand, withHarnessPath } from './harness-exec.utils.js';
 
 describe('harness PATH helpers', () => {
 	const originalHome = process.env.CREWLY_HOME;
@@ -110,10 +112,114 @@ describe('runCommand', () => {
 		// Like the codex wrapper: a Node parent that spawns the real worker and waits.
 		const pidFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'run-tree-')), 'pid');
 		const wrapper = `const c = require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' }); require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(c.pid)); setTimeout(() => {}, 30000);`;
+		// Let the previous test's killed node exit so the pile-up guard is clear.
+		await new Promise((r) => setTimeout(r, 300));
 		const result = await runCommand(node, ['-e', wrapper], { timeoutMs: 1000 });
 		expect(result.error).toMatch(/timed out/);
 		const childPid = Number(fs.readFileSync(pidFile, 'utf-8'));
 		await new Promise((r) => setTimeout(r, 100));
 		expect(() => process.kill(childPid, 0)).toThrow();
+	});
+});
+
+describe('runCommand pile-up guard', () => {
+	/** Fake child: never exits until `exit()` is called. */
+	function fakeSpawn(pidStart = 1000) {
+		let pid = pidStart;
+		const children: EventEmitter[] = [];
+		const fn = jest.fn(() => {
+			const c = new EventEmitter() as EventEmitter & Record<string, unknown>;
+			c.pid = pid++;
+			c.exitCode = null;
+			c.signalCode = null;
+			c.stdout = new EventEmitter();
+			c.stderr = new EventEmitter();
+			c.stdin = { on: () => undefined, end: () => undefined };
+			c.kill = () => true;
+			children.push(c);
+			return c;
+		});
+		return { fn: fn as unknown as typeof import('child_process').spawn, spawned: fn, children };
+	}
+
+	let killSpy: jest.SpyInstance;
+	beforeEach(() => {
+		killSpy = jest.spyOn(process, 'kill').mockImplementation(() => true);
+		jest.useFakeTimers();
+	});
+	afterEach(() => {
+		killSpy.mockRestore();
+		jest.useRealTimers();
+	});
+
+	function setup(alive: Set<number>) {
+		const sp = fakeSpawn();
+		const warn = jest.fn();
+		let t = 0;
+		const run = createRunCommand({ spawn: sp.fn, now: () => t, isAlive: (p) => alive.has(p), warn });
+		return { sp, warn, run, advance: (ms: number) => (t += ms) };
+	}
+
+	it('refuses to spawn while a killed child is still alive, and resumes once it is gone', async () => {
+		const alive = new Set<number>([1000]);
+		const { sp, run, warn } = setup(alive);
+		const first = run('/bin/codex', ['--help'], { timeoutMs: 100 });
+		jest.advanceTimersByTime(100);
+		expect((await first).error).toMatch(/timed out/);
+
+		const blocked = await run('/bin/codex', ['login', 'status'], { timeoutMs: 100 });
+		expect(blocked.code).toBeNull();
+		expect(blocked.error).toBe('/bin/codex is not responding (an earlier run is still stuck)');
+		expect(sp.spawned).toHaveBeenCalledTimes(1);
+		expect(warn).toHaveBeenCalledTimes(1);
+		expect(warn.mock.calls[0][1]).toEqual({ executable: '/bin/codex', stuckPids: 1 });
+
+		// Other executables are unaffected.
+		void run('/bin/other', [], { timeoutMs: 100 });
+		expect(sp.spawned).toHaveBeenCalledTimes(2);
+
+		alive.delete(1000);
+		void run('/bin/codex', [], { timeoutMs: 100 });
+		expect(sp.spawned).toHaveBeenCalledTimes(3);
+	});
+
+	it('resumes when the stuck child emits exit', async () => {
+		const { sp, run } = setup(new Set([1000]));
+		const first = run('/bin/codex', [], { timeoutMs: 50 });
+		jest.advanceTimersByTime(50);
+		await first;
+		sp.children[0].emit('exit', null, 'SIGKILL');
+		void run('/bin/codex', [], { timeoutMs: 50 });
+		expect(sp.spawned).toHaveBeenCalledTimes(2);
+	});
+
+	it('rate-limits the warning per executable', async () => {
+		const { run, warn, advance } = setup(new Set([1000]));
+		const first = run('/bin/codex', [], { timeoutMs: 50 });
+		jest.advanceTimersByTime(50);
+		await first;
+		await run('/bin/codex', []);
+		await run('/bin/codex', []);
+		expect(warn).toHaveBeenCalledTimes(1);
+		advance(HARNESS_CONSTANTS.STUCK_WARN_INTERVAL_MS + 1);
+		await run('/bin/codex', []);
+		expect(warn).toHaveBeenCalledTimes(2);
+	});
+
+	it('caps concurrent timeout-bounded runs per executable', async () => {
+		const { sp, run } = setup(new Set());
+		const max = HARNESS_CONSTANTS.MAX_INFLIGHT_PER_EXECUTABLE;
+		for (let i = 0; i < max; i++) void run('/bin/codex', [], { timeoutMs: 10_000 });
+		expect(sp.spawned).toHaveBeenCalledTimes(max);
+		const over = await run('/bin/codex', [], { timeoutMs: 10_000 });
+		expect(over.error).toMatch(/too many runs in flight/);
+		expect(sp.spawned).toHaveBeenCalledTimes(max);
+		// Unbounded runs are not capped.
+		void run('/bin/codex', []);
+		expect(sp.spawned).toHaveBeenCalledTimes(max + 1);
+		// A finished run frees a slot.
+		sp.children[0].emit('close', 0);
+		void run('/bin/codex', [], { timeoutMs: 10_000 });
+		expect(sp.spawned).toHaveBeenCalledTimes(max + 2);
 	});
 });
