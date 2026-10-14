@@ -14,6 +14,7 @@ import { pathToFileURL } from 'url';
 import { COMPLETION_EVIDENCE_CONSTANTS } from '../../constants.js';
 import {
   artifactBaseDirs,
+  artifactNotBefore,
   blockedReason,
   decideCompletion,
   describeEvidenceForReviewer,
@@ -153,7 +154,8 @@ describe('decideCompletion', () => {
       { type: 'command', command: 'npm test', exitCode: 0, outputTail: '12 passed' },
     ];
     const d = await decideCompletion(evidence, null, { mode: 'enforce' });
-    expect(d).toEqual({ action: 'complete', evidence });
+    // The checked file carries its size and mtime (#1313).
+    expect(d).toEqual({ action: 'complete', evidence: [{ ...evidence[0], sizeBytes: expect.any(Number), mtime: expect.any(String) }, ...evidence.slice(1)] });
   });
 
   it('rejects an absolute artifact that does not exist, naming it', async () => {
@@ -189,13 +191,13 @@ describe('decideCompletion', () => {
   });
 
   it('accepts http(s) URLs without checking them', async () => {
-    const pathExists = jest.fn().mockResolvedValue(false);
+    const statPath = jest.fn().mockResolvedValue(null);
     const d = await decideCompletion([
       { type: 'artifact', path: 'https://github.com/o/r/pull/1' },
       { type: 'artifact', path: 'HTTP://example.com/x' },
-    ], null, { mode: 'enforce', pathExists });
+    ], null, { mode: 'enforce', statPath });
     expect(d.action).toBe('complete');
-    expect(pathExists).not.toHaveBeenCalled();
+    expect(statPath).not.toHaveBeenCalled();
   });
 
   it('accepts file:// URLs that exist and expands ~/', async () => {
@@ -209,3 +211,53 @@ describe('decideCompletion', () => {
     expect(d).toEqual(expect.objectContaining({ action: 'reject', code: CODES.MALFORMED }));
   });
 });
+
+describe('empty and stale artifacts (#1313)', () => {
+  const at = (iso: string) => Date.parse(iso);
+  const stat = (sizeBytes: number, mtime: string, isDirectory = false) => jest.fn().mockResolvedValue({ isDirectory, sizeBytes, mtimeMs: at(mtime) });
+  const wi = { metadata: {}, createdAt: '2026-10-14T13:43:00.000Z' };
+
+  it('rejects an empty file', async () => {
+    const d = await decideCompletion([{ type: 'artifact', path: '/out/report.md' }], wi, { mode: 'warn', statPath: stat(0, '2026-10-14T14:00:00Z') });
+    expect(d).toEqual(expect.objectContaining({ action: 'reject', code: CODES.ARTIFACT_EMPTY }));
+    if (d.action === 'reject') expect(d.error).toContain('is empty (0 bytes)');
+  });
+
+  it('rejects a file last changed before the WorkItem existed (past the grace)', async () => {
+    const d = await decideCompletion([{ type: 'artifact', path: '/out/old.png' }], wi, { mode: 'warn', statPath: stat(10, '2026-10-13T09:00:00Z') });
+    expect(d).toEqual(expect.objectContaining({ action: 'reject', code: CODES.ARTIFACT_STALE }));
+    if (d.action === 'reject') expect(d.error).toContain('before this WorkItem existed');
+  });
+
+  it('accepts a file saved within the grace before the WorkItem, and records size and mtime', async () => {
+    const mtime = new Date(at(wi.createdAt) - COMPLETION_EVIDENCE_CONSTANTS.STALE_GRACE_MS + 1000).toISOString();
+    const d = await decideCompletion([{ type: 'artifact', path: '/out/v1.mp4' }, { type: 'artifact', path: 'https://x.test/a' }], wi, { mode: 'warn', statPath: stat(4096, mtime) });
+    expect(d.action).toBe('complete');
+    if (d.action === 'complete') {
+      expect(d.evidence?.[0]).toEqual({ type: 'artifact', path: '/out/v1.mp4', sizeBytes: 4096, mtime });
+      expect(d.evidence?.[1]).toEqual({ type: 'artifact', path: 'https://x.test/a' });
+    }
+  });
+
+  it('a directory only needs to exist; no age check without createdAt', async () => {
+    expect((await decideCompletion([{ type: 'artifact', path: '/out/dir' }], wi, { mode: 'warn', statPath: stat(0, '2020-01-01T00:00:00Z', true) })).action).toBe('complete');
+    expect((await decideCompletion([{ type: 'artifact', path: '/out/old.md' }], { metadata: {} }, { mode: 'warn', statPath: stat(5, '2020-01-01T00:00:00Z') })).action).toBe('complete');
+  });
+
+  it('artifactNotBefore', () => {
+    expect(artifactNotBefore(null)).toBeNull();
+    expect(artifactNotBefore({ createdAt: 'nope' })).toBeNull();
+    expect(artifactNotBefore({ createdAt: wi.createdAt })).toBe(at(wi.createdAt) - COMPLETION_EVIDENCE_CONSTANTS.STALE_GRACE_MS);
+  });
+
+  it('a real empty file on disk is rejected by the default check', async () => {
+    const d = mkdtempSync(path.join(os.tmpdir(), 'ev-empty-'));
+    try {
+      writeFileSync(path.join(d, 'e.md'), '');
+      expect((await decideCompletion([{ type: 'artifact', path: path.join(d, 'e.md') }], null, { mode: 'warn' })).action).toBe('reject');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+});
+

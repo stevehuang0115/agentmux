@@ -1518,8 +1518,16 @@ export const COMPLETION_EVIDENCE_CONSTANTS = {
 		MISSING: 'evidence_required',
 		ARTIFACT_NOT_FOUND: 'evidence_artifact_not_found',
 		ARTIFACT_UNRESOLVABLE: 'evidence_artifact_relative_path',
+		ARTIFACT_EMPTY: 'evidence_artifact_empty',
+		ARTIFACT_STALE: 'evidence_artifact_stale',
 		COMMAND_FAILED: 'evidence_command_failed',
 	},
+	/**
+	 * A local file artifact last modified more than this before its WorkItem
+	 * was created is stale: it was not made for this task (#1313). The slack
+	 * covers clock skew and a file saved just before the item was filed.
+	 */
+	STALE_GRACE_MS: 5 * 60_000,
 	/** The shape a worker must send, quoted in every rejection and warning. */
 	SHAPE_HINT:
 		'Send body.result.evidence: an array of {"type":"artifact","path":"<existing file or https URL>"}, ' +

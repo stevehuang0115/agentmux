@@ -73,6 +73,10 @@ User-visible changes. Newest first.
   fork) is sent back once with the reason. Turn off with `CREWLY_SUBAGENT_GUARD=0`.
   See `specs/2026-10-03-subagent-guard.md`.
 
+### Changed
+
+- **Done needs real files (#1313).** A completion's file evidence is now refused when the file is empty, or when it was last changed more than 5 minutes before the task was created (an earlier task's output or a placeholder). Files that pass are stored with their size and modification time, so the reviewer sees what was checked. Directories and http(s) links are checked as before.
+
 ### Fixed
 
 - **Handing work on no longer closes the owner's request.** A reply like "@Pia please take this" was taken as the answer and the request closed in two minutes. Now a reply that @-mentions another agent is not the answer, and a request does not close while the agent who answered still has unanswered asks out to teammates.

@@ -1183,9 +1183,11 @@ describe('TaskPoolController', () => {
       const res = await complete({ summary: 'Report written and tested', evidence });
 
       expect(res.status).not.toHaveBeenCalled();
+      // Local files carry the size and mtime the server checked (#1313).
+      const checked = { sizeBytes: expect.any(Number), mtime: expect.any(String) };
       expect(mockService.setOutput).toHaveBeenCalledWith('wi-ev', expect.objectContaining({
         summary: 'Report written and tested',
-        evidence,
+        evidence: [{ ...evidence[0], ...checked }, { ...evidence[1], ...checked }, evidence[2], evidence[3]],
       }));
       expect(mockService.completeItem).toHaveBeenCalledWith(
         'wi-ev',
