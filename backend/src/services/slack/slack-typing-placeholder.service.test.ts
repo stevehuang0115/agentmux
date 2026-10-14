@@ -783,3 +783,15 @@ describe('readableAgentName', () => {
     expect(readableAgentName('Ella')).toBe('Ella');
   });
 });
+
+describe('isPlaceholderText', () => {
+  it('recognises every placeholder phase and nothing else', () => {
+    const { isPlaceholderText } = jest.requireActual('./slack-typing-placeholder.service.js') as typeof import('./slack-typing-placeholder.service.js');
+    const C = jest.requireActual('../../constants.js').SLACK_TYPING_CONSTANTS;
+    for (const t of [C.TYPING_TEXT, C.WAKING_TEXT, C.WAKING_SLOW_TEXT, C.QUEUED_TEXT, C.FAILED_TEXT, C.TIMEOUT_TEXT]) {
+      expect(isPlaceholderText(t.replace('{name}', 'Nova'))).toBe(true);
+    }
+    expect(isPlaceholderText('On it')).toBe(false);
+    expect(isPlaceholderText('Nova is working on it… and here is the answer')).toBe(false);
+  });
+});

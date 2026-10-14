@@ -33,7 +33,7 @@ import { getTicketIntakeService } from '../v3/ticket-intake.service.js';
 import { intakeWithin, slackIntakeMessage, ticketOfOutcome, markAndLinkTicket, linkLateTicket, isOwnerChatMessage } from '../v3/ticket-channel-hooks.js';
 import type { Request } from '../../types/v2/request.types.js';
 import { CREWLY_CONSTANTS, RUNTIME_FALLBACK_CONSTANTS } from '../../constants.js';
-import { isInterim } from './slack-typing-placeholder.service.js';
+import { isInterim, isPlaceholderText } from './slack-typing-placeholder.service.js';
 import { isOwnerAuthored, deliveredSessions, type SlackAutoWorkingService } from './slack-auto-working.service.js';
 import { resolveMemberSessionName } from '../../utils/member-session-name.utils.js';
 import { isTeamLead } from '../../utils/team.utils.js';
@@ -3031,7 +3031,8 @@ export class SlackTeamChannelService {
         return;
       }
       // An agent — here or on another machine — already replied in the
-      // thread, or shows "working on it": nothing to hand over.
+      // thread: nothing to hand over. Crewly's own typing placeholders (waking,
+      // queued, working, failed, timed out) are not replies.
       // Nobody waits on this read, so it gets a longer budget and one retry
       // (a busy backend missed the router's 3 s regularly).
       const readAfter = () =>
@@ -3044,7 +3045,7 @@ export class SlackTeamChannelService {
           : Promise.resolve(null);
       const after = (await readAfter()) ?? (this.deps.slackRepliesAfter ? await readAfter() : null);
       const harnessNotes = [SLACK_TEAM_CHANNEL_CONSTANTS.ROOM_UNANSWERED_NOTE, SLACK_TEAM_CHANNEL_CONSTANTS.ROOM_ROUTE_STALLED_NOTE] as string[];
-      if (after?.some((m) => m.isBot && !harnessNotes.includes(m.text.trim()))) {
+      if (after?.some((m) => m.isBot && !harnessNotes.includes(m.text.trim()) && !isPlaceholderText(m.text))) {
         this.logger.info('Unanswered room message: an agent has replied or is working on it in Slack — no hand-off', {
           slackChannel: pending.slackChannelId,
           ts: pending.message.ts,

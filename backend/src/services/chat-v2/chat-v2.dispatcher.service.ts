@@ -1620,6 +1620,16 @@ export class ChatV2DispatcherService {
           }
         } else if (activated) {
           result = await attempt(sessionName, responseMode);
+          if (!result.ok && result.prompt !== undefined) {
+            // The start was accepted but the session is not up yet (a boot
+            // restore or runtime switch is still creating it): hold the
+            // message on the agent's queue; registration delivers it.
+            const threadId = options.threadId ?? message.threadId ?? message.id;
+            if (this.hold(channel, message, sessionName, result.prompt, threadId)) {
+              this.contextBacklog.take(sessionName, channel.id, message.id);
+              result = { ok: true, queued: true, deferred: true };
+            }
+          }
         }
       }
       if (result.ok) {
@@ -1844,6 +1854,11 @@ export class ChatV2DispatcherService {
               dispatched: false,
               error: err instanceof Error ? err.message : String(err),
             };
+          }
+          if (!result.success && this.hold(channel, message, channel.agentSession, prompt, message.threadId ?? undefined)) {
+            // Started but not registered yet: the message waits on its queue.
+            this.noteOriginThread(channel.agentSession, channel.id, undefined);
+            return { dispatched: true, deferred: true };
           }
         }
       }
