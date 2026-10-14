@@ -5,7 +5,8 @@
  * touches the WorkItem. The decision is one of:
  *
  * - `reject` (400): malformed evidence, an artifact path that does not exist
- *   (or a relative path with no project/worktree to resolve it against), a
+ *   (or a relative path with no project/worktree to resolve it against), an
+ *   empty file, a file last modified before the WorkItem was created (#1313), a
  *   command that exited non-zero, or — in `enforce` mode — no evidence.
  * - `block`: a `blocked` entry. The worker could not finish, so the item is
  *   recorded as blocked (same path as `POST /task-pool/block/:id`), not done.
@@ -50,8 +51,8 @@ export interface EvidenceCheckOptions {
    * is the deliverable). Malformed evidence is still rejected.
    */
   exemptFromMissing?: boolean;
-  /** Existence check, injectable for tests. Defaults to `fs.stat`. */
-  pathExists?: (absolutePath: string) => Promise<boolean>;
+  /** File check, injectable for tests. Defaults to `fs.stat`; null when nothing is there. */
+  statPath?: (absolutePath: string) => Promise<ArtifactStat | null>;
   /** Home directory for `~/` paths. Defaults to `os.homedir()`. */
   homeDir?: string;
 }
@@ -70,18 +71,25 @@ export function resolveEvidenceEnforcementMode(env: NodeJS.ProcessEnv = process.
   return C.EVIDENCE_ENFORCEMENT_MODE;
 }
 
+/** What the server learns about a local artifact. */
+export interface ArtifactStat {
+  isDirectory: boolean;
+  sizeBytes: number;
+  mtimeMs: number;
+}
+
 /**
- * Default existence check.
+ * Default file check.
  *
  * @param p - Absolute path
- * @returns True when something exists at `p`
+ * @returns Its stat, or null when nothing exists at `p`
  */
-async function defaultPathExists(p: string): Promise<boolean> {
+async function defaultStatPath(p: string): Promise<ArtifactStat | null> {
   try {
-    await fs.stat(p);
-    return true;
+    const st = await fs.stat(p);
+    return { isDirectory: st.isDirectory(), sizeBytes: st.size, mtimeMs: st.mtimeMs };
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -110,21 +118,23 @@ export function artifactBaseDirs(workItem: Pick<WorkItem, 'metadata'> | null): s
 
 /** Outcome of checking one artifact. */
 type ArtifactCheck =
-  | { ok: true }
+  | { ok: true; stat?: ArtifactStat }
   | { ok: false; code: string; problem: string };
 
 /**
- * Check one artifact: http(s) URLs pass without fetching; local paths must exist.
+ * Check one artifact: http(s) URLs pass without fetching; local paths must
+ * exist, and a file must be non-empty and modified no earlier than
+ * `notBeforeMs` (#1313). Directories only need to exist.
  *
  * @param artifact - The artifact entry
  * @param bases - Directories for relative paths
- * @param options - Existence check and home directory
- * @returns ok, or the problem with this artifact
+ * @param options - File check, home directory, and the oldest acceptable mtime (null: no age check)
+ * @returns ok (with the stat of a local artifact), or the problem with this artifact
  */
 async function checkArtifact(
   artifact: ArtifactEvidence,
   bases: string[],
-  options: Required<Pick<EvidenceCheckOptions, 'pathExists' | 'homeDir'>>,
+  options: Required<Pick<EvidenceCheckOptions, 'statPath' | 'homeDir'>> & { notBeforeMs: number | null },
 ): Promise<ArtifactCheck> {
   const raw = artifact.path;
   const scheme = /^([a-z][a-z0-9+.-]*:)\/\//i.exec(raw)?.[1]?.toLowerCase();
@@ -150,9 +160,8 @@ async function checkArtifact(
   }
 
   if (path.isAbsolute(local)) {
-    return (await options.pathExists(local))
-      ? { ok: true }
-      : { ok: false, code: C.CODES.ARTIFACT_NOT_FOUND, problem: `"${raw}" does not exist` };
+    const st = await options.statPath(local);
+    return st ? judgeFile(raw, st, options.notBeforeMs) : { ok: false, code: C.CODES.ARTIFACT_NOT_FOUND, problem: `"${raw}" does not exist` };
   }
   if (bases.length === 0) {
     return {
@@ -162,13 +171,48 @@ async function checkArtifact(
     };
   }
   for (const base of bases) {
-    if (await options.pathExists(path.resolve(base, local))) return { ok: true };
+    const st = await options.statPath(path.resolve(base, local));
+    if (st) return judgeFile(raw, st, options.notBeforeMs);
   }
   return {
     ok: false,
     code: C.CODES.ARTIFACT_NOT_FOUND,
     problem: `"${raw}" does not exist (looked in ${bases.join(', ')})`,
   };
+}
+
+/**
+ * An existing local artifact: a file must have content and be newer than the
+ * WorkItem (a placeholder or an earlier task's output is not evidence).
+ *
+ * @param raw - The path as sent
+ * @param st - Its stat
+ * @param notBeforeMs - Oldest acceptable mtime, or null for no age check
+ * @returns The check
+ */
+function judgeFile(raw: string, st: ArtifactStat, notBeforeMs: number | null): ArtifactCheck {
+  if (st.isDirectory) return { ok: true, stat: st };
+  if (st.sizeBytes <= 0) return { ok: false, code: C.CODES.ARTIFACT_EMPTY, problem: `"${raw}" is empty (0 bytes)` };
+  if (notBeforeMs !== null && st.mtimeMs < notBeforeMs) {
+    return {
+      ok: false,
+      code: C.CODES.ARTIFACT_STALE,
+      problem: `"${raw}" was last changed ${new Date(st.mtimeMs).toISOString()}, before this WorkItem existed, so it is not this task's output; attach what this task produced, or a command that shows the work`,
+    };
+  }
+  return { ok: true, stat: st };
+}
+
+/**
+ * The oldest mtime a file artifact may have: the WorkItem's creation minus
+ * {@link COMPLETION_EVIDENCE_CONSTANTS.STALE_GRACE_MS}.
+ *
+ * @param workItem - The WorkItem (null or no createdAt: no age check)
+ * @returns Epoch ms, or null
+ */
+export function artifactNotBefore(workItem: Pick<WorkItem, 'createdAt'> | null): number | null {
+  const created = workItem?.createdAt ? Date.parse(workItem.createdAt) : NaN;
+  return Number.isFinite(created) ? created - C.STALE_GRACE_MS : null;
 }
 
 /**
@@ -221,7 +265,7 @@ export function describeEvidenceForReviewer(output: Record<string, unknown> | un
  */
 export async function decideCompletion(
   rawEvidence: unknown,
-  workItem: Pick<WorkItem, 'metadata'> | null,
+  workItem: (Pick<WorkItem, 'metadata'> & Partial<Pick<WorkItem, 'createdAt'>>) | null,
   options: EvidenceCheckOptions,
 ): Promise<EvidenceDecision> {
   const missing = rawEvidence === undefined || rawEvidence === null || (Array.isArray(rawEvidence) && rawEvidence.length === 0);
@@ -261,20 +305,26 @@ export async function decideCompletion(
   }
 
   const bases = artifactBaseDirs(workItem);
-  const fsOptions = { pathExists: options.pathExists ?? defaultPathExists, homeDir: options.homeDir ?? os.homedir() };
+  const fsOptions = {
+    statPath: options.statPath ?? defaultStatPath,
+    homeDir: options.homeDir ?? os.homedir(),
+    notBeforeMs: artifactNotBefore(workItem as Pick<WorkItem, 'createdAt'> | null),
+  };
   const problems: Array<{ code: string; text: string }> = [];
   for (let i = 0; i < evidence.length; i++) {
     const e = evidence[i];
     if (e.type !== 'artifact') continue;
     const check = await checkArtifact(e, bases, fsOptions);
     if (!check.ok) problems.push({ code: check.code, text: `evidence[${i}] artifact ${check.problem}` });
+    // Recorded so the reviewer sees what was checked (#1313).
+    else if (check.stat && !check.stat.isDirectory) evidence[i] = { ...e, sizeBytes: check.stat.sizeBytes, mtime: new Date(check.stat.mtimeMs).toISOString() };
   }
   if (problems.length > 0) {
     return {
       action: 'reject',
       status: 400,
       code: problems[0].code,
-      error: `${problems.map((p) => p.text).join('; ')}. Artifacts must exist on this machine (or be http(s) URLs).`,
+      error: `${problems.map((p) => p.text).join('; ')}. Artifacts must exist on this machine (or be http(s) URLs), and files must be non-empty and made for this task.`,
     };
   }
 

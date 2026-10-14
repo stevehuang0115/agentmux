@@ -52,12 +52,17 @@ result onto `WorkItem.output.evidence`); a top-level `evidence` is a 400
 | a `command` with `exitCode ≠ 0` | 400 `evidence_command_failed` ("a failing command is not evidence of done; report blocked/failed") | unchanged |
 | an `artifact` local path that does not exist | 400 `evidence_artifact_not_found`, names it and where it looked | unchanged |
 | a relative `artifact` path, no project/worktree on the item | 400 `evidence_artifact_relative_path` (send an absolute path) | unchanged |
-| otherwise | 200 | done; evidence persisted on `output.evidence` |
+| a local `artifact` file of 0 bytes (#1313) | 400 `evidence_artifact_empty` | unchanged |
+| a local `artifact` file last modified more than 5 min (`STALE_GRACE_MS`) before the WorkItem's `createdAt` (#1313) | 400 `evidence_artifact_stale` ("not this task's output") | unchanged |
+| otherwise | 200 | done; evidence persisted on `output.evidence`, each checked local file with `sizeBytes` and `mtime` (#1313) |
 
 - Relative paths resolve against `metadata.worktree.workdir`, then
   `metadata.worktree.path`, then `metadata.projectPath`. `~/` expands to the
   server user's home; `file://` URLs are checked like paths; `http(s)://` URLs
-  are accepted without fetching; other schemes are malformed.
+  are accepted without fetching; other schemes are malformed. A directory only
+  has to exist (its size and mtime say nothing about the work inside). The age
+  check uses `createdAt`, not the claim time, so a retry can still attach what
+  the first attempt made.
 - A review item's verdict completion (`result.verdict` set) is exempt from the
   missing-evidence rule — the verdict is the deliverable. Malformed evidence is
   still rejected.
