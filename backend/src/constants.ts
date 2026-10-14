@@ -6112,6 +6112,14 @@ export const HARNESS_CONSTANTS = {
 	LATEST_VERSION_FAILURE_TTL_MS: 5 * 60 * 1000,
 	/** Timeout for short probe commands (which, --version, login status) */
 	PROBE_TIMEOUT_MS: 15_000,
+	/**
+	 * Guard against probe pile-ups (500 hung `codex` on one Mac). Concurrent
+	 * timeout-bounded runs allowed per executable; beyond it `runCommand`
+	 * fails fast instead of spawning.
+	 */
+	MAX_INFLIGHT_PER_EXECUTABLE: 4,
+	/** Minimum gap between "executable is stuck" warnings, per executable (ms) */
+	STUCK_WARN_INTERVAL_MS: 30 * 60 * 1000,
 	/** Timeout for `npm view` */
 	NPM_VIEW_TIMEOUT_MS: 20_000,
 	/** Timeout for one `npm install -g` attempt */
