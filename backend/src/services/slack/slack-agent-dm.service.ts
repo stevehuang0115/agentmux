@@ -708,6 +708,7 @@ export class SlackAgentDmService {
         botToken: installed.botToken,
         senderSession: link.agentSession,
         skipChatV2Mirror: true,
+        ...(isInterim(dto) ? { notAnAnswer: true } : {}),
       });
       return { attempted: true, delivery: this.recordDelivery(dto, link.slackChannelId, sentTs, target.threadTs) };
     } catch (err) {
