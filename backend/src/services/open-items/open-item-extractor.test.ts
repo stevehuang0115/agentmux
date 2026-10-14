@@ -206,6 +206,12 @@ describe('TKT-187 / TKT-140 real messages (false positives and the positive cont
     expect(c[0].waitsOnOwner).toBe(true);
     expect(extractOpenItems('After you approve, I will send the draft tomorrow.', { now }).commitments[0]?.waitsOnOwner).toBe(true);
   });
+
+  it('a promise that waits on something the owner sends first is flagged (Milo, 2026-10-13)', () => {
+    const c = extractOpenItems('孩子换了以后，你用手机录好直接发给我，宠物剪好我再发回给你。', { now }).commitments;
+    expect(c.every((x) => x.waitsOnOwner === true)).toBe(true);
+    expect(extractOpenItems('Once you send the recording, I will cut it and send it back tomorrow.', { now }).commitments[0]?.waitsOnOwner).toBe(true);
+  });
 });
 
 describe('explicit dates win over now + default', () => {

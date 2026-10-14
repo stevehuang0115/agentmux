@@ -276,6 +276,13 @@ const ZH_DELIVER_MODIFIER = /(?:发|给|交|传|带|拿|报|告诉|通知|回复
 const OWNER_GATE =
   /(?:你|您)(?:点头|同意|批准|确认|拍板|说可以|说行|答应)(?:后|以后|之后)|等(?:你|您)(?:点头|同意|批准|确认|拍板)|once you (?:approve|confirm|agree|say)|after you (?:approve|confirm|agree|say)|when you (?:approve|confirm|agree|say)/iu;
 
+/**
+ * The deliverable waits on something the owner sends first ("你用手机录好直接发给我，
+ * 剪好我再发回给你"): no clock runs until it arrives (2026-10-13, Milo).
+ */
+const OWNER_SUPPLIES =
+  /(?:你|您)[^，,。；;！!]{0,24}(?:发给我|发我|传给我|传我|给我发|发过来|传过来|拍给我|录给我)|(?:once|after|when) you (?:send|share|upload|record|forward)/iu;
+
 /** The sentence asks the owner for a go-ahead ("先问你：可以就让 Vera 做"): nothing is owed, it is a question. */
 const ASKS_OWNER = /先问(?:你|您)|可以就让|可以的话我就|行的话我就|ok的话我就/iu;
 
@@ -322,7 +329,7 @@ function thirdPartyDelivers(t: string): boolean {
  * @returns True when it is conditional on the owner ("你点头后…")
  */
 export function waitsOnOwner(s: string): boolean {
-  return OWNER_GATE.test(s);
+  return OWNER_GATE.test(s) || OWNER_SUPPLIES.test(s);
 }
 
 /**
