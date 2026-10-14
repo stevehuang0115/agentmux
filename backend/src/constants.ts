@@ -8629,6 +8629,15 @@ export const RECURRING_CHANGE_HANDOFF_CONSTANTS = {
 	MIN_WORD_CHARS: 3,
 	/** Chars of a schedule label that name the job (the rest is its instructions) */
 	MAX_IDENTITY_CHARS: 80,
+	/**
+	 * When-words that say how often or at what time of day a job runs, not what
+	 * it is about. Two unrelated jobs share them ("every morning"), so they never
+	 * count towards a match (D-747 was matched to a different 8am job through
+	 * "每天早上" alone).
+	 */
+	GENERIC_CADENCE_PATTERN: /每天早上|每天晚上|每天|每日|每周|每週|每月|每晚|每早|早上|早晨|上午|下午|晚上|今天|明天|昨天|今晚|明早|周一|周二|周三|周四|周五|周六|周日|星期[一二三四五六日天]/gu,
+	/** Latin words of the same kind (lower-case) */
+	GENERIC_CADENCE_WORDS: ['daily', 'weekly', 'monthly', 'nightly', 'hourly', 'every', 'each', 'day', 'week', 'month', 'morning', 'evening', 'night', 'today', 'tomorrow', 'yesterday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
 	/** `WorkItem.metadata` marker on the hand-off WorkItem */
 	METADATA_KEY: 'recurringChangeHandoff',
 	/** Option labels / answers that decline a change (nothing to hand off) */
