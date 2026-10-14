@@ -1,6 +1,6 @@
 ---
 name: Social Media Draft Generator
-description: Generate platform-optimized social media drafts for Twitter/X, LinkedIn, and Reddit. It only writes drafts: you review each one and publish it yourself.
+description: Generate platform-optimized social media drafts for Twitter/X, LinkedIn, and Reddit. It only writes drafts — you review each one and publish it yourself.
 version: 1.1.0
 category: content
 skillType: claude-skill

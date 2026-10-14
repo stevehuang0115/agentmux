@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "lastUpdated": "2026-10-03T15:59:43.271Z",
+  "lastUpdated": "2026-10-14T03:53:59.392Z",
   "cdnBaseUrl": "https://raw.githubusercontent.com/stevehuang0115/crewly/main",
   "source": "github",
   "items": [
@@ -23,12 +23,12 @@
       "downloads": 0,
       "rating": 0,
       "createdAt": "2026-02-22T23:57:06.027Z",
-      "updatedAt": "2026-09-24T19:55:44.195Z",
+      "updatedAt": "2026-10-14T03:53:59.392Z",
       "source": "config/skills/agent/marketplace/send-pdf-to-slack",
       "assets": {
         "archive": "config/skills/agent/marketplace/send-pdf-to-slack",
         "checksum": "",
-        "sizeBytes": 8170
+        "sizeBytes": 8158
       },
       "metadata": {
         "skillType": "claude-skill",
@@ -1464,7 +1464,7 @@
       "id": "social-media-post",
       "type": "skill",
       "name": "Social Media Draft Generator",
-      "description": "Generate platform-optimized social media drafts for Twitter/X, LinkedIn, and Reddit. It only writes drafts: you review each one and publish it yourself.",
+      "description": "Generate platform-optimized social media drafts for Twitter/X, LinkedIn, and Reddit. It only writes drafts — you review each one and publish it yourself.",
       "author": "Crewly Team",
       "version": "1.1.0",
       "category": "development",
@@ -1480,12 +1480,12 @@
       "downloads": 0,
       "rating": 0,
       "createdAt": "2026-02-22T23:57:06.027Z",
-      "updatedAt": "2026-10-03T03:22:34.836Z",
+      "updatedAt": "2026-10-14T03:53:59.392Z",
       "source": "config/skills/agent/marketplace/social-media-post",
       "assets": {
         "archive": "config/skills/agent/marketplace/social-media-post",
         "checksum": "",
-        "sizeBytes": 11255
+        "sizeBytes": 11076
       },
       "metadata": {
         "skillType": "claude-skill",
@@ -1725,12 +1725,12 @@
       "downloads": 0,
       "rating": 0,
       "createdAt": "2026-09-24T19:40:56.903Z",
-      "updatedAt": "2026-09-24T19:55:44.195Z",
+      "updatedAt": "2026-10-14T03:53:59.392Z",
       "source": "config/skills/agent/marketplace/xhs-downloader",
       "assets": {
         "archive": "config/skills/agent/marketplace/xhs-downloader",
         "checksum": "",
-        "sizeBytes": 9369
+        "sizeBytes": 9337
       },
       "metadata": {
         "skillType": "claude-skill",
