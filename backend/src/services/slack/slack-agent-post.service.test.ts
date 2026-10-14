@@ -70,6 +70,13 @@ class FakeSlack implements AgentPostSlackApi {
   async findUserByHandle(handle: string) {
     return this.handles[handle.toLowerCase()] ?? null;
   }
+  uploads: Array<Record<string, unknown>> = [];
+  uploadError: unknown = null;
+  async uploadFile(o: Record<string, unknown>) {
+    if (this.uploadError) throw this.uploadError;
+    this.uploads.push(o);
+    return { fileId: 'F1' };
+  }
 }
 
 class FakeIdentities implements AgentPostIdentityApi {
@@ -420,5 +427,38 @@ describe('mention linking', () => {
     });
     await broken.post({ agentSession: 'crewly-a-sam', target: '#general', text: '@Ella hi' });
     expect(slack.sent[1].text).toBe('@Ella hi');
+  });
+});
+
+describe('app-less agents: mapped channel names and file uploads (2026-10-13)', () => {
+  it('resolves a team room by its mapped name even when conversations.list cannot see it', async () => {
+    service = new SlackAgentPostService({
+      slack,
+      storage: { getTeams: async () => TEAMS },
+      identities,
+      findMappedChannelByName: (n) => (n === 'content-team' ? { id: 'C0C46TTBNNP', name: 'content-team' } : null),
+    });
+    const res = await service.post({ agentSession: 'crewly-a-sam', target: '#content-team', text: 'hi' });
+    expect(res.channelId).toBe('C0C46TTBNNP');
+  });
+
+  it('uploads files with the workspace bot under the agent persona when the agent has no bot', async () => {
+    const res = await service.post({ agentSession: 'crewly-a-sam', target: '#general', text: 'draft', files: ['/p/a.md'] });
+    expect(res.filesSent).toEqual(['/p/a.md']);
+    expect(slack.uploads[0]).toMatchObject({ channelId: 'C-GEN', filePath: '/p/a.md', persona: { username: 'Sam' } });
+    expect(slack.uploads[0].botToken).toBeUndefined();
+  });
+
+  it('uploads with the agent bot token when it has one', async () => {
+    identities!.installed['crewly-a-sam'] = { botUserId: 'UB', botToken: 'xoxb-sam' };
+    await service.post({ agentSession: 'crewly-a-sam', target: '#general', text: 'draft', files: ['/p/a.md'], threadTs: '1.2' });
+    expect(slack.uploads[0]).toMatchObject({ botToken: 'xoxb-sam', threadTs: '1.2' });
+  });
+
+  it('reports Slack\'s error code when an upload fails, and still returns the post', async () => {
+    slack.uploadError = Object.assign(new Error('x'), { data: { error: 'not_in_channel' } });
+    const res = await service.post({ agentSession: 'crewly-a-sam', target: '#general', text: 'draft', files: ['/p/a.md'] });
+    expect(res.messageTs).toBe('111.222');
+    expect(res.filesFailed).toEqual([{ path: '/p/a.md', error: 'not_in_channel' }]);
   });
 });

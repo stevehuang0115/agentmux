@@ -1419,21 +1419,51 @@ describe('Slack Controller', () => {
       expect(mockAgentPost.current.post).not.toHaveBeenCalled();
     });
 
-    it('--file: the files travel as handoffs, their marker lines join the text, and a failure is reported while the post still goes', async () => {
-      const post = jest.fn().mockResolvedValue({ channelId: 'C1', messageTs: '1.1', kind: 'channel', postedAs: 'agent', identity: 'Owen' });
-      mockAgentPost.current = { post };
-      const wiring = jest.requireMock('../../services/file-handoff/file-handoff.wiring.js') as { getFileHandoffService: jest.Mock; projectDirForAgent: jest.Mock };
-      const attachToMessage = jest.fn().mockResolvedValue({
-        content: 'the report\n📎 r.pdf (1 KB) · crewly-file:hf_AAAAAAAAAAAAAAAAAAAAAA',
-        attached: [{ fileName: 'r.pdf', sizeBytes: 1024, handoffId: 'hf_AAAAAAAAAAAAAAAAAAAAAA' }],
-        failed: [{ file: './x.env', reason: 'looks like a secret' }],
+    describe('--file guard', () => {
+      let dir: string;
+      let outside: string;
+      let post: jest.Mock;
+      beforeEach(async () => {
+        const { FileHandoffService } = jest.requireActual('../../services/file-handoff/file-handoff.service.js');
+        dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'slack-post-proj-')));
+        outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'slack-post-out-')));
+        await fs.writeFile(path.join(dir, 'r.md'), 'draft');
+        await fs.writeFile(path.join(outside, 'cfg.json'), '{"a":1}');
+        await fs.symlink(path.join(outside, 'cfg.json'), path.join(dir, 'link.json'));
+        const wiring = jest.requireMock('../../services/file-handoff/file-handoff.wiring.js') as { getFileHandoffService: jest.Mock; projectDirForAgent: jest.Mock };
+        wiring.getFileHandoffService.mockReturnValue(new FileHandoffService({ api: () => null, crewlyHomes: () => [] }));
+        wiring.projectDirForAgent.mockResolvedValue(dir);
+        post = jest.fn().mockResolvedValue({ channelId: 'C1', messageTs: '1.1', kind: 'channel', postedAs: 'crewly', identity: 'Owen' });
+        mockAgentPost.current = { post };
       });
-      wiring.getFileHandoffService.mockReturnValue({ attachToMessage });
-      wiring.projectDirForAgent.mockResolvedValue('/proj');
-      const res = await request(app).post('/api/slack/post').set('X-Agent-Session', 'owen').send({ target: '#room', text: 'the report', files: ['./r.pdf', './x.env'] });
-      expect(res.status).toBe(200);
-      expect(post).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('crewly-file:hf_AAAAAAAAAAAAAAAAAAAAAA') }));
-      expect(res.body.fileHandoff.failed[0].file).toBe('./x.env');
+      const send = (files: string[]) => request(app).post('/api/slack/post').set('X-Agent-Session', 'owen').send({ target: '#room', text: 'x', files, projectPath: dir });
+
+      it('uploads a file inside the project (relative path)', async () => {
+        const res = await send(['r.md']);
+        expect(res.status).toBe(200);
+        expect(post).toHaveBeenCalledWith(expect.objectContaining({ files: [path.join(dir, 'r.md')] }));
+      });
+
+      it('refuses a path outside the project with file_outside_project, posting nothing', async () => {
+        const res = await send([path.join(outside, 'cfg.json')]);
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('file_outside_project');
+        expect(post).not.toHaveBeenCalled();
+      });
+
+      it('refuses a symlink inside the project that points outside', async () => {
+        const res = await send(['link.json']);
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('file_outside_project');
+        expect(post).not.toHaveBeenCalled();
+      });
+
+      it('404s a missing file before posting', async () => {
+        const res = await send(['nope.md']);
+        expect(res.status).toBe(404);
+        expect(res.body.code).toBe('file_not_found');
+        expect(post).not.toHaveBeenCalled();
+      });
     });
 
     it('a --thread from another channel than --target goes where the resolver puts it, never top level here (2026-10-02)', async () => {

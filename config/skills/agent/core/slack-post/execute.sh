@@ -24,7 +24,7 @@ Options:
   --text-file        Read the message text from a file
   --thread    | -t   Slack thread timestamp to reply inside
   --new-topic        A new top-level post (scheduled output), never an answer to an open question
-  --file      | -f   Attach a file for a colleague on another machine (repeatable, up to 5)
+  --file      | -f   Upload a file into the channel (repeatable, up to 5)
   --json      | -j   Raw JSON payload
   --help      | -h   Show this help
 EOF_USAGE
@@ -137,10 +137,11 @@ out = {
     "kind": d.get("kind", ""),
     "postedAs": d.get("postedAs", ""),
 }
-fh = full.get("fileHandoff") or {}
-if fh.get("failed"):
-    out["filesNotSent"] = fh["failed"]
-    out["warning"] = "The message was posted, but some files did not go; tell your colleague or send them again with --file."
+if d.get("filesSent"):
+    out["filesSent"] = d["filesSent"]
+if d.get("filesFailed"):
+    out["filesNotSent"] = d["filesFailed"]
+    out["warning"] = "The message was posted, but Slack did not take some files (see the error code in filesNotSent); fix that or tell the owner. Do not paste the file contents instead."
 print(json.dumps(out))
 '
   exit 0

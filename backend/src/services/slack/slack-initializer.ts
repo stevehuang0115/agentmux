@@ -1005,6 +1005,10 @@ export async function startSlackTeamChannels(): Promise<void> {
           // Resolved lazily: the team-channel service is built just below.
           linkMentions: async (text, channelId) =>
             (await getSlackTeamChannelService()?.linkAgentMentions(text, channelId)) ?? text,
+          findMappedChannelByName: (name) => {
+            const m = getSlackTeamChannelService()?.findBySlackChannelName(name);
+            return m ? { id: m.slackChannelId, name: m.slackChannelName ?? name } : null;
+          },
         }),
       );
     }
