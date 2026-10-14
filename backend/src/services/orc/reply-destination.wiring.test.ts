@@ -300,10 +300,10 @@ describe('deliverReply — "Triggered by" provenance (agent-provenance audit 202
     const d = deps({ turnTrigger: () => reminder, currentTrace: () => 'tr-20261014-0123abcd' });
     await deliverReply({ session: 'owen', content: 'preview: https://x', reference: { ticket: 'TKT-187' } }, d);
     expect(d.deliver).toHaveBeenCalledWith(expect.objectContaining({
-      content: 'preview: https://x\n\n_↳ Triggered by an automatic reminder (TKT-187) of something promised to you_',
+      content: 'preview: https://x\n\n_↳ Triggered by an automatic reminder of something promised to you_',
       metadata: {
         deliversTicket: 'TKT-187',
-        triggeredBy: expect.objectContaining({ traceId: 'tr-20261014-0123abcd', triggerKind: 'follow_up', rootRef: 'TKT-187', label: 'Triggered by an automatic reminder (TKT-187) of something promised to you' }),
+        triggeredBy: expect.objectContaining({ traceId: 'tr-20261014-0123abcd', triggerKind: 'follow_up', rootRef: 'TKT-187', label: 'Triggered by an automatic reminder of something promised to you' }),
       },
     }));
   });

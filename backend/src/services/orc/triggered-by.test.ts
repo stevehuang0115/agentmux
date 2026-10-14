@@ -44,7 +44,7 @@ describe('triggeredByPhrase', () => {
 	});
 
 	it('harness reminders say so', () => {
-		expect(triggeredByPhrase(trig({ triggerKind: 'follow_up', ticket: 'TKT-12' }), {})).toBe('an automatic reminder (TKT-12) of something promised to you');
+		expect(triggeredByPhrase(trig({ triggerKind: 'follow_up', ticket: 'TKT-12' }), {})).toBe('an automatic reminder of something promised to you'); // no ticket id: tickets are internal
 		expect(triggeredByPhrase(trig({ triggerKind: 'redelivery' }), {})).toBe('an automatic reminder of queued work');
 		expect(triggeredByPhrase(trig({ triggerKind: 'restart' }), {})).toBe('a Crewly restart (resuming interrupted work)');
 	});

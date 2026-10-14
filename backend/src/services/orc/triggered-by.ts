@@ -79,7 +79,8 @@ export function triggeredByPhrase(trigger: TurnTrigger | null, ctx: TriggeredByC
         if (origin.conversationId && origin.conversationId === ctx.postedConversationId) return null;
         return `your request${title}`;
       }
-      if (origin?.kind === 'ticket') return `ticket ${origin.ticketId}${title}`;
+      // Tickets are internal: name the task, never its ticket id.
+      if (origin?.kind === 'ticket') return `a task${title}`;
       const by = (wi?.metadata as Record<string, unknown> | undefined)?.delegatedBy;
       if (typeof by === 'string' && by) return `a task from ${name(by)}${title}`;
       return `a queued task${title}`;
@@ -87,7 +88,7 @@ export function triggeredByPhrase(trigger: TurnTrigger | null, ctx: TriggeredByC
     case 'redelivery':
       return 'an automatic reminder of queued work';
     case 'follow_up':
-      return `an automatic reminder${trigger.ticket ? ` (${trigger.ticket})` : ''} of something promised to you`;
+      return 'an automatic reminder of something promised to you';
     case 'owner_report_due':
       return 'an automatic reminder to report finished work';
     case 'follow_through':
@@ -95,7 +96,7 @@ export function triggeredByPhrase(trigger: TurnTrigger | null, ctx: TriggeredByC
     case 'stale_item':
       return 'a stale-item notice';
     case 'decision':
-      return `your answer on a decision card${trigger.ticket ? ` (${trigger.ticket})` : ''}`;
+      return 'your answer on a decision card';
     case 'restart':
       return 'a Crewly restart (resuming interrupted work)';
     case 'app_change':
