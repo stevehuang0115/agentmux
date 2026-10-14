@@ -191,8 +191,8 @@ if [ -z "$RESULT_LINE" ]; then
     '{success: true, workItemId: $id, message: ("WorkItem " + $id + " completion was accepted; the server reply was not JSON."), raw: $raw}')
 fi
 printf '%s\n' "$RESULT_LINE"
-# Warn-mode rollout (#873): the server accepts a completion without evidence
-# for one release but says so. Repeat it on stderr so it is not missed.
+# With CREWLY_EVIDENCE_MODE=warn the server accepts a completion without
+# evidence but says so (#873, #1312). Repeat it on stderr so it is not missed.
 EVIDENCE_WARNING=$(printf '%s' "$COMPLETE_RESPONSE" | jq -r '.warning // empty' 2>/dev/null || true)
 if [ -n "$EVIDENCE_WARNING" ]; then
   jq -n --arg w "$EVIDENCE_WARNING" '{warning: $w}' >&2

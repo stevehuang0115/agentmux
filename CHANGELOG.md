@@ -75,6 +75,7 @@ User-visible changes. Newest first.
 
 ### Changed
 
+- **Done needs evidence, now for real (#1312).** Completing a delegated task, project task or review without evidence (a file, a link, or a command with its exit code) is now refused with `evidence_required` and the task stays open; before, it was accepted with a warning, and 304 of 1081 completions since 2026-10-10 had none. `report-status` tells the agent which flags to add, and the in-process agent's `report_status` no longer hides the refusal. A review with a verdict, and harness bookkeeping (triage, replans, retros), need no evidence. `CREWLY_EVIDENCE_MODE=warn` brings back the old behaviour.
 - **Done needs real files (#1313).** A completion's file evidence is now refused when the file is empty, or when it was last changed more than 5 minutes before the task was created (an earlier task's output or a placeholder). Files that pass are stored with their size and modification time, so the reviewer sees what was checked. Directories and http(s) links are checked as before.
 
 ### Fixed

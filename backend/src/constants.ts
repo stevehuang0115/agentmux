@@ -1497,12 +1497,20 @@ export const COMPLETION_EVIDENCE_CONSTANTS = {
 	/** The two rollout modes for a completion that carries no evidence. */
 	MODES: ['warn', 'enforce'] as readonly string[],
 	/**
-	 * Default mode for a completion with no evidence. `warn` (this release):
-	 * accepted, logged, and the response carries a `warning`. `enforce` (next
-	 * release): 400. Malformed evidence, missing artifacts, failing commands and
-	 * `blocked` entries are handled the same in both modes.
+	 * Default mode for a completion with no evidence. `enforce` (default since
+	 * #1312): 400 `evidence_required`. `warn` (the escape hatch, set with
+	 * {@link ENV_MODE}): accepted, logged, and the response carries a `warning`.
+	 * Malformed evidence, missing artifacts, failing commands and `blocked`
+	 * entries are handled the same in both modes.
 	 */
-	EVIDENCE_ENFORCEMENT_MODE: 'warn' as 'warn' | 'enforce',
+	EVIDENCE_ENFORCEMENT_MODE: 'enforce' as 'warn' | 'enforce',
+	/**
+	 * WorkItem types whose completion must carry evidence: a worker's
+	 * deliverable. Every other type is harness bookkeeping (triage, replans,
+	 * retros, reconciles, notifications) and may complete without it. An item
+	 * with no known type is treated as a deliverable.
+	 */
+	REQUIRED_FOR_TYPES: ['delegate', 'project_task', 'review'] as readonly string[],
 	/** Env var that overrides {@link EVIDENCE_ENFORCEMENT_MODE} (`warn` | `enforce`). */
 	ENV_MODE: 'CREWLY_EVIDENCE_MODE',
 	/** Most evidence entries accepted on one completion. */

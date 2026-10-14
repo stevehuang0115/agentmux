@@ -35,7 +35,7 @@ import { formatError } from '../../utils/format-error.js';
 import { TeamBudgetExceededError } from '../../services/budget/team-budget-gate.service.js';
 import { LoggerService } from '../../services/core/logger.service.js';
 import { ORCHESTRATOR_SESSION_NAME, PROJECT_TICKET_CONSTANTS, OPEN_ITEMS_CONSTANTS, PEOPLE_CONSTANTS, COMPLETION_EVIDENCE_CONSTANTS, TEAM_PAUSE_CONSTANTS } from '../../constants.js';
-import { decideCompletion, resolveEvidenceEnforcementMode } from '../../services/task-pool/completion-evidence.service.js';
+import { decideCompletion, evidenceRequiredFor, resolveEvidenceEnforcementMode } from '../../services/task-pool/completion-evidence.service.js';
 import { readAgentSessionHeader, resolveTransitionActor } from '../../utils/agent-caller.utils.js';
 import { getTicketIntakeService } from '../../services/v3/ticket-intake.service.js';
 import { ownerThreadHandover } from '../../services/orc/work-item-destination.js';
@@ -846,9 +846,10 @@ export async function releaseItem(req: Request, res: Response): Promise<void> {
  *    - a `command` with non-zero `exitCode` → 400 `evidence_command_failed`;
  *    - an `artifact` local path that does not exist (relative paths resolve
  *      against the WorkItem's worktree, then `metadata.projectPath`) → 400;
- *    - missing/empty → `warn` mode (default this release): accepted with a
- *      `warning` field; `enforce` mode (`CREWLY_EVIDENCE_MODE=enforce`): 400
- *      `evidence_required`. A review item's verdict completion is exempt.
+ *    - missing/empty → `enforce` mode (default since #1312): 400
+ *      `evidence_required`; `warn` mode (`CREWLY_EVIDENCE_MODE=warn`): accepted
+ *      with a `warning` field. Exempt: a review item's verdict completion, and
+ *      bookkeeping types outside `REQUIRED_FOR_TYPES` (triage, replans, retros).
  *
  * Any field beyond `summary` inside `result` (e.g. `prNumber`, `links`,
  * `evidence`) is preserved into `WorkItem.output` via spread merge, so
@@ -939,8 +940,9 @@ export async function completeItem(req: Request, res: Response): Promise<void> {
     const evidenceMode = resolveEvidenceEnforcementMode();
     const decision = await decideCompletion(result?.['evidence'], existing, {
       mode: evidenceMode,
-      // A review item's verdict is its deliverable.
-      exemptFromMissing: typeof result?.['verdict'] === 'string',
+      // A review item's verdict is its deliverable; bookkeeping types
+      // (triage, replans, retros) have no artifact to show (#1312).
+      exemptFromMissing: typeof result?.['verdict'] === 'string' || !evidenceRequiredFor(existing?.type),
     });
     if (decision.action === 'reject') {
       logger.info('complete: rejected by the evidence contract', { workItemId, agentId, code: decision.code });

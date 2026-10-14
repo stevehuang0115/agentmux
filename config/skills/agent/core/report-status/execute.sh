@@ -53,7 +53,7 @@ Evidence (status done — #873: "done" needs evidence):
   --blocked-reason <why>   ... and why. The WorkItem is recorded as BLOCKED, not done.
   --evidence <json>        Raw evidence array, e.g. '[{"type":"artifact","path":"/abs/f"}]'
   A non-zero --exit-code or a missing artifact is rejected by the server. Without
-  any evidence, done is accepted this release with a warning; next release it is refused.
+  any evidence, done is refused and the WorkItem stays open (#1312).
   --help     | -h   Show this help
 EOF_USAGE
 }
@@ -385,8 +385,8 @@ if [ "$STATUS" = "done" ]; then
     # `agentId is required` + `summary required in body.result`,
     # forcing every worker into a direct-curl workaround.
     #
-    # #873: the evidence block goes in result.evidence. Omitted when empty
-    # (the server then warns this release, refuses the next).
+    # #873: the evidence block goes in result.evidence. Omitted when empty;
+    # the server then refuses a deliverable's completion (#1312).
     COMPLETE_BODY=$(jq -n \
       --arg agentId "$SESSION_NAME" \
       --arg summary "$SUMMARY" \
@@ -410,8 +410,12 @@ if [ "$STATUS" = "done" ]; then
           '{completedWorkItem: $id, resolvedBy: $how} + (if $w != "" then {warning: $w} else {} end)' >&2
       fi
     else
-      jq -n --arg id "$TARGET_WI_ID" --arg err "$COMPLETE_RESULT" \
-        '{warning: "status reported, but completing the WorkItem FAILED — it is still open", workItemId: $id, error: $err}' >&2
+      NEXT_STEP=""
+      case "$COMPLETE_RESULT" in
+        *evidence_required*) NEXT_STEP="Run report-status --status done again with evidence: --artifact <file or https URL> (repeatable) and/or --command '<cmd>' --exit-code N; if you could not finish, --blocked-step '<step>' --blocked-reason '<why>'." ;;
+      esac
+      jq -n --arg id "$TARGET_WI_ID" --arg err "$COMPLETE_RESULT" --arg next "$NEXT_STEP" \
+        '{warning: "status reported, but completing the WorkItem FAILED — it is still open", workItemId: $id, error: $err} + (if $next != "" then {next: $next} else {} end)' >&2
     fi
   fi
 fi
