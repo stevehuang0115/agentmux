@@ -1450,6 +1450,33 @@ export class LiveReconcilerDataProvider implements ReconcilerDataProvider {
       }
     }
 
+    // A start that cannot happen yet is settled before anything else: the
+    // memory-pressure gate below may evict an idle agent for this wake, and
+    // the wake log ran every 10 s for an agent the approval gate had already
+    // refused (crewly-product-team-sam, 2026-10-13).
+    const blocked = this.lastWakeBlockedAt.get(agentSessionName);
+    if (strategy === 'start') {
+      // Don't re-attempt a wake the approval gate just refused. Its verdict
+      // depends on owner messages, not on anything the reconciler can change
+      // by asking again 10 seconds later.
+      if (blocked !== undefined && Date.now() - blocked.at < wakeBlockedCooldownMs(blocked.refusals)) {
+        this.logger.debug('Skipping wake — approval gate refused recently', {
+          agent: agentSessionName,
+          msSinceRefusal: Date.now() - blocked.at,
+          refusals: blocked.refusals,
+        });
+        // Not attempted: before CREW-304 every tick of this cooldown was
+        // traced as a failed wake (≈8/min for hours).
+        return { outcome: 'skipped', reason: 'approval gate cooldown' };
+      }
+
+      // A start already waiting for a slot behind the running-agent cap is
+      // pending, not failed, and is not requested again (CREW-304).
+      if (ResourceModeService.getInstance().isStartWaiting(agentSessionName)) {
+        return { outcome: 'pending', reason: 'start queued behind the running-agent cap' };
+      }
+    }
+
     // Memory-pressure gate with a concurrency floor.
     //
     // Previous behaviour (unconditional skip on >=90% used) wedged the
@@ -1607,27 +1634,6 @@ export class LiveReconcilerDataProvider implements ReconcilerDataProvider {
           // Without this, the gate would still pass via path 2 (pool scan)
           // — but explicit is better when we already have the evidence.
           body = { sessionName: agentSessionName, workItemId: action.workItemId };
-        }
-
-        // Don't re-attempt a wake the approval gate just refused. Its verdict
-        // depends on owner messages, not on anything the reconciler can change
-        // by asking again 10 seconds later.
-        const blocked = this.lastWakeBlockedAt.get(agentSessionName);
-        if (blocked !== undefined && Date.now() - blocked.at < wakeBlockedCooldownMs(blocked.refusals)) {
-          this.logger.debug('Skipping wake — approval gate refused recently', {
-            agent: agentSessionName,
-            msSinceRefusal: Date.now() - blocked.at,
-            refusals: blocked.refusals,
-          });
-          // Not attempted: before CREW-304 every tick of this cooldown was
-          // traced as a failed wake (≈8/min for hours).
-          return { outcome: 'skipped', reason: 'approval gate cooldown' };
-        }
-
-        // A start already waiting for a slot behind the running-agent cap is
-        // pending, not failed, and is not requested again (CREW-304).
-        if (ResourceModeService.getInstance().isStartWaiting(agentSessionName)) {
-          return { outcome: 'pending', reason: 'start queued behind the running-agent cap' };
         }
 
         const response = await fetch(url, {

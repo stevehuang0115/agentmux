@@ -786,7 +786,8 @@ export class DecisionService {
    * 3. the ticket's thread, when it has one;
    * 4. the thread of the asker's current work;
    * 5. a new ticket thread (ticket asks);
-   * 6. top-level, only when there is no thread at all.
+   * 6. top-level in the team channel, only when there is no thread at all;
+   * 7. the owner's DM, when the asker has no team channel (the orc).
    *
    * The owner's conversation used to lose to the ticket thread: a ticket ask
    * landed in an old ticket thread while the owner waited elsewhere
@@ -815,8 +816,12 @@ export class DecisionService {
     const work = await this.deps.workDestination?.(decision.asker).catch(() => null);
     if (work?.slackChannelId) return work;
     const channel = decision.teamId ? await this.deps.teamChannelOf(decision.teamId) : null;
-    if (!channel) throw new DecisionError(409, `No Slack place to ask in: ${decision.asker} has no team channel and no Slack conversation in hand`);
-    return { slackChannelId: channel, ...team };
+    if (channel) return { slackChannelId: channel, ...team };
+    // No team channel (the orc has no team): ask in the owner's DM with the
+    // asker's bot rather than never asking (D-665/D-733 waited for days).
+    const dm = await this.deps.ownerDmOf?.(identity).catch(() => null);
+    if (!dm) throw new DecisionError(409, `No Slack place to ask in: ${decision.asker} has no team channel, no owner DM and no Slack conversation in hand`);
+    return { slackChannelId: dm, ...team };
   }
 
   /**
