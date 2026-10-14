@@ -265,8 +265,13 @@ export function createAgentReplyHandler(deps: AgentReplyDeps = defaultDeps) {
             content,
             senderName: 'Orchestrator',
             senderType: 'orchestrator',
-            ...(plan.conversationId ? { conversationId: plan.conversationId } : {}),
+            // Only a conversation the agent NAMED is passed on: an unnamed post
+            // is placed by the harness (work item, fresh origin, owner DM).
+            ...(requestedConv && plan.conversationId ? { conversationId: plan.conversationId } : {}),
             ...(requestedConv ? { crossPost: body.crossPost === true } : {}),
+            // The thread and work item the post answers: the harness places it there.
+            ...(requestedThread ? { slackThread: requestedThread } : {}),
+            ...(typeof body.workItemId === 'string' && body.workItemId ? { workItemId: body.workItemId } : {}),
           };
           await deps.agentResponse(req, res, next);
           return;

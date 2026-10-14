@@ -46,6 +46,18 @@ bash config/skills/orchestrator/reply-chat/execute.sh \
   --text "Deploy complete"
 ```
 
+### Answer in a thread / relay a teammate's result
+
+```bash
+# Answer in the Slack thread the owner wrote in (key from [SLACK-THREAD:<key>])
+bash config/skills/orchestrator/reply-chat/execute.sh --thread "C0123:1790.5" --text "Done"
+
+# Relay a teammate's result: the post goes to the thread that work came from
+bash config/skills/orchestrator/reply-chat/execute.sh --work-item "<work item id>" --text "Owen finished the page"
+```
+
+With neither, a post answers the thread of the owner message your turn came from; if that turn is old it goes to the owner DM, never to the last active channel.
+
 ### Multi-line text from stdin
 
 ```bash

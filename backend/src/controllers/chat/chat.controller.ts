@@ -902,6 +902,52 @@ export function pickCompletionThreads<T extends { channelId: string; threadTs: s
 }
 
 /**
+ * Conversation and thread of an orchestrator post (see
+ * `services/orc/orc-post-placement.ts`). Looks up the work item and the
+ * orchestrator's owner DM lazily; never throws (a failed lookup leaves the
+ * post where the reply router put it).
+ *
+ * @param input - What the caller named and where the router sent the post
+ * @returns The placement
+ */
+async function placeOrchestratorPost(input: {
+  requestedConversationId?: string;
+  requestedSlackThread?: string;
+  routedConversationId?: string;
+  workItemId?: string;
+}): Promise<import('../../services/orc/orc-post-placement.js').OrcPostPlacement> {
+  const { planOrcPostPlacement, findWorkItem } = await import('../../services/orc/orc-post-placement.js');
+  const origin = OrcReplyRouteService.getInstance().getLastOrigin(ORCHESTRATOR_SESSION_NAME);
+  let workItem = null;
+  if (input.workItemId) {
+    try {
+      const { TaskPoolService } = await import('../../services/task-pool/task-pool.service.js');
+      workItem = findWorkItem(await TaskPoolService.getInstance().getAllItems(), input.workItemId);
+    } catch {
+      workItem = null;
+    }
+  }
+  let ownerDmConversationId: string | null = null;
+  if (!input.requestedConversationId && !input.requestedSlackThread) {
+    try {
+      const { getSlackAgentDmService } = await import('../../services/slack/slack-agent-dm.service.js');
+      ownerDmConversationId = getSlackAgentDmService()?.findByAgentSession(ORCHESTRATOR_SESSION_NAME)?.chatChannelId ?? null;
+      if (!ownerDmConversationId) {
+        const { getChatV2Service } = await import('../../services/chat-v2/chat-v2.singleton.js');
+        const { SLACK_AGENT_DM_CONSTANTS } = await import('../../constants.js');
+        ownerDmConversationId = getChatV2Service().ensureDmChannel({
+          agentSession: ORCHESTRATOR_SESSION_NAME,
+          principal: { userId: SLACK_AGENT_DM_CONSTANTS.OWNER_USER_ID, source: 'oss' },
+        }).channel.id;
+      }
+    } catch {
+      ownerDmConversationId = null;
+    }
+  }
+  return planOrcPostPlacement({ ...input, origin, workItem, ownerDmConversationId, now: Date.now() });
+}
+
+/**
  * POST /api/chat/agent-response
  *
  * Store an agent's response message in a chat conversation. Used by
@@ -934,7 +980,7 @@ export async function agentResponse(
     const { content, senderName, senderType, conversationId } = req.body;
     // `reply-chat --thread <key>`: the Slack thread this answer belongs to.
     const threadParts = parseSlackThreadKey(req.body?.slackThread);
-    const slackThreadKey = threadParts ? formatSlackThreadKey(threadParts.slackChannelId, threadParts.threadTs) : undefined;
+    let slackThreadKey = threadParts ? formatSlackThreadKey(threadParts.slackChannelId, threadParts.threadTs) : undefined;
 
     if (!content || (typeof content === 'string' && content.trim().length === 0)) {
       res.status(400).json({
@@ -1018,6 +1064,23 @@ export async function agentResponse(
         resolvedConversationId = route.conversationId;
         conversationIdWasExplicit = true;
       }
+      // Conversation AND thread: a post answers the thread it belongs to (the
+      // work item's, else the fresh turn origin's), and with nothing to go on
+      // it goes to the owner DM — never the last active channel.
+      const placement = await placeOrchestratorPost({
+        requestedConversationId: typeof conversationId === 'string' && conversationId ? conversationId : undefined,
+        requestedSlackThread: slackThreadKey,
+        routedConversationId: route.conversationId,
+        workItemId: typeof req.body?.workItemId === 'string' ? req.body.workItemId : undefined,
+      });
+      if (placement.via !== 'unchanged') {
+        logger.info('Orchestrator post placed', { via: placement.via, conversationId: placement.conversationId, thread: placement.slackThread, reason: placement.reason });
+      }
+      if (placement.conversationId) {
+        resolvedConversationId = placement.conversationId;
+        conversationIdWasExplicit = true;
+      }
+      if (placement.slackThread) slackThreadKey = placement.slackThread;
     }
 
     // An agent's message to a person (anything that is not a status line)
