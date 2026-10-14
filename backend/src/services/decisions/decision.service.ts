@@ -749,7 +749,8 @@ export class DecisionService {
     try {
       const identity = await this.deps.identityOf(decision.asker);
       const place = await this.placeFor(decision, identity, slack);
-      const blocks = renderOpenCard(decision, this.deps.instanceId(), this.now());
+      const deadline = this.deadlineWhenPosted(decision);
+      const blocks = renderOpenCard({ ...decision, deadline }, this.deps.instanceId(), this.now());
       const { ts, ownBot } = await this.send(slack, identity, {
         channelId: place.slackChannelId,
         text: cardFallbackText(decision),
@@ -766,6 +767,7 @@ export class DecisionService {
           renderRev: DECISION_CONSTANTS.CARD_RENDER_REV,
         },
         ...(place.teamId && !decision.teamId ? { teamId: place.teamId } : {}),
+        ...(deadline !== decision.deadline ? { deadline } : {}),
         postError: undefined,
       }));
       this.logger.info('Decision card posted', { decisionId: decision.id, channel: place.slackChannelId, threaded: !!place.threadTs, ownBot });
@@ -776,6 +778,23 @@ export class DecisionService {
       this.logger.warn('Decision card not posted (retried on the next tick)', { decisionId: decision.id, error: msg });
       return (await this.deps.store.update(decision.id, () => ({ postError: msg }))) ?? decision;
     }
+  }
+
+  /**
+   * The deadline a card carries once it is actually posted. A card whose
+   * earlier posts failed gets its original window again from now, so the
+   * default is never applied to a question the owner has not seen in time
+   * (D-665 could only be posted a day after its deadline).
+   *
+   * @param decision - Decision about to be posted
+   * @returns ISO deadline to store and render
+   */
+  private deadlineWhenPosted(decision: OwnerDecision): string {
+    if (!decision.postError) return decision.deadline;
+    const window = Date.parse(decision.deadline) - Date.parse(decision.createdAt);
+    const now = this.now().getTime();
+    if (!(window > 0) || Date.parse(decision.deadline) - now >= window) return decision.deadline;
+    return new Date(now + window).toISOString();
   }
 
   /**
