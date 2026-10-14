@@ -650,6 +650,16 @@ describe('SlackTypingPlaceholderService — signals for the unanswered-owner-mes
     expect(svc.owesThread('D1', '1.1')).toBe(false);
   });
 
+  it('an interim note posted fresh is flagged notAnAnswer', async () => {
+    const { slack, sent } = makeSlack();
+    const svc = new SlackTypingPlaceholderService({ slack, ...noTimer });
+    await svc.resolve(k, 'plan: …', ella, { reopen: 'typing' });
+    expect((sent[0] as { notAnAnswer?: boolean }).notAnAnswer).toBe(true);
+    // A final answer posted fresh (no placeholder left) is an answer.
+    await svc.resolve({ ...k, threadTs: '7.7' }, 'done', ella);
+    expect((sent.find((m) => m.text === 'done') as { notAnAnswer?: boolean }).notAnAnswer).toBeUndefined();
+  });
+
   it('tells listeners when the answer replaced the placeholder — not for an interim note', async () => {
     const { slack } = makeSlack();
     const svc = new SlackTypingPlaceholderService({ slack, ...noTimer });

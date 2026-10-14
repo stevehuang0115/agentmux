@@ -3860,6 +3860,7 @@ export class SlackTeamChannelService {
         skipChatV2Mirror: true,
         senderSession: dto.senderId,
         ...identity,
+        ...(isInterim(dto) ? { notAnAnswer: true } : {}),
       });
       const delivery = this.recordDelivery(dto, mapping.slackChannelId, sentTs, threadTs);
       this.logger.info('Agent reply mirrored to Slack', {
