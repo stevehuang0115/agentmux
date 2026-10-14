@@ -553,6 +553,7 @@ export function buildAppWakeMessage(input: WakeMessageInput): string {
     const dropped = total - input.dataChanges.length;
     lines.push(`Data changes by the owner (${total}): ${summarizeDataChanges(input.dataChanges)}${dropped > 0 ? ` · plus ${dropped} earlier change(s) not listed` : ''}`);
     lines.push(`Read the current data with: bash ${input.skillsPath}/core/app-data/execute.sh --app ${input.appId} --list <collection>`);
+    lines.push(`Files the owner uploaded (a fileId or a /_f/ URL in the data, e.g. a screenshot) can be fetched with: bash ${input.skillsPath}/core/app-data/execute.sh --app ${input.appId} --download <fileId|url>`);
   }
 
   if (visitors.length > 0) {

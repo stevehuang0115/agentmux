@@ -57,6 +57,7 @@ beforeEach(() => {
     getComment: jest.fn().mockResolvedValue({ id: 'c1' }),
     replyComment: jest.fn().mockResolvedValue({ id: 'c1', replies: [{}] }),
     setCommentStatus: jest.fn().mockResolvedValue({ id: 'c1', status: 'resolved' }),
+    downloadFile: jest.fn().mockResolvedValue({ data: Buffer.from([0x89, 0x50, 0x4e, 0x47]), contentType: 'image/png', name: 'subs shot.png' }),
     uploadFile: jest.fn().mockResolvedValue({ fileId: 'f1', name: 'a b.png', size: 4, contentType: 'image/png', url: 'https://apps.crewlyai.com/_f/t/f1' }),
   };
   service.assertPublisher = jest.fn().mockResolvedValue(undefined);
@@ -234,6 +235,41 @@ describe('Crewly Apps controller: file upload', () => {
   it('refuses an anonymous caller', async () => {
     const res = await request(app).post(`/api/apps/${ID}/files`).set('X-Test-Anonymous', '1').set('Content-Type', 'image/png').send(png);
     expect(res.status).toBe(401);
+  });
+});
+
+describe('Crewly Apps controller: file download', () => {
+  const FID = 'abcdefghij012345';
+
+  it('streams the bytes with content type and file name as the verified agent', async () => {
+    const res = await request(app).get(`/api/apps/${ID}/files/${FID}`).set(agentAuthHeaders('dev-ella')).buffer(true).parse((r, cb) => {
+      const chunks: Buffer[] = [];
+      r.on('data', (c: Buffer) => chunks.push(c));
+      r.on('end', () => cb(null, Buffer.concat(chunks)));
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('image/png');
+    expect(res.headers['content-disposition']).toBe('attachment; filename="subs shot.png"');
+    expect(res.headers['x-file-name']).toBe('subs%20shot.png');
+    expect(res.body).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    expect(service.downloadFile).toHaveBeenCalledWith(ID, FID, { agentSession: 'dev-ella' });
+  });
+
+  it("passes the service's refusal (not a collaborator / other account) through with its status and code", async () => {
+    service.downloadFile.mockRejectedValueOnce(new AppsCloudError(403, 'not_your_app', 'This app is not yours.'));
+    const res = await request(app).get(`/api/apps/${ID}/files/${FID}`).set(agentAuthHeaders('dev-ella'));
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ success: false, error: 'not_your_app' });
+    service.downloadFile.mockRejectedValueOnce(new AppsCloudError(404, 'not_found', 'No such file in this app.'));
+    const res2 = await request(app).get(`/api/apps/${ID}/files/${FID}`).set(agentAuthHeaders('dev-ella'));
+    expect(res2.status).toBe(404);
+    expect(res2.body).toMatchObject({ success: false, error: 'not_found' });
+  });
+
+  it('refuses an anonymous caller', async () => {
+    const res = await request(app).get(`/api/apps/${ID}/files/${FID}`).set('X-Test-Anonymous', '1');
+    expect(res.status).toBe(401);
+    expect(service.downloadFile).not.toHaveBeenCalled();
   });
 });
 

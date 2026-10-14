@@ -21,6 +21,7 @@ Usage:
   bash execute.sh --app <appId> --add <collection> --data '{"name":"milk"}'
   bash execute.sh --app <appId> --delete <collection> <docId>
   bash execute.sh --app <appId> --upload <path-to-image> [--name <file name>]
+  bash execute.sh --app <appId> --download <fileId|file url> [--out <path>]
   bash execute.sh --app <appId> --request-access [--scope team|agent] [--reason "why"]
   bash execute.sh --app <appId> --collaborators
   bash execute.sh --app <appId> --owner
@@ -38,6 +39,7 @@ Options:
   --out        File to write for --get-field: inside your project directory, not an existing symlink
   --decode     With --get-field: base64-decode the value (a data:...;base64, prefix is dropped) so a photo is written as the real image
   --upload     Put a file (an image for a post) into the app and print its url; works for the owner's agents and for collaborators. Regular, non-symlink file inside your project directory, up to 10 MB (the app's own limit may be smaller)
+  --download   Fetch a file stored in the app (a screenshot the owner uploaded: the fileId or /_f/ URL in the app data) into your project, default <project>/inbox/app-files/<appId>/<name>; prints {success, path, name, size, contentType}. Open an image with your file-read tool to see it. Up to 10 MB
   --name       File name to show for --upload (default: the file's name)
   --request-access  Ask the owner to let your team (default) or only you work in an app another team published; a card goes to the owner, nothing is granted until they tap Allow
   --collaborators   Who the owner let work in the app
@@ -138,7 +140,15 @@ resolve_out_path() {
   printf '%s/%s' "$real_dir" "$base"
 }
 
-APP=""; OP=""; UPLOAD=""; NAME=""; COLL=""; DOC=""; DATA=""; IF_REV=""; LIMIT=""; AFTER=""; SCOPE=""; REASON=""; SET_OWNER=""; WHO=""; FIELD=""; OUT_FILE=""; DECODE=""
+# The 16-character file id out of a bare id or a file URL (https://apps.../_f/<token>/<fileId>[?q]).
+file_id_of() {
+  local v="${1%%[?#]*}"
+  v="${v##*/}"
+  [[ "$v" =~ ^[a-z0-9]{16}$ ]] || return 1
+  printf '%s' "$v"
+}
+
+APP=""; OP=""; DOWNLOAD=""; UPLOAD=""; NAME=""; COLL=""; DOC=""; DATA=""; IF_REV=""; LIMIT=""; AFTER=""; SCOPE=""; REASON=""; SET_OWNER=""; WHO=""; FIELD=""; OUT_FILE=""; DECODE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --app)    [ $# -ge 2 ] || error_exit "--app requires a value"; APP="$2"; shift 2 ;;
@@ -160,6 +170,7 @@ while [[ $# -gt 0 ]]; do
     --limit)     [ $# -ge 2 ] || error_exit "--limit requires a value";     LIMIT="$2"; shift 2 ;;
     --after)     [ $# -ge 2 ] || error_exit "--after requires a value";     AFTER="$2"; shift 2 ;;
     --upload)    [ $# -ge 2 ] || error_exit "--upload requires a file path"; OP="upload"; UPLOAD="$2"; shift 2 ;;
+    --download)  [ $# -ge 2 ] || error_exit "--download requires a file id or file URL"; OP="download"; DOWNLOAD="$2"; shift 2 ;;
     --name)      [ $# -ge 2 ] || error_exit "--name requires a value";      NAME="$2"; shift 2 ;;
     --request-access) OP="request-access"; shift ;;
     --collaborators)  OP="collaborators"; shift ;;
@@ -174,7 +185,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [ -n "$APP" ] || error_exit "--app is required"
-[ -n "$OP" ] || error_exit "one of --list / --get / --set / --update / --add / --delete / --upload / --request-access / --collaborators / --owner / --add-collaborator is required"
+[ -n "$OP" ] || error_exit "one of --list / --get / --set / --update / --add / --delete / --upload / --download / --request-access / --collaborators / --owner / --add-collaborator is required"
 [[ "$APP" =~ ^[a-z0-9]{10}$ ]] || error_exit "--app must be a 10-character app id"
 case "$COLL" in .|..) error_exit "collection cannot be . or .." ;; esac
 case "$DOC" in .|..) error_exit "doc id cannot be . or .." ;; esac
@@ -187,6 +198,33 @@ case "$OP" in
     RESPONSE=$(CREWLY_API_UPLOAD_FILE="$FILE_PATH" CREWLY_API_UPLOAD_TYPE="$(content_type_for "$FILE_PATH")" CREWLY_API_UPLOAD_NAME="$(uri "$NAME")" call POST "/apps/${APP}/files") || { printf '%s\n' "$RESPONSE"; exit 1; }
     printf '%s' "$RESPONSE" | jq -e '.data.url | type == "string" and length > 0' >/dev/null 2>&1 || error_exit "the upload answered without a url; the file may not be stored"
     printf '%s' "$RESPONSE" | jq -c '{success: true, fileId: .data.fileId, name: .data.name, size: .data.size, contentType: .data.contentType, url: .data.url}'
+    exit 0
+    ;;
+  download)
+    FILE_ID="$(file_id_of "$DOWNLOAD")" || error_exit "--download needs the 16-character file id (or the file URL) from the app data"
+    PROJECT_DIR="$(cd "${CREWLY_PROJECT_PATH:-$PWD}" && pwd -P)" || error_exit "cannot resolve the project directory"
+    if [ -n "$OUT_FILE" ]; then
+      TARGET="$(resolve_out_path "$OUT_FILE")" || exit 1
+    else
+      case "$PROJECT_DIR/" in "${CREWLY_HOME:-$HOME/.crewly}"/*|"$HOME/.crewly"/*) error_exit "your project directory is inside Crewly's home directory" ;; esac
+      mkdir -p "$PROJECT_DIR/inbox/app-files/$APP" || error_exit "cannot create inbox/app-files/$APP in your project directory"
+      TARGET=""
+    fi
+    DL_TMP="$(mktemp "${TARGET:-$PROJECT_DIR/inbox/app-files/$APP/.download}.XXXXXX")" || error_exit "cannot write the download into your project directory"
+    trap 'rm -f "$DL_TMP" "$DL_TMP.hdr"' EXIT
+    DL_OUT=$(CREWLY_API_DOWNLOAD_TO="$DL_TMP" call GET "/apps/${APP}/files/${FILE_ID}") || { printf '%s\n' "$DL_OUT"; exit 1; }
+    DL_NAME="$(grep -i '^x-file-name:' "$DL_TMP.hdr" | tail -1 | sed -E 's/^[^:]*:[[:space:]]*//' | tr -d '\r')"
+    DL_NAME="$(printf '%b' "$(printf '%s' "$DL_NAME" | sed 's/%/\\x/g')")"
+    DL_TYPE="$(grep -i '^content-type:' "$DL_TMP.hdr" | tail -1 | sed -E 's/^[^:]*:[[:space:]]*//' | tr -d '\r' | cut -d';' -f1)"
+    [ -s "$DL_TMP" ] || error_exit "the download came back empty"
+    if [ -z "$TARGET" ]; then
+      SAFE_NAME="$(printf '%s' "${DL_NAME:-$FILE_ID}" | tr -d '\000-\037' | sed -E 's#[/\\]#_#g; s#^\.+##')"
+      [ -n "$SAFE_NAME" ] || SAFE_NAME="$FILE_ID"
+      TARGET="$PROJECT_DIR/inbox/app-files/$APP/$SAFE_NAME"
+      [ ! -L "$TARGET" ] || error_exit "$TARGET is a symbolic link; refusing to overwrite it"
+    fi
+    mv "$DL_TMP" "$TARGET"
+    jq -cn --arg p "$TARGET" --arg n "${DL_NAME:-$(basename "$TARGET")}" --arg t "${DL_TYPE:-application/octet-stream}" --argjson s "$(wc -c < "$TARGET" | tr -d ' ')" '{success: true, path: $p, name: $n, size: $s, contentType: $t}'
     exit 0
     ;;
   request-access)
@@ -228,7 +266,7 @@ case "$OP" in
     [ -n "$LIMIT" ] && Q="limit=$(uri "$LIMIT")"
     [ -n "$AFTER" ] && Q="${Q:+$Q&}after=$(uri "$AFTER")"
     RESPONSE=$(call GET "${BASE}${Q:+?$Q}") || { printf '%s\n' "$RESPONSE"; exit 1; }
-    printf '%s' "$RESPONSE" | jq -c '{success: true, docs: [.data.docs[]? | {id, data, rev, updatedAt, updatedBy: (.updatedBy.kind // null)} + (if .updatedBy.kind == "agent" then {by: .updatedBy.id} else {} end)], next: .data.next} + (if .data.truncated then {truncated: .data.truncated, truncatedHint: .data.truncatedHint} else {} end)'
+    printf '%s' "$RESPONSE" | jq -c '(tojson | test("\"fileId\"|/_f/")) as $hasFile | {success: true, docs: [.data.docs[]? | {id, data, rev, updatedAt, updatedBy: (.updatedBy.kind // null)} + (if .updatedBy.kind == "agent" then {by: .updatedBy.id} else {} end)], next: .data.next} + (if .data.truncated then {truncated: .data.truncated, truncatedHint: .data.truncatedHint} else {} end) + (if $hasFile then {fileHint: "Files in this data (fileId / /_f/ URL) can be fetched with --download <fileId|url>, then opened with your file-read tool."} else {} end)'
     ;;
   get-field)
     [ -n "$FIELD" ] || error_exit "--field is required for --get-field (a JSON pointer such as /photo)"
@@ -249,7 +287,7 @@ case "$OP" in
     ;;
   get)
     RESPONSE=$(call GET "${BASE}/$(uri "$DOC")") || { printf '%s\n' "$RESPONSE"; exit 1; }
-    printf '%s' "$RESPONSE" | jq -c '{success: true, id: .data.id, data: .data.data, rev: .data.rev, updatedAt: .data.updatedAt} + (if .data.truncated then {truncated: .data.truncated, truncatedHint: .data.truncatedHint} else {} end)'
+    printf '%s' "$RESPONSE" | jq -c '(tojson | test("\"fileId\"|/_f/")) as $hasFile | {success: true, id: .data.id, data: .data.data, rev: .data.rev, updatedAt: .data.updatedAt} + (if .data.truncated then {truncated: .data.truncated, truncatedHint: .data.truncatedHint} else {} end) + (if $hasFile then {fileHint: "Files in this data (fileId / /_f/ URL) can be fetched with --download <fileId|url>, then opened with your file-read tool."} else {} end)'
     ;;
   set)
     need_data
