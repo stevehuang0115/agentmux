@@ -38,6 +38,15 @@ const completionEvidenceSchema = z.array(z.discriminatedUnion('type', [
   'if you could not finish (the WorkItem is then recorded as blocked, not done).',
 );
 
+/** What a reviewer checked when accepting a `Verify: …` item (#1314). */
+const reviewChecksSchema = z.array(z.object({
+  entry: z.number().int().nullable().describe("Index in the worker's output.evidence, or null for a direct look at the work"),
+  did: z.string().min(1).describe('What you did and saw: opened it, re-ran it (exit code), looked at the page'),
+  outcome: z.enum(['pass', 'fail']),
+})).describe(
+  'Required to accept a review: one entry per worker evidence entry you checked; at least one must name an entry when there is any.',
+);
+
 /** One completion evidence entry, as accepted by {@link completionEvidenceSchema}. */
 type CompletionEvidenceInput = z.infer<typeof completionEvidenceSchema>;
 
@@ -1286,8 +1295,11 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
         sessionName: z.string().describe('Agent session that completed it'),
         summary: z.string().describe('Completion summary'),
         evidence: completionEvidenceSchema.optional(),
+        verdict: z.enum(['verified', 'rejected']).optional().describe('Reviewing a Verify item: verified accepts (needs checks), rejected sends it back (needs feedback)'),
+        feedback: z.string().optional().describe('With verdict rejected: what is wrong'),
+        checks: reviewChecksSchema.optional(),
       }),
-      execute: async ({ workItemId, sessionName: agent, summary, evidence }) => {
+      execute: async ({ workItemId, sessionName: agent, summary, evidence, verdict, feedback, checks }) => {
         // V3-only as of spec 2026-05-06-task-management-v1-deprecation.md.
         // Replaces v1 `/task-management/complete`. Note: the legacy
         // `absoluteTaskPath` parameter is removed; callers must now pass
@@ -1303,7 +1315,12 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
         //   - tool-registry.ts §report_status auto-complete path (below)
         const result = await client.post(`/task-pool/complete/${workItemId}`, {
           agentId: agent,
-          result: completionResult(summary as string, evidence as CompletionEvidenceInput | undefined),
+          result: {
+            ...completionResult(summary as string, evidence as CompletionEvidenceInput | undefined),
+            ...(verdict ? { verdict } : {}),
+            ...(typeof feedback === 'string' && feedback.trim() ? { feedback } : {}),
+            ...(Array.isArray(checks) && checks.length > 0 ? { checks } : {}),
+          },
         });
 
         // Auto-cancel scheduled checks targeting the completing agent

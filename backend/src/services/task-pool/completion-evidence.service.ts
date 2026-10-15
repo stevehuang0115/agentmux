@@ -28,6 +28,7 @@ import {
   type ArtifactEvidence,
   type BlockedEvidence,
   type CompletionEvidence,
+  type ReviewCheck,
 } from '../../types/v2/completion-evidence.types.js';
 import type { WorkItem } from '../../types/v2/work-item.types.js';
 
@@ -257,11 +258,15 @@ export function describeEvidenceForReviewer(output: Record<string, unknown> | un
   const v = validateCompletionEvidence(output?.['evidence']);
   const evidence = v.ok ? v.evidence : [];
   if (evidence.length === 0) {
-    return 'Evidence: NONE — marked done without artifacts or commands (accepted only in evidence warn mode). Check the work directly or send it back asking for evidence.';
+    return 'Evidence: NONE — marked done without artifacts or commands (accepted only in evidence warn mode). Check the work directly (a check with "entry": null) or send it back asking for evidence.';
   }
   const artifacts = evidence.filter((e) => e.type === 'artifact').length;
   const commands = evidence.filter((e) => e.type === 'command').length;
-  return `Evidence: ${artifacts} artifact(s), ${commands} command(s) — read them first (verify-output shows them, or GET /api/task-pool/items/<id> → output.evidence).`;
+  // Numbered so the reviewer's checks can name each entry (#1314).
+  const lines = evidence.map((e, i) => `  [${i}] ${e.type === 'artifact' ? `artifact ${e.path}` : e.type === 'command' ? `command \`${e.command}\` → exit ${e.exitCode}` : `blocked at ${e.step}`}`.slice(0, 300));
+  const shown = lines.slice(0, C.REVIEW_LISTED_ENTRIES);
+  if (lines.length > shown.length) shown.push(`  … and ${lines.length - shown.length} more (verify-output lists them all)`);
+  return `Evidence: ${artifacts} artifact(s), ${commands} command(s) — open or re-run them and record each check:\n${shown.join('\n')}`;
 }
 
 /**
@@ -347,4 +352,105 @@ export async function decideCompletion(
   }
 
   return { action: 'complete', evidence };
+}
+
+/** Result of {@link decideReviewAccept}. */
+export type ReviewAcceptDecision =
+  | { action: 'accept'; checks: ReviewCheck[] }
+  | { action: 'accept_unchecked'; warning: string }
+  | { action: 'reject'; status: 400; code: string; error: string };
+
+/**
+ * Why one raw check entry is not a {@link ReviewCheck}, or null when it is.
+ *
+ * @param raw - One entry of `result.checks`
+ * @param evidenceCount - Number of entries in the worker's evidence
+ * @returns A problem description, or null
+ */
+function checkProblem(raw: unknown, evidenceCount: number): string | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'must be an object';
+  const c = raw as Record<string, unknown>;
+  const entry = c['entry'];
+  if (entry !== null && entry !== undefined) {
+    if (typeof entry !== 'number' || !Number.isInteger(entry)) return '"entry" must be an evidence index or null';
+    if (entry < 0 || entry >= evidenceCount) return `"entry" ${entry} is not in the worker's evidence (it has ${evidenceCount} entr${evidenceCount === 1 ? 'y' : 'ies'})`;
+  }
+  if (typeof c['did'] !== 'string' || !c['did'].trim()) return '"did" must say what you did';
+  if (c['did'].length > C.MAX_FIELD_CHARS) return `"did" is longer than ${C.MAX_FIELD_CHARS} characters`;
+  if (!C.CHECK_OUTCOMES.includes(c['outcome'] as string)) return '"outcome" must be "pass" or "fail"';
+  return null;
+}
+
+/**
+ * Decide whether a reviewer's accept of a worker's delivery may go through
+ * (#1314): it must record, per worker evidence entry it looked at, what it
+ * did. A rubber-stamp accept was indistinguishable from a real check.
+ *
+ * Rules (rejections are not affected; only accepts are checked):
+ * - `checks` is a non-empty array of `{entry, did, outcome}`;
+ * - when the worker sent evidence, at least one check names an entry of it;
+ *   without evidence, a check with `entry: null` (a direct look) is enough;
+ * - a check with `outcome: "fail"` cannot be accepted — send it back.
+ *
+ * In `warn` mode a missing record is accepted and flagged `unchecked`;
+ * malformed or failed checks are refused in both modes.
+ *
+ * @param rawChecks - `body.result.checks` as received (any value)
+ * @param workerEvidence - The worker's `output.evidence` (any value)
+ * @param mode - Rollout mode ({@link resolveEvidenceEnforcementMode})
+ * @returns The decision; never throws
+ *
+ * @example
+ * ```typescript
+ * const d = decideReviewAccept(result.checks, source.output?.evidence, resolveEvidenceEnforcementMode());
+ * if (d.action === 'reject') return res.status(d.status).json({ error: d.error, code: d.code });
+ * ```
+ */
+export function decideReviewAccept(rawChecks: unknown, workerEvidence: unknown, mode: EvidenceEnforcementMode): ReviewAcceptDecision {
+  const ev = validateCompletionEvidence(workerEvidence);
+  const evidenceCount = ev.ok ? ev.evidence.length : 0;
+  const missing = rawChecks === undefined || rawChecks === null || (Array.isArray(rawChecks) && rawChecks.length === 0);
+  if (missing) {
+    const what = evidenceCount > 0 ? `the worker sent ${evidenceCount} evidence entr${evidenceCount === 1 ? 'y' : 'ies'}` : 'the worker sent no evidence';
+    if (mode === 'warn') {
+      return { action: 'accept_unchecked', warning: `Accepted WITHOUT a check record (${what}); flagged unchecked. ${C.CHECKS_HINT}` };
+    }
+    return {
+      action: 'reject',
+      status: 400,
+      code: C.CODES.REVIEW_UNCHECKED,
+      error: `accepting a review requires a record of what you checked; ${what}. Nothing was accepted. ${C.CHECKS_HINT}`,
+    };
+  }
+  if (!Array.isArray(rawChecks)) {
+    return { action: 'reject', status: 400, code: C.CODES.REVIEW_CHECKS_MALFORMED, error: `checks must be an array. ${C.CHECKS_HINT}` };
+  }
+  if (rawChecks.length > C.MAX_ENTRIES) {
+    return { action: 'reject', status: 400, code: C.CODES.REVIEW_CHECKS_MALFORMED, error: `checks has ${rawChecks.length} entries; at most ${C.MAX_ENTRIES} are accepted` };
+  }
+  const checks: ReviewCheck[] = [];
+  for (let i = 0; i < rawChecks.length; i++) {
+    const problem = checkProblem(rawChecks[i], evidenceCount);
+    if (problem) return { action: 'reject', status: 400, code: C.CODES.REVIEW_CHECKS_MALFORMED, error: `checks[${i}]: ${problem}. ${C.CHECKS_HINT}` };
+    const c = rawChecks[i] as Record<string, unknown>;
+    checks.push({ entry: typeof c['entry'] === 'number' ? c['entry'] : null, did: (c['did'] as string).trim(), outcome: c['outcome'] as ReviewCheck['outcome'] });
+  }
+  if (evidenceCount > 0 && !checks.some((c) => c.entry !== null)) {
+    return {
+      action: 'reject',
+      status: 400,
+      code: C.CODES.REVIEW_UNCHECKED,
+      error: `the worker sent ${evidenceCount} evidence entr${evidenceCount === 1 ? 'y' : 'ies'} but no check names one: open or re-run at least one and record it. ${C.CHECKS_HINT}`,
+    };
+  }
+  const failed = checks.flatMap((c, i) => (c.outcome === 'fail' ? [`checks[${i}] (${c.did})`] : []));
+  if (failed.length > 0) {
+    return {
+      action: 'reject',
+      status: 400,
+      code: C.CODES.REVIEW_CHECK_FAILED,
+      error: `${failed.join('; ')} failed: a failed check cannot be accepted. Send it back with {"verdict":"rejected","feedback":"<what is wrong>"}.`,
+    };
+  }
+  return { action: 'accept', checks };
 }

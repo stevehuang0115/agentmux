@@ -126,6 +126,8 @@ echo "verify-output: evidence first (#873)"
 
 assert_json_field "evidence is the first key of the verdict" \
   '{"workItemId":"wi-ev"}' 'keys_unsorted[0]' 'evidence'
+assert_json_field "each evidence entry carries its index for the checks (#1314)" \
+  '{"workItemId":"wi-ev"}' '.evidence[1].index' '1'
 assert_json_field "evidence block is surfaced from output.evidence" \
   '{"workItemId":"wi-ev"}' '[.evidence[].type] | join(",")' 'artifact,command'
 assert_json_field "no evidence warning when evidence is present" \

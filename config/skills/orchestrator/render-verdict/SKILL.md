@@ -45,7 +45,7 @@ orchestrator) and the backend recognizes the caller correctly.
 
 ```bash
 CREWLY_SESSION_NAME=crewly-orc bash config/skills/orchestrator/render-verdict/execute.sh \
-  '{"workItemId":"abc-123","verdict":"verified","comment":"Meets the acceptance criteria"}'
+  '{"workItemId":"abc-123","verdict":"verified","comment":"Meets the acceptance criteria","checks":[{"entry":0,"did":"opened report.md: covers the 3 asks","outcome":"pass"}]}'
 ```
 
 ## Parameters
@@ -53,6 +53,7 @@ CREWLY_SESSION_NAME=crewly-orc bash config/skills/orchestrator/render-verdict/ex
 - `workItemId` (required, alias `taskId`) — the `done_by_worker` WorkItem to verdict.
 - `verdict` (required) — `"verified"` or `"rejected"`.
 - `comment` (optional) — reviewer's note; required in practice for a rejection so the worker knows what to fix.
+- `checks` (required for `verified`, #1314) — what you checked: `[{"entry":<index in the item's output.evidence, or null for a direct look>,"did":"<what you did and saw>","outcome":"pass"|"fail"}]`. At least one must name an evidence entry when the worker sent any. Without it (or with a `fail`) the server returns 400 `review_unchecked` / `review_check_failed` and nothing is verified.
 
 ## Output
 

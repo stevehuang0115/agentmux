@@ -1529,7 +1529,19 @@ export const COMPLETION_EVIDENCE_CONSTANTS = {
 		ARTIFACT_EMPTY: 'evidence_artifact_empty',
 		ARTIFACT_STALE: 'evidence_artifact_stale',
 		COMMAND_FAILED: 'evidence_command_failed',
+		REVIEW_UNCHECKED: 'review_unchecked',
+		REVIEW_CHECKS_MALFORMED: 'review_checks_malformed',
+		REVIEW_CHECK_FAILED: 'review_check_failed',
 	},
+	/** Worker evidence entries listed, numbered, in a review item's description (#1314). */
+	REVIEW_LISTED_ENTRIES: 10,
+	/** Outcomes a reviewer records for one check (#1314). */
+	CHECK_OUTCOMES: ['pass', 'fail'] as readonly string[],
+	/** The shape of a reviewer's check record, quoted in every refusal (#1314). */
+	CHECKS_HINT:
+		'Send body.result.checks: an array of {"entry":<index in the worker\'s output.evidence, or null for a direct look at the work>,' +
+		'"did":"<what you did: opened it and read X / re-ran it, exit 0 / looked at the page>","outcome":"pass"|"fail"}. ' +
+		'At least one check must name a worker evidence entry when there is any. A failed check cannot be accepted: send it back with {"verdict":"rejected","feedback":"..."}.',
 	/**
 	 * A local file artifact last modified more than this before its WorkItem
 	 * was created is stale: it was not made for this task (#1313). The slack

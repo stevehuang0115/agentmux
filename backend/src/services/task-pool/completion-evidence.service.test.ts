@@ -18,6 +18,7 @@ import {
   blockedReason,
   decideCompletion,
   describeEvidenceForReviewer,
+  decideReviewAccept,
   resolveEvidenceEnforcementMode,
   evidenceRequiredFor,
 } from './completion-evidence.service.js';
@@ -78,6 +79,19 @@ describe('describeEvidenceForReviewer', () => {
       { type: 'artifact', path: 'https://x' },
       { type: 'command', command: 'npm test', exitCode: 0 },
     ] })).toMatch(/^Evidence: 2 artifact\(s\), 1 command\(s\)/);
+  });
+
+  it('numbers each entry so checks can name it, and caps the list (#1314)', () => {
+    const d = describeEvidenceForReviewer({ evidence: [
+      { type: 'artifact', path: '/out/report.md' },
+      { type: 'command', command: 'npm test', exitCode: 0 },
+    ] });
+    expect(d).toContain('[0] artifact /out/report.md');
+    expect(d).toContain('[1] command `npm test` → exit 0');
+    const many = describeEvidenceForReviewer({ evidence: Array.from({ length: 13 }, (_, i) => ({ type: 'artifact', path: `/f${i}` })) });
+    expect(many).toContain('[9] artifact /f9');
+    expect(many).not.toContain('[10]');
+    expect(many).toContain('and 3 more');
   });
 
   it.each([undefined, {}, { evidence: [] }, { evidence: 'nope' }])('flags no (usable) evidence: %j', (output) => {
@@ -269,3 +283,50 @@ describe('empty and stale artifacts (#1313)', () => {
   });
 });
 
+describe('decideReviewAccept (#1314)', () => {
+  const evidence = [{ type: 'artifact', path: '/out/report.md' }, { type: 'command', command: 'npm test', exitCode: 0 }];
+  const pass = (entry: number | null, did = 'opened it: 3 sections, matches the brief') => ({ entry, did, outcome: 'pass' });
+
+  it('accepts checks that name worker evidence, trimmed and with only known fields', () => {
+    const d = decideReviewAccept([{ ...pass(0, '  opened it  '), extra: 1 }, pass(null)], evidence, 'enforce');
+    expect(d).toEqual({ action: 'accept', checks: [{ entry: 0, did: 'opened it', outcome: 'pass' }, { entry: null, did: 'opened it: 3 sections, matches the brief', outcome: 'pass' }] });
+  });
+
+  it.each([undefined, null, []])('enforce: no record is refused (%j)', (raw) => {
+    const d = decideReviewAccept(raw, evidence, 'enforce');
+    expect(d).toMatchObject({ action: 'reject', status: 400, code: CODES.REVIEW_UNCHECKED });
+    expect((d as { error: string }).error).toContain('2 evidence entries');
+  });
+
+  it('warn: no record is accepted and flagged unchecked', () => {
+    expect(decideReviewAccept(undefined, evidence, 'warn')).toMatchObject({ action: 'accept_unchecked', warning: expect.stringContaining('unchecked') });
+  });
+
+  it('with worker evidence, only direct looks are not enough', () => {
+    expect(decideReviewAccept([pass(null)], evidence, 'enforce')).toMatchObject({ action: 'reject', code: CODES.REVIEW_UNCHECKED });
+  });
+
+  it('without worker evidence, a direct look is enough', () => {
+    expect(decideReviewAccept([pass(null)], undefined, 'enforce')).toMatchObject({ action: 'accept' });
+  });
+
+  it.each([
+    ['not an array', { entry: 0 }],
+    ['entry out of range', [pass(2)]],
+    ['negative entry', [pass(-1)]],
+    ['fractional entry', [{ entry: 0.5, did: 'x', outcome: 'pass' }]],
+    ['empty did', [pass(0, '  ')]],
+    ['bad outcome', [{ entry: 0, did: 'x', outcome: 'ok' }]],
+    ['non-object entry', ['looked']],
+  ])('malformed is refused in both modes: %s', (_name, raw) => {
+    for (const mode of ['warn', 'enforce'] as const) {
+      expect(decideReviewAccept(raw, evidence, mode)).toMatchObject({ action: 'reject', code: CODES.REVIEW_CHECKS_MALFORMED });
+    }
+  });
+
+  it('a failed check cannot be accepted', () => {
+    const d = decideReviewAccept([pass(0), { entry: 1, did: 're-ran npm test: 2 failing', outcome: 'fail' }], evidence, 'enforce');
+    expect(d).toMatchObject({ action: 'reject', code: CODES.REVIEW_CHECK_FAILED });
+    expect((d as { error: string }).error).toContain('verdict');
+  });
+});

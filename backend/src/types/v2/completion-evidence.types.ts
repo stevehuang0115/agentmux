@@ -50,6 +50,19 @@ export interface BlockedEvidence {
 /** One evidence entry. */
 export type CompletionEvidenceEntry = ArtifactEvidence | CommandEvidence | BlockedEvidence;
 
+/**
+ * What a reviewer did to check one piece of a worker's delivery (#1314).
+ * Sent as `body.result.checks` when accepting a review item.
+ */
+export interface ReviewCheck {
+  /** Index into the worker's `output.evidence`, or null for a direct look at the work. */
+  entry: number | null;
+  /** What the reviewer did and saw (opened it, re-ran it, looked at the page). */
+  did: string;
+  /** Whether that check passed. */
+  outcome: 'pass' | 'fail';
+}
+
 /** The evidence block sent with a completion (`body.result.evidence`). */
 export type CompletionEvidence = CompletionEvidenceEntry[];
 

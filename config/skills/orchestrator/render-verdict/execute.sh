@@ -38,10 +38,14 @@ if [ "$VERDICT" != "verified" ] && [ "$VERDICT" != "rejected" ]; then
   error_exit "verdict must be \"verified\" or \"rejected\" (got: \"${VERDICT}\")"
 fi
 
-if [ -n "$COMMENT" ]; then
-  BODY=$(jq -n --arg verdict "$VERDICT" --arg comment "$COMMENT" '{verdict: $verdict, comment: $comment}')
-else
-  BODY=$(jq -n --arg verdict "$VERDICT" '{verdict: $verdict}')
+# An accept records what you checked (#1314): the server refuses
+# "verified" without checks.
+CHECKS=$(printf '%s' "$INPUT" | jq -c '.checks // empty')
+if [ -n "$CHECKS" ] && [ "$(printf '%s' "$CHECKS" | jq -r 'type')" != "array" ]; then
+  error_exit "checks must be a JSON array, e.g. [{\"entry\":0,\"did\":\"opened report.md: covers the 3 asks\",\"outcome\":\"pass\"}]"
 fi
+
+BODY=$(jq -n --arg verdict "$VERDICT" --arg comment "$COMMENT" --argjson checks "${CHECKS:-null}" \
+  '{verdict: $verdict} + (if $comment != "" then {comment: $comment} else {} end) + (if $checks != null then {checks: $checks} else {} end)')
 
 api_call POST "/task-pool/items/${WORK_ITEM_ID}/verdict" "$BODY"

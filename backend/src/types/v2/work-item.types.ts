@@ -770,6 +770,13 @@ export function describeTransitionActor(actor: TransitionActor | undefined): str
 export const WORK_ITEM_REVIEWER_KEY = 'reviewer';
 
 /**
+ * `WorkItem.metadata` key holding what the reviewer checked when it accepted
+ * this item (#1314): `{reviewItemId, reviewer, at, checks}`, or
+ * `{…, unchecked: true}` when accepted without a record in warn mode.
+ */
+export const WORK_ITEM_REVIEW_CHECKS_KEY = 'reviewChecks';
+
+/**
  * `WorkItem.metadata` key stamped when an overdue review was escalated to the
  * orchestrator. From then on the orchestrator may render the verdict too.
  */
