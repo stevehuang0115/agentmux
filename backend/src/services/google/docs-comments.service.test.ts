@@ -1,17 +1,17 @@
 /**
  * Tests for DocsCommentsService — Drive comments/replies over a mocked fetch:
- * list paging and filters, reply, resolve, add, and the reauth_required
+ * list paging and filters, reply, resolve, add, and the file_not_accessible
  * mapping for a grant without the full Drive scope.
  *
  * @module services/google/docs-comments.service.test
  */
 
-import { DocsCommentsService, docIdFrom, toDocComment } from './docs-comments.service.js';
+import { COMMENTS_NOT_ACCESSIBLE_MESSAGE, DocsCommentsService, docIdFrom, toDocComment } from './docs-comments.service.js';
 import type { GoogleApiDeps } from './google-api.client.js';
 
 const BASE = 'https://www.googleapis.com/drive/v3';
 const DRIVE_FULL = 'https://www.googleapis.com/auth/drive';
-const NARROW = ['https://www.googleapis.com/auth/drive.readonly', 'https://www.googleapis.com/auth/drive.file'];
+const NARROW = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/documents'];
 
 function response(status: number, body: unknown) {
   return { ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(body) };
@@ -147,29 +147,29 @@ describe('reply / resolve / add', () => {
   });
 });
 
-describe('reauth_required', () => {
-  it('maps a write 403 to reauth_required when the grant lacks drive and the doc is readable', async () => {
-    fetchMock.mockResolvedValueOnce(googleError(403)).mockResolvedValueOnce(response(200, { id: 'DOC1' }));
-    await expect(svc.reply('DOC1', 'c1', 'hi')).rejects.toMatchObject({
-      status: 403,
-      code: 'reauth_required',
-      message: expect.stringContaining('Google Drive edit access'),
-    });
-    expect(call(1).url.pathname).toBe('/drive/v3/files/DOC1');
-    // Scoped to the account this service acts as (here the default), never all of them.
-    expect(tokens.clearCacheFor).toHaveBeenCalledWith(undefined);
-    expect(tokens.clearCache).not.toHaveBeenCalled();
-  });
-
-  it('treats a drive.file 404 the same way', async () => {
-    fetchMock.mockResolvedValueOnce(googleError(404, 'File not found')).mockResolvedValueOnce(response(200, { id: 'DOC1' }));
-    await expect(svc.resolve('DOC1', 'c1')).rejects.toMatchObject({ code: 'reauth_required' });
-  });
-
-  it('passes the error through when the doc itself is not readable (wrong id)', async () => {
-    fetchMock.mockResolvedValueOnce(googleError(404, 'File not found')).mockResolvedValueOnce(googleError(404, 'File not found'));
-    await expect(svc.add('NOPE', 'x')).rejects.toMatchObject({ status: 404, code: 'google_error' });
+// 2026-10-15: new grants are `drive.file` only and Cloud cannot grant full
+// `drive`, so a refusal must never ask for a reconnect (it would loop).
+describe('file_not_accessible', () => {
+  it('maps a write 403 on a narrow grant to file_not_accessible, with no reconnect', async () => {
+    fetchMock.mockResolvedValueOnce(googleError(403));
+    const err = await svc.reply('DOC1', 'c1', 'hi').catch((e) => e);
+    expect(err).toMatchObject({ status: 403, code: 'file_not_accessible', message: COMMENTS_NOT_ACCESSIBLE_MESSAGE });
+    expect(err.message).toContain('only on documents Crewly created');
+    expect(err.details?.product).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(tokens.clearCacheFor).not.toHaveBeenCalled();
+  });
+
+  it('treats a drive.file 404 the same way, for writes and for list', async () => {
+    fetchMock.mockResolvedValueOnce(googleError(404, 'File not found'));
+    await expect(svc.resolve('DOC1', 'c1')).rejects.toMatchObject({ status: 404, code: 'file_not_accessible' });
+    fetchMock.mockResolvedValueOnce(googleError(404, 'File not found'));
+    await expect(svc.list('DOC1')).rejects.toMatchObject({ status: 404, code: 'file_not_accessible' });
+  });
+
+  it("turns Google's insufficient-scopes 403 into file_not_accessible, not a reconnect card", async () => {
+    fetchMock.mockResolvedValueOnce(googleError(403, 'Request had insufficient authentication scopes.'));
+    await expect(svc.add('DOC1', 'x')).rejects.toMatchObject({ code: 'file_not_accessible' });
   });
 
   it('passes the error through when the grant already has full drive', async () => {

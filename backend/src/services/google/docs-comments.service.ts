@@ -2,20 +2,26 @@
  * DocsCommentsService — comments on a Google Doc, over the owner's grant.
  *
  * Uses the Drive API v3 `comments` / `replies` endpoints (Docs has no
- * comments API of its own). Listing works with `drive.readonly` on any
- * document the owner can see. Writing (reply, resolve, add) needs `drive`
- * or `drive.file`, and `drive.file` covers only files Crewly created — so on
- * the owner's own documents a write needs the full `drive` scope, which
- * older grants do not carry. That case answers `reauth_required` with what
- * to do, instead of Google's opaque 403.
+ * comments API of its own), so it reaches what the Drive grant reaches.
+ * New grants carry `drive.file` only (Cloud stopped requesting `drive` /
+ * `drive.readonly` on 2026-10-15), which covers only documents Crewly
+ * created. On any other document Google answers 403 / 404; that case
+ * answers `file_not_accessible` with what to do instead. It never asks for
+ * a reconnect: reconnecting cannot add full Drive, so that prompt would
+ * loop. Grants made earlier with the full `drive` scope still work on every
+ * document, and their refusals pass through unchanged.
  *
  * @module services/google/docs-comments.service
  */
 
 import { GOOGLE_WORKSPACE_CONSTANTS } from '../../constants.js';
 import { GoogleWorkspaceError } from './google-workspace-token.service.js';
-import { buildGoogleUrl, dropCachedToken, googleRequest, type GoogleApiDeps } from './google-api.client.js';
-import { requireId } from './drive.service.js';
+import { buildGoogleUrl, googleRequest, type GoogleApiDeps } from './google-api.client.js';
+import { parseDriveRef, requireId } from './drive.service.js';
+
+/** Agent-facing text for comments on a document Crewly did not create. */
+export const COMMENTS_NOT_ACCESSIBLE_MESSAGE =
+  'Comments work only on documents Crewly created. Do not ask the owner to reconnect Google; that cannot add this access. Tell the owner which comment needs a reply so they can handle it in Google Docs, or offer to put the content in a new document Crewly creates (docs-read, then docs-write create) and comment there.';
 
 /** One reply under a comment. */
 export interface DocCommentReply {
@@ -92,11 +98,7 @@ interface WireCommentList {
  * @throws GoogleWorkspaceError(400, validation) when empty
  */
 export function docIdFrom(idOrUrl: string | undefined): string {
-  const raw = requireId(idOrUrl);
-  const path = raw.match(/\/d\/([A-Za-z0-9_-]+)/);
-  if (path) return path[1];
-  const query = raw.match(/[?&]id=([A-Za-z0-9_-]+)/);
-  return query ? query[1] : raw;
+  return parseDriveRef(idOrUrl).id;
 }
 
 function toReply(r: WireReply): DocCommentReply {
@@ -167,7 +169,7 @@ export class DocsCommentsService {
     let pageToken: string | undefined;
     let pages = 0;
     do {
-      const page = await googleRequest<WireCommentList>(
+      const page = await this.guard(() => googleRequest<WireCommentList>(
         this.deps,
         buildGoogleUrl(this.commentsUrl(docId), {
           fields: '*',
@@ -175,7 +177,7 @@ export class DocsCommentsService {
           includeDeleted: 'false',
           pageToken,
         }),
-      );
+      ));
       for (const c of page.comments ?? []) {
         if (c.deleted) continue;
         if (c.resolved && !options.includeResolved) continue;
@@ -199,7 +201,7 @@ export class DocsCommentsService {
     const docId = docIdFrom(idOrUrl);
     const cid = requireId(commentId);
     const content = requireText(text);
-    const reply = await this.write<WireReply>(docId, this.repliesUrl(docId, cid), { content });
+    const reply = await this.write<WireReply>(this.repliesUrl(docId, cid), { content });
     return { docId, commentId: cid, ...toReply(reply) };
   }
 
@@ -215,7 +217,7 @@ export class DocsCommentsService {
     const docId = docIdFrom(idOrUrl);
     const cid = requireId(commentId);
     const content = (text ?? '').replace(/\r\n/g, '\n').trim();
-    const reply = await this.write<WireReply>(docId, this.repliesUrl(docId, cid), {
+    const reply = await this.write<WireReply>(this.repliesUrl(docId, cid), {
       action: 'resolve',
       ...(content ? { content } : {}),
     });
@@ -236,7 +238,7 @@ export class DocsCommentsService {
     const docId = docIdFrom(idOrUrl);
     const content = requireText(text);
     const quoted = (quote ?? '').trim();
-    const comment = await this.write<WireComment>(docId, this.commentsUrl(docId), {
+    const comment = await this.write<WireComment>(this.commentsUrl(docId), {
       content,
       ...(quoted ? { quotedFileContent: { mimeType: 'text/plain', value: quoted } } : {}),
     });
@@ -252,49 +254,57 @@ export class DocsCommentsService {
   }
 
   /**
-   * POST a comment or reply, turning a scope refusal into `reauth_required`.
+   * POST a comment or reply; a refusal on a document Crewly did not create
+   * becomes `file_not_accessible` (see {@link guard}).
    *
-   * Google answers 403 (or 404, for `drive.file`) when the token may not
-   * write to this file. That only means "reconnect Drive" when the grant
-   * lacks the full `drive` scope *and* the document is readable — otherwise
-   * it is a real permission problem or a wrong id, and passes through.
-   *
-   * @param docId - Document id
    * @param url - Endpoint (without query)
    * @param body - JSON body
    * @returns Google's answer
    */
-  private async write<T>(docId: string, url: string, body: unknown): Promise<T> {
+  private async write<T>(url: string, body: unknown): Promise<T> {
+    return this.guard(() => googleRequest<T>(this.deps, buildGoogleUrl(url, { fields: '*' }), { method: 'POST', body }));
+  }
+
+  /**
+   * Run a comments call, turning Drive's refusal of a document outside the
+   * `drive.file` reach into `file_not_accessible`.
+   *
+   * Google answers 403 or 404 (and sometimes "insufficient scopes") when the
+   * token may not touch this file. Without the full `drive` scope that means
+   * Crewly did not create the document — a reconnect cannot fix it, so the
+   * error says what to do instead of asking for one. A grant that does hold
+   * `drive` (made before 2026-10-15), or whose scopes are unknown, sees
+   * Google's error unchanged: there a 403 / 404 is a real permission problem
+   * or a wrong id.
+   *
+   * @param run - The Google call
+   * @returns Its answer
+   * @throws GoogleWorkspaceError(403|404, file_not_accessible) on that refusal
+   */
+  private async guard<T>(run: () => Promise<T>): Promise<T> {
     try {
-      return await googleRequest<T>(this.deps, buildGoogleUrl(url, { fields: '*' }), { method: 'POST', body });
+      return await run();
     } catch (err) {
-      if (await this.isScopeRefusal(err, docId)) {
-        // The owner is about to widen the grant; the next call must not
-        // reuse the narrow token cached for the next hour.
-        dropCachedToken(this.deps.tokens, this.deps.account);
-        throw new GoogleWorkspaceError(
-          403,
-          GOOGLE_WORKSPACE_CONSTANTS.ERROR_CODES.REAUTH_REQUIRED,
-          'Replying to or adding comments on this document needs Google Drive edit access, which this Google account has not granted yet.',
-          { reason: 'insufficient_scope', product: 'drive', ...(this.deps.account ? { account: this.deps.account } : {}) },
-        );
+      if (this.isOutsideReach(err)) {
+        const status = (err as GoogleWorkspaceError).status;
+        throw new GoogleWorkspaceError(status, GOOGLE_WORKSPACE_CONSTANTS.ERROR_CODES.FILE_NOT_ACCESSIBLE, COMMENTS_NOT_ACCESSIBLE_MESSAGE);
       }
       throw err;
     }
   }
 
-  private async isScopeRefusal(err: unknown, docId: string): Promise<boolean> {
+  /**
+   * Whether a failure is a refusal a narrow (`drive.file`) grant gets on a
+   * document it did not create.
+   *
+   * @param err - The failure
+   * @returns True for 403 / 404 on a grant known to lack the full `drive` scope
+   */
+  private isOutsideReach(err: unknown): boolean {
     if (!(err instanceof GoogleWorkspaceError) || (err.status !== 403 && err.status !== 404)) return false;
-    // Google said outright that the token lacks a scope.
-    if (err.code === GOOGLE_WORKSPACE_CONSTANTS.ERROR_CODES.REAUTH_REQUIRED) return true;
-    if (err.code !== GOOGLE_WORKSPACE_CONSTANTS.ERROR_CODES.GOOGLE_ERROR) return false;
+    const CODES = GOOGLE_WORKSPACE_CONSTANTS.ERROR_CODES;
+    if (err.code !== CODES.GOOGLE_ERROR && err.code !== CODES.REAUTH_REQUIRED) return false;
     const scopes = this.deps.tokens.grantedScopes?.(this.deps.account ? { account: this.deps.account } : {});
-    if (!scopes || scopes.includes(GOOGLE_WORKSPACE_CONSTANTS.DRIVE_FULL_SCOPE)) return false;
-    try {
-      await googleRequest(this.deps, buildGoogleUrl(`${this.base}/files/${encodeURIComponent(docId)}`, { fields: 'id', supportsAllDrives: 'true' }));
-      return true;
-    } catch {
-      return false;
-    }
+    return scopes !== undefined && !scopes.includes(GOOGLE_WORKSPACE_CONSTANTS.DRIVE_FULL_SCOPE);
   }
 }

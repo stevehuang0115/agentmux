@@ -19,7 +19,7 @@ Usage:
   bash execute.sh '{"id":"<fileId>"}'
 
 Options:
-  --id          Drive file id (required; from drive-search)
+  --id          Drive file id or Docs / Sheets / Slides / Drive URL (required)
   --out         Save the content to this path instead of printing it (binary files are decoded)
   --account     Which connected Google account to act as (default: your primary)
   --help | -h   Show this help

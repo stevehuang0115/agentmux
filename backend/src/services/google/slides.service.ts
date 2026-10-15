@@ -1,8 +1,10 @@
 /**
  * SlidesService — Google Slides over the owner's Workspace grant.
  *
- * Reads any presentation the owner can see (`drive.readonly`) and builds
- * new decks from an outline (`drive.file`). Each outline slide becomes a
+ * Reads any presentation the owner can see through `presentations.readonly`
+ * (optional on new Drive grants; grants made before 2026-10-15 read through
+ * `drive.readonly` instead) and builds new decks from an outline
+ * (`drive.file`). Each outline slide becomes a
  * TITLE_AND_BODY slide with the title and bullet lines; the deck's default
  * first slide is removed so the outline is the whole deck.
  *

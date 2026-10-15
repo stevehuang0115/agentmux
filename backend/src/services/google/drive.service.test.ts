@@ -1,11 +1,13 @@
 /**
  * Tests for DriveService — query building, search/get request shapes,
- * export vs download vs binary reads, multipart upload.
+ * export vs download vs binary reads, native fallback outside `drive.file`
+ * reach, multipart upload.
  *
  * @module services/google/drive.service.test
  */
 
-import { DriveService, buildDriveQuery, escapeDriveQuery, isTextMime, requireId, toDriveFile } from './drive.service.js';
+import { DRIVE_NOT_ACCESSIBLE_MESSAGE, DriveService, buildDriveQuery, escapeDriveQuery, isTextMime, parseDriveRef, requireId, rowsToCsv, toDriveFile } from './drive.service.js';
+import { GoogleWorkspaceError } from './google-workspace-token.service.js';
 import type { GoogleApiDeps } from './google-api.client.js';
 
 const BASE = 'https://www.googleapis.com/drive/v3';
@@ -107,6 +109,110 @@ describe('readContent', () => {
     await expect(drive.readContent('big')).rejects.toMatchObject({ status: 413 });
     fetchMock.mockResolvedValueOnce(response(200, { id: 'f', name: 'Form', mimeType: 'application/vnd.google-apps.form' }));
     await expect(drive.readContent('f')).rejects.toMatchObject({ status: 400, code: 'validation' });
+  });
+});
+
+// 2026-10-15: new grants are `drive.file` only, so Drive answers 404 for a
+// file Crewly did not create; native files fall back to their own API.
+describe('readContent outside drive.file reach', () => {
+  const notFound = () => response(404, { error: { code: 404, message: 'File not found: X.' } });
+  let docs: { read: jest.Mock };
+  let sheets: { info: jest.Mock; read: jest.Mock };
+  let slides: { read: jest.Mock };
+  let native: DriveService;
+
+  beforeEach(() => {
+    docs = { read: jest.fn() };
+    sheets = { info: jest.fn(), read: jest.fn() };
+    slides = { read: jest.fn() };
+    native = new DriveService(
+      { tokens: { getAccessToken: jest.fn().mockResolvedValue('t'), clearCache: jest.fn() }, fetchImpl: fetchMock as unknown as typeof fetch },
+      { docs, sheets, slides },
+    );
+  });
+
+  it('reads a Sheets URL through the Sheets API as CSV, without probing the others', async () => {
+    fetchMock.mockResolvedValueOnce(notFound());
+    sheets.info.mockResolvedValue({ id: 'S1', title: 'Budget', sheets: [], webViewLink: 'https://docs.google.com/spreadsheets/d/S1/edit' });
+    sheets.read.mockResolvedValue({ spreadsheetId: 'S1', range: 'A1:Z1000', rows: [['name', 'note'], ['Ann', 'a, "b"']] });
+    const out = await native.readContent('https://docs.google.com/spreadsheets/d/S1/edit#gid=0');
+    expect(fetchMock.mock.calls[0][0]).toContain(`${BASE}/files/S1?`);
+    expect(out).toMatchObject({
+      file: { id: 'S1', name: 'Budget', mimeType: 'application/vnd.google-apps.spreadsheet' },
+      contentType: 'text/csv',
+      content: 'name,note\r\nAnn,"a, ""b"""',
+      encoding: 'utf8',
+    });
+    expect(docs.read).not.toHaveBeenCalled();
+  });
+
+  it('probes Docs, then Sheets, then Slides for a bare id', async () => {
+    fetchMock.mockResolvedValueOnce(notFound());
+    docs.read.mockRejectedValue(new Error('not a doc'));
+    sheets.info.mockRejectedValue(new Error('not a sheet'));
+    slides.read.mockResolvedValue({
+      id: 'P1',
+      title: 'Pitch',
+      slideCount: 2,
+      webViewLink: 'w',
+      slides: [{ index: 1, objectId: 'a', lines: ['Why', 'now'] }, { index: 2, objectId: 'b', lines: ['Plan'] }],
+    });
+    const out = await native.readContent('P1');
+    expect(out).toMatchObject({
+      file: { id: 'P1', name: 'Pitch', mimeType: 'application/vnd.google-apps.presentation' },
+      contentType: 'text/plain',
+      content: 'Why\nnow\n\nPlan',
+    });
+    expect(docs.read).toHaveBeenCalledWith('P1');
+  });
+
+  it("says what to do when no API can read it, keeping Drive's status", async () => {
+    fetchMock.mockResolvedValueOnce(notFound());
+    docs.read.mockRejectedValue(new Error('x'));
+    sheets.info.mockRejectedValue(new Error('x'));
+    slides.read.mockRejectedValue(new Error('x'));
+    await expect(native.readContent('PDF1')).rejects.toMatchObject({ status: 404, code: 'file_not_accessible', message: DRIVE_NOT_ACCESSIBLE_MESSAGE });
+    // No native readers wired: same message.
+    fetchMock.mockResolvedValueOnce(response(403, { error: { code: 403, message: 'forbidden' } }));
+    await expect(drive.readContent('PDF1')).rejects.toMatchObject({ status: 403, code: 'file_not_accessible' });
+  });
+
+  it("surfaces a known kind's own failure (e.g. a missing scope) rather than the generic message", async () => {
+    fetchMock.mockResolvedValueOnce(notFound());
+    docs.read.mockRejectedValue(new GoogleWorkspaceError(403, 'reauth_required', 'insufficient scopes'));
+    await expect(native.readContent('https://docs.google.com/document/d/D1/edit')).rejects.toMatchObject({ code: 'reauth_required' });
+  });
+
+  it('get falls back to native metadata the same way', async () => {
+    fetchMock.mockResolvedValueOnce(notFound());
+    docs.read.mockResolvedValue({ id: 'D1', title: 'Plan', text: 'x', webViewLink: 'https://docs.google.com/document/d/D1/edit' });
+    await expect(native.get('https://docs.google.com/document/d/D1/edit')).resolves.toEqual({
+      id: 'D1',
+      name: 'Plan',
+      mimeType: 'application/vnd.google-apps.document',
+      webViewLink: 'https://docs.google.com/document/d/D1/edit',
+    });
+  });
+
+  it('does not fall back on rate-limit failures', async () => {
+    fetchMock.mockResolvedValueOnce(response(429, { error: { code: 429, message: 'slow down' } }));
+    await expect(native.readContent('X')).rejects.toMatchObject({ status: 429, code: 'google_error' });
+    expect(docs.read).not.toHaveBeenCalled();
+  });
+});
+
+describe('parseDriveRef / rowsToCsv', () => {
+  it('extracts the id and the kind from typed URLs', () => {
+    expect(parseDriveRef('1AbC')).toEqual({ id: '1AbC' });
+    expect(parseDriveRef('https://docs.google.com/document/d/D-1/edit?tab=t.0')).toEqual({ id: 'D-1', kind: 'document' });
+    expect(parseDriveRef('https://docs.google.com/spreadsheets/d/S_1/edit')).toEqual({ id: 'S_1', kind: 'spreadsheet' });
+    expect(parseDriveRef('https://docs.google.com/presentation/d/P1/edit')).toEqual({ id: 'P1', kind: 'presentation' });
+    expect(parseDriveRef('https://drive.google.com/file/d/F1/view')).toEqual({ id: 'F1' });
+    expect(parseDriveRef('https://drive.google.com/open?id=Z9')).toEqual({ id: 'Z9' });
+  });
+
+  it('quotes CSV fields only when needed', () => {
+    expect(rowsToCsv([['a', 1, true], ['x\ny', '']])).toBe('a,1,true\r\n"x\ny",');
   });
 });
 

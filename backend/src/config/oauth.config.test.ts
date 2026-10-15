@@ -85,6 +85,13 @@ describe('oauth.config', () => {
         'https://www.googleapis.com/auth/photoslibrary.readonly',
       );
     });
+
+    // Crewly's own Drive scopes changed on 2026-10-15; theirs must not follow.
+    it('keeps its own Drive scopes, independent of Crewly\'s list', () => {
+      expect(GEMINI_CLI_GOOGLE_SCOPES).toContain('https://www.googleapis.com/auth/drive.readonly');
+      expect(GEMINI_CLI_GOOGLE_SCOPES).toContain('https://www.googleapis.com/auth/documents.readonly');
+      expect(GEMINI_CLI_GOOGLE_SCOPES).not.toContain('https://www.googleapis.com/auth/spreadsheets');
+    });
   });
 
   describe("Crewly's own scopes", () => {
@@ -94,13 +101,21 @@ describe('oauth.config', () => {
         'https://www.googleapis.com/auth/userinfo.email',
         'https://www.googleapis.com/auth/gmail.readonly',
         'https://www.googleapis.com/auth/gmail.send',
-        'https://www.googleapis.com/auth/drive.readonly',
         'https://www.googleapis.com/auth/drive.file',
-        'https://www.googleapis.com/auth/documents.readonly',
+        'https://www.googleapis.com/auth/documents',
+        'https://www.googleapis.com/auth/spreadsheets',
+        'https://www.googleapis.com/auth/presentations.readonly',
         'https://www.googleapis.com/auth/calendar.events',
       ]) {
         expect(CREWLY_GOOGLE_SCOPES).toContain(scope);
       }
+    });
+
+    // 2026-10-15: no CASA for Drive, so no restricted Drive scope is requested.
+    it('requests no restricted Drive scope', () => {
+      expect(CREWLY_GOOGLE_SCOPES).not.toContain('https://www.googleapis.com/auth/drive.readonly');
+      expect(CREWLY_GOOGLE_SCOPES).not.toContain('https://www.googleapis.com/auth/drive');
+      expect(CREWLY_GOOGLE_SCOPES).not.toContain('https://www.googleapis.com/auth/documents.readonly');
     });
 
     // Requesting a scope the consent screen does not declare fails the whole

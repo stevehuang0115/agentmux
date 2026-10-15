@@ -4823,8 +4823,14 @@ export const GOOGLE_OAUTH_CONSTANTS = {
  * Consent is per product so a user who wants Calendar is not asked for their
  * whole mailbox, and so an install that never touches mail or files stays out
  * of Google's *restricted* scope tier (which requires a CASA security
- * assessment to verify). `drive` covers Docs, Sheets and Slides — those APIs
- * read through `drive.readonly` and write through `drive.file`.
+ * assessment to verify). `drive` covers Docs, Sheets and Slides. Since
+ * 2026-10-15 (owner decision: no CASA for Drive) a new Drive grant carries
+ * only sensitive scopes: required `drive.file`, optional `documents`,
+ * `spreadsheets` and `presentations.readonly`. The Docs / Sheets / Slides
+ * APIs read any file the owner can see through those; the Drive API itself
+ * (search, metadata, export, download, comments) reaches only files Crewly
+ * created or the owner opened with Crewly. Older grants keep the
+ * `drive.readonly` / `drive` scopes they were given.
  */
 export const GOOGLE_PRODUCTS = ['gmail', 'calendar', 'drive'] as const;
 
@@ -4898,9 +4904,10 @@ export const GOOGLE_WORKSPACE_CONSTANTS = {
 		'application/vnd.google-apps.presentation': 'text/plain',
 	} as Record<string, string>,
 	/**
-	 * Full Drive scope. Needed to reply to, resolve or add comments on a
-	 * document Crewly did not create (`comments.create` / `replies.create`
-	 * accept only `drive` or `drive.file`). Optional on the Cloud grant.
+	 * Full Drive scope. Lets the Drive API (comments included) reach a file
+	 * Crewly did not create. Cloud no longer requests it (restricted scope,
+	 * no CASA for Drive since 2026-10-15), so only grants made before then
+	 * can carry it; never ask the owner to reconnect for it.
 	 */
 	DRIVE_FULL_SCOPE: 'https://www.googleapis.com/auth/drive',
 	/**
@@ -4971,6 +4978,12 @@ export const GOOGLE_WORKSPACE_CONSTANTS = {
 		VALIDATION: 'validation',
 		/** The grant lacks a scope this call needs; the owner must reconnect the product */
 		REAUTH_REQUIRED: 'reauth_required',
+		/**
+		 * The Drive API cannot reach this file under `drive.file` (Crewly did
+		 * not create it). Reconnecting does not help: Cloud no longer grants
+		 * full Drive. The agent uses a native reader or asks the owner.
+		 */
+		FILE_NOT_ACCESSIBLE: 'file_not_accessible',
 	},
 } as const;
 

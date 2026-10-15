@@ -43,7 +43,10 @@ describe('wording', () => {
     );
     expect(reauthCardMessage({ product: 'gmail', kind: 'expired' })).toBe('Gmail access expired — tap to reconnect.');
     expect(reauthCardMessage({ product: 'gmail', kind: 'not_connected' })).toContain('Gmail needs access');
-    expect(reauthCardMessage({ product: 'drive', kind: 'missing_scope' })).toContain('Google Drive needs re-authorization to comment on documents');
+    // Drive no longer names comments: Cloud cannot grant the full scope they needed.
+    expect(reauthCardMessage({ product: 'drive', kind: 'missing_scope' })).toBe(
+      'Google Drive needs re-authorization (missing permission). Tap to reconnect — takes 30 seconds on your phone.',
+    );
   });
 
   it('tells the agent what to retry', () => {
@@ -58,6 +61,16 @@ describe('isReconnected', () => {
     expect(isReconnected(statusWith(GMAIL), trigger)).toBe(false);
     expect(isReconnected(statusWith([...GMAIL, COMPOSE]), trigger)).toBe(true);
     expect(isReconnected(statusWith([...GMAIL, COMPOSE], ['gmail'], 'other@gmail.com'), trigger)).toBe(false);
+  });
+
+  // 2026-10-15: Cloud stopped granting full `drive`; waiting for it would never end.
+  it('never waits for the full Drive scope; Cloud reporting nothing missing is enough', () => {
+    const trigger = { product: 'drive' as const, kind: 'missing_scope' as const, account: 'owner@gmail.com' };
+    const driveFile = ['https://www.googleapis.com/auth/drive.file'];
+    expect(isReconnected(statusWith(driveFile, ['drive']), trigger)).toBe(true);
+    const missing = statusWith(driveFile, ['drive']);
+    (missing.connections[0] as { missingScopes?: string[] }).missingScopes = ['https://www.googleapis.com/auth/documents'];
+    expect(isReconnected(missing, trigger)).toBe(false);
   });
 
   it('needs the account back for the product after an expiry', () => {

@@ -1,11 +1,12 @@
 /**
  * DocsService — Google Docs over the owner's Workspace grant.
  *
- * Reads any document the owner can see (`documents.readonly` /
- * `drive.readonly`) and creates or appends to documents Crewly created
- * (`drive.file`). Appending to a document the owner made elsewhere needs
- * the `documents` scope, which the grant does not carry yet; Google then
- * answers 403 and the error says so.
+ * Reads and appends to any document the owner can see through the
+ * `documents` scope (optional on new Drive grants; grants made before
+ * 2026-10-15 read through `documents.readonly` / `drive.readonly` instead),
+ * and creates documents through `drive.file`. A grant without `documents`
+ * can still create and edit the documents Crewly created; anything else
+ * answers 403 with insufficient scopes and the owner is asked to reconnect.
  *
  * @module services/google/docs.service
  */
@@ -143,7 +144,7 @@ export class DocsService {
         throw new GoogleWorkspaceError(
           400,
           GOOGLE_WORKSPACE_CONSTANTS.ERROR_CODES.VALIDATION,
-          'This is an Office file (.docx) stored in Drive, not a Google Doc, so docs-read cannot open it. To read it: drive-read --id <id> --out <name>.docx, then read that file. To comment on it: docs-comment works on any Drive file (list / add / reply / resolve).',
+          'This is an Office file (.docx) stored in Drive, not a Google Doc, so docs-read cannot open it. To read it: drive-read --id <id> --out <name>.docx, then read that file. Note that drive-read reaches only files Crewly created or the owner opened with Crewly; for any other file, ask the owner to upload it.',
         );
       }
       throw err;

@@ -98,22 +98,26 @@ interface Pending {
 /**
  * The scope a `missing_scope` failure is about, per product — what a
  * reconnect must have added for the retry to work.
+ *
+ * Drive has no entry: it used to wait for the full `drive` scope (comments on
+ * the owner's documents), but Cloud no longer grants it (no CASA for Drive,
+ * 2026-10-15), so that card could never be satisfied. A Drive `missing_scope`
+ * (e.g. an older grant without `documents`) is judged by Cloud's own
+ * `missingScopes` instead, and comments on documents Crewly did not create
+ * fail as `file_not_accessible`, which never posts a card.
  */
 const EXTRA_SCOPE: Partial<Record<GoogleProduct, string>> = {
   gmail: GOOGLE_WORKSPACE_CONSTANTS.GMAIL_COMPOSE_SCOPE,
-  drive: GOOGLE_WORKSPACE_CONSTANTS.DRIVE_FULL_SCOPE,
 };
 
 /** What the missing scope lets the agent do, for the card. */
 const EXTRA_PURPOSE: Partial<Record<GoogleProduct, string>> = {
   gmail: 'save drafts',
-  drive: 'comment on documents',
 };
 
 /** What the agent retries once the scope is there. */
 const EXTRA_RETRY: Partial<Record<GoogleProduct, string>> = {
   gmail: 'your draft',
-  drive: 'your comment',
 };
 
 /**

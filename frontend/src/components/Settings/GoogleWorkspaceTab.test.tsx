@@ -78,7 +78,8 @@ describe('GoogleWorkspaceTab', () => {
     expect(screen.getByTestId('google-connect-calendar')).toBeInTheDocument();
     expect(screen.getByTestId('google-connect-drive')).toBeInTheDocument();
     // The tier that forces a Google security review is called out.
-    expect(screen.getAllByText('restricted')).toHaveLength(2);
+    // Only Gmail: Drive dropped its restricted scopes on 2026-10-15.
+    expect(screen.getAllByText('restricted')).toHaveLength(1);
   });
 
   it('requests only the product whose button was pressed', async () => {

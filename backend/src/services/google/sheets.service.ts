@@ -1,10 +1,12 @@
 /**
  * SheetsService — Google Sheets over the owner's Workspace grant.
  *
- * Reads any spreadsheet the owner can see (`drive.readonly`), creates new
- * spreadsheets and writes to the ones Crewly created (`drive.file`).
- * Writing to a spreadsheet made elsewhere needs the `spreadsheets` scope
- * the grant does not carry yet; Google answers 403 and the error says so.
+ * Reads and writes any spreadsheet the owner can see through the
+ * `spreadsheets` scope (optional on new Drive grants; grants made before
+ * 2026-10-15 read through `drive.readonly` instead), and creates
+ * spreadsheets through `drive.file`. A grant without `spreadsheets` still
+ * reaches the spreadsheets Crewly created; anything else answers 403 and
+ * the error says so.
  *
  * @module services/google/sheets.service
  */

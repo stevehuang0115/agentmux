@@ -95,8 +95,38 @@ export interface GoogleOAuthApp {
  * purpose — the Photos Library API is not enabled on the project, and it is a
  * restricted scope that would widen the eventual CASA assessment for a feature
  * nothing asks for yet.
+ *
+ * Drive matches what Crewly Cloud requests since 2026-10-15 (no CASA for
+ * Drive): `drive.file` plus `documents`, `spreadsheets` and
+ * `presentations.readonly`, all sensitive rather than restricted. The
+ * restricted `drive.readonly` and the narrower `documents.readonly` are no
+ * longer requested.
  */
 export const CREWLY_GOOGLE_SCOPES: readonly string[] = [
+  'openid',
+  'https://www.googleapis.com/auth/userinfo.email',
+  'https://www.googleapis.com/auth/userinfo.profile',
+  'https://www.googleapis.com/auth/gmail.readonly',
+  'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/drive.file',
+  'https://www.googleapis.com/auth/documents',
+  'https://www.googleapis.com/auth/spreadsheets',
+  'https://www.googleapis.com/auth/presentations.readonly',
+  'https://www.googleapis.com/auth/calendar.readonly',
+  'https://www.googleapis.com/auth/calendar.events',
+];
+
+/**
+ * Scopes the Gemini CLI Workspace extension's consent screen declares.
+ *
+ * Kept as-is, including `photoslibrary.readonly` and `drive.readonly`,
+ * because these grants were issued against their app: narrowing the list
+ * would silently drop an already-working capability for installs still on
+ * the fallback. Spelled out rather than derived from
+ * {@link CREWLY_GOOGLE_SCOPES} so a change to Crewly's own consent screen
+ * never changes what is asked of theirs.
+ */
+export const GEMINI_CLI_GOOGLE_SCOPES: readonly string[] = [
   'openid',
   'https://www.googleapis.com/auth/userinfo.email',
   'https://www.googleapis.com/auth/userinfo.profile',
@@ -107,17 +137,6 @@ export const CREWLY_GOOGLE_SCOPES: readonly string[] = [
   'https://www.googleapis.com/auth/documents.readonly',
   'https://www.googleapis.com/auth/calendar.readonly',
   'https://www.googleapis.com/auth/calendar.events',
-];
-
-/**
- * Scopes the Gemini CLI Workspace extension's consent screen declares.
- *
- * Kept as-is, including `photoslibrary.readonly`, because these grants were
- * issued against their app: narrowing the list would silently drop an
- * already-working capability for installs still on the fallback.
- */
-export const GEMINI_CLI_GOOGLE_SCOPES: readonly string[] = [
-  ...CREWLY_GOOGLE_SCOPES,
   'https://www.googleapis.com/auth/photoslibrary.readonly',
 ];
 

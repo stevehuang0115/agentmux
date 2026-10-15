@@ -49,6 +49,14 @@ bash execute.sh discard --batch C3
 `--doc` takes a document id or its docs.google.com URL. `--account` picks a
 connected Google account (see below).
 
+## Which documents
+
+Comments go through the Drive API, and the Drive grant is `drive.file`, so
+`list`, `reply`, `resolve` and `add` work only on **documents Crewly
+created** (with `docs-write create`, `drive-upload`, …). On any other
+document they fail with `reason: "file_not_accessible"`. Connections made
+before 2026-10-15 that hold full Drive access still work on every document.
+
 ## Working through feedback
 
 1. `list` the open comments. Each one has the text it is about (`quote`),
@@ -138,17 +146,14 @@ too, for example `--text "On 'grew 40%': is this Q2?"`.
 
 ## Failures
 
-`{"success":false,"reason":"reauth_required",…}` (exit 1): the Google grant
-can read comments but not write them on this document. Reply, resolve and add
-on a document Crewly did not create need Google Drive edit access, which
-older connections do not include. When the output has
-`"reconnectLinkSent":true`, the harness has already sent the owner a one-tap
-reconnect card in Slack: tell them in one line what you will do once it is
-granted, and retry when you get `[GOOGLE] Google Drive reconnected — retry your
-comment.` The card's link does not expire. If the owner says it did not work (or
-there is no `reconnectLinkSent`), run `google-connect --product drive --resend` for a
-fresh card, or give them https://crewlyai.com/portal/integrations/google?products=drive&auto=1
-to open directly. Never send them to Crewly settings or the Connections page.
+`{"success":false,"reason":"file_not_accessible",…}` (exit 1): Crewly did
+not create this document, so it cannot read or write its comments. **Do not
+ask the owner to reconnect Google** — reconnecting cannot grant this access,
+and the request would loop. Instead, tell the owner in one line which
+comments need an answer so they can handle them in Google Docs, or offer to
+copy the content into a new document Crewly creates (`docs-read`, then
+`docs-write create`) and work on that copy. There is no skill that copies
+the original document with its comments.
 
 `{"success":false,"reason":"not_connected","hint":"…"}` (exit 1): Google
 Drive is not connected. Use `google-connect --product drive` the same way.

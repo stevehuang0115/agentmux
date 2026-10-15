@@ -97,15 +97,20 @@ function buildDeps(account?: string): GoogleControllerDeps {
   // Each service names the product it needs, so a call made against a grant
   // that does not cover it fails with "connect Drive" rather than a Google 403.
   const bind = (product: GoogleProduct) => ({ tokens, product, ...(account ? { account } : {}) });
+  const docs = new DocsService(bind('drive'));
+  const sheets = new SheetsService(bind('drive'));
+  const slides = new SlidesService(bind('drive'));
   return {
     tokens,
     gmail: new GmailService(bind('gmail')),
     calendar: new CalendarService(bind('calendar')),
-    drive: new DriveService(bind('drive')),
-    docs: new DocsService(bind('drive')),
+    // A `drive.file` grant cannot open a Doc / Sheet / Slides deck Crewly did
+    // not create through Drive; the native APIs can, so drive-read falls back.
+    drive: new DriveService(bind('drive'), { docs, sheets, slides }),
+    docs,
     docComments: new DocsCommentsService(bind('drive')),
-    sheets: new SheetsService(bind('drive')),
-    slides: new SlidesService(bind('drive')),
+    sheets,
+    slides,
   };
 }
 
@@ -348,6 +353,10 @@ export async function sendGoogleError(req: Request, res: Response, err: unknown)
         break;
       case CODES.VALIDATION:
         hint = 'Fix the request and retry.';
+        break;
+      case CODES.FILE_NOT_ACCESSIBLE:
+        // Reconnecting cannot help: Cloud no longer grants full Drive.
+        hint = 'Do not ask the owner to reconnect Google; that cannot widen this access. Follow the message.';
         break;
       case CODES.REAUTH_REQUIRED: {
         // Owner-away: the only step is one tap on the Slack card.

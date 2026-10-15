@@ -24,6 +24,8 @@ class H(BaseHTTPRequestHandler):
             self.send_response(409); self.send_header('Content-Type', 'application/json'); self.end_headers()
             self.wfile.write(json.dumps({'success': False, 'error': 'not_connected', 'message': 'no grant', 'hint': 'https://cloud/start?token=j'}).encode()); return
         self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers()
+        if 'nothing' in self.path:
+            self.wfile.write(json.dumps({'success': True, 'data': {'count': 0, 'files': []}}).encode()); return
         self.wfile.write(json.dumps({'success': True, 'data': {'count': 1, 'files': [{'id': '1', 'name': 'Q3', 'mimeType': 'application/vnd.google-apps.document'}]}}).encode())
     def do_GET(self): self._reply('GET')
     def do_POST(self):
@@ -47,6 +49,9 @@ run '{"query":"x"}' >/dev/null
 check "json: path" "$(jq -r .path "$STUB_LOG")" "/api/google/drive/files?q=x"
 run >/dev/null
 check "no args: bare list" "$(jq -r .path "$STUB_LOG")" "/api/google/drive/files"
+OUT=$(run --query nothing)
+check "empty: count" "$(printf '%s' "$OUT" | jq -r .count)" "0"
+check "empty: note says ask for the link" "$(printf '%s' "$OUT" | jq -r '.note | test("ask the owner for its link")')" "true"
 OUT=$(run --query no-grant || true)
 check "not connected" "$(printf '%s' "$OUT" | jq -r .reason)" "not_connected"
 

@@ -7,7 +7,8 @@
  *
  * Two things shape it. Consent is **per product**: asking for Calendar must
  * not put "read all your mail" on the consent screen, and an install that
- * never touches mail or files stays out of Google's restricted scope tier.
+ * never touches mail stays out of Google's restricted scope tier (Drive
+ * requests only sensitive scopes since 2026-10-15).
  * And a Crewly account may connect **several Google accounts** — until
  * 2026-09-19 a second one silently overwrote the first.
  *
@@ -72,8 +73,8 @@ export const PRODUCT_META: { id: GoogleProduct; name: string; blurb: string; res
   {
     id: 'drive',
     name: 'Drive, Docs, Sheets & Slides',
-    blurb: 'Search and read your files, and create new ones',
-    restricted: true,
+    blurb: 'Read Docs, Sheets and Slides you link, and create new files',
+    restricted: false,
   },
 ];
 
@@ -86,6 +87,10 @@ const SCOPE_LABELS: Record<string, string> = {
   'https://www.googleapis.com/auth/drive.readonly': 'Read Drive, Docs, Sheets, Slides',
   'https://www.googleapis.com/auth/drive.file': 'Create files (Docs, Sheets, Slides, uploads)',
   'https://www.googleapis.com/auth/documents.readonly': 'Read Docs',
+  'https://www.googleapis.com/auth/documents': 'Read and edit Docs',
+  'https://www.googleapis.com/auth/spreadsheets': 'Read and edit Sheets',
+  'https://www.googleapis.com/auth/presentations.readonly': 'Read Slides',
+  'https://www.googleapis.com/auth/drive': 'Full Drive access',
 };
 
 /**

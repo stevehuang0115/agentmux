@@ -1,11 +1,14 @@
 /**
  * DriveService — Google Drive over the owner's Workspace grant.
  *
- * Works within the scopes the grant already carries: `drive.readonly`
- * (search, metadata, download / export of anything the owner can see) and
- * `drive.file` (upload; the created files are then editable by Crewly).
- * Google-native files (Docs / Sheets / Slides) are read through `export`
- * as text / CSV so an agent gets something it can reason about.
+ * New Drive grants carry `drive.file` only (no CASA for Drive, owner
+ * decision 2026-10-15), so the Drive API — search, metadata, export,
+ * download — reaches only files Crewly created or the owner opened with
+ * Crewly. Older grants may still hold `drive.readonly` / `drive` and reach
+ * everything. Google-native files (Docs / Sheets / Slides) are read through
+ * `export` as text / CSV; when Drive refuses one, `readContent` falls back to
+ * the Docs / Sheets / Slides API (`documents` / `spreadsheets` /
+ * `presentations.readonly`), which reads any file the owner can see.
  *
  * @module services/google/drive.service
  */
@@ -15,6 +18,49 @@ import { GOOGLE_WORKSPACE_CONSTANTS } from '../../constants.js';
 import { GoogleWorkspaceError } from './google-workspace-token.service.js';
 import { buildGoogleUrl, googleRequest, type GoogleApiDeps } from './google-api.client.js';
 import { clampMax } from './gmail.service.js';
+import type { DocText } from './docs.service.js';
+import type { SheetValues, SpreadsheetInfo } from './sheets.service.js';
+import type { PresentationText } from './slides.service.js';
+
+/** Google-native file kinds `readContent` can read without the Drive API. */
+export type NativeKind = 'document' | 'spreadsheet' | 'presentation';
+
+/** A file id, plus the native kind when the caller passed a typed URL. */
+export interface DriveRef {
+  id: string;
+  kind?: NativeKind;
+}
+
+/**
+ * Per-kind readers used when Drive refuses a Google-native file. Structural
+ * so this module need not import the services (they import `requireId` from it).
+ */
+export interface NativeReaders {
+  docs?: { read(id: string): Promise<DocText> };
+  sheets?: { info(id: string): Promise<SpreadsheetInfo>; read(id: string, range?: string): Promise<SheetValues> };
+  slides?: { read(id: string): Promise<PresentationText> };
+}
+
+/** Owner-facing text for a file the Drive API cannot reach under `drive.file`. */
+export const DRIVE_NOT_ACCESSIBLE_MESSAGE =
+  'Crewly can open only Drive files it created or that you opened with Crewly. For a Google Doc, Sheet or Slides link use docs-read / sheets-read / slides-read. For another file, ask the owner to upload it.';
+
+/** MIME type of each native kind. */
+const NATIVE_MIME: Record<NativeKind, string> = {
+  document: 'application/vnd.google-apps.document',
+  spreadsheet: 'application/vnd.google-apps.spreadsheet',
+  presentation: 'application/vnd.google-apps.presentation',
+};
+
+/** URL path segment that names each native kind (`docs.google.com/<segment>/d/<id>`). */
+const KIND_BY_PATH: Record<string, NativeKind> = {
+  document: 'document',
+  spreadsheets: 'spreadsheet',
+  presentation: 'presentation',
+};
+
+/** Order tried when the kind of a refused id is unknown. */
+const NATIVE_PROBE_ORDER: NativeKind[] = ['document', 'spreadsheet', 'presentation'];
 
 /** Drive file metadata (the fields Crewly asks for). */
 export interface DriveFile {
@@ -145,12 +191,15 @@ export class DriveService {
   private readonly deps: GoogleApiDeps;
   private readonly base = GOOGLE_WORKSPACE_CONSTANTS.DRIVE_API_BASE;
   private readonly uploadBase = GOOGLE_WORKSPACE_CONSTANTS.DRIVE_UPLOAD_BASE;
+  private readonly native: NativeReaders;
 
   /**
    * @param deps - Token provider and optional fetch override
+   * @param native - Docs / Sheets / Slides readers used when Drive refuses a native file
    */
-  constructor(deps: GoogleApiDeps) {
+  constructor(deps: GoogleApiDeps, native: NativeReaders = {}) {
     this.deps = deps;
+    this.native = native;
   }
 
   /**
@@ -177,32 +226,47 @@ export class DriveService {
   }
 
   /**
-   * `files.get` metadata.
+   * `files.get` metadata. When Drive refuses the file (outside `drive.file`
+   * reach) and it is a Google Doc / Sheet / Slides deck, the metadata comes
+   * from the matching native API instead.
    *
-   * @param id - File id
+   * @param idOrUrl - File id or a Docs / Sheets / Slides / Drive URL
    * @returns The file
-   * @throws GoogleWorkspaceError(400, validation) without an id; Google 404 passes through
+   * @throws GoogleWorkspaceError(400, validation) without an id;
+   *   (403|404, file_not_accessible) when no API can reach the file
    */
-  async get(id: string): Promise<DriveFile> {
-    const fileId = requireId(id);
-    const wire = await googleRequest<DriveWireFile>(
-      this.deps,
-      buildGoogleUrl(`${this.base}/files/${encodeURIComponent(fileId)}`, { fields: FILE_FIELDS, supportsAllDrives: 'true' }),
-    );
-    return toDriveFile(wire);
+  async get(idOrUrl: string): Promise<DriveFile> {
+    const ref = parseDriveRef(idOrUrl);
+    try {
+      return await this.fetchMeta(ref.id);
+    } catch (err) {
+      if (!isFileRefusal(err)) throw err;
+      return (await this.readNative(ref, (err as GoogleWorkspaceError).status)).file;
+    }
   }
 
   /**
    * File content: Google-native types are exported (Docs → text/plain,
    * Sheets → text/csv, Slides → text/plain); other files are downloaded and
-   * returned as UTF-8 when text-like, else base64.
+   * returned as UTF-8 when text-like, else base64. When Drive refuses the
+   * file, a Google Doc / Sheet / Slides deck is read through its own API
+   * (kind taken from the URL, else probed); anything else fails with a
+   * message that says what to do.
    *
-   * @param id - File id
+   * @param idOrUrl - File id or a Docs / Sheets / Slides / Drive URL
    * @returns Content with its type and encoding
-   * @throws GoogleWorkspaceError(413, validation) when the file exceeds DRIVE_MAX_CONTENT_BYTES
+   * @throws GoogleWorkspaceError(413, validation) when the file exceeds DRIVE_MAX_CONTENT_BYTES;
+   *   (403|404, file_not_accessible) when no API can reach the file
    */
-  async readContent(id: string): Promise<DriveContent> {
-    const file = await this.get(id);
+  async readContent(idOrUrl: string): Promise<DriveContent> {
+    const ref = parseDriveRef(idOrUrl);
+    let file: DriveFile;
+    try {
+      file = await this.fetchMeta(ref.id);
+    } catch (err) {
+      if (!isFileRefusal(err)) throw err;
+      return this.readNative(ref, (err as GoogleWorkspaceError).status);
+    }
     const exportMime = GOOGLE_WORKSPACE_CONSTANTS.DRIVE_EXPORT_MIME[file.mimeType];
     if (exportMime) {
       const text = await googleRequest<string>(
@@ -231,6 +295,70 @@ export class DriveService {
       return { file, contentType: file.mimeType, content: text, encoding: 'utf8', bytes: buf.length };
     }
     return { file, contentType: file.mimeType, content: buf.toString('base64'), encoding: 'base64', bytes: buf.length };
+  }
+
+  /**
+   * Raw `files.get`; Google's 403/404 passes through.
+   *
+   * @param fileId - Bare file id
+   * @returns The file
+   */
+  private async fetchMeta(fileId: string): Promise<DriveFile> {
+    const wire = await googleRequest<DriveWireFile>(
+      this.deps,
+      buildGoogleUrl(`${this.base}/files/${encodeURIComponent(fileId)}`, { fields: FILE_FIELDS, supportsAllDrives: 'true' }),
+    );
+    return toDriveFile(wire);
+  }
+
+  /**
+   * Read a file Drive refused through the Docs / Sheets / Slides API. With
+   * a known kind only that API is asked and its failures (other than a
+   * refusal) surface; with no kind each API is tried in turn.
+   *
+   * @param ref - Id and optional kind
+   * @param status - Drive's refusal status, reused for the final error
+   * @returns The content, shaped like a Drive export
+   * @throws GoogleWorkspaceError(status, file_not_accessible) when no API reads it
+   */
+  private async readNative(ref: DriveRef, status: number): Promise<DriveContent> {
+    const kinds = ref.kind ? [ref.kind] : NATIVE_PROBE_ORDER;
+    for (const kind of kinds) {
+      try {
+        const content = await this.readNativeKind(kind, ref.id);
+        if (content) return content;
+      } catch (err) {
+        // A wrong-kind probe answers 400/403/404; a known kind's real error
+        // (missing scope, rate limit) is worth more than the generic message.
+        if (ref.kind && !isFileRefusal(err)) throw err;
+      }
+    }
+    throw notAccessible(status);
+  }
+
+  /**
+   * One native read, or null when no reader is wired for the kind.
+   *
+   * @param kind - Native kind
+   * @param id - File id
+   * @returns The content, or null
+   */
+  private async readNativeKind(kind: NativeKind, id: string): Promise<DriveContent | null> {
+    const mimeType = NATIVE_MIME[kind];
+    if (kind === 'document' && this.native.docs) {
+      const doc = await this.native.docs.read(id);
+      return nativeContent({ id: doc.id || id, name: doc.title, mimeType, webViewLink: doc.webViewLink }, 'text/plain', doc.text);
+    }
+    if (kind === 'spreadsheet' && this.native.sheets) {
+      const info = await this.native.sheets.info(id);
+      const values = await this.native.sheets.read(id);
+      return nativeContent({ id: info.id || id, name: info.title, mimeType, webViewLink: info.webViewLink }, 'text/csv', rowsToCsv(values.rows));
+    }
+    if (kind === 'presentation' && this.native.slides) {
+      const deck = await this.native.slides.read(id);
+      return nativeContent({ id: deck.id || id, name: deck.title, mimeType, webViewLink: deck.webViewLink }, 'text/plain', presentationToText(deck));
+    }
+    return null;
   }
 
   /**
@@ -284,4 +412,89 @@ export function requireId(id: string | undefined): string {
   const value = (id ?? '').trim();
   if (!value) throw new GoogleWorkspaceError(400, GOOGLE_WORKSPACE_CONSTANTS.ERROR_CODES.VALIDATION, '"id" is required');
   return value;
+}
+
+/**
+ * Accept a file id or any Docs / Sheets / Slides / Drive URL that contains one.
+ *
+ * @param idOrUrl - `1AbC…`, `https://docs.google.com/spreadsheets/d/1AbC…/edit`,
+ *   `https://drive.google.com/file/d/1AbC…/view`, or `…?id=1AbC…`
+ * @returns The bare id, and the native kind when the URL names one
+ * @throws GoogleWorkspaceError(400, validation) when empty
+ */
+export function parseDriveRef(idOrUrl: string | undefined): DriveRef {
+  const raw = requireId(idOrUrl);
+  const path = raw.match(/(?:\/([a-z]+))?\/d\/([A-Za-z0-9_-]+)/);
+  if (path) {
+    const kind = path[1] ? KIND_BY_PATH[path[1]] : undefined;
+    return { id: path[2], ...(kind ? { kind } : {}) };
+  }
+  const query = raw.match(/[?&]id=([A-Za-z0-9_-]+)/);
+  return { id: query ? query[1] : raw };
+}
+
+/**
+ * Whether a failure is Drive refusing a file outside the `drive.file` reach
+ * (404 "File not found" or 403), as opposed to a scope or auth problem.
+ *
+ * @param err - The failure
+ * @returns True for a Google 403/404 `google_error`
+ */
+export function isFileRefusal(err: unknown): boolean {
+  return err instanceof GoogleWorkspaceError
+    && err.code === GOOGLE_WORKSPACE_CONSTANTS.ERROR_CODES.GOOGLE_ERROR
+    && (err.status === 403 || err.status === 404);
+}
+
+/**
+ * Quote one CSV field (RFC 4180).
+ *
+ * @param cell - Cell value
+ * @returns The field
+ */
+function csvField(cell: unknown): string {
+  const text = cell === null || cell === undefined ? '' : String(cell);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+/**
+ * Rows to CSV text, matching what Drive's `text/csv` export returns.
+ *
+ * @param rows - Cell rows (may be ragged)
+ * @returns CSV, one line per row
+ */
+export function rowsToCsv(rows: unknown[][]): string {
+  return rows.map((row) => row.map(csvField).join(',')).join('\r\n');
+}
+
+/**
+ * Plain text of a presentation, one block per slide.
+ *
+ * @param deck - The flattened presentation
+ * @returns Text
+ */
+function presentationToText(deck: PresentationText): string {
+  return deck.slides.map((slide) => slide.lines.join('\n')).filter(Boolean).join('\n\n');
+}
+
+/**
+ * The error for a file Drive will not hand over.
+ *
+ * @param status - Google's status (403 / 404)
+ * @returns The error
+ */
+function notAccessible(status: number): GoogleWorkspaceError {
+  return new GoogleWorkspaceError(status, GOOGLE_WORKSPACE_CONSTANTS.ERROR_CODES.FILE_NOT_ACCESSIBLE, DRIVE_NOT_ACCESSIBLE_MESSAGE);
+}
+
+/**
+ * Wrap native-API text as {@link DriveContent}.
+ *
+ * @param file - Metadata built from the native API
+ * @param contentType - `text/plain` or `text/csv`
+ * @param text - The content
+ * @returns The content
+ */
+function nativeContent(file: DriveFile, contentType: string, text: string): DriveContent {
+  return { file, contentType, content: text, encoding: 'utf8', bytes: Buffer.byteLength(text, 'utf8') };
 }

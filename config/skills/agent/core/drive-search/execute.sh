@@ -89,4 +89,7 @@ QS=""
 QS="${QS#&}"
 RESPONSE=$(call GET "/google/drive/files${QS:+?$QS}") || { printf '%s\n' "$RESPONSE"; exit 1; }
 if printf '%s' "$RESPONSE" | jq -e '.truncated == true' >/dev/null 2>&1; then printf '%s\n' "$RESPONSE"; exit 0; fi
-printf '%s' "$RESPONSE" | jq -c '{count: .data.count, files: .data.files}'
+# Search reaches only files Crewly created or the owner opened with Crewly
+# (`drive.file`), so an empty result does not mean the file does not exist.
+EMPTY_NOTE="Drive search covers only files Crewly created or the owner opened with Crewly. If the file exists elsewhere in their Drive, ask the owner for its link and read it with docs-read / sheets-read / slides-read (Google Docs, Sheets, Slides) or ask them to upload it."
+printf '%s' "$RESPONSE" | jq -c --arg note "$EMPTY_NOTE" '{count: .data.count, files: .data.files} + (if (.data.count // 0) == 0 then {note: $note} else {} end)'

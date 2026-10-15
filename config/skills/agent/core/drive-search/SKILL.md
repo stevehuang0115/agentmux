@@ -1,6 +1,6 @@
 ---
 name: Drive Search
-description: Search the owner's Google Drive by text, type or folder (via the Google Workspace grant held by Crewly Cloud). Returns file ids to pass to drive-read / docs-read / sheets-read / slides-read. Read-only.
+description: Search the Google Drive files Crewly created or the owner opened with Crewly, by text, type or folder (via the Google Workspace grant held by Crewly Cloud). Not the owner's whole Drive. Returns file ids to pass to drive-read / docs-read / sheets-read / slides-read. Read-only.
 version: 1.0.0
 category: productivity
 skillType: claude-skill
@@ -38,14 +38,25 @@ bash execute.sh --folder 1AbC... --query budget   # inside one folder
 `…spreadsheet` → `sheets-read`, `…presentation` → `slides-read`, anything
 else → `drive-read`.
 
+## What search covers
+
+Search finds only files Crewly created or the owner opened with Crewly
+(the Drive grant is `drive.file`). It does not see the rest of the owner's
+Drive, so an empty result does not mean the file does not exist; the
+output then carries a `note`. For any other file, ask the owner for its
+link: a Google Doc, Sheet or Slides link opens with `docs-read` /
+`sheets-read` / `slides-read`; for another kind of file, ask them to upload it.
+
+```json
+{"count":0,"files":[],"note":"Drive search covers only files Crewly created or the owner opened with Crewly. …"}
+```
+
 ## Failures
 
 `{"success":false,"reason":"not_connected","hint":"<connect URL>"}` (exit 1)
 when the owner has not connected Google Workspace. Run the `google-connect` skill
 to post the owner a one-tap card in Slack (never send them to Crewly settings or
 the Connections page — they are usually on a phone). Manual fallback: https://crewlyai.com/portal/integrations/google.
-A `403` with `reason: "google_error"` on a write means the file was not
-created by Crewly — the grant only edits files Crewly made (`drive.file`).
 
 ## Choosing a Google account
 

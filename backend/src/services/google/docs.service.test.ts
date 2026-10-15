@@ -58,7 +58,8 @@ describe('read', () => {
     const err = await docs.read('docx1').catch((e: unknown) => e);
     expect(err).toMatchObject({ status: 400, code: 'validation' });
     expect((err as Error).message).toMatch(/drive-read --id <id> --out/);
-    expect((err as Error).message).toMatch(/docs-comment/);
+    // drive.file reaches only Crewly's own files; the message must say to ask for an upload.
+    expect((err as Error).message).toMatch(/ask the owner to upload it/);
   });
 
   it('passes other failures through unchanged', async () => {

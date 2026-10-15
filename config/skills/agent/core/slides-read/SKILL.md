@@ -47,8 +47,15 @@ bash execute.sh --id 1AbC…
 when the owner has not connected Google Workspace. Run the `google-connect` skill
 to post the owner a one-tap card in Slack (never send them to Crewly settings or
 the Connections page — they are usually on a phone). Manual fallback: https://crewlyai.com/portal/integrations/google.
-A `403` with `reason: "google_error"` on a write means the file was not
-created by Crewly — the grant only edits files Crewly made (`drive.file`).
+
+## What it can read
+
+This reads through the Slides API (`presentations.readonly` scope), so it opens any
+Google Slides deck the owner can see, by id or link, including ones `drive-search`
+cannot find (search covers only files Crewly created or was given). When
+you cannot find a file, ask the owner for its link. A `403` with
+`reason: "reauth_required"` means this Google connection predates that
+scope; the harness posts the owner a reconnect card.
 
 ## Choosing a Google account
 
