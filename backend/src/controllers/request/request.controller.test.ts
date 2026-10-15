@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, jest, beforeEach } from '@jest/globals';
-import { listRequests, getRequest, createRequestHandler, planRequest, updateRequest } from './request.controller.js';
+import { listRequests, getRequest, createRequestHandler, planRequest, updateRequest, getRequestWhereabouts } from './request.controller.js';
 
 // Mock RequestService
 const mockRequests = new Map<string, unknown>();
@@ -40,6 +40,15 @@ jest.mock('../../services/v3/request.service.js', () => ({
       plan: mockPlan,
     }),
   },
+}));
+
+const mockPoolItems: unknown[] = [];
+jest.mock('../../services/task-pool/task-pool.service.js', () => ({
+  TaskPoolService: { getInstance: () => ({ getAllItems: async () => mockPoolItems }) },
+}));
+const mockAsks: unknown[] = [];
+jest.mock('../../services/messaging/agent-ask-ledger.service.js', () => ({
+  getAgentAskLedger: () => ({ openAsks: () => mockAsks }),
 }));
 
 /**
@@ -247,5 +256,32 @@ describe('Request Controller', () => {
 
       expect(res.status).toHaveBeenCalledWith(404);
     });
+  });
+});
+
+describe('getRequestWhereabouts', () => {
+  beforeEach(() => {
+    mockRequests.clear();
+    mockPoolItems.length = 0;
+    mockAsks.length = 0;
+    mockRequests.set('req-w', { id: 'req-w', title: 'Video', status: 'running', ticketNumber: 12, workItemIds: [], createdAt: '2026-10-14T13:00:00Z', updatedAt: '2026-10-14T13:00:00Z' });
+  });
+
+  it('returns the holders, by id or by ticket number', async () => {
+    mockPoolItems.push({ id: 'wi-1', type: 'delegate', status: 'running', title: 'Make it', requestId: 'req-w', target: 'dex', createdAt: '2026-10-14T13:05:00Z', metadata: {} });
+    mockAsks.push({ sender: 'dex', target: 'sam', excerpt: 'render it', deliveredAt: Date.parse('2026-10-14T13:10:00Z') });
+    for (const id of ['req-w', 'TKT-12', '12']) {
+      const res = mockRes();
+      await getRequestWhereabouts(mockReq({ params: { id } }) as never, res as never);
+      const body = res._lastJson as { success: boolean; data: { holders: Array<{ session: string; state: string }> } };
+      expect(body.success).toBe(true);
+      expect(body.data.holders.map((h) => `${h.session}:${h.state}`)).toEqual(['dex:waiting_on_agent', 'sam:working']);
+    }
+  });
+
+  it('404 for an unknown request', async () => {
+    const res = mockRes();
+    await getRequestWhereabouts(mockReq({ params: { id: 'TKT-99' } }) as never, res as never);
+    expect(res.status).toHaveBeenCalledWith(404);
   });
 });

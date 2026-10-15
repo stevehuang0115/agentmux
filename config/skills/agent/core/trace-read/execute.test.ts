@@ -48,6 +48,17 @@ describe('trace-read skill', () => {
 				const text = `Trace ${TRACE} · request · Fix it\n${'Key event line with → arrows and · dots\n'.repeat(Math.ceil(summaryChars / 40))}`.slice(0, summaryChars);
 				return send(200, { success: true, data: { traceId: TRACE, text, links: { ui: `/tickets/traces/${TRACE}`, api: `/api/traces/${TRACE}/timeline` }, metrics: { traceId: TRACE } } });
 			}
+			if (url.pathname === '/api/requests/TKT-12/whereabouts') {
+				return send(200, { success: true, data: {
+					requestId: 'req-1', ticketNumber: 12, title: 'Replicate the video', status: 'running', finished: false,
+					summary: 'dex (working on "Dex, replicate it", from pia) for 3h 32m.',
+					holders: [
+						{ session: 'pia', state: 'waiting_on_agent', since: '2026-10-14T13:46:00.000Z', forMs: 4.2 * 3_600_000, what: 'Pia, you take this', from: 'ella' },
+						{ session: 'dex', state: 'working', since: '2026-10-14T14:28:00.000Z', forMs: 212 * 60_000, what: 'Dex, replicate it', from: 'pia' },
+					],
+				} });
+			}
+			if (url.pathname.startsWith('/api/requests/')) return send(404, { success: false, error: 'Request not found' });
 			if (url.pathname === '/api/traces') {
 				const row = (i: number) => ({
 					traceId: `tr-20261003-0000000${i}`,
@@ -80,6 +91,21 @@ describe('trace-read skill', () => {
 				resolve({ code, stdout, stderr });
 			});
 		});
+
+	it('--where shows who holds a request now', async () => {
+		const r = await run('--where', 'TKT-12');
+		expect(r.code).toBe(0);
+		expect(seen.map((s) => s.url)).toEqual(['/api/requests/TKT-12/whereabouts']);
+		expect(r.stdout).toContain('TKT-12 · Replicate the video · running');
+		expect(r.stdout).toContain('- dex: working for 3h 32m (since 2026-10-14 14:28) · from pia');
+		expect(r.stdout).toContain('- pia: waiting on agent for 4h 12m');
+	});
+
+	it('--where fails clearly for an unknown request', async () => {
+		const r = await run('--where', 'TKT-99');
+		expect(r.code).not.toBe(0);
+		expect(r.stdout + r.stderr).toContain('No owner request TKT-99');
+	});
 
 	it('reads one run by trace id with the size bound and stall threshold', async () => {
 		const r = await run('--trace', TRACE, '--max-chars', '2000', '--stall-minutes', '45');

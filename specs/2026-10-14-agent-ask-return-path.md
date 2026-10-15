@@ -42,3 +42,30 @@ No model call; one transcript tail read per returned ask.
 ## Not covered
 
 A per-request "where is it now" view for the owner (proposed, separate work).
+
+## Where a request is now (fix 3)
+
+`GET /api/requests/:id/whereabouts` (id or `TKT-n`) answers "who has it,
+doing what, since when" without reading transcripts. Built by
+`computeWhereabouts` (`services/v3/request-whereabouts.service.ts`) from:
+
+- the request's open WorkItems (by `requestId` or `workItemIds`): the
+  `target` while running / queued / blocked, the reviewer once the worker is
+  `done_by_worker` (review items are folded into the item they review);
+  `since` = `statusChangedAt ?? startedAt ?? createdAt`;
+- with no open WorkItem: `assignee` / `ownerAgent` (`handling`), or the
+  owner when the request is `waiting_confirmation` / `awaiting_followup`;
+- open asks from this ledger (`openAsks()`): a holder that asked another
+  agent after it took the work is `waiting_on_agent` and the asked agent
+  holds it, followed up to 4 hops.
+
+Returns `{requestId, ticketNumber?, title, status, finished, finishedAt?,
+holders: [{session, state, since, forMs, workItemId?, what?, from?,
+blockedReason?}], summary}`, holders longest-held first.
+
+Surfaces: `trace-read --where TKT-12` (agents answering "how is X going"),
+and a "Now:" line on the request detail page.
+
+Limits: an ask carries no request id, so a holder's asks are attributed to
+the request by time (sent after the holder took the work). An agent holding
+two requests at once can show the same ask under both.
