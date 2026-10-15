@@ -71,6 +71,7 @@ import { createDriveLogsRouter } from '../controllers/drive-logs/drive-logs.cont
 import { createBriefingRouter } from '../controllers/briefing/briefing.controller.js';
 import { createCanvaRouter } from '../controllers/canva/canva.routes.js';
 import { createAppsRouter } from '../controllers/apps/apps.routes.js';
+import { createExternalRouter } from '../controllers/external/external.routes.js';
 import { createMicrosoftTodoRouter } from '../controllers/microsoft/microsoft-todo.routes.js';
 import { createConnectorRouter } from '../controllers/connector/connector.routes.js';
 import { createAgentSelfImprovementRouter } from '../controllers/agent-self-improvement/agent-self-improvement.controller.js';
@@ -312,6 +313,10 @@ export function createApiRoutes(apiController: ApiController): Router {
   // Crewly Apps: agents publish small web apps to apps.crewlyai.com and read/write
   // their data through this instance's Cloud login. Backs publish-app / app-data.
   router.use('/apps', createAppsRouter());
+
+  // Embedded panels (portal side panels): replies to external askers through the
+  // guard, host API calls as the asker, embed attachment. Backs reply-external / host-api.
+  router.use('/external', createExternalRouter());
 
   // Microsoft To Do on the owner's account — Cloud holds the `microsoft` grant. Backs the todo-* skills.
   router.use('/microsoft-todo', createMicrosoftTodoRouter());

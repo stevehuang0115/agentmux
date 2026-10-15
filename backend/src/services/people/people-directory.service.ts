@@ -25,7 +25,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { PEOPLE_CONSTANTS } from '../../constants.js';
+import { PEOPLE_CONSTANTS, EXTERNAL_CONSTANTS } from '../../constants.js';
 import { getCrewlyHomePath } from '../core/crewly-home.utils.js';
 
 /** A person's role on this instance. */
@@ -234,6 +234,8 @@ export class PeopleDirectoryService {
 	 * @returns Role
 	 */
 	roleOf(id: string): PersonRole {
+		// An external asker (embedded panel) is a guest, whatever the host says.
+		if (id.startsWith(EXTERNAL_CONSTANTS.PERSON_PREFIX)) return 'guest';
 		if (this.isOwner(id)) return 'owner';
 		const found = this.read().people.find((p) => p.id === id);
 		if (!found) return PEOPLE_CONSTANTS.DEFAULT_ROLE as PersonRole;
