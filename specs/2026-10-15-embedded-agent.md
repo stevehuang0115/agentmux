@@ -468,6 +468,11 @@ Services deploys wait for the owner's 「上线」.
 
 ## P1a: the first cut (2026-10-15 night), and the contracts between repos
 
+**Order (owner, 2026-10-15):** finish and ship the Crewly side first (Cloud,
+instance, and an SDK package). The SteamFun portal integrates afterwards by
+installing the SDK; its section below is the contract the SDK implements for
+it.
+
 The goal is a working side panel in the SteamFun portal. At first it is shown
 only to admins; teachers and assistants follow with one config switch after
 the owner has tried it. Parents are never in P1.
@@ -623,3 +628,49 @@ Every call is logged in the portal's audit with the user and the
   conversation from Cloud and calls `hostApiBase` + path. The agent can only
   act for the asker of a conversation it was given.
 - **"Portals" group** in team chat: read-only.
+
+### SDK: `@crewly/embed` (OSS, npm)
+
+Path: `crewly/packages/embed`. One package that a host installs to get the
+whole host side: the identity token, the panel, and the ops interface (#1325).
+Framework-agnostic core built on Web `Request`/`Response` (works as-is in
+Next.js route handlers), plus an Express adapter.
+
+**Server** (`@crewly/embed/server`):
+
+- `signIdentityToken({ embedId, secret, user: { id, name?, email?, roles } })`
+  returns the host JWT from the Cloud section above: HS256, 10 min.
+- `verifyHostToken(token, { embedId, secret })` returns
+  `{ sub, scope }` or throws. It is strict: HS256 only, `aud`, `exp`,
+  `scope: 'self'`.
+- `defineOpsTool({ name, method, path, risk: 'read' | 'write' | 'irreversible', description, params, handler })`.
+  `handler` gets `({ user, params, body })`, and `user` comes from the host's
+  own `resolveUser(sub)`.
+- `createOpsHandler({ embedId, secret, resolveUser, tools, audit?, limits? })`
+  returns `(req: Request) => Promise<Response>`. It:
+  - verifies the host token;
+  - resolves the user, and refuses with 403 when `resolveUser` returns null;
+  - routes to the tool and validates its params;
+  - applies per-user limits (default: 5 writes per user a day);
+  - calls `audit({ user, tool, outcome })`.
+
+  `GET <base>/` returns the **manifest**: name, method, path, risk,
+  description and params for each tool. The agent's `host-api` skill reads it,
+  so a host's tools are discovered rather than hard-coded in Crewly.
+- `toExpress(handler)` adapts it to Express.
+
+**Client** (`@crewly/embed/client`, `@crewly/embed/react`):
+
+- `loadCrewlyEmbed({ embedId, tokenUrl, context? })` injects `embed.js` and
+  calls `identify` with a fetch of `tokenUrl`. It renders nothing when that
+  returns 204.
+- `<CrewlyEmbed embedId tokenUrl context? />` is a React wrapper.
+
+**SteamFun with the SDK** (the integration step, after Crewly ships):
+
+- `app/api/crewly/token/route.ts` calls `signIdentityToken` for allowed
+  roles (never `parent`).
+- `app/api/crewly/ops/[...path]/route.ts` calls `createOpsHandler`, with the
+  five tools above implemented on the portal's own permission-checked
+  functions.
+- `<CrewlyEmbed>` goes in the signed-in layout.
