@@ -465,3 +465,161 @@ Services deploys wait for the owner's 「上线」.
   - Email, WhatsApp and CRM inbound (e.g. Salesforce) on the same layer.
   - The portal's API as an acting-for connector.
   - Push to the host when a request moves.
+
+## P1a: the first cut (2026-10-15 night), and the contracts between repos
+
+The goal is a working side panel in the SteamFun portal. At first it is shown
+only to admins; teachers and assistants follow with one config switch after
+the owner has tried it. Parents are never in P1.
+
+What this cut changes from the sections above:
+
+- **Hosting.** No new DNS. The panel and its APIs are served by the apps
+  service on `apps.crewlyai.com`: `/embed/v1/embed.js`, `/e/<embedId>` and
+  `/_embed/v1/*`. The account APIs live under
+  `https://api.crewlyai.com/api/apps/v1/embeds`.
+- **Delivery.** No relay change. The instance long-polls Cloud for pending
+  messages per embed. This is the same shape as `AppWakeService` polling app
+  change feeds.
+- **Dashboard.** Deferred. The owner creates and edits the embed through the
+  account API; a small `crewly embed` CLI wraps it.
+- **Front agent.** Avery (SteamFun Portal Team, operations) on the
+  steamfun-ops instance.
+- **Host data.** The portal exposes a small read-and-file API, scoped to the
+  asker. This is the first slice of #1325.
+
+### Cloud (apps service)
+
+Embed document (Mongo `embeds`):
+
+```
+{ embedId, accountId, name, allowedOrigins[], identitySecretEnc, prevSecretEnc?, prevSecretUntil?,
+  frontAgent, rolePrompt, hostApiBase, profiles[{ id, name, roles[], sharePolicy, replyMode }],
+  retentionDays, enabled, createdAt, updatedAt }
+```
+
+**Account API** (crewly-auth user JWT, `plan` must be Pro):
+
+| Method | Path | Notes |
+|---|---|---|
+| `POST` | `/api/apps/v1/embeds` | Body `{ name, allowedOrigins, frontAgent, rolePrompt, hostApiBase, profiles }`. Returns the embed plus `identitySecret`, shown once |
+| `GET` | `/api/apps/v1/embeds` | The account's embeds, without secrets |
+| `GET` | `/api/apps/v1/embeds/:embedId` | One embed, without secrets |
+| `PATCH` | `/api/apps/v1/embeds/:embedId` | Any field except the id and secret |
+| `POST` | `/api/apps/v1/embeds/:embedId/rotate-secret` | Returns the new secret. The old one keeps working for 24h |
+
+**Panel API** (no cookies; the session token travels in the `Authorization`
+header):
+
+| Method | Path | Notes |
+|---|---|---|
+| `POST` | `/_embed/v1/session` | Body `{ embedId, token }`, where `token` is the host JWT. Returns `{ session, asker: { name }, profile: { id, name } }` |
+| `POST` | `/_embed/v1/messages` | Body `{ text, clientMessageId, context? }` (text ≤ 4,000 chars, context ≤ 2 KB JSON). Returns `{ message }` |
+| `GET` | `/_embed/v1/messages?since=<seq>&wait=<s≤25>` | Returns `{ messages[{ seq, id, from: 'asker'\|'agent', text, at }], typing }` |
+
+The host JWT is HS256 with the embed secret:
+
+- `aud` must equal `embedId`; `exp - iat` must be at most 600 s.
+- `sub` and `roles` are required; `name` and `email` are optional.
+- The algorithm must be HS256 exactly.
+
+The profile is the first one whose `roles` intersect the token's. If none
+matches, the call returns 403 `no_profile`.
+
+Conversation id: `ext-` + the first 12 hex characters of
+sha256(`embedId:sub`).
+
+**Instance API** (crewly-auth user JWT of the owning account, the token the
+OSS cloud client already holds):
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/api/apps/v1/embeds/:embedId/pending?wait=<s≤25>` | Returns `{ items[{ messageId, conversationId, sub, asker: { name, email?, roles[] }, profileId, text, context?, at }] }`. Covers asker messages not yet acked |
+| `POST` | `/api/apps/v1/embeds/:embedId/ack` | Body `{ messageIds[] }` |
+| `POST` | `/api/apps/v1/embeds/:embedId/replies` | Body `{ conversationId, text }`. Appends an agent message to that conversation |
+| `POST` | `/api/apps/v1/embeds/:embedId/typing` | Body `{ conversationId, on }`. On times out by itself after 120 s |
+| `POST` | `/api/apps/v1/embeds/:embedId/host-token` | Body `{ conversationId }`. Returns `{ token, hostApiBase }`, details below |
+
+The host token is a JWT, HS256, with the embed secret:
+
+```
+{ iss: 'crewly', aud: 'host:<embedId>', sub: <that conversation's sub>, scope: 'self', iat, exp: iat + 300 }
+```
+
+The instance never sees the embed secret.
+
+Limits:
+
+- per `sub`: 20 messages per 10 min and 200 a day;
+- per embed: 2,000 a day;
+- `embed_messages` has a TTL of `retentionDays` (default 30).
+
+Snippet:
+
+```html
+<script src="https://apps.crewlyai.com/embed/v1/embed.js" data-embed="emb_…" async></script>
+<script>CrewlyEmbed.identify(() => fetch('/api/crewly/token').then(r => r.ok ? r.text() : null));</script>
+```
+
+`embed.js` adds a launcher and the iframe at `/e/<embedId>`. The token reaches
+the iframe by `postMessage`, with the origin checked on both sides. The panel
+page sends `frame-ancestors <allowedOrigins>`.
+
+### SteamFun portal
+
+Environment: `CREWLY_EMBED_ID`, `CREWLY_EMBED_SECRET`,
+`CREWLY_EMBED_ROLES` (comma list, `admin` at first).
+
+**Token route.** `GET /api/crewly/token`, with a portal session.
+
+- It returns 204 when the user's acting role is not in `CREWLY_EMBED_ROLES`,
+  or when the env vars are missing. In that case the snippet renders nothing.
+- Otherwise it returns a JWT `{ aud: CREWLY_EMBED_ID, sub: <stable user id>,
+  name, email, roles: [<acting role>] }`, valid for 10 min, as text.
+
+**Ops API** under `/api/crewly/ops/*`.
+
+Every call carries `Authorization: Bearer <host token>`, and the route checks:
+
+- the signature and HS256;
+- `aud === 'host:' + CREWLY_EMBED_ID`;
+- `exp`;
+- `scope === 'self'`.
+
+It then resolves `sub` to the user and that user's role, and answers *as that
+user*, with the portal's own permissions. No child's photo, parent contact or
+other teacher's data leaves through it unless that user could see it in the
+portal.
+
+| Method | Path | Returns |
+|---|---|---|
+| `GET` | `/me` | The user's name, role and what they teach |
+| `GET` | `/my-classes?from=&to=` | The user's upcoming classes and lessons |
+| `GET` | `/lesson-prep?lessonId=` | Materials, notes and to-dos for a lesson the user teaches |
+| `GET` | `/my-tickets` | Tickets the user filed, with their status |
+| `POST` | `/tickets` | Body `{ title, body }`. Files a ticket in the portal's own ticket system, with `source: 'crewly-embed'` and the user as the requester |
+
+Every call is logged in the portal's audit with the user and the
+`crewly-embed` origin. The panel is only rendered for the roles above.
+
+### OSS (crewly)
+
+- **`EmbedPollService`.**
+  - For each embed in `~/.crewly/embeds.json` (`[{ embedId, frontAgent }]`,
+    written by `crewly embed attach`), it long-polls `pending`.
+  - For each item, it records the turn in the conversation's chat-v2 channel,
+    sets acting-for (`source: 'embed'`, actor
+    `ext:<embedId>:<sub>`), delivers the `[EXTERNAL MESSAGE]` wrapper to the
+    front agent, and then acks.
+  - It sets typing on while the agent works.
+- **`reply-external` skill.**
+  `reply-external --conversation ext-… "<text>"` calls
+  `POST /api/external/replies`. The guard runs, then the reply is uploaded.
+  The P1a guard is the deterministic part: secrets, paths, internal ids,
+  markup and other askers' names. The share-policy model review follows in
+  P1b.
+- **`host-api` skill.**
+  `host-api --conversation ext-… GET /my-classes` gets a host token for that
+  conversation from Cloud and calls `hostApiBase` + path. The agent can only
+  act for the asker of a conversation it was given.
+- **"Portals" group** in team chat: read-only.
