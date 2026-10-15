@@ -7,6 +7,7 @@
  * - POST /api/requests       — create a Request
  * - POST /api/requests/plan  — plan tasks from a user message
  * - PUT  /api/requests/:id   — update a Request
+ * - GET  /api/requests/:id/whereabouts — who holds it now, doing what, since when
  *
  * @module controllers/request/request.controller
  */
@@ -16,6 +17,10 @@ import { RequestService } from '../../services/v3/request.service.js';
 import type { CreateRequestInput, UpdateRequestInput } from '../../types/v2/index.js';
 import { readAgentSessionHeader } from '../../utils/agent-caller.utils.js';
 import { ensureTraceForSession } from '../../services/trace/trace-recorder.js';
+import { TaskPoolService } from '../../services/task-pool/task-pool.service.js';
+import { getAgentAskLedger } from '../../services/messaging/agent-ask-ledger.service.js';
+import { computeWhereabouts } from '../../services/v3/request-whereabouts.service.js';
+import type { Request as CrewlyRequest } from '../../types/v2/request.types.js';
 
 /**
  * Gets the RequestService singleton.
@@ -70,6 +75,50 @@ export async function getRequest(req: ExpressRequest, res: Response): Promise<vo
     }
 
     res.json({ success: true, data: request });
+  } catch (error) {
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+}
+
+/**
+ * Find a Request by id, or by its ticket number (`TKT-12` or `12`).
+ *
+ * @param ref - Request id or ticket number
+ * @returns The Request, or null
+ */
+async function findRequest(ref: string): Promise<CrewlyRequest | null> {
+  const byId = await getService().getById(ref);
+  if (byId) return byId;
+  const m = /^(?:TKT-)?(\d+)$/i.exec(ref.trim());
+  if (!m) return null;
+  const n = Number(m[1]);
+  return (await getService().listAll()).find((r) => r.ticketNumber === n) ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/requests/:id/whereabouts — where the Request is now
+// ---------------------------------------------------------------------------
+
+/**
+ * Who holds a Request now, doing what, since when: its open WorkItems (the
+ * worker, or the reviewer once the worker is done) and agent-to-agent
+ * hand-offs from the ask ledger. See services/v3/request-whereabouts.service.ts.
+ *
+ * Responses: 200 `{success, data: RequestWhereabouts}`, 404 unknown request.
+ *
+ * @param req - Express request with id param (request id or `TKT-n`)
+ * @param res - Express response
+ */
+export async function getRequestWhereabouts(req: ExpressRequest, res: Response): Promise<void> {
+  try {
+    const request = await findRequest(req.params.id ?? '');
+    if (!request) {
+      res.status(404).json({ success: false, error: `Request not found: ${req.params.id}` });
+      return;
+    }
+    const items = await TaskPoolService.getInstance().getAllItems();
+    const asks = getAgentAskLedger()?.openAsks() ?? [];
+    res.json({ success: true, data: computeWhereabouts(request, items, asks, Date.now()) });
   } catch (error) {
     res.status(500).json({ success: false, error: (error as Error).message });
   }

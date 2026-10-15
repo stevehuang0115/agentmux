@@ -15,6 +15,7 @@ vi.mock('../services/api.service', () => ({
   apiService: {
     getRequest: vi.fn(),
     getWorkItemsByRequest: vi.fn(),
+    getRequestWhereabouts: vi.fn().mockRejectedValue(new Error('not mocked')),
     updateRequest: vi.fn(),
   },
 }));
@@ -116,6 +117,30 @@ describe('RequestDetail', () => {
     expect(screen.getByText(/code change/)).toBeInTheDocument();
     // Back button
     expect(screen.getByTestId('request-detail-back')).toBeInTheDocument();
+  });
+
+  it('shows who holds the request now', async () => {
+    vi.mocked(apiService.getRequest).mockResolvedValue(mockRequest);
+    vi.mocked(apiService.getWorkItemsByRequest).mockResolvedValue([mockWorkItem]);
+    vi.mocked(apiService.getRequestWhereabouts).mockResolvedValueOnce({ summary: 'dex (working on "Make it") for 2h 10m.', finished: false, holders: [] });
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('request-now-with')).toHaveTextContent('Now: dex (working on "Make it") for 2h 10m.');
+    });
+  });
+
+  it('shows no "Now" line when whereabouts are unavailable', async () => {
+    vi.mocked(apiService.getRequest).mockResolvedValue(mockRequest);
+    vi.mocked(apiService.getWorkItemsByRequest).mockResolvedValue([mockWorkItem]);
+
+    renderWithRouter();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('request-detail')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('request-now-with')).not.toBeInTheDocument();
   });
 
   it('renders work items section', async () => {

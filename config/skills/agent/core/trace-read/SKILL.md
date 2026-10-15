@@ -27,6 +27,8 @@ triggers:
   - how did the run go
   - what happened to my work
   - why was it stuck
+  - where is it now
+  - who has it
   - stalls
   - retro
   - autonomy
@@ -86,6 +88,18 @@ You get, in at most `--max-chars` (default 4000):
   touches, in time order (routine skill calls and usage lines are only
   counted).
 - **Links** — the dashboard page with its Timeline tab, and the API.
+
+## Where a request is now
+
+```bash
+bash execute.sh --where TKT-12          # or the request id
+```
+
+Who holds the owner's request right now, what they are doing (working,
+queued, blocked, reviewing, waiting on another agent, waiting on the owner)
+and for how long. It follows plain-message hand-offs too: if Ella passed it
+to Pia and Pia to Dex, you see all three and that Dex has it. Use this when
+the owner asks "how is X going" or "is it forgotten", before guessing.
 
 ## Recent runs
 

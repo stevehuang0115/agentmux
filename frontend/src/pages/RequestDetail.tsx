@@ -252,6 +252,8 @@ export const RequestDetail: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  /** One line: who holds it now, doing what, for how long (null until loaded or on error). */
+  const [nowWith, setNowWith] = useState<string | null>(null);
 
   /**
    * Loads the request and associated work items from the API.
@@ -267,10 +269,15 @@ export const RequestDetail: React.FC = () => {
     setError(null);
 
     try {
-      const [requestData, workItemsData] = await Promise.all([
+      const [requestData, workItemsData, whereabouts] = await Promise.all([
         apiService.getRequest(id),
         apiService.getWorkItemsByRequest(id),
+        // Optional: an older backend has no whereabouts endpoint.
+        Promise.resolve()
+          .then(() => apiService.getRequestWhereabouts(id))
+          .catch(() => null),
       ]);
+      setNowWith(whereabouts && !whereabouts.finished ? whereabouts.summary : null);
       setRequest(requestData as RequestData);
       setWorkItems(
         (workItemsData as WorkItem[]).sort(
@@ -471,6 +478,12 @@ export const RequestDetail: React.FC = () => {
             {typeof request.ticketNumber === 'number' && <span>TKT-{String(request.ticketNumber).padStart(3, '0')}</span>}
             <ProgressRail currentStatus={request.status} />
           </div>
+
+          {nowWith && (
+            <p className="-mt-3 text-[13px] text-text-2" data-testid="request-now-with">
+              <span className="font-semibold text-text">Now: </span>{nowWith}
+            </p>
+          )}
 
           {/* Approval / Rejection — only for requests awaiting confirmation */}
           {request.requiresConfirmation && request.status === 'waiting_confirmation' && (

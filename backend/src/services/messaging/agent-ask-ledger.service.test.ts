@@ -197,6 +197,16 @@ describe('noteDelivered / noteAnswered / prune', () => {
 		expect(l.openAsksBy('ella')).toHaveLength(1);
 	});
 
+	it('openAsks lists every open ask as copies', () => {
+		const l = makeLedger();
+		l.noteDelivered('dex', 'pia', 'task');
+		l.noteDelivered('ella', 'sam', 'other');
+		const all = l.openAsks();
+		expect(all.map((a) => `${a.sender}>${a.target}`)).toEqual(['pia>dex', 'sam>ella']);
+		all[0].excerpt = 'changed';
+		expect(l.openAsks()[0].excerpt).toBe('task');
+	});
+
 	it('forgets asks after the TTL', () => {
 		const l = makeLedger();
 		l.noteDelivered('dex', 'pia', 'task');

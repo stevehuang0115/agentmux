@@ -180,6 +180,16 @@ export class AgentAskLedger {
 	}
 
 	/**
+	 * Every ask still unanswered (copies), for "where is it now" views.
+	 *
+	 * @returns Open asks, oldest first
+	 */
+	openAsks(): AgentAsk[] {
+		this.prune();
+		return this.asks.map((a) => ({ ...a }));
+	}
+
+	/**
 	 * `target` finished a turn. An ask it worked on for at least
 	 * {@link AGENT_ASK_CONSTANTS.MIN_WORK_MS} with no word back is answered
 	 * for it: its last words go to the sender. One it answered in chat, or

@@ -10,6 +10,7 @@
 #   bash execute.sh --trace tr-20261003-ab12cd34
 #   bash execute.sh --work-item <id> | --ticket CE-7 | --ticket TKT-12 | --request <id> | --experiment EXP-3
 #   bash execute.sh --since 2026-10-01T00:00:00Z [--limit 10]      # recent runs, one line each
+#   bash execute.sh --where TKT-12 | --where <request id>             # who holds it NOW, doing what, since when
 #   Options: [--max-chars 4000] [--stall-minutes 30] [--json]
 # =============================================================================
 set -euo pipefail
@@ -25,6 +26,7 @@ Usage:
   bash execute.sh --request ID                     The run of a Request
   bash execute.sh --experiment EXP-3               The run of an experiment card
   bash execute.sh --since ISO [--limit 10]         Runs active since then, one line each, newest first (at most 100)
+  bash execute.sh --where TKT-12 | --where ID      Where an owner request is NOW: who holds it, doing what, for how long
 Options:
   --max-chars N       Size bound of the output (default 4000, 600..16000)
   --stall-minutes N   A gap with no progress longer than this is a stall (default 30)
@@ -32,10 +34,11 @@ Options:
 EOF_USAGE
 }
 
-TRACE=""; WORK_ITEM=""; TICKET=""; REQUEST=""; EXPERIMENT=""; SINCE=""; LIMIT="10"; MAX_CHARS="4000"; STALL=""; JSON_OUT="0"
+WHERE=""; TRACE=""; WORK_ITEM=""; TICKET=""; REQUEST=""; EXPERIMENT=""; SINCE=""; LIMIT="10"; MAX_CHARS="4000"; STALL=""; JSON_OUT="0"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --where)          [ $# -ge 2 ] || error_exit "--where requires a request id or TKT-n"; WHERE="$2"; shift 2 ;;
     --trace|-t)       [ $# -ge 2 ] || error_exit "--trace requires a value"; TRACE="$2"; shift 2 ;;
     --work-item|-w)   [ $# -ge 2 ] || error_exit "--work-item requires a value"; WORK_ITEM="$2"; shift 2 ;;
     --ticket)         [ $# -ge 2 ] || error_exit "--ticket requires a value"; TICKET="$2"; shift 2 ;;
@@ -65,9 +68,29 @@ enc() { jq -rn --arg v "$1" '$v|@uri'; }
 STALL_QS=""
 [ -n "$STALL" ] && STALL_QS="&stallMinutes=$(enc "$STALL")"
 
+# --- Where a request is now (backed by GET /api/requests/:id/whereabouts) ---
+if [ -n "$WHERE" ]; then
+  if ! RESP=$(api_call_full GET "/requests/$(enc "$WHERE")/whereabouts"); then
+    error_exit "No owner request $WHERE (pass a request id or TKT-n)"
+  fi
+  if [ "$JSON_OUT" = "1" ]; then
+    printf '%s' "$RESP" | jq -c '{success: true} + .data'
+    exit 0
+  fi
+  printf '%s' "$RESP" | jq -r --argjson max "$MAX_CHARS" '
+    def dur: (. / 60000 | floor) as $m
+      | if $m < 60 then "\($m)m" elif $m < 2880 then "\($m / 60 | floor)h \($m % 60)m" else "\($m / 1440 | floor)d \(($m % 1440) / 60 | floor)h" end;
+    .data as $d
+    | ([ "\(if $d.ticketNumber then "TKT-\($d.ticketNumber) · " else "" end)\($d.title[0:100]) · \($d.status)", $d.summary ]
+       + [ $d.holders[] | "- \(.session): \(.state | gsub("_"; " ")) for \(.forMs | dur) (since \(.since[0:16] | sub("T"; " ")))\(if .workItemId then " · \(.workItemId)" else "" end)\(if .from then " · from \(.from)" else "" end)\(if .blockedReason then " · blocked: \(.blockedReason[0:120])" else "" end)\(if .what then " · \(.what[0:100])" else "" end)" ]
+       | join("\n")) as $text
+    | if ($text | length) > $max then $text[0:($max - 1)] + "…" else $text end'
+  exit 0
+fi
+
 # --- Recent runs -------------------------------------------------------------
 if [ -z "$TRACE$WORK_ITEM$TICKET$REQUEST$EXPERIMENT" ]; then
-  [ -n "$SINCE" ] || { print_usage >&2; error_exit "Pass one of --trace, --work-item, --ticket, --request, --experiment or --since"; }
+  [ -n "$SINCE" ] || { print_usage >&2; error_exit "Pass one of --where, --trace, --work-item, --ticket, --request, --experiment or --since"; }
   if ! RESP=$(api_call_full GET "/traces?since=$(enc "$SINCE")&limit=$(enc "$LIMIT")${STALL_QS}"); then
     error_exit "Could not list traces since $SINCE"
   fi
