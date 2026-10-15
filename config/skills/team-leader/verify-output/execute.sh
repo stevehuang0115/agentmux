@@ -359,7 +359,8 @@ jq -n \
   --arg workerId "$WORKER_ID" \
   --arg templateId "$TEMPLATE_ID" \
   '{
-    evidence: $evidence,
+    evidence: ($evidence | to_entries | map(.value + {index: .key})),
+    acceptWith: "complete-task with \"verdict\":\"verified\" and \"checks\":[{\"entry\":<evidence index, or null for a direct look>,\"did\":\"<what you did and saw>\",\"outcome\":\"pass\"}] (#1314)",
     evidenceWarning: (if $evidenceWarning != "" then $evidenceWarning else null end),
     passed: ($passed == "true"),
     score: ($score | tonumber),

@@ -40,10 +40,13 @@ WorkItem: artifacts that exist, commands with exit codes, blocked steps) before
 running any check, and returns it as the first field of the verdict.
 
 - `evidenceWarning` is set when the item was marked done **without evidence**
-  (accepted only while the server is in evidence warn mode) — do not verify it
+  (possible only with `CREWLY_EVIDENCE_MODE=warn` or before #1312) — do not verify it
   on its summary alone: check the work directly or send it back asking for
   evidence. It is also set when the worker reported `blocked` steps.
 - The warning, when present, leads `feedback`.
+- Each evidence entry is listed with its index. When you accept, record what
+  you did to each one you checked (#1314): open the artifact, re-run the
+  command, look at the page. An accept without that record is refused.
 
 ## When to Use
 
@@ -162,8 +165,10 @@ requiresReview: true → TL must manually evaluate these steps
 ### Accept finished work; never cancel it
 
 When the work is done and checks pass, ACCEPT it: complete the item (for a
-"Verify: ..." item, `complete-task` with `"verdict":"verified"` and your
-evidence). Do not cancel a WorkItem that was done or verified, even with a
+"Verify: ..." item, `complete-task` with `"verdict":"verified"` and
+`"checks":[{"entry":<evidence index, or null for a direct look>,"did":"<what you did and saw>","outcome":"pass"}]`,
+at least one naming a worker evidence entry when there is any). A failed
+check cannot be accepted: send it back with `"verdict":"rejected"`. Do not cancel a WorkItem that was done or verified, even with a
 "verified" note: a cancel is for work that should not happen, and a project
 ticket whose WorkItem is cancelled can go back to the queue so the same work
 is picked up twice. Cancel only work that is NOT done.

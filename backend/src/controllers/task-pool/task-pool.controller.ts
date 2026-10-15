@@ -30,12 +30,13 @@ import {
   type CreateWorkItemInput,
   type WorkItem,
   ForbiddenTransitionError,
+  WORK_ITEM_REVIEW_CHECKS_KEY,
 } from '../../types/v2/work-item.types.js';
 import { formatError } from '../../utils/format-error.js';
 import { TeamBudgetExceededError } from '../../services/budget/team-budget-gate.service.js';
 import { LoggerService } from '../../services/core/logger.service.js';
 import { ORCHESTRATOR_SESSION_NAME, PROJECT_TICKET_CONSTANTS, OPEN_ITEMS_CONSTANTS, PEOPLE_CONSTANTS, COMPLETION_EVIDENCE_CONSTANTS, TEAM_PAUSE_CONSTANTS } from '../../constants.js';
-import { decideCompletion, evidenceRequiredFor, resolveEvidenceEnforcementMode } from '../../services/task-pool/completion-evidence.service.js';
+import { decideCompletion, decideReviewAccept, evidenceRequiredFor, resolveEvidenceEnforcementMode } from '../../services/task-pool/completion-evidence.service.js';
 import { readAgentSessionHeader, resolveTransitionActor } from '../../utils/agent-caller.utils.js';
 import { getTicketIntakeService } from '../../services/v3/ticket-intake.service.js';
 import { ownerThreadHandover } from '../../services/orc/work-item-destination.js';
@@ -815,6 +816,59 @@ export async function releaseItem(req: Request, res: Response): Promise<void> {
 // POST /api/task-pool/complete/:workItemId — Complete a WorkItem
 // ---------------------------------------------------------------------------
 
+/** A review accept's check decision and the worker item it is about (#1314). */
+interface ReviewCheckOutcome {
+  sourceId: string;
+  decision: ReturnType<typeof decideReviewAccept>;
+}
+
+/**
+ * The check-record decision for completing a review item as an accept
+ * (#1314), or null when the completion is not one: not a review item, no
+ * `metadata.verifyOf`, a `verdict: "rejected"`, or a source no longer
+ * awaiting review.
+ *
+ * @param reviewItem - The review WorkItem being completed
+ * @param result - The completion's `body.result`
+ * @param mode - Evidence rollout mode
+ * @returns The decision with its source id, or null
+ */
+async function decideReviewCheck(
+  reviewItem: WorkItem | null,
+  result: Record<string, unknown> | undefined,
+  mode: ReturnType<typeof resolveEvidenceEnforcementMode>,
+): Promise<ReviewCheckOutcome | null> {
+  const verifyOf = reviewItem?.type === 'review' ? reviewItem.metadata?.['verifyOf'] : undefined;
+  if (typeof verifyOf !== 'string' || result?.['verdict'] === 'rejected') return null;
+  const source = await getService().findWorkItem(verifyOf).catch(() => null);
+  if (!source || source.status !== 'done_by_worker') return null;
+  return { sourceId: verifyOf, decision: decideReviewAccept(result?.['checks'], source.output?.['evidence'], mode) };
+}
+
+/**
+ * Stamp what the reviewer checked onto the worker's item (#1314), so the
+ * record is visible where the work is. Non-fatal.
+ *
+ * @param outcome - The accepted check decision
+ * @param reviewItemId - The review WorkItem (absent for a direct verdict)
+ * @param reviewer - Who reviewed
+ */
+async function recordReviewCheck(outcome: ReviewCheckOutcome, reviewItemId: string | undefined, reviewer: string): Promise<void> {
+  const d = outcome.decision;
+  if (d.action === 'reject') return;
+  const record = {
+    ...(reviewItemId ? { reviewItemId } : {}),
+    reviewer,
+    at: new Date().toISOString(),
+    ...(d.action === 'accept' ? { checks: d.checks } : { unchecked: true }),
+  };
+  try {
+    await getService().mergeItemMetadata(outcome.sourceId, { [WORK_ITEM_REVIEW_CHECKS_KEY]: record });
+  } catch (err) {
+    logger.warn('Failed to record review checks on the source (non-fatal)', { sourceId: outcome.sourceId, error: formatError(err) });
+  }
+}
+
 /**
  * Marks a running WorkItem as completed ('done').
  *
@@ -949,9 +1003,18 @@ export async function completeItem(req: Request, res: Response): Promise<void> {
       res.status(decision.status).json({ success: false, error: decision.error, code: decision.code });
       return;
     }
-    const warningFields: Record<string, unknown> = decision.action === 'complete' && decision.warning
-      ? { warning: decision.warning, evidenceMode }
-      : {};
+    // #1314: accepting a review needs a record of what the reviewer checked,
+    // per worker evidence entry. Sending it back does not.
+    const reviewCheck = await decideReviewCheck(existing, result, evidenceMode);
+    if (reviewCheck?.decision.action === 'reject') {
+      logger.info('complete: review accept refused, no usable check record', { workItemId, agentId, code: reviewCheck.decision.code });
+      res.status(reviewCheck.decision.status).json({ success: false, error: reviewCheck.decision.error, code: reviewCheck.decision.code });
+      return;
+    }
+    const reviewWarning = reviewCheck?.decision.action === 'accept_unchecked' ? reviewCheck.decision.warning : undefined;
+    const evidenceWarning = decision.action === 'complete' ? decision.warning : undefined;
+    const warningText = [evidenceWarning, reviewWarning].filter(Boolean).join(' ');
+    const warningFields: Record<string, unknown> = warningText ? { warning: warningText, evidenceMode } : {};
     if (decision.action === 'complete' && decision.warning) {
       logger.warn('complete: WorkItem completed without evidence (warn mode)', { workItemId, agentId });
     }
@@ -970,6 +1033,7 @@ export async function completeItem(req: Request, res: Response): Promise<void> {
         ...(result ?? {}),
         // The validated evidence (only known fields), replacing the raw value.
         ...(decision.evidence ? { evidence: decision.evidence } : {}),
+        ...(reviewCheck?.decision.action === 'accept' ? { checks: reviewCheck.decision.checks } : {}),
       };
       await getService().setOutput(workItemId, mergedOutput);
     } catch (err) {
@@ -1020,6 +1084,7 @@ export async function completeItem(req: Request, res: Response): Promise<void> {
       }
     }
     const outcome = await getGiveUp().complete(workItemId, result, actor);
+    if (reviewCheck) await recordReviewCheck(reviewCheck, workItemId, actor.session ?? agentId);
     if (outcome.action === 'retry_queued' || outcome.action === 'escalated_to_lead') {
       res.json({
         success: true,
@@ -1192,7 +1257,9 @@ export async function failItemHandler(req: Request, res: Response): Promise<void
 /**
  * POST /api/task-pool/items/:workItemId/verdict — record a review verdict.
  *
- * Body: `{ "verdict": "verified" | "rejected", "comment"?: string }`.
+ * Body: `{ "verdict": "verified" | "rejected", "comment"?: string, "checks"?: ReviewCheck[] }`.
+ * An agent's or the orchestrator's `verified` needs `checks` (#1314, see
+ * `decideReviewAccept`); the owner's does not.
  *
  * The caller is resolved from the request (`X-Agent-Session`, or the owner's
  * dashboard marker) — never from the body (#813). An agent session acts as a
@@ -1202,7 +1269,7 @@ export async function failItemHandler(req: Request, res: Response): Promise<void
  *
  * Responses:
  *   - 200 `{ success: true, data: WorkItem }`
- *   - 400 invalid verdict
+ *   - 400 invalid verdict, or `review_unchecked` / `review_checks_malformed` / `review_check_failed`
  *   - 403 `{ code: 'transition_not_reviewer' | 'transition_self_review' | … }`
  *   - 404 WorkItem not found
  *   - 409 item is not `done_by_worker`
@@ -1221,13 +1288,29 @@ export async function renderVerdict(req: Request, res: Response): Promise<void> 
     const caller = resolveTransitionActor(req, 'POST /task-pool/items/:id/verdict');
     // An agent session here is acting as a reviewer, not as the worker.
     const actor = caller.role === 'agent' ? { ...caller, role: 'team_lead' as const } : caller;
+    // #1314: an agent's or the orchestrator's accept records what it checked,
+    // as on a review item's completion. The owner's dashboard click does not.
+    let reviewCheck: ReviewCheckOutcome | null = null;
+    if (verdict === 'verified' && caller.role !== 'owner') {
+      const item = await getService().findWorkItem(workItemId).catch(() => null);
+      if (item?.status === 'done_by_worker') {
+        const mode = resolveEvidenceEnforcementMode();
+        reviewCheck = { sourceId: workItemId, decision: decideReviewAccept((req.body as Record<string, unknown>)['checks'], item.output?.['evidence'], mode) };
+        if (reviewCheck.decision.action === 'reject') {
+          res.status(reviewCheck.decision.status).json({ success: false, error: reviewCheck.decision.error, code: reviewCheck.decision.code });
+          return;
+        }
+      }
+    }
     const updated = await getService().verifyItem(
       workItemId,
       actor,
       verdict,
       typeof comment === 'string' && comment.trim() ? comment.trim() : undefined,
     );
-    res.json({ success: true, data: updated });
+    if (reviewCheck) await recordReviewCheck(reviewCheck, undefined, caller.session ?? caller.role);
+    const warning = reviewCheck?.decision.action === 'accept_unchecked' ? { warning: reviewCheck.decision.warning } : {};
+    res.json({ success: true, data: updated, ...warning });
   } catch (error) {
     handleServiceError(res, error);
   }

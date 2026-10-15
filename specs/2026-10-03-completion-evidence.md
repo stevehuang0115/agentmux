@@ -118,3 +118,38 @@ Worker communication module (`communication.module.ts`) states the contract
 ("Reporting Done — Evidence Contract"); the TL rules add "Done needs evidence"
 and "read its evidence first"; the developer role's task-pool steps and the
 orchestrator's skill table show evidence.
+
+## Reviewer check record (#1314)
+
+A rubber-stamp accept looked the same as a real check. Accepting a review
+item (`type: review`, `metadata.verifyOf` → a source still `done_by_worker`,
+`verdict` absent or `verified`) now needs `body.result.checks`:
+
+```json
+[{"entry": 0, "did": "opened report.md: covers the 3 asks", "outcome": "pass"},
+ {"entry": null, "did": "loaded the page on staging", "outcome": "pass"}]
+```
+
+- `entry` is an index into the worker's `output.evidence`, or `null` for a
+  direct look at the work. Out-of-range or non-integer → 400
+  `review_checks_malformed`.
+- When the worker sent evidence, at least one check names an entry of it;
+  otherwise one `null` check is enough. No checks → 400 `review_unchecked`.
+- A check with `outcome: "fail"` cannot be accepted → 400
+  `review_check_failed`; send it back with `verdict: "rejected"`.
+- `verdict: "rejected"` needs no checks.
+- `CREWLY_EVIDENCE_MODE=warn` accepts a missing record with a `warning` and
+  stamps the source `unchecked`; malformed and failed checks are refused in
+  both modes.
+- Decided by `decideReviewAccept` (completion-evidence.service.ts) in
+  `completeItem`, before anything is written.
+
+**Where it is visible:** the review item's `output.checks`, and the source's
+`metadata.reviewChecks` = `{reviewItemId, reviewer, at, checks}` (or
+`unchecked: true`).
+
+**Callers:** the review item's description lists the worker's evidence
+numbered (first 10); `verify-output` returns each entry with its `index`
+and an `acceptWith` hint; `complete-task` (agent core) and crewly-agent
+`complete_task` pass `checks` (plus `verdict`/`feedback`). The owner's
+dashboard verdict (`POST /task-pool/items/:id/verdict`) is not affected.

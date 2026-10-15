@@ -1309,6 +1309,19 @@ describe('Tool Registry', () => {
     });
   });
 
+  describe('complete_task review fields (#1314)', () => {
+    it('sends verdict, feedback and checks inside result', async () => {
+      mockClient.post.mockResolvedValue({ success: true, data: {}, status: 200 });
+      mockClient.get.mockResolvedValue({ success: true, data: [], status: 200 });
+      const checks = [{ entry: 0, did: 'opened it', outcome: 'pass' }];
+      await (tools.complete_task as any).execute({ workItemId: 'wi-v', sessionName: 'tl', summary: 'ok', verdict: 'verified', checks });
+      expect(mockClient.post).toHaveBeenCalledWith('/task-pool/complete/wi-v', {
+        agentId: 'tl',
+        result: { summary: 'ok', verdict: 'verified', checks },
+      });
+    });
+  });
+
   describe('report_status', () => {
     it('should send status via chat API with formatted message', async () => {
       mockClient.post.mockResolvedValue({

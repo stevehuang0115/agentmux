@@ -1119,6 +1119,60 @@ describe('TaskPoolController', () => {
       }
     });
 
+    describe('review accept needs a check record (#1314)', () => {
+      const review = { id: 'wi-ev', type: 'review', status: 'running', output: null, metadata: { verifyOf: 'wi-src' } };
+      const source = {
+        id: 'wi-src',
+        status: 'done_by_worker',
+        output: { evidence: [{ type: 'artifact', path: '/out/a.md' }] },
+        metadata: {},
+      };
+      beforeEach(() => {
+        delete process.env.CREWLY_EVIDENCE_MODE;
+        mockService.mergeItemMetadata.mockClear();
+        mockService.findWorkItem.mockImplementation(async (id: string) => (id === 'wi-src' ? source : review));
+      });
+
+      it('an accept without checks is refused and nothing is completed', async () => {
+        const res = await complete({ summary: 'LGTM', verdict: 'verified' });
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'review_unchecked' }));
+        expect(mockService.completeItem).not.toHaveBeenCalled();
+      });
+
+      it('an accept with checks completes, stores them and stamps the worker item', async () => {
+        const checks = [{ entry: 0, did: 'opened a.md: covers all 3 asks', outcome: 'pass' }];
+        const res = await complete({ summary: 'LGTM', verdict: 'verified', checks });
+        expect(res.status).not.toHaveBeenCalled();
+        expect(mockService.completeItem).toHaveBeenCalled();
+        expect(mockService.setOutput).toHaveBeenCalledWith('wi-ev', expect.objectContaining({ checks }));
+        expect(mockService.mergeItemMetadata).toHaveBeenCalledWith('wi-src', {
+          reviewChecks: expect.objectContaining({ reviewItemId: 'wi-ev', reviewer: 'dev-1', checks }),
+        });
+      });
+
+      it('sending it back needs no checks', async () => {
+        const res = await complete({ summary: 'wrong file', verdict: 'rejected', feedback: 'wrong file' });
+        expect(res.status).not.toHaveBeenCalled();
+        expect(mockService.completeItem).toHaveBeenCalled();
+        expect(mockService.mergeItemMetadata).not.toHaveBeenCalled();
+      });
+
+      it('warn mode accepts without checks and flags the worker item unchecked', async () => {
+        process.env.CREWLY_EVIDENCE_MODE = 'warn';
+        const res = await complete({ summary: 'LGTM', verdict: 'verified' });
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, warning: expect.stringContaining('unchecked') }));
+        expect(mockService.mergeItemMetadata).toHaveBeenCalledWith('wi-src', { reviewChecks: expect.objectContaining({ unchecked: true }) });
+      });
+
+      it('a review whose source is no longer awaiting review is not checked', async () => {
+        mockService.findWorkItem.mockImplementation(async (id: string) => (id === 'wi-src' ? { ...source, status: 'verified' } : review));
+        const res = await complete({ summary: 'LGTM', verdict: 'verified' });
+        expect(res.status).not.toHaveBeenCalled();
+        expect(mockService.mergeItemMetadata).not.toHaveBeenCalled();
+      });
+    });
+
     it('enforce mode: a review verdict completion needs no evidence', async () => {
       process.env.CREWLY_EVIDENCE_MODE = 'enforce';
       const res = await complete({ summary: 'Looks right', verdict: 'verified' });
@@ -2020,6 +2074,39 @@ describe('scoreItem', () => {
         mockRes(),
       );
       expect(mockService.verifyItem).not.toHaveBeenCalledWith('wi-src', expect.objectContaining({ role: 'owner' }), 'rejected', undefined);
+    });
+
+    describe('verdict: check record (#1314)', () => {
+      const worker = { id: 'wi-src', status: 'done_by_worker', output: { evidence: [{ type: 'artifact', path: '/a.md' }] }, metadata: {} };
+      beforeEach(() => {
+        delete process.env.CREWLY_EVIDENCE_MODE;
+        mockService.findWorkItem.mockResolvedValue(worker);
+        mockService.verifyItem.mockResolvedValue({ id: 'wi-src', status: 'verified' });
+        mockService.verifyItem.mockClear();
+        mockService.mergeItemMetadata.mockClear();
+      });
+
+      it('an agent accept without checks is refused before anything is verified', async () => {
+        const res = mockRes();
+        await renderVerdict(mockReq({ params: { workItemId: 'wi-src' }, headers: { 'x-agent-session': 'crewly-orc' }, body: { verdict: 'verified' } }), res);
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'review_unchecked' }));
+        expect(mockService.verifyItem).not.toHaveBeenCalled();
+      });
+
+      it('an agent accept with checks is verified and the checks are stamped', async () => {
+        const checks = [{ entry: 0, did: 'read a.md', outcome: 'pass' }];
+        await renderVerdict(mockReq({ params: { workItemId: 'wi-src' }, headers: { 'x-agent-session': 'crewly-orc' }, body: { verdict: 'verified', checks } }), mockRes());
+        expect(mockService.verifyItem).toHaveBeenCalled();
+        expect(mockService.mergeItemMetadata).toHaveBeenCalledWith('wi-src', { reviewChecks: expect.objectContaining({ reviewer: 'crewly-orc', checks }) });
+      });
+
+      it('the owner and rejections need no checks', async () => {
+        await renderVerdict(mockReq({ params: { workItemId: 'wi-src' }, headers: ownerAuthHeaders(), body: { verdict: 'verified' } }), mockRes());
+        await renderVerdict(mockReq({ params: { workItemId: 'wi-src' }, headers: { 'x-agent-session': 'crewly-orc' }, body: { verdict: 'rejected', comment: 'no' } }), mockRes());
+        expect(mockService.verifyItem).toHaveBeenCalledTimes(2);
+        expect(mockService.mergeItemMetadata).not.toHaveBeenCalled();
+      });
     });
 
     it('verdict: a caller that is not the reviewer gets 403', async () => {

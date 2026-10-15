@@ -498,7 +498,9 @@ export class EventToWorkItemBridge {
       title: `Verify: ${sourceWI.title}`,
       description:
         `Worker ${sourceWI.target ?? '(unknown)'} reported done on ${sourceWI.id}. Verify the deliverable.\n` +
-        `Accept: complete this item normally. Send it back: complete it with ` +
+        // #1314: an accept records what the reviewer checked, per entry.
+        `Accept: complete this item with output {"checks":[{"entry":<evidence index, or null for a direct look>,"did":"<what you did and saw>","outcome":"pass"}]} — ` +
+        `at least one check must name a worker evidence entry when there is any. Send it back: complete it with ` +
         `output {"verdict":"rejected","feedback":"<what is wrong>"} — the worker gets a retry with your feedback.` +
         // #873: the reviewer reads the evidence first.
         `\n${describeEvidenceForReviewer(sourceWI.output)}` +
