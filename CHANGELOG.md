@@ -82,6 +82,7 @@ User-visible changes. Newest first.
 
 ### Fixed
 
+- **Answering an agent's question on its card now settles the work.** When an agent finished something and asked "have a look, is it right?", answering on the decision card left the request waiting on you for up to 24 hours (only a typed reply in the thread counted). A card answer after the agent's answer now counts the same way; "打回" on the card still sends it back.
 - **"Where is it now" no longer blames you for an agent's follow-up.** A request waiting on a follow-up an agent promised ("I'll send v2 tonight") showed "waiting on you". It now shows the agent that owes it and since when; it says "waiting on you" only when every owed item is a question to you.
 - **Handing work on no longer closes the owner's request.** A reply like "@Pia please take this" was taken as the answer and the request closed in two minutes. Now a reply that @-mentions another agent is not the answer, and a request does not close while the agent who answered still has unanswered asks out to teammates.
 - **Your messages no longer wait behind reminders when an agent is busy.** When an agent was

@@ -360,6 +360,23 @@ describe('auto-accept: the owner moved on in the thread', () => {
     expect((await requests.getById(t.id))?.discussion?.some((d) => d.text === 'auto-accepted: no objection')).toBe(true);
   });
 
+  it('an answer on a decision card after the submit counts; a send-back on the card does not', async () => {
+    const card = (id: string, answer: string, closedAt: string) => ({
+      id, type: 'question' as const, agent: 'atlas', sourceMessageId: 'x', createdAt: closedAt, status: 'resolved' as const, text: '你看一眼对不对？', decisionId: 'D-1', answer, closedAt,
+    });
+    const a = await submitted(1);
+    const after = (t: { submittedAt?: string }) => new Date(Date.parse(t.submittedAt!) + 60_000).toISOString();
+    await requests.update(a.id, { openItems: [card('q-a', '对的', after(a))] });
+    const b = await submitted(2);
+    await requests.update(b.id, { openItems: [card('q-b', '打回 少了截图', after(b))] });
+    const c = await submitted(3);
+    await requests.update(c.id, { openItems: [card('q-c', '对的', new Date(Date.parse(c.submittedAt!) - 60_000).toISOString())] });
+    expect((await review.sweep()).autoAccepted).toBe(1);
+    expect((await requests.getById(a.id))?.status).toBe('done');
+    expect((await requests.getById(b.id))?.status).toBe('waiting_confirmation');
+    expect((await requests.getById(c.id))?.status).toBe('waiting_confirmation');
+  });
+
   it('does not settle early while the agent still owes the owner an open item', async () => {
     const t = await submitted(1);
     await ownerSays(t.id, '好 那继续吧');
