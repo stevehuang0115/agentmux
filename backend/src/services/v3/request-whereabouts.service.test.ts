@@ -116,6 +116,23 @@ describe('computeWhereabouts', () => {
 		expect(w.summary).toContain('You (waiting on you for');
 	});
 
+	it('an awaiting_followup request is with the agent that still owes an item', () => {
+		const oi = (agent: string, status: string, text: string) => ({ id: `c-${agent}`, type: 'commitment', text, agent, sourceMessageId: 'm', createdAt: at('16:00'), status });
+		const w = computeWhereabouts(
+			request({ status: 'awaiting_followup', updatedAt: at('17:30'), openItems: [oi('pia', 'open', 'send v2 tonight'), oi('dex', 'delivered', 'done')] as Request['openItems'] }),
+			[],
+			[],
+			NOW,
+		);
+		expect(w.holders).toEqual([expect.objectContaining({ session: 'pia', state: 'handling', what: 'send v2 tonight', since: at('16:00') })]);
+	});
+
+	it('an awaiting_followup request waits on the owner only when every owed item does', () => {
+		const owed = [{ id: 'q-1', type: 'question', text: 'which cut?', agent: 'pia', sourceMessageId: 'm', createdAt: at('16:00'), status: 'waiting_owner' }];
+		const w = computeWhereabouts(request({ status: 'awaiting_followup', updatedAt: at('17:30'), openItems: owed as Request['openItems'] }), [], [], NOW);
+		expect(w.holders).toEqual([expect.objectContaining({ session: 'owner', state: 'waiting_on_owner' })]);
+	});
+
 	it('says so when nobody holds it', () => {
 		const w = computeWhereabouts(request(), [], [], NOW);
 		expect(w.holders).toEqual([]);

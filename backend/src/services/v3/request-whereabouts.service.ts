@@ -67,8 +67,14 @@ export interface RequestWhereabouts {
 /** WorkItem statuses that still hold a request. */
 const OPEN_STATUSES = new Set<string>(['queued', 'scheduled', 'proposed', 'accepted', 'running', 'blocked', 'escalated', 'done_by_worker']);
 
-/** Request statuses that wait on the owner. */
-const OWNER_WAIT_STATUSES = new Set<string>(['waiting_confirmation', 'awaiting_followup']);
+/** Request status that waits on the owner's OK. */
+const WAITING_CONFIRMATION = 'waiting_confirmation';
+
+/** Request status that waits on its open items (see followupWaitsOn in trace-recorder). */
+const AWAITING_FOLLOWUP = 'awaiting_followup';
+
+/** Open-item statuses still owed. */
+const ACTIVE_OPEN_ITEM_STATUSES = new Set<string>(['open', 'waiting_owner', 'ready', 'overdue']);
 
 /** Most hops followed along agent-to-agent asks. */
 const MAX_ASK_HOPS = 4;
@@ -180,7 +186,13 @@ export function computeWhereabouts(request: Request, workItems: WorkItem[], open
 	}
 
 	if (holders.length === 0) {
-		if (OWNER_WAIT_STATUSES.has(request.status)) {
+		// An awaiting_followup request waits on the agents that still owe an
+		// item; it waits on the owner only when every owed item does.
+		const owed = request.status === AWAITING_FOLLOWUP ? (request.openItems ?? []).filter((i) => ACTIVE_OPEN_ITEM_STATUSES.has(i.status)) : [];
+		const agentOwed = owed.filter((i) => i.status !== 'waiting_owner');
+		if (agentOwed.length > 0) {
+			for (const i of agentOwed) add({ session: i.agent, state: 'handling', since: i.createdAt, what: i.text });
+		} else if (request.status === WAITING_CONFIRMATION || request.status === AWAITING_FOLLOWUP) {
 			add({ session: 'owner', state: 'waiting_on_owner', since: request.updatedAt, what: request.title });
 		} else {
 			const agent = request.assignee ?? request.ownerAgent;

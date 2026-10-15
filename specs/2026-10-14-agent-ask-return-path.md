@@ -53,8 +53,11 @@ doing what, since when" without reading transcripts. Built by
   `target` while running / queued / blocked, the reviewer once the worker is
   `done_by_worker` (review items are folded into the item they review);
   `since` = `statusChangedAt ?? startedAt ?? createdAt`;
-- with no open WorkItem: `assignee` / `ownerAgent` (`handling`), or the
-  owner when the request is `waiting_confirmation` / `awaiting_followup`;
+- with no open WorkItem: for `awaiting_followup`, each agent that still owes
+  an open item (`open` / `ready` / `overdue`, `handling`, since the item was
+  said); the owner for `waiting_confirmation`, or for `awaiting_followup` when
+  every owed item is `waiting_owner`; else `assignee` / `ownerAgent`
+  (`handling`);
 - open asks from this ledger (`openAsks()`): a holder that asked another
   agent after it took the work is `waiting_on_agent` and the asked agent
   holds it, followed up to 4 hops.

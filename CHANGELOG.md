@@ -82,6 +82,7 @@ User-visible changes. Newest first.
 
 ### Fixed
 
+- **"Where is it now" no longer blames you for an agent's follow-up.** A request waiting on a follow-up an agent promised ("I'll send v2 tonight") showed "waiting on you". It now shows the agent that owes it and since when; it says "waiting on you" only when every owed item is a question to you.
 - **Handing work on no longer closes the owner's request.** A reply like "@Pia please take this" was taken as the answer and the request closed in two minutes. Now a reply that @-mentions another agent is not the answer, and a request does not close while the agent who answered still has unanswered asks out to teammates.
 - **Your messages no longer wait behind reminders when an agent is busy.** When an agent was
   mid-task, your message (or your answer on its decision card) joined the back of its queue and
