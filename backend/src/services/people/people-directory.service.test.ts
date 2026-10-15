@@ -48,6 +48,10 @@ describe('PeopleDirectoryService', () => {
 		expect(directory.canonicalId('UINFO001')).toBe('UINFO001');
 	});
 
+	it('an external asker (embedded panel) is always a guest, never a member', () => {
+		expect(directory.roleOf('ext:emb_abc123:teacher-118')).toBe('guest');
+	});
+
 	describe('Slack credentials from env / no installer known', () => {
 		beforeEach(() => {
 			owner = null;

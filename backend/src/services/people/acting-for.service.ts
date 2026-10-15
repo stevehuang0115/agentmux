@@ -31,10 +31,10 @@ import { getCrewlyHomePath } from '../core/crewly-home.utils.js';
 import { getPeopleDirectory, type PeopleDirectoryService, type PersonRole } from './people-directory.service.js';
 
 /** Where an acting-for record came from. */
-export type ActingForSource = 'slack' | 'dashboard' | 'agent' | 'system';
+export type ActingForSource = 'slack' | 'dashboard' | 'agent' | 'system' | 'embed';
 
 /** Valid sources (for reading the store). */
-const SOURCES: readonly ActingForSource[] = ['slack', 'dashboard', 'agent', 'system'];
+const SOURCES: readonly ActingForSource[] = ['slack', 'dashboard', 'agent', 'system', 'embed'];
 
 /** One session's record. */
 export interface ActingForEntry {

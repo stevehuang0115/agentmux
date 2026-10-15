@@ -99,6 +99,15 @@ describe('ActingForService', () => {
 		expect(service.get('dev-2')?.personId).toBe('UINFO001');
 	});
 
+	it('an external asker from an embedded panel: the agent acts for a guest, and teammates it messages inherit that', () => {
+		service.record('front-1', 'ext:emb_abc123:teacher-118', 'embed');
+		expect(service.actorFor('front-1')).toMatchObject({ id: 'ext:emb_abc123:teacher-118', role: 'guest' });
+		service.inherit('dev-2', 'front-1');
+		expect(service.actorFor('dev-2').role).toBe('guest');
+		const again = new ActingForService({ filePath: path.join(dir, 'acting-for.json'), people: () => people });
+		expect(again.get('front-1')?.source).toBe('embed');
+	});
+
 	it('is kept across a restart', () => {
 		service.recordHumanMessage('dev-1', 'UINFO001');
 		service.recordSystemTurn('crewly-orc');

@@ -8840,3 +8840,41 @@ export const SLACK_INBOUND_BACKFILL_CONSTANTS = {
 	/** Per-request timeout (ms) */
 	REQUEST_TIMEOUT_MS: 15_000,
 } as const;
+
+/**
+ * External conversations: people outside the team talking to a front agent
+ * through an embedded panel (specs/2026-10-15-embedded-agent.md, crewly#1168).
+ */
+export const EXTERNAL_CONSTANTS = {
+	/** `<CREWLY_HOME>/embeds.json`: embeds this instance answers, `[{ embedId, frontAgent }]` */
+	EMBEDS_FILE: 'embeds.json',
+	/** `<CREWLY_HOME>/external-conversations.json`: conversation → embed, asker, profile */
+	CONVERSATIONS_FILE: 'external-conversations.json',
+	/** `<CREWLY_HOME>/logs/external-audit.jsonl`: one line per delivery, reply and host call (no text) */
+	AUDIT_FILE: 'external-audit.jsonl',
+	/** Person ids of external askers: `ext:<embedId>:<sub>`; always role guest */
+	PERSON_PREFIX: 'ext:',
+	/** Conversation ids: `ext-` + 12 hex chars */
+	CONVERSATION_ID_PATTERN: /^ext-[0-9a-f]{12}$/,
+	/** Embed ids */
+	EMBED_ID_PATTERN: /^emb_[A-Za-z0-9_-]{6,64}$/,
+	/** Long-poll wait asked of Cloud (s) */
+	POLL_WAIT_S: 25,
+	/** Request timeout of one long-poll (ms) */
+	POLL_TIMEOUT_MS: 40_000,
+	/** Backoff after a failed poll: first and max (ms) */
+	POLL_BACKOFF_MS: 5_000,
+	POLL_BACKOFF_MAX_MS: 5 * 60_000,
+	/** Longest reply sent to an asker (chars) */
+	MAX_REPLY_CHARS: 8_000,
+	/** Largest host API response passed to the agent (bytes) */
+	MAX_HOST_RESPONSE_BYTES: 64 * 1024,
+	/** Largest host API request body (bytes) */
+	MAX_HOST_BODY_BYTES: 16 * 1024,
+	/** Host API call timeout (ms) */
+	HOST_TIMEOUT_MS: 20_000,
+	/** Conversations kept in the local map (oldest dropped) */
+	MAX_CONVERSATIONS: 5_000,
+	/** Off switch: CREWLY_EXTERNAL=off */
+	ENV_SWITCH: 'CREWLY_EXTERNAL',
+} as const;

@@ -6838,6 +6838,29 @@ void (async () => {
 				},
 			});
 			this.logger.info('Crewly Apps change poller started');
+			// Embedded panels: askers' messages from Cloud to the embed's front agent.
+			await import('./services/external/external.wiring.js')
+				.then((m) =>
+					m.startExternalLayer({
+						skillsPath: path.join(findPackageRoot(__dirname), 'config', 'skills', 'agent'),
+						getTeams: () => this.storageService.getTeams(),
+						sendToAgent: async (session, text) => {
+							let exists = false;
+							try {
+								exists = getSessionBackendSync()?.sessionExists(session) ?? false;
+							} catch {
+								exists = false;
+							}
+							if (!exists) {
+								const { activateAgentBySession } = await import('./controllers/team/team.controller.js');
+								await activateAgentBySession(this.apiController, session).catch(() => undefined);
+							}
+							const result = await this.apiController.agentRegistrationService.sendMessageToAgent(session, text);
+							return result.success;
+						},
+					}),
+				)
+				.catch((err) => this.logger.warn('Embedded panels not started (non-critical)', { error: err instanceof Error ? err.message : String(err) }));
 			// App comments for apps owned by a team or channel go into that room;
 			// agents' replies there are added to the app's comment (apps/SPEC.md §15).
 			await import('./services/apps/apps.wiring.js')
