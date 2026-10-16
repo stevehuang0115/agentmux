@@ -80,6 +80,18 @@ export interface TeamMember {
     detectedAt: string;
   };
   /**
+   * Set (in API responses only — never persisted) while the agent's runtime
+   * is out of usage (e.g. Claude Code's weekly limit). The agent is not
+   * restarted or written to before `retryAt`; `until` is the reset time the
+   * runtime named, when it named one.
+   */
+  usageLimited?: {
+    until?: string;
+    retryAt: string;
+    detectedAt: string;
+    runtime: string | null;
+  };
+  /**
    * Set (in API responses only — never persisted on the member) while the
    * agent runs on a fallback runtime because its own ran out of usage.
    * `runtimeType` stays the configured runtime. specs/2026-10-01-runtime-fallback.md

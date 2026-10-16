@@ -10,6 +10,8 @@ import { OAuthReloginMonitorService, formatLoginNotice, loginScreenRegion } from
 import type { LoginRequiredInfo } from './oauth-relogin-monitor.service.js';
 import { OAUTH_RELOGIN_CONSTANTS, LOGIN_SCREEN_REGION } from '../../constants.js';
 import { setRuntimeFallbackHooks } from '../runtime-fallback/effective-runtime.js';
+import { resetUsageLimitState, usageLimitOf } from '../runtime-fallback/usage-limit-state.js';
+import { USAGE_LIMIT_STATE_CONSTANTS } from '../../constants.js';
 
 const LOGIN_TAIL_LINES = LOGIN_SCREEN_REGION.TAIL_LINES;
 
@@ -1169,6 +1171,59 @@ describe('OAuthReloginMonitorService', () => {
 			feedLive(CLAUDE_EXPIRED);
 			await advancePastRelogin();
 			expect(mockSessionWrite).toHaveBeenCalledWith('/login\r');
+		});
+	});
+
+	describe('usage limit in live output (2026-10-16 weekly-limit incident)', () => {
+		const SESSION = 'agent-dev-001';
+		const UNDATED_LIMIT = "  ⎿  You've hit your session limit · resets 8pm (America/New_York)";
+		const WORK = '⏺ Read(src/app.ts)\n  ⎿  Read 120 lines\n⏺ Updating the request handler now';
+
+		beforeEach(() => resetUsageLimitState());
+		afterEach(() => resetUsageLimitState());
+
+		/** Start monitoring and step past the startup grace period. */
+		function startLive(): void {
+			service.startMonitoring(SESSION, 'claude-code');
+			jest.advanceTimersByTime(OAUTH_RELOGIN_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 1);
+		}
+
+		it('an undated limit line counts when it arrives as new live output', () => {
+			startLive();
+			capturedOnDataCallback?.(UNDATED_LIMIT);
+			expect(usageLimitOf(SESSION)).toMatchObject({ source: 'output', runtime: 'claude-code' });
+		});
+
+		it('the same undated line on a swept screen (resumed history) does not count', () => {
+			mockBackend.listSessions.mockReturnValue([SESSION]);
+			mockBackend.captureOutput.mockReturnValue(['> earlier request', UNDATED_LIMIT, '', '> next', '⏺ Done.', '│ >      │'].join('\n'));
+			service.startMonitoring(SESSION, 'claude-code');
+			service.sweepAllSessions();
+			expect(usageLimitOf(SESSION)).toBeNull();
+		});
+
+		it('an undated limit line repainted during the startup grace period (resume) does not count', () => {
+			service.startMonitoring(SESSION, 'claude-code');
+			capturedOnDataCallback?.(UNDATED_LIMIT);
+			expect(usageLimitOf(SESSION)).toBeNull();
+		});
+
+		it('fresh non-limit output lifts the state, but not within the grace after the limit was seen', () => {
+			startLive();
+			capturedOnDataCallback?.(UNDATED_LIMIT);
+			capturedOnDataCallback?.(WORK);
+			expect(usageLimitOf(SESSION)).not.toBeNull();
+			jest.advanceTimersByTime(USAGE_LIMIT_STATE_CONSTANTS.LIFT_GRACE_MS);
+			capturedOnDataCallback?.(WORK);
+			expect(usageLimitOf(SESSION)).toBeNull();
+		});
+
+		it('a repaint of the limit screen does not lift the state', () => {
+			startLive();
+			capturedOnDataCallback?.(UNDATED_LIMIT);
+			jest.advanceTimersByTime(USAGE_LIMIT_STATE_CONSTANTS.LIFT_GRACE_MS);
+			capturedOnDataCallback?.('   ❯ 2. Wait here, then continue automatically at 8pm   ');
+			expect(usageLimitOf(SESSION)).not.toBeNull();
 		});
 	});
 });

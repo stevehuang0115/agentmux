@@ -27,6 +27,7 @@ import type { ISessionBackend } from '../session/session-backend.interface.js';
 import { PtyActivityTrackerService } from '../agent/pty-activity-tracker.service.js';
 import { delay } from '../../utils/async.utils.js';
 import { isPlannedRelaunch } from '../agent/planned-relaunch.registry.js';
+import { usageLimitOf } from '../runtime-fallback/usage-limit-state.js';
 
 /** Options of {@link OrchestratorRestartService.attemptRestart}. */
 export interface RestartOptions {
@@ -108,6 +109,8 @@ export class OrchestratorRestartService {
 	private consecutiveFailures = 0;
 	/** Set when auto-restart has stopped trying (see {@link markGaveUp}) */
 	private gaveUp: RestartGiveUp | null = null;
+	/** Retry time of the usage-limit state last logged as blocking a restart (log once) */
+	private loggedUsageLimitRetryAt: string | null = null;
 
 	/** External dependencies (injected via setDependencies) */
 	private agentRegistrationService: AgentRegistrationService | null = null;
@@ -205,6 +208,21 @@ export class OrchestratorRestartService {
 			return false;
 		}
 		if (planned) return this.runRestart(true, options.reason);
+
+		// Out of usage (e.g. Claude Code's weekly limit): a restart cannot help
+		// and only loses the pending turn. Wait for the reset (2026-10-16: 12
+		// restarts in 15 minutes on a limited orchestrator).
+		const limited = usageLimitOf(ORCHESTRATOR_SESSION_NAME);
+		if (limited) {
+			if (this.loggedUsageLimitRetryAt !== limited.retryAt) {
+				this.loggedUsageLimitRetryAt = limited.retryAt;
+				this.logger.warn('Not restarting the orchestrator: its runtime is out of usage', {
+					until: limited.until ?? null,
+					retryAt: limited.retryAt,
+				});
+			}
+			return false;
+		}
 
 		if (this.gaveUp) {
 			if (Date.now() - Date.parse(this.gaveUp.at) < ORCHESTRATOR_RESTART_CONSTANTS.GAVE_UP_RETRY_MS) {

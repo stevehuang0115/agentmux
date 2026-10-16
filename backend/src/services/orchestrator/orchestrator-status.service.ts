@@ -14,6 +14,7 @@ import { getSessionBackendSync } from '../session/index.js';
 import { isInProcessRuntimeActive } from '../agent/crewly-agent/in-process-runtime-registry.js';
 import { RUNTIME_TYPES, type RuntimeType } from '../../constants.js';
 import { effectiveRuntimeType } from '../runtime-fallback/effective-runtime.js';
+import { usageLimitOf, usageLimitReason, usageLimitedView, type UsageLimitedView } from '../runtime-fallback/usage-limit-state.js';
 
 /** Dashboard URL for user-facing messages */
 const DASHBOARD_URL = `http://localhost:${WEB_CONSTANTS.PORTS.FRONTEND}`;
@@ -28,6 +29,31 @@ export interface OrchestratorStatusResult {
   agentStatus: string | null;
   /** Human-readable status message */
   message: string;
+  /**
+   * Set while the orchestrator's runtime is out of usage (e.g. Claude Code's
+   * weekly limit). `isActive` stays true — the session is running and must
+   * not be restarted — but it takes no turn before `until` / `retryAt`.
+   */
+  usageLimited?: UsageLimitedView;
+}
+
+/**
+ * The status of a running orchestrator: "active and ready", unless its
+ * runtime is out of usage, in which case it says so and until when.
+ *
+ * @param sessionName - Orchestrator session
+ * @param message - Message for the ready case
+ * @returns Active status
+ */
+function activeStatus(sessionName: string, message: string): OrchestratorStatusResult {
+  const base = { isActive: true, agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE };
+  const limited = usageLimitOf(sessionName);
+  if (!limited) return { ...base, message };
+  return {
+    ...base,
+    message: `${usageLimitReason('Orchestrator', limited)}. It is not restarted meanwhile; messages wait in the queue.`,
+    usageLimited: usageLimitedView(sessionName),
+  };
 }
 
 /**
@@ -127,11 +153,7 @@ export async function getOrchestratorStatus(): Promise<OrchestratorStatusResult>
     const isSessionActive = sessionExists && agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.STARTED;
 
     if (isRegisteredActive || isSessionActive) {
-      return {
-        isActive: true,
-        agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE,
-        message: 'Orchestrator is active and ready.',
-      };
+      return activeStatus(sessionName, 'Orchestrator is active and ready.');
     }
 
     // Proactive cleanup: if the session backend confirmed the session is dead
@@ -185,11 +207,7 @@ export async function getOrchestratorStatus(): Promise<OrchestratorStatusResult>
         } catch {
           // Best-effort — don't let persist failure block recovery
         }
-        return {
-          isActive: true,
-          agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE,
-          message: 'Orchestrator is active and ready (status recovered).',
-        };
+        return activeStatus(sessionName, 'Orchestrator is active and ready (status recovered).');
       }
     }
 

@@ -55,6 +55,7 @@ import type { WorkItem } from '../../types/v2/work-item.types.js';
 import { getLocalApiBaseUrl } from '../../utils/local-api-url.utils.js';
 import { DIRECT_DELIVERY_CONSTANTS, ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
 import { spendCapStopOf } from '../spend/spend-cap.gate.js';
+import { usageLimitOf } from '../runtime-fallback/usage-limit-state.js';
 import { SubAgentMessageQueue } from '../messaging/sub-agent-message-queue.service.js';
 import {
   FreshTaskConversationService,
@@ -557,6 +558,19 @@ export class WorkItemDispatchSubscriber {
         capTokens: capStop.capTokens,
       });
       return { status: 'held', reason: 'over its daily token cap' };
+    }
+
+    // Out of usage (e.g. Claude Code's weekly limit): the write would only
+    // be queued. Keep the item queued (not dispatched) until the reset.
+    const usageLimit = usageLimitOf(workItem.target);
+    if (usageLimit) {
+      this.logger.info('Dispatch skipped — target is out of usage', {
+        workItemId: workItem.id,
+        target: workItem.target,
+        until: usageLimit.until ?? null,
+        retryAt: usageLimit.retryAt,
+      });
+      return { status: 'held', reason: 'out of usage' };
     }
 
     // Team budget gate: do not wake an agent whose team is over budget. The

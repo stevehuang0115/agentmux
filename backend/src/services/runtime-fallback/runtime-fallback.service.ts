@@ -53,6 +53,7 @@
 
 import { ORCHESTRATOR_SESSION_NAME, RUNTIME_FALLBACK_CONSTANTS, RUNTIME_TYPES } from '../../constants.js';
 import { detectUsageLimit, type UsageLimitMatch } from './usage-limit-rules.js';
+import { clearUsageLimit } from './usage-limit-state.js';
 import { traceRuntimeBlocked } from '../trace/trace-recorder.js';
 import { accountOf, baseRuntimeOf, parseRuntimeTarget, runtimeTarget } from '../harness/claude-accounts.js';
 import type { LaunchRuntimeDecision, LaunchRuntimeInput, RuntimeFallbackHooks, RuntimeOutputSource } from './effective-runtime.js';
@@ -737,7 +738,11 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 			}
 		} else {
 			const confirmed = await this.confirm(runtime);
-			if (!confirmed) return;
+			if (!confirmed) {
+				// The probe answered normally: the session is not out of usage either.
+				clearUsageLimit(sessionName);
+				return;
+			}
 			if (!this.state.exhausted[runtime]) {
 				// The limit came straight back after a switch-back: back off the
 				// next probe, and do not tell the owner a second time.
@@ -815,6 +820,9 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 			return outcome;
 		} finally {
 			this.switching.delete(sessionName);
+			// On another runtime now (or back on one that has usage again): the
+			// session's own usage-limit state no longer holds.
+			if (outcome === 'switched' || outcome === 'reverted') clearUsageLimit(sessionName);
 			await this.afterSwitch(sessionName, outcome, opts.flushAfter);
 		}
 	}

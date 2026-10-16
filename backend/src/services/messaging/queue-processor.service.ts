@@ -31,8 +31,10 @@ import {
   MESSAGE_SOURCES,
   GCHAT_THREAD_CONSTANTS,
   SPEND_CAP_CONSTANTS,
+  USAGE_LIMIT_STATE_CONSTANTS,
   type RuntimeType,
 } from '../../constants.js';
+import { usageLimitOf, usageLimitRemainingMs } from '../runtime-fallback/usage-limit-state.js';
 import { PtyActivityTrackerService } from '../agent/pty-activity-tracker.service.js';
 import { InFlightTurnTracker } from '../restart/in-flight-turn-tracker.service.js';
 import { RestartDrainService } from '../restart/restart-drain.service.js';
@@ -304,6 +306,15 @@ export class QueueProcessorService extends EventEmitter {
     // cap resets at midnight or the owner boosts it.
     if (spendCapStopOf(ORCHESTRATOR_SESSION_NAME)) {
       this.scheduleProcessNext(SPEND_CAP_CONSTANTS.QUEUE_RECHECK_MS);
+      return;
+    }
+
+    // Out of usage (e.g. Claude Code's weekly limit): its prompt will not
+    // come back before the reset, so do not wait on it or force-deliver into
+    // it; messages stay on the queue and go out after the reset.
+    const usageLimit = usageLimitOf(ORCHESTRATOR_SESSION_NAME);
+    if (usageLimit) {
+      this.scheduleProcessNext(Math.min(usageLimitRemainingMs(usageLimit), USAGE_LIMIT_STATE_CONSTANTS.RECHECK_MAX_MS));
       return;
     }
 

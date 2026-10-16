@@ -16,6 +16,7 @@ import {
 import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
 import { OAuthReloginMonitorService } from '../../services/agent/oauth-relogin-monitor.service.js';
 import { OrchestratorRestartService } from '../../services/orchestrator/orchestrator-restart.service.js';
+import { clearUsageLimit } from '../../services/runtime-fallback/usage-limit-state.js';
 import { MemoryService } from '../../services/memory/memory.service.js';
 import { LoggerService } from '../../services/core/logger.service.js';
 import { isModelProvider } from '../../services/agent/crewly-agent/types.js';
@@ -716,6 +717,8 @@ export async function updateOrchestratorRuntime(
 			// A new runtime may fix what made auto-restart stop (e.g. the old
 			// runtime's CLI was not installed): let it try again.
 			OrchestratorRestartService.getInstance().clearGiveUp();
+			// The old runtime's usage limit says nothing about the new one.
+			clearUsageLimit(ORCHESTRATOR_SESSION_NAME);
 		}
 		if (hasModelId && !hasEffort) {
 			await this.storageService.updateOrchestratorModelId(modelId);
@@ -774,6 +777,10 @@ export async function getOrchestratorStatus(
 		// signed in): say why instead of a bare "not running" (B8 D1).
 		const restartGaveUp = status.isActive ? null : OrchestratorRestartService.getInstance().getGiveUp();
 
+		// Out of usage (e.g. Claude Code's weekly limit): the status service
+		// says so, and until when, instead of "active and ready" (2026-10-16).
+		const usageLimited = status.usageLimited ?? null;
+
 		res.json({
 			success: true,
 			data: {
@@ -787,6 +794,7 @@ export async function getOrchestratorStatus(
 				offlineMessage: status.isActive ? null : getOrchestratorOfflineMessage(false),
 				loginRequired,
 				restartGaveUp,
+				usageLimited,
 			},
 		} as ApiResponse);
 	} catch (error) {

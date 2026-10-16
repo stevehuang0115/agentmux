@@ -53,6 +53,7 @@ import {
 	RUNTIME_INPUT_SAFETY,
 	TUI_INPUT_GUARD,
 	INPUT_BLOCKED_RETRY_CONSTANTS,
+	USAGE_LIMIT_STATE_CONSTANTS,
 } from '../../constants.js';
 import { TuiInputGuardError, TuiPasteHoldError, screenShowsTurnInProgress, type TuiInputReading } from '../session/tui-input-guard.js';
 import { InputBlockedRetryService } from '../messaging/input-blocked-retry.service.js';
@@ -138,6 +139,8 @@ import {
 	takeRuntimeSwitchKickoffNote,
 } from '../runtime-fallback/effective-runtime.js';
 import { spendCapReason, spendCapStopOf } from '../spend/spend-cap.gate.js';
+import { inspectUsageLimitScreen } from '../runtime-fallback/usage-limit-screen.js';
+import { usageLimitOf, usageLimitReason, usageLimitRemainingMs } from '../runtime-fallback/usage-limit-state.js';
 import { noteTurnDelivery, traceTurnActivity, traceTurnError } from '../trace/trace-recorder.js';
 import { stripTraceMarkers } from '../trace/trace-markers.js';
 import { mintAgentBadge } from '../core/owner-auth.service.js';
@@ -296,6 +299,8 @@ export class AgentRegistrationService {
 	private busyHoldSince = new Map<string, { at: number; message: string }>();
 	/** Re-check timers for messages held for a busy agent */
 	private busyHoldTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	/** Timers that write out messages held for a usage-limited agent */
+	private usageLimitFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	// Consecutive guard refusals per session, for escalation.
 	private guardRefusalCount = new Map<string, number>();
 
@@ -4711,6 +4716,26 @@ Loop until done, blocked, or explicitly reassigned:
 				};
 			}
 
+			// Out of usage (e.g. Claude Code's weekly limit): typing into it would
+			// only be lost (or land in its usage-limit menu). Hold the message and
+			// write it out once the limit has reset.
+			const usageLimit = usageLimitOf(sessionName);
+			if (usageLimit) {
+				SubAgentMessageQueue.getInstance().enqueue(sessionName, message);
+				this.scheduleUsageLimitFlush(sessionName, usageLimitRemainingMs(usageLimit));
+				this.logger.info('Agent is out of usage — message queued until the limit resets', {
+					sessionName,
+					until: usageLimit.until ?? null,
+					retryAt: usageLimit.retryAt,
+					messageLength: message.length,
+				});
+				return {
+					success: true,
+					queued: true,
+					message: `${USAGE_LIMIT_STATE_CONSTANTS.QUEUED_MARKER} ${usageLimitReason(sessionName, usageLimit)}; message queued`,
+				};
+			}
+
 			// ===== In-process Crewly Agent delivery =====
 			// Route directly to the in-process runtime, bypassing PTY entirely.
 			// Fire-and-forget: mirrors PTY runtimes where the write returns immediately.
@@ -5164,6 +5189,24 @@ Loop until done, blocked, or explicitly reassigned:
 		// idle-detection already refuses to suspend on this signal; delivery
 		// now refuses to write on it.
 		const currentOutput = sessionHelper.capturePane(sessionName);
+
+		// Out of usage (Claude Code's weekly-limit menu, a "You've hit your …
+		// limit" line): its prompt will not come back before the reset, so do
+		// not wait for it (2026-10-16: "Waiting for agent to return to prompt …
+		// Timed out" every ~17s for ~38 hours).
+		const limited = await inspectUsageLimitScreen(sessionName, currentOutput, runtimeType ?? null, {
+			io: {
+				sendKey: (s, key) => sessionHelper.sendKey(s, key),
+				sendEnter: (s) => sessionHelper.sendEnter(s),
+				capture: (s) => sessionHelper.capturePane(s),
+			},
+			logger: this.logger,
+		});
+		if (limited) {
+			this.logger.debug('Agent is out of usage — not waiting for its prompt', { sessionName, retryAt: limited.retryAt });
+			return false;
+		}
+
 		if (this.isAtIdlePrompt(sessionHelper, sessionName, currentOutput, runtimeType) && !(await this.isBusyByWorkingStatus(sessionName))) {
 			this.logger.debug('Agent already at prompt', { sessionName });
 			return true;
@@ -5203,6 +5246,13 @@ Loop until done, blocked, or explicitly reassigned:
 			const pollId = setInterval(() => {
 				if (resolved) return;
 				pollCount++;
+				// Marked out of usage meanwhile (by the screen sweep): stop waiting.
+				if (usageLimitOf(sessionName)) {
+					this.logger.info('Agent is out of usage — stopped waiting for its prompt', { sessionName, pollCount });
+					cleanup();
+					resolve(false);
+					return;
+				}
 				const output = sessionHelper.capturePane(sessionName);
 				if (this.isAtIdlePrompt(sessionHelper, sessionName, output, runtimeType)) {
 					void this.isBusyByWorkingStatus(sessionName).then((busy) => {
@@ -5365,6 +5415,31 @@ Loop until done, blocked, or explicitly reassigned:
 			return null;
 		}
 		return this.holdForBusyAgent(sessionName, message);
+	}
+
+	/**
+	 * Write out the messages held for a usage-limited agent once its limit
+	 * has reset. One timer per agent; the flush re-checks (still limited
+	 * means held again and a new timer).
+	 *
+	 * @param sessionName - The agent session
+	 * @param delayMs - Time until the limit's retry time
+	 */
+	private scheduleUsageLimitFlush(sessionName: string, delayMs: number): void {
+		if (this.usageLimitFlushTimers.has(sessionName)) return;
+		const timer = setTimeout(() => {
+			this.usageLimitFlushTimers.delete(sessionName);
+			const queue = SubAgentMessageQueue.getInstance();
+			if (!queue.hasPending(sessionName)) return;
+			void queue
+				.flush(sessionName, (data) => this.sendMessageToAgent(sessionName, data), SUB_AGENT_QUEUE_CONSTANTS.FLUSH_INTER_MESSAGE_DELAY)
+				.catch((err) => this.logger.warn('Writing out messages held for a usage-limited agent failed', {
+					sessionName,
+					error: err instanceof Error ? err.message : String(err),
+				}));
+		}, delayMs);
+		timer.unref?.();
+		this.usageLimitFlushTimers.set(sessionName, timer);
 	}
 
 	/**

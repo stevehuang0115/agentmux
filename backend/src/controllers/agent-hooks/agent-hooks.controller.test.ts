@@ -12,6 +12,8 @@ import { ownerHookNoteFor } from '../../services/messaging/owner-hook-message.js
 import { WindDownService } from '../../services/system/wind-down.service.js';
 import { BoardActivityTracker, getBoardActivity } from '../../services/board/board-activity.tracker.js';
 import { setRuntimeFallbackHooks, type RuntimeFallbackHooks } from '../../services/runtime-fallback/effective-runtime.js';
+import { markUsageLimited, resetUsageLimitState, usageLimitOf } from '../../services/runtime-fallback/usage-limit-state.js';
+import { USAGE_LIMIT_STATE_CONSTANTS } from '../../constants.js';
 
 // The owner-message note reads the real queue; stub that one lookup (the
 // joining stays real).
@@ -50,6 +52,28 @@ describe('receiveAgentHook', () => {
 		const r = call(SESSION, { event: 'Notification', notificationType: 'permission_prompt' });
 		expect(r).toEqual({ status: 202, json: { success: true, recorded: true } });
 		expect(getHookSignal('crewly-dev-1')).toMatchObject({ state: 'waiting', kind: 'permission' });
+	});
+
+	it.each(['Stop', 'PostToolUse'])('a %s hook (the agent works again) lifts a usage-limit state', (event) => {
+		const seen = Date.now() - USAGE_LIMIT_STATE_CONSTANTS.LIFT_GRACE_MS - 1;
+		markUsageLimited({ sessionName: 'crewly-dev-1', runtime: 'claude-code', ruleId: 'claude.hit_your_limit', resetAt: Date.now() + 3_600_000, source: 'output' }, seen);
+		try {
+			call(SESSION, { event });
+			expect(usageLimitOf('crewly-dev-1')).toBeNull();
+		} finally {
+			resetUsageLimitState();
+		}
+	});
+
+	it('a hook other than Stop / PostToolUse leaves a usage-limit state alone', () => {
+		const seen = Date.now() - USAGE_LIMIT_STATE_CONSTANTS.LIFT_GRACE_MS - 1;
+		markUsageLimited({ sessionName: 'crewly-dev-1', runtime: 'claude-code', ruleId: 'claude.hit_your_limit', resetAt: Date.now() + 3_600_000, source: 'output' }, seen);
+		try {
+			call(SESSION, { event: 'Notification', notificationType: 'permission_prompt' });
+			expect(usageLimitOf('crewly-dev-1')).not.toBeNull();
+		} finally {
+			resetUsageLimitState();
+		}
 	});
 
 	it('records a cleared signal after the prompt is answered', () => {

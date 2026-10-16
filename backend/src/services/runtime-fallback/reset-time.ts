@@ -5,7 +5,8 @@
  *
  * - Claude Code: `You've hit your limit · resets 3pm (America/Los_Angeles)`,
  *   `resets Oct 6, 9am`, `Your limit will reset at 5pm (Asia/Shanghai).`,
- *   `continuing automatically at 3pm`, the old `usage limit reached|1767225600`
+ *   `continuing automatically at 3pm`, the limit menu's `Wait here, then
+ *   continue automatically at 8pm`, the old `usage limit reached|1767225600`
  *   (epoch seconds) and the API's `resets 2026-08-08 00:00 UTC`.
  * - Codex: `try again at 4:05 PM`, `try again at Oct 3rd, 2026 4:05 PM`,
  *   `try again in 4 days 7 hours 3 minutes`.
@@ -119,7 +120,7 @@ const DATE = String.raw`(?:(?:on\s+)?([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|t
 const ZONE = String.raw`(?:\s*\(([A-Za-z_]+(?:\/[A-Za-z0-9_+\-]+)*)\)|\s+(UTC|GMT)\b)?`;
 
 /** What introduces an absolute reset time. */
-const ABSOLUTE_LEAD = String.raw`(?:resets?|reset\s+at|resets?\s+at|try\s+again\s+(?:at|after)|available\s+again\s+at|continuing\s+automatically(?:\s+at)?|until)`;
+const ABSOLUTE_LEAD = String.raw`(?:resets?|reset\s+at|resets?\s+at|try\s+again\s+(?:at|after)|available\s+again\s+at|continu(?:e|ing)\s+automatically(?:\s+at)?|until)`;
 
 /** Absolute: lead + optional date + clock + optional zone. */
 const ABSOLUTE_RE = new RegExp(String.raw`${ABSOLUTE_LEAD}\s+(?:at\s+)?${DATE}${CLOCK}${ZONE}`, 'i');

@@ -7730,6 +7730,45 @@ export const RUNTIME_FALLBACK_CONSTANTS = {
 } as const;
 
 /**
+ * Per-session usage-limit state (2026-10-16 incident: the orchestrator sat on
+ * Claude Code's weekly-limit menu for ~38 hours while Crewly restarted it,
+ * waited for its prompt, and reported it "active and ready"). While a session
+ * is usage-limited it is not restarted, not waited on and not written to.
+ */
+export const USAGE_LIMIT_STATE_CONSTANTS = {
+	/** How long to back off when the limit message names no reset time (ms) */
+	NO_RESET_BACKOFF_MS: 30 * 60 * 1000,
+	/** Grace after the parsed reset time before the session is tried again (ms) */
+	RESET_GRACE_MS: 2 * 60 * 1000,
+	/**
+	 * Furthest a parsed reset time may lie ahead. Weekly limits reset within
+	 * 7 days; a dated message further out is an old one (a past "Oct 10" is
+	 * read as next year's), so it is not trusted.
+	 */
+	MAX_RESET_AHEAD_MS: 8 * 24 * 60 * 60 * 1000,
+	/** Trailing non-empty screen lines inspected for a usage-limit state */
+	SCREEN_TAIL_LINES: 25,
+	/** Longest a held queue waits before looking at the state again (ms) */
+	RECHECK_MAX_MS: 60_000,
+	/** Delay between the keys that answer the usage-limit menu (ms) */
+	MENU_KEY_DELAY_MS: 300,
+	/** Marker on a delivery result held because the agent is usage-limited */
+	QUEUED_MARKER: '[USAGE_LIMITED]',
+	/**
+	 * Fewest printable characters (whitespace collapsed) a live output chunk
+	 * needs to count as fresh activity that lifts a usage-limit state; cursor
+	 * moves and spinner ticks stay below it.
+	 */
+	FRESH_OUTPUT_MIN_CHARS: 40,
+	/**
+	 * After a limit is last seen (or its menu answered), activity this soon is
+	 * not trusted to lift the state: it is the repaint of the limit screen or
+	 * of the key Crewly pressed (ms).
+	 */
+	LIFT_GRACE_MS: 10_000,
+} as const;
+
+/**
  * Per-person access (issue #968, epic #967): the people directory, the person
  * each agent turn acts for, and grant sharing. specs/per-person-access.md
  */
