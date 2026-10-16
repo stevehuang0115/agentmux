@@ -1,6 +1,6 @@
 ---
 name: Playwright Chrome Browser
-description: Enable browser automation capabilities using Playwright MCP server. This allows agents to interact with web pages, take screenshots, fill forms, and perform automated browser tasks through the Playwright automation framework.
+description: "Fallback only: use the remote-browser skill (Crewly in Chrome) first; use this only when Crewly in Chrome is not drivable. Enable browser automation capabilities using Playwright MCP server. This allows agents to interact with web pages, take screenshots, fill forms, and perform automated browser tasks through the Playwright automation framework."
 version: 1.0.0
 category: automation
 skillType: mcp

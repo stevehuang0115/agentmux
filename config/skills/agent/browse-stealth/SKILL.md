@@ -1,6 +1,6 @@
 ---
 name: Stealth Browser (Patchright + CDP)
-description: Anti-detection browser automation using Patchright (Playwright fork) connected to a real Chrome instance via CDP. Bypasses navigator.webdriver checks, fingerprint anomalies, and headless detection used by platforms like 小红书, X/Twitter, and LinkedIn.
+description: "Fallback only: use the remote-browser skill (Crewly in Chrome) first; use this only when Crewly in Chrome is not drivable. Anti-detection browser automation using Patchright (Playwright fork) connected to a real Chrome instance via CDP. Bypasses navigator.webdriver checks, fingerprint anomalies, and headless detection used by platforms like 小红书, X/Twitter, and LinkedIn."
 version: 1.0.0
 category: browser
 skillType: claude-skill

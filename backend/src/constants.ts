@@ -8840,3 +8840,35 @@ export const SLACK_INBOUND_BACKFILL_CONSTANTS = {
 	/** Per-request timeout (ms) */
 	REQUEST_TIMEOUT_MS: 15_000,
 } as const;
+
+/**
+ * Browser tool order for every agent prompt.
+ *
+ * Crewly in Chrome (the `remote-browser` skill) drives the user's real Chrome,
+ * so requests carry the user's own cookies and fingerprint and pass the bot
+ * checks that stop headless and automation browsers. It always comes first;
+ * Playwright / headless / stealth / CDP-attach browsers are fallbacks, and a
+ * fallback that hits a wall goes back to Crewly in Chrome instead of fighting
+ * the block.
+ */
+export const BROWSER_PRIORITY_CONSTANTS = {
+	/**
+	 * Prompt section shared by the legacy init prompt and the modular
+	 * skills-reference module.
+	 *
+	 * @param remoteBrowserPath - Absolute path of the remote-browser `execute.sh`
+	 * @returns Markdown section
+	 */
+	promptSection(remoteBrowserPath: string): string {
+		return [
+			'### Browser order — Crewly in Chrome first',
+			'',
+			'For ANY web task (browsing, reading, searching a site, scraping, filling forms, screenshots, logged-in pages), use the tools in this order:',
+			`1. **Crewly in Chrome** (\`remote-browser\` skill: \`bash ${remoteBrowserPath} '{"action":"status"}'\`). It is the user's real Chrome with their real cookies and logins, so sites treat it as the user and bot checks rarely trigger. Use it whenever status reports \`drivable: true\` (or a connected client), even for pages that work logged out.`,
+			'2. **Only if Crewly in Chrome is not drivable**: Playwright MCP, `browse-stealth`, `chrome-attach`, or another headless/automation browser.',
+			'',
+			'**Hit a wall in a fallback browser?** A CAPTCHA, "verify you are human", Cloudflare/challenge page, 403/429, login wall, or an empty or different page than a person would see: stop retrying there. Check Crewly in Chrome status again and redo the step in Crewly in Chrome. Do not try to solve CAPTCHAs, spoof headers, or rotate browsers to get around the block.',
+			'If Crewly in Chrome is still not drivable, tell the user in one line that the site blocks automated browsers and the step needs Crewly in Chrome connected (open Chrome with the Crewly extension signed in), then continue with whatever else you can do.',
+		].join('\n');
+	},
+} as const;

@@ -81,7 +81,15 @@ describe('SkillsReferenceModule', () => {
 		const result = await module.build(baseConfig);
 
 		expect(result).toContain('Available Capabilities');
-		expect(result).toContain('Playwright MCP server');
+		expect(result).toContain('Crewly in Chrome first');
+	});
+
+	it('puts Crewly in Chrome ahead of headless browsers and sends blocked fallbacks back to it', async () => {
+		const result = await module.build(baseConfig);
+
+		expect(result).toContain('Browser order — Crewly in Chrome first');
+		expect(result.indexOf('1. **Crewly in Chrome**')).toBeLessThan(result.indexOf('2. **Only if Crewly in Chrome is not drivable**'));
+		expect(result).toContain('Hit a wall in a fallback browser?');
 	});
 
 	it('should include memory tool instructions', async () => {
