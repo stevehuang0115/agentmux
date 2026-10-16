@@ -441,10 +441,12 @@ export class ResourceModeService {
 	 *
 	 * Anti-thrash rules (2026-10-16, Luna and Max evicting each other), which
 	 * hold in every mode, relaxed included, unless memory is critical:
-	 *  - an agent started less than MIN_RUN_BEFORE_EVICT_MS ago is kept (not for an
-	 *    owner-message waiter: the owner never waits behind a just-started agent),
+	 *  - an agent started less than MIN_RUN_BEFORE_EVICT_MS ago is kept,
 	 *  - an agent whose work the waiter waits on ({@link ResourceModeDeps.waitsOn}) is kept,
 	 *  - an agent that displaced the waiter less than DISPLACED_GUARD_MS ago is kept (hysteresis).
+	 * An owner-message waiter skips the first and last rule (owner messages are
+	 * rare, so they cannot thrash, and the owner must never wait); it keeps only
+	 * the waits-on rule and the protections above.
 	 * Relaxing only lifts the idle timeout; protected agents are never stopped.
 	 * When no agent qualifies, the waiter waits.
 	 *
@@ -524,7 +526,7 @@ export class ResourceModeService {
 	 * @param candidate - Running agent considered as a victim
 	 * @param waiter - First waiting start
 	 * @param now - Epoch ms of this pump
-	 * @param ownerWaiter - The waiter carries an owner message: the start window does not apply (hysteresis and waits-on still do)
+	 * @param ownerWaiter - The waiter carries an owner message: the start window and the hysteresis do not apply (waits-on still does)
 	 * @returns English reason, or null
 	 */
 	private async thrashReason(candidate: string, waiter: string, now: number, ownerWaiter = false): Promise<string | null> {
@@ -533,7 +535,7 @@ export class ResourceModeService {
 			return `started ${Math.round((now - started) / 60000)} min ago, under the ${RESOURCE_MODE_CONSTANTS.MIN_RUN_BEFORE_EVICT_MS / 60000} min protection window`;
 		}
 		const displaced = this.displacedBy.get(waiter);
-		if (displaced && displaced.by === candidate && now - displaced.at < RESOURCE_MODE_CONSTANTS.DISPLACED_GUARD_MS) {
+		if (!ownerWaiter && displaced && displaced.by === candidate && now - displaced.at < RESOURCE_MODE_CONSTANTS.DISPLACED_GUARD_MS) {
 			return `it displaced ${waiter} ${Math.round((now - displaced.at) / 60000)} min ago (no ping-pong)`;
 		}
 		if (waiter && this.deps?.waitsOn) {

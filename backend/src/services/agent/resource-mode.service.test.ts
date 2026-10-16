@@ -404,14 +404,14 @@ describe('anti-thrash rules (2026-10-16: Luna and Max evicting each other)', () 
 		expect(stopped).toEqual([]);
 	});
 
-	it('no ping-pong for an owner-message start either: it cannot stop the agent that displaced it', async () => {
+	it('an owner-message start skips the ping-pong guard: it may stop the agent that displaced it at once', async () => {
 		const { svc, stopped, run } = setup([agent('luna', 9e6)], { max: 1 });
 		await enter(svc);
 		expect(await waitedStart(svc, 'max')).toBe(true);
 		run('max');
-		// Inside Max's start window, which an owner start ignores; only the hysteresis keeps Max.
-		expect(await waitedStart(svc, 'luna', true)).toBe(false);
-		expect(stopped).toEqual(['luna']);
+		// Inside both Max's start window and the hysteresis window; an owner start ignores both.
+		expect(await settleWithin(svc.requestStart('luna', true), 20)).toBe(true);
+		expect(stopped).toEqual(['luna', 'max']);
 	});
 
 	it('never stops the agent whose work the waiter is waiting on', async () => {
@@ -447,7 +447,6 @@ describe('anti-thrash rules (2026-10-16: Luna and Max evicting each other)', () 
 		// Past Max's start protection, inside the hysteresis window: Luna's restart may not stop Max.
 		await jest.advanceTimersByTimeAsync(RESOURCE_MODE_CONSTANTS.MIN_RUN_BEFORE_EVICT_MS);
 		expect(await waitedStart(svc, 'luna')).toBe(false);
-		expect(await waitedStart(svc, 'luna', true)).toBe(false);
 		expect(stopped).toEqual(['luna']);
 		// Hysteresis is per pair: another agent's start may still take Max's slot.
 		expect(await waitedStart(svc, 'sage')).toBe(true);
