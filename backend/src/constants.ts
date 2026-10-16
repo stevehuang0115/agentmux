@@ -7187,6 +7187,10 @@ export const OPEN_ITEMS_CONSTANTS = {
 	ASK_OWNER_DEDUPE_WINDOW_MS: 2 * 60 * 60 * 1000,
 	/** Two questions with at least this character-bigram overlap are the same question */
 	SAME_QUESTION_SIMILARITY: 0.5,
+	/** Window (ms) for counting an agent's lifted-question cards (#1334) */
+	REPLY_CARD_WINDOW_MS: 24 * 60 * 60 * 1000,
+	/** At most this many lifted-question cards per agent per window; later questions are tracked without a card (#1334) */
+	REPLY_CARDS_PER_AGENT_PER_DAY: 3,
 	/** Option labels of a derived card */
 	YES_LABEL: 'Yes',
 	NO_LABEL: 'No',

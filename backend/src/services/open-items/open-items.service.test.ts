@@ -616,6 +616,14 @@ describe('OpenItemsService — questions', () => {
     expect(h.cards[0].card.context).toEqual(['*Context:* 我第二工位的播客也可以作为素材 — reply in thread to ask Atlas for details', '_Full message in Crewly chat._']);
   });
 
+  it('#1334: a cut-off fragment or a question for colleagues is tracked without a card', async () => {
+    const h = harness();
+    await ticket(h);
+    await h.service.onAgentMessage(msg(h, '尺寸已经改好了。:4，1080×1440 — 这样行不行？'));
+    await h.service.onAgentMessage(msg(h, '素材还差两张。你们能在周五 9 点前回一句结论吗？'));
+    expect(h.cards).toHaveLength(0);
+  });
+
   describe('TKT-072: a question lifted out of a message stands on its own', () => {
     const T72 = '要不要按这个草稿回，还是你想换个说法？';
     const DRAFT = '给 Mia 的回复草稿：\n\n谢谢提醒，那条帖子是我们的自动化误发的，已经删掉了。\n\n' + T72;

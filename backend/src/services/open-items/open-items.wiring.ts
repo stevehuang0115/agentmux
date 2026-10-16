@@ -129,7 +129,6 @@ export function createOpenItemsService(input: OpenItemsWiringInput): OpenItemsSe
     askQuestion: async (q: QuestionCardInput) => {
       const decisions = DecisionService.getInstance();
       if (!decisions) return null;
-      const tkt = typeof q.request.ticketNumber === 'number' ? formatTicketNumber(q.request.ticketNumber) : undefined;
       const name = await nameOf(q.item.agent);
       return decisions.askPrebuilt({
         kind: 'reply_question',
@@ -140,7 +139,8 @@ export function createOpenItemsService(input: OpenItemsWiringInput): OpenItemsSe
         ...(q.card.yesKey ? { yesKey: q.card.yesKey } : {}),
         deadline: defaultDeadline(new Date()),
         ...(q.card.sensitive ? { sensitive: q.card.sensitive } : {}),
-        title: tkt ? `${tkt} · ${name} asks` : `${name} asks`,
+        // Tickets are internal: the owner never sees their numbers.
+        title: `${name} asks`,
         ...(q.card.context?.length ? { body: q.card.context } : {}),
         ...(q.place ? { place: { slackChannelId: q.place.slackChannelId, threadTs: q.place.threadTs } } : {}),
         requestRef: { requestId: q.request.id, itemId: q.item.id },
