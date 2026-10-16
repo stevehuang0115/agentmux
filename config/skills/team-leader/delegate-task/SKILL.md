@@ -1,6 +1,6 @@
 ---
 name: Delegate Task (TL)
-description: "Assign a task to a worker within the Team Leader's subordinate scope. Validates that the target worker's parentMemberId matches the TL's memberId before delegation. Includes auto-monitoring setup."
+description: "Assign a task to a worker within the Team Leader's subordinate scope. Validates that the target worker's parentMemberId matches the TL's memberId before delegation. Subscribes the lead to the worker's idle event; a recurring progress check is opt-in (minimum 30 minutes)."
 version: 1.0.0
 category: management
 skillType: claude-skill
@@ -52,6 +52,28 @@ Assigns a task to a worker within the Team Leader's subordinate scope. Validates
 | `--thread` | `thread` | No | Owner request from Slack: the key from the `[SLACK-THREAD:<key>]` of the owner's message. The member answers the owner in that thread itself — see Owner requests |
 | `--no-member-fits` | `noMemberFits` | No | You keep the work: record what is missing (access, tool, permission, everyone busy). Needs `--task`; nothing is delegated — see No member fits |
 | `--work-item` | `workItemId` | No | With `--no-member-fits`: the WorkItem you keep (gets a `[NO-MEMBER-FITS]` note) |
+| `--progress-check` | `monitor.progressCheckMinutes` | No | Opt in to a recurring "TL progress check" every N minutes for this delegation. Off by default; values under 30 are raised to 30. Legacy JSON `monitor.fallbackCheckMinutes` is read the same way |
+| — | `monitor.idleEvent` | No | `false` skips the idle event subscription (default `true`) |
+
+## Monitoring
+
+Each delegation subscribes you (one-shot) to the worker's `agent:idle` event,
+so you are woken when the worker goes idle; the worker also reports
+completion with `report-status`. That is enough for almost every task.
+
+No recurring progress check is scheduled unless you ask for one. Every check
+wakes your session and re-reads your whole context; the old default (every 5
+minutes per delegation) woke leads 219 times in 3.5 days. Opt in only for a
+long task with no other signal:
+
+```bash
+bash execute.sh --to worker-session --task "..." --progress-check 60
+```
+
+The minimum is 30 minutes (lower values are raised, with a note on stderr).
+The backend applies the same floor to any "TL progress check" it schedules.
+A check linked to the WorkItem stops once the item is done, verified,
+cancelled or failed.
 
 ## Who to delegate to
 

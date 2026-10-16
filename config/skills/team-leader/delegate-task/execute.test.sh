@@ -26,6 +26,15 @@ if ! grep -q 'Request Contract incomplete' "$REAL_FN_FILE"; then
   echo "FATAL: could not extract warn_missing_request_contract() from execute.sh" >&2
   exit 1
 fi
+# Same for the progress-check interval resolution (default off, 30 min floor).
+sed -n '/^resolve_progress_check_minutes() {$/,/^}$/p' "$SCRIPT_DIR/execute.sh" >> "$REAL_FN_FILE"
+if ! grep -q 'min_minutes=' "$REAL_FN_FILE"; then
+  echo "FATAL: could not extract resolve_progress_check_minutes() from execute.sh" >&2
+  exit 1
+fi
+# The mock writes each /schedule request body here so scenarios can check the interval.
+SCHED_BODY_LOG="$(mktemp)"
+export SCHED_BODY_LOG
 # shellcheck source=/dev/null
 source "$REAL_FN_FILE"
 
@@ -133,6 +142,7 @@ TEAMJSON
   fi
 
   if [ "$method" = "POST" ] && [ "$endpoint" = "/schedule" ]; then
+    printf '%s\n' "$body" >> "$SCHED_BODY_LOG"
     echo '{"success":true,"data":{"checkId":"sched-001"}}'
     return 0
   fi
@@ -225,7 +235,9 @@ fi
 
 # --- THIS IS THE CODE BEING TESTED ---
 MONITOR_IDLE=$(echo "$INPUT" | jq -r 'if .monitor.idleEvent == null then true else .monitor.idleEvent end')
-MONITOR_FALLBACK_MINUTES=$(echo "$INPUT" | jq -r 'if .monitor.fallbackCheckMinutes == null then 5 else .monitor.fallbackCheckMinutes end')
+# Production line verbatim (the mock takes JSON only, so no --progress-check flag).
+PROGRESS_CHECK_ARG="${PROGRESS_CHECK_ARG:-}"
+eval "$(grep -E '^MONITOR_FALLBACK_MINUTES=' "${REAL_SKILL_DIR}/execute.sh")"
 
 COLLECTED_SCHEDULE_IDS="[]"
 COLLECTED_SUBSCRIPTION_IDS="[]"
@@ -412,6 +424,88 @@ if [ "$SCHED_COUNT" = "0" ]; then
   PASS=$((PASS + 1))
 else
   echo "  FAIL: expected 0 schedules, got $SCHED_COUNT"
+  FAIL=$((FAIL + 1))
+fi
+
+# -----------------------------------------------------------------------
+# Scenario 7b: no monitor field — no recurring progress check by default
+# (219 "TL progress check" wakes in 3.5 days with the old 5-minute default)
+# -----------------------------------------------------------------------
+echo "Scenario 7b: no recurring progress check by default"
+: > "$SCHED_BODY_LOG"
+RAW_OUTPUT=$(env CREWLY_SESSION_NAME="sam-tl" bash "$MOCK_SCRIPT" "$SKILL_DIR" \
+  '{"to":"crewly-product-leo-dev","task":"Default monitoring"}' 2>&1)
+OUTPUT=$(echo "$RAW_OUTPUT" | grep '"monitoring"' | head -1)
+SCHED_COUNT=$(echo "$OUTPUT" | jq '.monitoring.scheduleIds | length')
+SUB_COUNT=$(echo "$OUTPUT" | jq '.monitoring.subscriptionIds | length')
+if [ "$SCHED_COUNT" = "0" ] && [ "$SUB_COUNT" = "1" ] && [ ! -s "$SCHED_BODY_LOG" ]; then
+  echo "  PASS: idle subscription only, no /schedule call"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: expected 0 schedules + 1 subscription, got schedules=$SCHED_COUNT subs=$SUB_COUNT body=$(cat "$SCHED_BODY_LOG")"
+  FAIL=$((FAIL + 1))
+fi
+
+# -----------------------------------------------------------------------
+# Scenario 7c: opt-in below the floor is raised to 30 minutes, with a note
+# -----------------------------------------------------------------------
+echo "Scenario 7c: fallbackCheckMinutes=5 is raised to the 30 min floor"
+: > "$SCHED_BODY_LOG"
+RAW_OUTPUT=$(env CREWLY_SESSION_NAME="sam-tl" bash "$MOCK_SCRIPT" "$SKILL_DIR" \
+  '{"to":"crewly-product-leo-dev","task":"Opt in low","monitor":{"fallbackCheckMinutes":5}}' 2>&1)
+INTERVAL=$(jq -r '.intervalMinutes' "$SCHED_BODY_LOG" 2>/dev/null | head -1)
+RECURRING=$(jq -r '.isRecurring' "$SCHED_BODY_LOG" 2>/dev/null | head -1)
+if [ "$INTERVAL" = "30" ] && [ "$RECURRING" = "true" ] && echo "$RAW_OUTPUT" | grep -q "below the 30 min minimum"; then
+  echo "  PASS: interval raised to 30 and the lead is told"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: expected recurring interval 30 + warning, got interval=$INTERVAL recurring=$RECURRING output=$RAW_OUTPUT"
+  FAIL=$((FAIL + 1))
+fi
+
+# -----------------------------------------------------------------------
+# Scenario 7d: opt-in at or above the floor is kept as asked
+# -----------------------------------------------------------------------
+echo "Scenario 7d: progressCheckMinutes=45 is kept"
+: > "$SCHED_BODY_LOG"
+env CREWLY_SESSION_NAME="sam-tl" bash "$MOCK_SCRIPT" "$SKILL_DIR" \
+  '{"to":"crewly-product-leo-dev","task":"Opt in 45","monitor":{"progressCheckMinutes":45}}' > /dev/null 2>&1 || true
+INTERVAL=$(jq -r '.intervalMinutes' "$SCHED_BODY_LOG" 2>/dev/null | head -1)
+if [ "$INTERVAL" = "45" ]; then
+  echo "  PASS: 45 min interval kept"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: expected interval 45, got '$INTERVAL'"
+  FAIL=$((FAIL + 1))
+fi
+
+# -----------------------------------------------------------------------
+# Scenario 7e: a non-numeric interval schedules nothing
+# -----------------------------------------------------------------------
+echo "Scenario 7e: non-numeric interval is ignored"
+: > "$SCHED_BODY_LOG"
+RAW_OUTPUT=$(env CREWLY_SESSION_NAME="sam-tl" bash "$MOCK_SCRIPT" "$SKILL_DIR" \
+  '{"to":"crewly-product-leo-dev","task":"Bad interval","monitor":{"progressCheckMinutes":"soon"}}' 2>&1)
+if [ ! -s "$SCHED_BODY_LOG" ] && echo "$RAW_OUTPUT" | grep -q "expected whole minutes"; then
+  echo "  PASS: nothing scheduled, warning emitted"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: expected no schedule + warning, got body=$(cat "$SCHED_BODY_LOG") output=$RAW_OUTPUT"
+  FAIL=$((FAIL + 1))
+fi
+
+# -----------------------------------------------------------------------
+# Scenario 7f: --progress-check flag value wins over JSON; floor and default hold
+# -----------------------------------------------------------------------
+echo "Scenario 7f: --progress-check flag resolves through the real function"
+if [ "$(resolve_progress_check_minutes "10" '{}' 2>/dev/null)" = "30" ] \
+  && [ "$(resolve_progress_check_minutes "" '{}')" = "0" ] \
+  && [ "$(resolve_progress_check_minutes "60" '{"monitor":{"progressCheckMinutes":45}}')" = "60" ] \
+  && grep -q -- '--progress-check) PROGRESS_CHECK_ARG="$2"' "$SCRIPT_DIR/execute.sh"; then
+  echo "  PASS: flag wins over JSON, floor and default hold"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: resolve_progress_check_minutes / --progress-check parsing mismatch"
   FAIL=$((FAIL + 1))
 fi
 
