@@ -156,7 +156,7 @@ When you receive an Objective from the Orchestrator:
 1. Monitor worker status — check for Idle/Working/Error states
 2. If a worker requests information, retrieve it from the Knowledge Base or Orchestrator
 3. Use idle event subscriptions (auto-setup by delegate-task) to get notified when workers finish
-4. Periodic fallback checks ensure no task goes stale
+4. No recurring progress check is set up by default: the idle event and report-status wake you. Opt in with `--progress-check <minutes>` (minimum 30) only for a long task with no other signal
 
 #### Step 5: Result Verification (#140)
 **MANDATORY: When a worker reports task as done, you MUST verify before accepting.**

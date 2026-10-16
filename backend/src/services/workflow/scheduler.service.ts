@@ -23,7 +23,7 @@ import { StorageService } from '../core/storage.service.js';
 import { MessageDeliveryLogModel } from '../../models/ScheduledMessage.js';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { AgentRegistrationService } from '../agent/agent-registration.service.js';
-import { RUNTIME_TYPES, ORCHESTRATOR_SESSION_NAME, RuntimeType, type MessageSource } from '../../constants.js';
+import { RUNTIME_TYPES, ORCHESTRATOR_SESSION_NAME, RuntimeType, DELEGATION_PROGRESS_CHECK_CONSTANTS, type MessageSource } from '../../constants.js';
 import { isUnderMemoryPressure, getMemoryStats } from '../core/system-health.util.js';
 import {
   ScheduledMessageType,
@@ -349,6 +349,40 @@ export class SchedulerService extends EventEmitter {
   }
 
   /**
+   * Raise a delegation progress check's interval to the floor.
+   *
+   * The team-leader delegate-task skill used to schedule a recurring
+   * "TL progress check" every 5 minutes per delegation, each one waking the
+   * lead's Claude session (219 wakes in 3.5 days, 2026-10-16). The skill now
+   * schedules none unless asked; this floor holds for any caller (an older
+   * skill copy, a hand-made request) whose message carries the
+   * {@link DELEGATION_PROGRESS_CHECK_CONSTANTS.MESSAGE_PREFIX}.
+   *
+   * @param targetSession - Session the check wakes (for the log line)
+   * @param intervalMinutes - Requested interval in minutes
+   * @param message - Check message; only messages with the progress-check prefix are floored
+   * @returns The interval to use
+   *
+   * @example
+   * ```typescript
+   * this.applyDelegationProgressCheckFloor('tl', 5, 'TL progress check: review dev status'); // 30
+   * this.applyDelegationProgressCheckFloor('tl', 5, 'Periodic check'); // 5
+   * ```
+   */
+  private applyDelegationProgressCheckFloor(targetSession: string, intervalMinutes: number, message: string): number {
+    const { MESSAGE_PREFIX, MIN_INTERVAL_MINUTES } = DELEGATION_PROGRESS_CHECK_CONSTANTS;
+    if (!message.trimStart().startsWith(MESSAGE_PREFIX) || intervalMinutes >= MIN_INTERVAL_MINUTES) {
+      return intervalMinutes;
+    }
+    this.logger.info('Raising delegation progress check interval to the minimum', {
+      targetSession,
+      requestedMinutes: intervalMinutes,
+      minimumMinutes: MIN_INTERVAL_MINUTES,
+    });
+    return MIN_INTERVAL_MINUTES;
+  }
+
+  /**
    * WorkItem statuses after which a check linked to the item has nothing left
    * to watch. `verified` and `failed` were missing (only `done`/`cancelled`
    * counted), so a delegation's 5-minute TL progress check kept firing after
@@ -503,6 +537,8 @@ export class SchedulerService extends EventEmitter {
       taskId?: string;
     }
   ): string {
+    intervalMinutes = this.applyDelegationProgressCheckFloor(targetSession, intervalMinutes, message);
+
     // #165: Enforce uniqueness — cancel existing recurring checks for the same target
     // to prevent duplicate/overlapping checks from accumulating.
     const existingCheckIds: string[] = [];

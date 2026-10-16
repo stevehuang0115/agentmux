@@ -19,7 +19,7 @@ import {
   DEFAULT_SCHEDULES,
   DEFAULT_ADAPTIVE_CONFIG,
 } from '../../types/scheduler.types.js';
-import { ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, DELEGATION_PROGRESS_CHECK_CONSTANTS } from '../../constants.js';
 // Mock system-health utility used by scheduler for memory pressure checks
 var __mockUnderPressure = false;
 jest.mock('../core/system-health.util.js', () => ({
@@ -262,6 +262,37 @@ describe('SchedulerService', () => {
           intervalMinutes: 10,
         })
       );
+    });
+
+    it('raises a delegation progress check below the floor to 30 minutes (2026-10-16: 219 wakes in 3.5 days)', () => {
+      const emitSpy = jest.spyOn(service, 'emit');
+      service.scheduleRecurringCheck('tl-session', 5, 'TL progress check: review dev status — task: x');
+      expect(emitSpy).toHaveBeenCalledWith(
+        'recurring_check_scheduled',
+        expect.objectContaining({ intervalMinutes: DELEGATION_PROGRESS_CHECK_CONSTANTS.MIN_INTERVAL_MINUTES })
+      );
+      expect(mockStorageService.saveRecurringCheck).toHaveBeenCalledWith(
+        expect.objectContaining({ intervalMinutes: 30 })
+      );
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'Raising delegation progress check interval to the minimum',
+        expect.objectContaining({ requestedMinutes: 5, minimumMinutes: 30 })
+      );
+    });
+
+    it('keeps a delegation progress check at or above the floor, and other recurring checks as asked', () => {
+      const emitSpy = jest.spyOn(service, 'emit');
+      service.scheduleRecurringCheck('tl-session', 45, 'TL progress check: review dev status');
+      service.scheduleRecurringCheck('other-session', 5, 'Periodic progress check');
+      expect(emitSpy).toHaveBeenCalledWith('recurring_check_scheduled', expect.objectContaining({ targetSession: 'tl-session', intervalMinutes: 45 }));
+      expect(emitSpy).toHaveBeenCalledWith('recurring_check_scheduled', expect.objectContaining({ targetSession: 'other-session', intervalMinutes: 5 }));
+    });
+
+    it('does not fire a floored delegation progress check before 30 minutes', async () => {
+      service.scheduleRecurringCheck('tl-session', 5, 'TL progress check: review dev status');
+      jest.advanceTimersByTime(29 * 60000);
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      expect(mockAgentRegistrationService.sendMessageToAgent).not.toHaveBeenCalled();
     });
 
     it('should store recurring check in recurringChecks map', () => {
@@ -1480,23 +1511,24 @@ describe('SchedulerService', () => {
             await Promise.resolve();
           }
         };
-        // The delegate-task skill links its 5-minute TL check to the WorkItem.
+        // The delegate-task skill links an opted-in TL check (30 min minimum) to the WorkItem.
+        const intervalMs = DELEGATION_PROGRESS_CHECK_CONSTANTS.MIN_INTERVAL_MINUTES * 60000;
         mockGetAllItems.mockResolvedValue([{ id: 'wi-7dfb2a6d', status: 'running' }]);
         service.scheduleRecurringCheck(
-          'tl-session', 1, 'TL progress check: review worker status — task: x', 'progress-check', undefined,
+          'tl-session', 30, 'TL progress check: review worker status — task: x', 'progress-check', undefined,
           { taskId: 'wi-7dfb2a6d' }
         );
 
         // Fires while the WorkItem is still running.
-        jest.advanceTimersByTime(60000);
+        jest.advanceTimersByTime(intervalMs);
         await flushMicrotasks();
         expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledTimes(1);
 
         // The WorkItem moves on (WorkItem v3 keeps it in the pool).
         mockGetAllItems.mockResolvedValue([{ id: 'wi-7dfb2a6d', status: terminalStatus }]);
-        jest.advanceTimersByTime(60000);
+        jest.advanceTimersByTime(intervalMs);
         await flushMicrotasks();
-        jest.advanceTimersByTime(60000);
+        jest.advanceTimersByTime(intervalMs);
         await flushMicrotasks();
 
         expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledTimes(1);

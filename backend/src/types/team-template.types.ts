@@ -276,6 +276,7 @@ export interface TeamTemplate {
   /** Default monitoring configuration */
   monitoringDefaults?: {
     idleEvent: boolean;
+    /** Recurring TL progress check interval in minutes; 0 = none (the default), otherwise at least DELEGATION_PROGRESS_CHECK_CONSTANTS.MIN_INTERVAL_MINUTES */
     fallbackCheckMinutes: number;
   };
   /** Maximum workers per team leader */

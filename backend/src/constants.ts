@@ -1613,6 +1613,20 @@ export const EVENT_BUS_CONSTANTS = {
 } as const;
 
 /**
+ * Recurring "TL progress check" scheduled by the team-leader delegate-task
+ * skill. Off by default (the lead is woken by the worker's agent:idle event
+ * and by report-status); an opted-in check never fires more often than
+ * MIN_INTERVAL_MINUTES. The 5-minute default woke Claude sessions 219 times
+ * in 3.5 days (2026-10-16).
+ */
+export const DELEGATION_PROGRESS_CHECK_CONSTANTS = {
+	/** Message prefix the skill uses; identifies these checks in the scheduler */
+	MESSAGE_PREFIX: 'TL progress check:',
+	/** Shortest allowed interval (minutes) for a recurring delegation progress check */
+	MIN_INTERVAL_MINUTES: 30,
+} as const;
+
+/**
  * Constants for Slack thread file storage.
  * Used by SlackThreadStoreService to persist thread conversations
  * and agent-thread associations.

@@ -21,6 +21,7 @@ PROJECT_TICKET=""
 OWNER_THREAD=""
 NO_MEMBER_FITS=""
 KEPT_WORK_ITEM=""
+PROGRESS_CHECK_ARG=""
 
 # Detect legacy JSON argument
 if [[ $# -gt 0 && ${1:0:1} == '{' ]]; then
@@ -44,11 +45,13 @@ while [[ $# -gt 0 ]]; do
     --thread)      OWNER_THREAD="$2";   shift 2 ;;
     --no-member-fits) NO_MEMBER_FITS="$2"; shift 2 ;;
     --work-item)   KEPT_WORK_ITEM="$2"; shift 2 ;;
+    --progress-check) PROGRESS_CHECK_ARG="$2"; shift 2 ;;
     --json|-j)     INPUT_JSON="$2";     shift 2 ;;
     --help|-h)
       echo "Usage: execute.sh --to worker-session --task 'implement feature' --priority high --project /path [--team teamId] [--tl-member memberId] [--request-id <ticket id from the [TICKET:TKT-123 <id>] line>] [--ticket <project ticket id, e.g. APP-12>]"
       echo "Work for a teammate on a project always runs through a project ticket: --ticket uses that backlog/ready ticket, otherwise one is created for you."
       echo "Owner request from Slack: add --thread <key> (from [SLACK-THREAD:<key>]) — the member answers the owner in that thread itself."
+      echo "Optional recurring progress check (off by default; the idle notification already wakes you): --progress-check <minutes, min 30>"
       echo "Keeping work yourself because no member fits: execute.sh --no-member-fits '<what is missing: access / tool / permission / everyone busy>' --task '<the work>' [--work-item <id>] [--ticket <ID>]"
       exit 0
       ;;
@@ -132,6 +135,45 @@ require_param "task (--task)" "$TASK"
 # The check is NOT weakened — a marker genuinely absent from BOTH fields
 # still warns, and the missing-field list is still per-marker.
 #
+# Minutes between recurring "TL progress check" wakes for this delegation,
+# or 0 for none.
+#
+# Off by default: the one-shot agent:idle subscription below already wakes
+# the lead when the worker goes idle, and completion is reported with
+# report-status. The old default (every 5 minutes, per delegation) woke a
+# Claude session 219 times in 3.5 days (Owen 109; every 5 min 03:21-05:13).
+# An explicit opt-in (--progress-check N, or monitor.progressCheckMinutes /
+# legacy monitor.fallbackCheckMinutes in JSON) is raised to the 30-minute
+# floor. The backend enforces the same floor
+# (DELEGATION_PROGRESS_CHECK_CONSTANTS in backend/src/constants.ts).
+#
+# $1 = --progress-check value (may be empty), $2 = parsed JSON input.
+# Prints the interval on stdout; notes go to stderr.
+resolve_progress_check_minutes() {
+  local min_minutes=30
+  local requested="$1"
+  if [ -z "$requested" ]; then
+    local input="${2:-}"
+    [ -z "$input" ] && input='{}'
+    requested=$(printf '%s' "$input" | jq -r '.monitor.progressCheckMinutes // .monitor.fallbackCheckMinutes // empty' 2>/dev/null || true)
+  fi
+  if [ -z "$requested" ] || [ "$requested" = "null" ] || [ "$requested" = "0" ] || [ "$requested" = "false" ]; then
+    echo 0
+    return 0
+  fi
+  if ! [[ "$requested" =~ ^[0-9]+$ ]]; then
+    echo "{\"warning\":\"Ignoring progress check interval '${requested}': expected whole minutes. No recurring check scheduled.\"}" >&2
+    echo 0
+    return 0
+  fi
+  if [ "$requested" -lt "$min_minutes" ]; then
+    echo "{\"warning\":\"Progress check interval ${requested} min is below the ${min_minutes} min minimum; using ${min_minutes} min.\"}" >&2
+    echo "$min_minutes"
+    return 0
+  fi
+  echo "$requested"
+}
+
 # $1 = task, $2 = context (either may be empty).
 warn_missing_request_contract() {
   # Join with a newline rather than concatenating: the patterns below anchor
@@ -406,7 +448,8 @@ fi
 
 # Set up idle event subscription for TL monitoring
 MONITOR_IDLE=$(printf '%s' "$INPUT" | jq -r 'if .monitor.idleEvent == null then true else .monitor.idleEvent end')
-MONITOR_FALLBACK_MINUTES=$(printf '%s' "$INPUT" | jq -r 'if .monitor.fallbackCheckMinutes == null then 5 else .monitor.fallbackCheckMinutes end')
+# Recurring progress check: none unless asked for (see resolve_progress_check_minutes).
+MONITOR_FALLBACK_MINUTES=$(resolve_progress_check_minutes "$PROGRESS_CHECK_ARG" "$INPUT")
 
 COLLECTED_SCHEDULE_IDS="[]"
 COLLECTED_SUBSCRIPTION_IDS="[]"
