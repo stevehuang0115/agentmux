@@ -600,3 +600,27 @@ describe('crewly#1113: an empty Claude Code box with footer variants below it re
 		expect(classifyTuiInput(view, OURS, 'before-write')).toMatchObject({ state: 'empty', layout: 'claude-code' });
 	});
 });
+
+describe('Claude Code "[Image #N]" markers from a paste with image paths (2026-10-16, Sage)', () => {
+	// A Slack message with 5 screenshots: Claude Code pulled each image path
+	// out of the paste ("[Image #N]") and collapsed the rest.
+	const shot = (n: number): string => `[Slack Image: /Users/me/.crewly/tmp/slack-images/F${n}-shot_${n}.png (1170x2532), image/png]`;
+	const body = Array.from({ length: 35 }, (_, i) => `line ${i + 1} of the owner's request`).join('\n');
+	const WITH_IMAGES = `${body}\n${[1, 2, 3, 4, 5].map(shot).join('\n')}`;
+	const BOX = '[Image #1] [Image #2] [Image #3] [Image #4] [Image #5][Pasted text #6 +36 lines]';
+
+	it('is our paste: image markers plus the collapsed rest', () => {
+		expect(splitBoxParts(BOX).filter((p) => p.image)).toHaveLength(5);
+		expect(partsShowPaste(splitBoxParts(BOX), WITH_IMAGES)).toBe(true);
+		expect(pasteShowsAsSplit(BOX, WITH_IMAGES)).toBe(true);
+		expect(attributeOwnPastes(BOX, [WITH_IMAGES])).toMatchObject({ messages: [WITH_IMAGES] });
+	});
+
+	it('is not ours when the message has fewer image paths than markers, or the text does not fit', () => {
+		expect(partsShowPaste(splitBoxParts(BOX), body)).toBe(false);
+		const twoImages = `${body}\n${shot(1)}\n${shot(2)}`;
+		expect(partsShowPaste(splitBoxParts(BOX), twoImages)).toBe(false);
+		const short = `just one line\n${[1, 2, 3, 4, 5].map(shot).join('\n')}`;
+		expect(partsShowPaste(splitBoxParts(BOX), short)).toBe(false);
+	});
+});

@@ -572,8 +572,10 @@ function attributeFrom(
 
 /** One piece of an input box: a runtime paste marker, or the text between markers. */
 export interface BoxPart {
-	/** True for a "[Pasted text …]" / "[Pasted Content …]" marker */
+	/** True for a "[Pasted text …]" / "[Pasted Content …]" / "[Image #N]" marker */
 	marker: boolean;
+	/** True for a Claude Code "[Image #N]" marker (an image path it pulled out of the paste) */
+	image?: boolean;
 	/** The marker, or the text (whitespace collapsed) */
 	text: string;
 }
@@ -587,12 +589,12 @@ export interface BoxPart {
 export function splitBoxParts(text: string): BoxPart[] {
 	const body = normalizeLine(text).replace(/\s+/g, ' ').trim();
 	const parts: BoxPart[] = [];
-	const re = /\[Pasted (?:text|content)[^\]]*\]/gi;
+	const re = /\[Pasted (?:text|content)[^\]]*\]|\[Image #\d+\]/gi;
 	let last = 0;
 	for (const m of body.matchAll(re)) {
 		const before = body.slice(last, m.index).trim();
 		if (before) parts.push({ marker: false, text: before });
-		parts.push({ marker: true, text: m[0] });
+		parts.push({ marker: true, text: m[0], ...(/^\[Image/i.test(m[0]) ? { image: true } : {}) });
 		last = (m.index ?? 0) + m[0].length;
 	}
 	const tail = body.slice(last).trim();
@@ -625,6 +627,12 @@ export function splitBoxParts(text: string): BoxPart[] {
 export function partsShowPaste(parts: readonly BoxPart[], message: string): boolean {
 	if (parts.length < 2 || !parts.some((p) => p.marker)) return false;
 	const normalized = message.replace(/\r\n?/g, '\n');
+	// Claude Code pulls image file paths out of a paste and shows each as
+	// "[Image #N]" (2026-10-16: a Slack message with 5 screenshots showed as
+	// "[Image #1] … [Image #5][Pasted text #6 +36 lines]" and was refused as
+	// foreign 219 times). Each one needs an image path in the message.
+	const images = parts.filter((p) => p.image).length;
+	if (images > (normalized.match(TUI_INPUT_GUARD.IMAGE_PATH_PATTERN) ?? []).length) return false;
 	const breaks = (normalized.match(/\n/g) ?? []).length;
 	// The message without whitespace, and where each kept character came from.
 	const origin: number[] = [];
@@ -640,6 +648,7 @@ export function partsShowPaste(parts: readonly BoxPart[], message: string): bool
 	let shown = 0; // line breaks the pieces show
 	for (let i = 0; i < parts.length; i++) {
 		const part = parts[i];
+		if (part.image) continue; // its path (and maybe its line) left the text
 		if (part.marker) {
 			const m = /^\[Pasted text #\d+(?: \+(\d+) lines?)?\]$/i.exec(part.text);
 			if (!m) return false;
