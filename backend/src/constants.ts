@@ -1222,6 +1222,12 @@ export const TUI_INPUT_GUARD = {
 	 * Codex "[Pasted Content 1234 chars]".
 	 */
 	PASTE_MARKER_PATTERN: /^\[Pasted (text|content)[^\]]*\]$/i,
+	/**
+	 * An image file path in a pasted message. Claude Code pulls each one out of
+	 * the paste and shows it as "[Image #N]"; the own-paste check needs one per
+	 * such marker.
+	 */
+	IMAGE_PATH_PATTERN: /\/[^\s\]]+\.(?:png|jpe?g|gif|webp|heic|bmp)\b/gi,
 	/** Layouts verified against live captures (fixtures under services/session/__fixtures__/tui) */
 	VERIFIED_LAYOUTS: ['claude-code', 'codex', 'gemini'] as readonly string[],
 	/**
