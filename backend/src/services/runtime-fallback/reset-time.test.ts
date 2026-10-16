@@ -52,6 +52,10 @@ describe('parseResetTime', () => {
 		expect(parseResetTime('Usage limit reached · continuing automatically at 3pm · esc to cancel', NOW, 'UTC')).toBe(Date.UTC(2026, 9, 1, 15, 0));
 	});
 
+	it('reads the usage-limit menu\'s "Wait here, then continue automatically at 8pm"', () => {
+		expect(parseResetTime('2. Wait here, then continue automatically at 8pm', NOW, 'UTC')).toBe(Date.UTC(2026, 9, 1, 20, 0));
+	});
+
 	it('reads "resets in 2h 5m"', () => {
 		expect(parseResetTime('quota resets in 2h 5m', NOW)).toBe(NOW + (2 * 60 + 5) * 60 * 1000);
 	});

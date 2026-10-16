@@ -58,6 +58,7 @@ jest.mock('../core/storage.service.js', () => ({
 import { OrchestratorRestartService } from './orchestrator-restart.service.js';
 import { ORCHESTRATOR_RESTART_CONSTANTS, ORCHESTRATOR_SESSION_NAME, RUNTIME_TYPES, CLAUDE_STARTUP_CONSTANTS } from '../../constants.js';
 import { markPlannedRelaunch, resetPlannedRelaunches } from '../agent/planned-relaunch.registry.js';
+import { markUsageLimited, resetUsageLimitState } from '../runtime-fallback/usage-limit-state.js';
 
 describe('OrchestratorRestartService', () => {
 	let service: OrchestratorRestartService;
@@ -155,6 +156,26 @@ describe('OrchestratorRestartService', () => {
 			expect(mockAgentRegistrationService.createAgentSession).not.toHaveBeenCalled();
 			expect(mockSendNotification).not.toHaveBeenCalled();
 			expect(service.getRestartStats().restartsInWindow).toBe(0);
+		});
+
+		it('refuses a restart while the orchestrator is out of usage (no restart loop on the weekly-limit menu)', async () => {
+			markUsageLimited({
+				sessionName: ORCHESTRATOR_SESSION_NAME,
+				runtime: RUNTIME_TYPES.CLAUDE_CODE,
+				ruleId: 'claude.hit_your_limit',
+				resetAt: Date.now() + 60 * 60 * 1000,
+				source: 'menu',
+			});
+			try {
+				for (let i = 0; i < 3; i++) await expect(run()).resolves.toBe(false);
+				expect(mockSessionBackend.killSession).not.toHaveBeenCalled();
+				expect(mockAgentRegistrationService.createAgentSession).not.toHaveBeenCalled();
+				expect(mockSendNotification).not.toHaveBeenCalled();
+				expect(service.getRestartStats().restartsInWindow).toBe(0);
+				expect(service.getGiveUp()).toBeNull();
+			} finally {
+				resetUsageLimitState();
+			}
 		});
 
 		it('a real restart still sends the alarm and counts the attempt', async () => {

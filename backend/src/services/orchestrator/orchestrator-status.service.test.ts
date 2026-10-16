@@ -70,6 +70,9 @@ jest.mock('../../constants', () => ({
     GEMINI_CLI: 'gemini-cli',
     CODEX_CLI: 'codex-cli',
   },
+  // Real values: read by the usage-limit state the status consults.
+  RUNTIME_FALLBACK_CONSTANTS: (jest.requireActual('../../constants') as Record<string, unknown>).RUNTIME_FALLBACK_CONSTANTS,
+  USAGE_LIMIT_STATE_CONSTANTS: (jest.requireActual('../../constants') as Record<string, unknown>).USAGE_LIMIT_STATE_CONSTANTS,
 }));
 
 jest.mock('../core/logger.service.js', () => ({
@@ -113,6 +116,7 @@ import {
   getOrchestratorStatus,
   getOrchestratorOfflineMessage,
 } from './orchestrator-status.service.js';
+import { markUsageLimited, resetUsageLimitState } from '../runtime-fallback/usage-limit-state.js';
 
 describe('OrchestratorStatusService', () => {
   /**
@@ -224,6 +228,34 @@ describe('OrchestratorStatusService', () => {
   });
 
   describe('getOrchestratorStatus', () => {
+    describe('usage-limited orchestrator (2026-10-16 weekly-limit incident)', () => {
+      afterEach(() => resetUsageLimitState());
+
+      it('says the orchestrator is out of usage and reports usageLimited instead of "active and ready"', async () => {
+        mockOrchestratorData.value = createMockOrchestratorStatus('active');
+        mockSessionState.exists = true;
+        const resetAt = Date.now() + 8 * 60 * 60 * 1000;
+        markUsageLimited({ sessionName: 'crewly-orc', runtime: 'claude-code', ruleId: 'claude.hit_your_limit', resetAt, source: 'menu' });
+
+        const result = await getOrchestratorStatus();
+        expect(result.isActive).toBe(true);
+        expect(result.message).not.toContain('active and ready');
+        expect(result.message).toContain('out of');
+        expect(result.message).toContain(new Date(resetAt).toISOString());
+        expect(result.usageLimited?.until).toBe(new Date(resetAt).toISOString());
+        expect(result.usageLimited?.runtime).toBe('claude-code');
+      });
+
+      it('has no usageLimited field when the orchestrator is not limited', async () => {
+        mockOrchestratorData.value = createMockOrchestratorStatus('active');
+        mockSessionState.exists = true;
+
+        const result = await getOrchestratorStatus();
+        expect(result.usageLimited).toBeUndefined();
+        expect(result.message).toContain('active and ready');
+      });
+    });
+
     it('should return active status with correct message', async () => {
       mockOrchestratorData.value = createMockOrchestratorStatus('active');
       mockSessionState.exists = true;

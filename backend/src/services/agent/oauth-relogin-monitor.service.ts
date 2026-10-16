@@ -26,7 +26,11 @@ import { v4 as uuidv4 } from 'uuid';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import {
 	getSessionBackendSync,
+	createSessionCommandHelper,
 } from '../session/index.js';
+import { inspectUsageLimitScreen, type UsageLimitMenuIO } from '../runtime-fallback/usage-limit-screen.js';
+import { detectUsageLimit, isExhaustingKind } from '../runtime-fallback/usage-limit-rules.js';
+import { markUsageLimited } from '../runtime-fallback/usage-limit-state.js';
 import { stripAnsiCodes } from '../../utils/terminal-output.utils.js';
 import {
 	OAUTH_RELOGIN_CONSTANTS,
@@ -641,7 +645,23 @@ export class OAuthReloginMonitorService {
 	}
 
 	/**
-	 * Sweep every live PTY session's screen for a sign-in state.
+	 * Keys + capture over the session backend, to answer the usage-limit menu.
+	 *
+	 * @param backend - Session backend
+	 * @returns Menu IO
+	 */
+	private usageLimitMenuIO(backend: NonNullable<ReturnType<typeof getSessionBackendSync>>): UsageLimitMenuIO {
+		const helper = createSessionCommandHelper(backend);
+		return {
+			sendKey: (sessionName, key) => helper.sendKey(sessionName, key),
+			sendEnter: (sessionName) => helper.sendEnter(sessionName),
+			capture: (sessionName) => backend.captureOutput(sessionName, LOGIN_REQUIRED_CONSTANTS.SWEEP_CAPTURE_LINES),
+		};
+	}
+
+	/**
+	 * Sweep every live PTY session's screen for a sign-in state and for a
+	 * usage-limit state ({@link inspectUsageLimitScreen}).
 	 * Safe to call at any time; errors are swallowed per session.
 	 */
 	sweepAllSessions(): void {
@@ -658,7 +678,15 @@ export class OAuthReloginMonitorService {
 		for (const sessionName of names) {
 			try {
 				const screen = backend.captureOutput(sessionName, LOGIN_REQUIRED_CONSTANTS.SWEEP_CAPTURE_LINES);
-				this.inspectScreen(sessionName, screen, this.sessions.get(sessionName)?.runtimeType ?? null);
+				const runtimeType = this.sessions.get(sessionName)?.runtimeType ?? null;
+				this.inspectScreen(sessionName, screen, runtimeType);
+				// Out of usage (e.g. Claude Code's weekly-limit menu): record it so
+				// nothing restarts or waits on the agent until the reset, and answer
+				// the menu with "wait, then continue automatically".
+				void inspectUsageLimitScreen(sessionName, screen, runtimeType, {
+					io: this.usageLimitMenuIO(backend),
+					logger: this.logger,
+				});
 			} catch (err) {
 				this.logger.debug('Login-required sweep failed for session (ignored)', {
 					sessionName,
@@ -1099,7 +1127,28 @@ export class OAuthReloginMonitorService {
 
 		// A usage limit (not a login problem) goes to the runtime fallback,
 		// which moves the agent to its next runtime until the limit resets
-		// (specs/2026-10-01-runtime-fallback.md).
+		// (specs/2026-10-01-runtime-fallback.md). The session itself is marked
+		// out of usage too, whether or not a fallback exists, so nothing
+		// restarts it or waits on its prompt until the reset.
+		const liveLimit = detectUsageLimit(data, state.runtimeType);
+		if (liveLimit && isExhaustingKind(liveLimit.kind)) {
+			const { info, isNew } = markUsageLimited({
+				sessionName,
+				runtime: state.runtimeType,
+				ruleId: liveLimit.ruleId,
+				resetAt: liveLimit.resetAt,
+				source: 'output',
+			});
+			if (isNew) {
+				this.logger.warn('Agent runtime is out of usage — no restarts or deliveries until it resets', {
+					sessionName,
+					runtime: state.runtimeType,
+					rule: liveLimit.ruleId,
+					until: info.until ?? null,
+					retryAt: info.retryAt,
+				});
+			}
+		}
 		if (reportRuntimeOutput(sessionName, state.runtimeType, data, 'output')) {
 			return;
 		}

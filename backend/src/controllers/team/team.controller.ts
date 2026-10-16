@@ -65,6 +65,7 @@ import { isOwnerDashboardRequest, readAgentSessionHeader } from '../../utils/age
 import { getCallerIdentity, isOwnerCaller, rejectNonOwner, sendOwnerAuthRequired } from '../../middleware/caller-identity.middleware.js';
 import { effectiveRuntimeType } from '../../services/runtime-fallback/effective-runtime.js';
 import { getRuntimeFallbackService } from '../../services/runtime-fallback/runtime-fallback.service.js';
+import { usageLimitedView } from '../../services/runtime-fallback/usage-limit-state.js';
 import { clearOwnerStopped, markOwnerStopped } from '../../services/agent/owner-stopped.registry.js';
 import { isTeamPausedNow, pausedRefusalMessage } from '../../services/team/team-pause.registry.js';
 import { reportOwnerThreadBlocking } from '../../services/messaging/owner-thread-sentinel.service.js';
@@ -1428,10 +1429,12 @@ export async function getTeams(this: ApiContext, req: Request, res: Response): P
     orchestratorTeam.members = orchestratorTeam.members.map(member => {
       const loginRequired = loginRequiredFor(member.sessionName);
       const runtimeOverride = runtimeOverrideFor(member.sessionName);
+      const usageLimited = usageLimitedView(member.sessionName);
       return {
         ...member,
         ...(loginRequired ? { loginRequired } : {}),
         ...(runtimeOverride ? { runtimeOverride } : {}),
+        ...(usageLimited ? { usageLimited } : {}),
       };
     });
 
@@ -1458,12 +1461,14 @@ export async function getTeams(this: ApiContext, req: Request, res: Response): P
         const resolvedWorkingStatus = workingStatusData?.teamMembers[member.sessionName]?.workingStatus || member.workingStatus || 'idle';
         const loginRequired = loginRequiredFor(member.sessionName);
         const runtimeOverride = runtimeOverrideFor(member.sessionName);
+        const usageLimited = usageLimitedView(member.sessionName);
         return {
           ...member,
           agentStatus: resolvedStatus,
           workingStatus: resolvedWorkingStatus,
           ...(loginRequired ? { loginRequired } : {}),
           ...(runtimeOverride ? { runtimeOverride } : {}),
+          ...(usageLimited ? { usageLimited } : {}),
         };
       })
     }));

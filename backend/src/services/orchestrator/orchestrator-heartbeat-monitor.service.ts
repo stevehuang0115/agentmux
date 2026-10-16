@@ -33,6 +33,7 @@ import { getSettingsService } from '../settings/index.js';
 import type { ISessionBackend } from '../session/session-backend.interface.js';
 import { isPlannedRelaunch } from '../agent/planned-relaunch.registry.js';
 import { createSessionCommandHelper } from '../session/session-command-helper.js';
+import { usageLimitOf } from '../runtime-fallback/usage-limit-state.js';
 
 /**
  * Per-agent API activity record for on-demand heartbeat optimization.
@@ -371,6 +372,16 @@ export class OrchestratorHeartbeatMonitorService {
 		// Guard: orchestrator session doesn't exist (not started yet)
 		if (!this.sessionBackend.sessionExists(ORCHESTRATOR_SESSION_NAME)) {
 			this.heartbeatRequestSentAt = null;
+			return;
+		}
+
+		// Guard: the orchestrator's runtime is out of usage (recorded by the
+		// screen sweep, e.g. Claude Code's weekly-limit menu). It cannot answer
+		// a heartbeat and a restart cannot help: wait for the reset.
+		if (usageLimitOf(ORCHESTRATOR_SESSION_NAME)) {
+			this.heartbeatRequestSentAt = null;
+			this.heartbeatRequestCount = 0;
+			this.inProgressSince = null;
 			return;
 		}
 

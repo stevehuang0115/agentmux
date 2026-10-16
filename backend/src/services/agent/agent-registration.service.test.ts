@@ -1585,6 +1585,23 @@ describe('AgentRegistrationService', () => {
 			}
 		});
 
+		it('queues instead of waiting for a prompt while the agent is out of usage (2026-10-16 weekly limit)', async () => {
+			const { SubAgentMessageQueue } = await import('../messaging/sub-agent-message-queue.service.js');
+			const { markUsageLimited, resetUsageLimitState } = await import('../runtime-fallback/usage-limit-state.js');
+			markUsageLimited({ sessionName: 'test-session', runtime: 'claude-code', ruleId: 'claude.hit_your_limit', resetAt: Date.now() + 60 * 60 * 1000, source: 'menu' });
+			try {
+				mockSessionHelper.sessionExists.mockReturnValue(true);
+				const result = await service.sendMessageToAgent('test-session', 'review this');
+				expect(result).toMatchObject({ success: true, queued: true });
+				expect(result.message).toContain('[USAGE_LIMITED]');
+				expect(mockSessionHelper.sendMessage).not.toHaveBeenCalled();
+				expect(SubAgentMessageQueue.getInstance().hasPending('test-session')).toBe(true);
+			} finally {
+				SubAgentMessageQueue.getInstance().dequeueAll('test-session');
+				resetUsageLimitState();
+			}
+		});
+
 		it('records a successful PTY delivery as an in-flight turn', async () => {
 			const { InFlightTurnTracker } = await import('../restart/in-flight-turn-tracker.service.js');
 			InFlightTurnTracker.resetInstance();

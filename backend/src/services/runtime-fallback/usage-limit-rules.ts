@@ -37,7 +37,7 @@
  * @module services/runtime-fallback/usage-limit-rules
  */
 
-import { RUNTIME_TYPES } from '../../constants.js';
+import { RUNTIME_TYPES, USAGE_LIMIT_STATE_CONSTANTS } from '../../constants.js';
 import { normalizeTerminalOutput, type NormalizedScreen } from '../harness/login-rules.js';
 import { detectLoginExpiry } from '../harness/login-expiry-rules.js';
 import { parseResetTime } from './reset-time.js';
@@ -294,4 +294,130 @@ export function detectUsageLimit(output: string, runtime: string, now: number = 
 		};
 	}
 	return null;
+}
+
+/**
+ * Claude Code's usage-limit menu, shown when a turn hits the limit:
+ *
+ * ```
+ *   ⎿  You've hit your weekly limit · resets Oct 16 at 8pm (America/New_York)
+ *    What do you want to do?
+ *    ❯ 1. Stop and wait for limit to reset
+ *      2. Wait here, then continue automatically at 8pm
+ *    Enter to confirm · Esc to cancel
+ * ```
+ *
+ * Both options must be on screen. Matched against the spaceless screen tail.
+ */
+export const CLAUDE_USAGE_LIMIT_MENU: readonly RegExp[] = [
+	/Stopandwaitfor(?:the)?limittoreset/i,
+	/Waithere,?thencontinueautomatically/i,
+];
+
+/** Which option of the usage-limit menu is highlighted (`❯`). */
+const MENU_SELECTED = /❯\s*([12])\./;
+
+/** Option 2 of the usage-limit menu, from "continue automatically" to the end of its line. */
+const MENU_OPTION_2_TIME = /continue\s*automatically[^\n]*/i;
+
+/** What {@link detectUsageLimitScreen} found. */
+export interface UsageLimitScreenMatch {
+	/** Runtime the match belongs to */
+	runtime: string;
+	/** Rule that matched the limit line, or `claude.usage_limit_menu` */
+	ruleId: string;
+	/** When the limit lifts (epoch ms), when the screen says so and it is plausible */
+	resetAt: number | null;
+	/** Set while the usage-limit menu is open; `selected` is the highlighted option */
+	menu: { selected: 1 | 2 | null } | null;
+}
+
+/**
+ * The last `count` non-empty lines of a screen, normalized.
+ *
+ * @param screen - Captured screen (escape sequences allowed)
+ * @param count - Lines to keep
+ * @returns The tail as text
+ */
+function screenTail(screen: string, count: number): string {
+	const lines = normalizeTerminalOutput(screen).text.split('\n').filter((line) => line.trim().length > 0);
+	return lines.slice(-count).join('\n');
+}
+
+/**
+ * A reset time a live screen may be trusted with: in the future and at most
+ * {@link USAGE_LIMIT_STATE_CONSTANTS.MAX_RESET_AHEAD_MS} away. A dated reset
+ * that already passed is read by {@link parseResetTime} as next year's, so a
+ * reset that far ahead means an old message.
+ *
+ * @param resetAt - Parsed reset time
+ * @param now - Current time (ms)
+ * @returns The reset time, or null when absent or implausible
+ */
+function plausibleReset(resetAt: number | null, now: number): number | null {
+	if (resetAt === null) return null;
+	return resetAt > now && resetAt - now <= USAGE_LIMIT_STATE_CONSTANTS.MAX_RESET_AHEAD_MS ? resetAt : null;
+}
+
+/**
+ * Find a usage-limit state on a captured screen — what the agent shows right
+ * now — as opposed to {@link detectUsageLimit}, which reads live output and
+ * error text.
+ *
+ * Only the bottom of the screen counts (old scrollback and resumed
+ * transcripts sit above it):
+ *
+ * - Claude Code's usage-limit menu ({@link CLAUDE_USAGE_LIMIT_MENU}) is a
+ *   modal waiting for an answer, so it always counts; the reset time comes
+ *   from the limit line above it or from option 2 ("continue automatically
+ *   at 8pm").
+ * - A plain limit line ("You've hit your … limit · resets …") counts only
+ *   with a plausible reset time ({@link plausibleReset}), so an old line that
+ *   names a past date is not read as a new limit.
+ *
+ * Transient rate limits and expired logins are never reported.
+ *
+ * @param screen - Captured screen text (escape sequences allowed)
+ * @param runtime - Runtime the session runs
+ * @param now - Current time (ms)
+ * @param defaultTimeZone - Zone for reset clock times that name none
+ * @returns The match, or null
+ *
+ * @example
+ * ```ts
+ * detectUsageLimitScreen(screen, 'claude-code');
+ * // { runtime: 'claude-code', ruleId: 'claude.hit_your_limit', resetAt: <Oct 16 8pm New York>, menu: { selected: 1 } }
+ * ```
+ */
+export function detectUsageLimitScreen(
+	screen: string,
+	runtime: string,
+	now: number = Date.now(),
+	defaultTimeZone?: string,
+): UsageLimitScreenMatch | null {
+	if (!screen) return null;
+	const tail = screenTail(screen, USAGE_LIMIT_STATE_CONSTANTS.SCREEN_TAIL_LINES);
+	if (!tail) return null;
+	const lineMatch = detectUsageLimit(tail, runtime, now, defaultTimeZone);
+	const exhausting = lineMatch && isExhaustingKind(lineMatch.kind) ? lineMatch : null;
+
+	const spaceless = tail.replace(/[ \t]+/g, '');
+	if (runtime === RUNTIME_TYPES.CLAUDE_CODE && CLAUDE_USAGE_LIMIT_MENU.every((re) => re.test(spaceless))) {
+		const selected = MENU_SELECTED.exec(tail)?.[1];
+		// Option 2 names the reset ("continue automatically at 8pm"); read only
+		// that line — option 1's "limit to reset" is followed by "2." otherwise.
+		const option2 = MENU_OPTION_2_TIME.exec(tail)?.[0] ?? '';
+		const resetAt = plausibleReset(exhausting?.resetAt ?? parseResetTime(option2, now, defaultTimeZone), now);
+		return {
+			runtime,
+			ruleId: exhausting?.ruleId ?? 'claude.usage_limit_menu',
+			resetAt,
+			menu: { selected: selected === '1' ? 1 : selected === '2' ? 2 : null },
+		};
+	}
+
+	if (!exhausting) return null;
+	const resetAt = plausibleReset(exhausting.resetAt, now);
+	if (resetAt === null) return null;
+	return { runtime: exhausting.runtime, ruleId: exhausting.ruleId, resetAt, menu: null };
 }
