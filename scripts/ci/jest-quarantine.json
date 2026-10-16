@@ -1,0 +1,4 @@
+{
+  "//": "Test files already failing on main when CI was introduced (see jest.ci.config.js). Run separately and non-blocking in CI. Fix one, delete its line.",
+  "files": []
+}

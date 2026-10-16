@@ -1,0 +1,84 @@
+# Typecheck + unit tests.
+#
+# Runs on pull requests and pushes to main, and is called by publish.yml so a
+# release tag is only published after the same checks pass.
+#
+#   typecheck  backend + cli (the tsconfigs `npm run build` uses) + frontend
+#   unit       the root jest suite (backend/src, cli/src, config, tests),
+#              split into 4 parallel shards, 2 workers each, using
+#              jest.ci.config.js (= jest.config.js minus the quarantine list
+#              in scripts/ci/jest-quarantine.json)
+#   quarantine the quarantined files only, non-blocking, so they stay visible
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - name: Typecheck backend
+        run: npx tsc -p backend/tsconfig.json --noEmit
+      - name: Typecheck cli
+        run: npx tsc -p cli/tsconfig.json --noEmit
+      - name: Typecheck frontend
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    name: unit (${{ matrix.shard }}/4)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - name: Jest shard ${{ matrix.shard }}/4
+        run: npx jest -c jest.ci.config.js --ci --maxWorkers=2 --shard=${{ matrix.shard }}/4
+
+  quarantine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        run: echo "files=$(jq -r '.files | join(" ")' scripts/ci/jest-quarantine.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        if: steps.list.outputs.files != ''
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - if: steps.list.outputs.files != ''
+        run: npm ci
+      - name: Quarantined tests (known failures, non-blocking)
+        if: steps.list.outputs.files != ''
+        run: |
+          if ! npx jest --ci --maxWorkers=2 ${{ steps.list.outputs.files }}; then
+            echo "::warning title=Quarantined tests still failing::see scripts/ci/jest-quarantine.json"
+          fi
