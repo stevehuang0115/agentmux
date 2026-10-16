@@ -205,6 +205,34 @@ extra account is a fallback target of its own: `claude-code@<name>`.
   comes back; it reverts when the default login is back. Smoke tests run on
   the default login (test Claude Code itself).
 
+### Failback to the better account, and stale marks (2026-10-16)
+
+Incident: the orc (configured on DeepSeek, out of credit since Oct 1) sat on
+`claude-code@<name>` showing Claude's weekly-limit menu while the default
+login had usage again. Both Claude targets were marked out of usage until the
+weekly reset; the owner had signed the default login in again and other
+agents ran fine on it, but nothing cleared the mark, and a revert only ever
+went back to the configured runtime.
+
+- **Prefer the better target.** While an agent's configured runtime is still
+  out, it moves at its next idle boundary to the earliest available entry of
+  its chain when that ranks before the one it is on (handover direction
+  `upgrade`). It never moves *down* at an idle boundary; that still happens
+  when it next gets work. A start (`resolveLaunch`) of an agent with an
+  override picks the best target too, including moving off a target that ran
+  out meanwhile.
+- **Stale marks are cleared** when (a) the reset time passes and the probe
+  answers (unchanged), (b) the owner signs that login in again — the default
+  login (`onRuntimeLogin`, from the re-login flow's success) or an account
+  (`onAccountLogin`, now for usage marks too, not only sign-outs) — and the
+  probe answers, or (c) any session on that target is seen working: a Claude
+  Code `PreToolUse` hook (the model produced a tool call, impossible while
+  out of usage) more than 2 minutes after the mark (`reportWorking`,
+  throttled to once a minute per session).
+- **`login` in an agent's own bot DM** (the orc's too) while it sits at a
+  sign-in screen signs in the account it actually runs on, not always the
+  default login.
+
 ## Runtime smoke test
 
 For one runtime, through the backend's own REST API (the same calls the

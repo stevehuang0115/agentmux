@@ -7,6 +7,7 @@ import {
 	effectiveRuntimeType,
 	reportRuntimeLoginExpiry,
 	reportRuntimeOutput,
+	reportRuntimeWorking,
 	resolveLaunchRuntime,
 	runtimeFallbackBeforeDelivery,
 	setRuntimeFallbackHooks,
@@ -92,5 +93,17 @@ describe('effective-runtime hooks', () => {
 		expect(takeRuntimeSwitchKickoffNote('dev-1')).toBeNull();
 		expect(effectiveClaudeAccount('dev-1')).toBeNull();
 		expect(reportRuntimeLoginExpiry('dev-1')).toBe(false);
+	});
+
+	it('forwards working signals, and never throws', () => {
+		expect(() => reportRuntimeWorking('dev-1')).not.toThrow();
+		const reportWorking = jest.fn();
+		setRuntimeFallbackHooks({ reportWorking } as unknown as RuntimeFallbackHooks);
+		reportRuntimeWorking('dev-1');
+		reportRuntimeWorking(null);
+		expect(reportWorking).toHaveBeenCalledTimes(1);
+		expect(reportWorking).toHaveBeenCalledWith('dev-1');
+		setRuntimeFallbackHooks({ reportWorking: () => { throw new Error('boom'); } } as unknown as RuntimeFallbackHooks);
+		expect(() => reportRuntimeWorking('dev-1')).not.toThrow();
 	});
 });

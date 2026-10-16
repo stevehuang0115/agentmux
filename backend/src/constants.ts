@@ -7687,6 +7687,14 @@ export const RUNTIME_FALLBACK_CONSTANTS = {
 	TRANSIENT_ESCALATED_HORIZON_MS: 30 * 60_000,
 	/** A revert is not attempted while the PTY wrote within this window */
 	IDLE_QUIET_MS: 20_000,
+	/**
+	 * A session's model turn (a Claude Code PreToolUse hook) counts as proof that
+	 * its runtime target has usage only this long after the target was marked out
+	 * of usage (a response already streaming when the limit hit is not proof)
+	 */
+	WORKING_EVIDENCE_GRACE_MS: 2 * 60_000,
+	/** Working-evidence reports of one session are looked at no more often than this */
+	WORKING_EVIDENCE_THROTTLE_MS: 60_000,
 	/** Smoke tests */
 	SMOKE: {
 		TEAM_PREFIX: 'zz-runtime-smoke-',

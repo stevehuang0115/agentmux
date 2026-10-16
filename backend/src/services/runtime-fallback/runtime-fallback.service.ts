@@ -24,6 +24,17 @@
  *    most every BILLING_PROBE_INTERVAL_MS. A switch-back that fails (the limit
  *    comes straight back) doubles the next probe interval.
  * 7. **Tell the owner once** per event, and once when it is over.
+ * 8. **Prefer the better target.** While the configured runtime is still out,
+ *    an agent on a fallback moves (at an idle boundary, or when it is next
+ *    started) to the earliest available entry of its chain when that is
+ *    earlier than the one it is on — orc on `claude-code@work` goes back to
+ *    `claude-code` once the default login has usage, even though its own
+ *    runtime (DeepSeek, out of credit) is not back.
+ * 9. **Stale marks are cleared** when the reset time passes and a probe
+ *    answers, when the owner signs that login in again
+ *    ({@link RuntimeFallbackService.onRuntimeLogin} /
+ *    {@link RuntimeFallbackService.onAccountLogin}), or when another session
+ *    on that target is seen working ({@link RuntimeFallbackService.reportWorking}).
  *
  * A chain entry may be one of the owner's other Claude Code accounts
  * (`claude-code@work`, issue #942): it is a runtime target of its own — out
@@ -87,7 +98,12 @@ export interface HandoverRequest {
 	sessionName: string;
 	from: string;
 	to: string;
-	direction: 'switch' | 'revert';
+	/**
+	 * `switch`: `from` ran out; `revert`: back to the configured runtime;
+	 * `upgrade`: `to` is earlier in the fallback order and has usage again
+	 * (the configured runtime is still out)
+	 */
+	direction: 'switch' | 'revert' | 'upgrade';
 	/** Conversation id on `from`, when known */
 	conversationId: string | null;
 	/** WorkItem the agent is on */
@@ -201,6 +217,8 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 	private readonly noticeDue = new Map<string, number>();
 	/** Kickoff notes waiting for a session's next launch */
 	private readonly kickoffNotes = new Map<string, string>();
+	/** Last working-evidence look per session (throttle) */
+	private readonly workingSeen = new Map<string, number>();
 	/** Last switch-back per runtime, to recognise one that failed */
 	private readonly recentRecoveries = new Map<string, { at: number; failedReverts: number; notified: boolean }>();
 	private availability: { at: number; list: RuntimeAvailability[] } | null = null;
@@ -314,7 +332,7 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 		this.availability = null;
 		const target = runtimeTarget(RUNTIME_TYPES.CLAUDE_CODE, account);
 		try {
-			await this.recoverSignedOutAccount(target);
+			await this.recheckAfterLogin(target);
 		} finally {
 			// The owner is away: a freshly signed-in account must be usable at once,
 			// without a trip to Settings, and agents stuck on an exhausted runtime
@@ -383,25 +401,89 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 	}
 
 	/**
-	 * If the account was marked signed out, probe it and bring it back.
+	 * The owner signed a harness's default login in again (the re-login flow
+	 * finished for it). A mark on that runtime — signed out, or out of usage:
+	 * the new login may be another account, or the same one with usage bought
+	 * — is probed now instead of at its reset time, and cleared when the
+	 * probe answers.
 	 *
-	 * @param target - `claude-code@<account>`
+	 * @param runtime - Runtime id (`claude-code`, `codex-cli`, …; the harness id)
+	 * @returns Resolves when done; never rejects
+	 *
+	 * @example
+	 * ```ts
+	 * relogin.setHarnessLoginHandler((harnessId) => service.onRuntimeLogin(harnessId));
+	 * ```
 	 */
-	private async recoverSignedOutAccount(target: string): Promise<void> {
+	async onRuntimeLogin(runtime: string): Promise<void> {
+		this.availability = null;
+		try {
+			await this.recheckAfterLogin(runtime);
+		} catch (err) {
+			this.logger.warn('Re-checking a runtime after a sign-in failed', { runtime, error: err instanceof Error ? err.message : String(err) });
+		}
+	}
+
+	/**
+	 * A login of a runtime target was signed in again: if it is marked (signed
+	 * out or out of usage), probe it and bring it back when it answers.
+	 *
+	 * @param target - Runtime target (`claude-code`, `claude-code@<account>`)
+	 */
+	private async recheckAfterLogin(target: string): Promise<void> {
 		const entry = this.state.exhausted[target];
-		if (!entry || entry.kind !== 'login') return;
+		if (!entry) return;
 		const result = await this.deps.probe(target).catch((): ProbeResult => 'unknown');
 		entry.lastProbeAt = new Date(this.now()).toISOString();
 		if (result === 'available') {
+			this.logger.info('Signed in again and the probe answers — clearing the out-of-usage mark', { runtime: target, kind: entry.kind ?? 'usage_limit' });
 			await this.recover(target);
 			return;
 		}
-		if (result === 'limited') {
+		if (result === 'limited' && entry.kind === 'login') {
 			// Signed in again, but that account is out of usage too.
 			entry.kind = 'usage_limit';
 			entry.ruleId = 'probe_limited';
 		}
 		this.save();
+	}
+
+	/**
+	 * A session's model just answered with a tool call (Claude Code
+	 * PreToolUse hook). A model cannot do that while its account is out of
+	 * usage, so a mark on the target the session runs on is stale: it is
+	 * cleared (agents moved off it come back at their idle boundary). Marks
+	 * newer than WORKING_EVIDENCE_GRACE_MS are kept (a turn already streaming
+	 * when the limit hit proves nothing). Looked at most once a minute per
+	 * session, and only while a Claude Code target is marked.
+	 *
+	 * @param sessionName - Session the hook came from
+	 */
+	reportWorking(sessionName: string): void {
+		if (!this.state.settings.enabled || this.isExempt(sessionName)) return;
+		if (!Object.keys(this.state.exhausted).some((r) => baseRuntimeOf(r) === RUNTIME_TYPES.CLAUDE_CODE)) return;
+		if (this.switching.has(sessionName)) return;
+		const now = this.now();
+		if (now - (this.workingSeen.get(sessionName) ?? Number.NEGATIVE_INFINITY) < C.WORKING_EVIDENCE_THROTTLE_MS) return;
+		this.workingSeen.set(sessionName, now);
+		void this.onWorking(sessionName).catch((err) =>
+			this.logger.warn('Runtime fallback could not use a working signal', { sessionName, error: err instanceof Error ? err.message : String(err) }),
+		);
+	}
+
+	/**
+	 * Clear the mark on the target a working session runs on.
+	 *
+	 * @param sessionName - Session
+	 */
+	private async onWorking(sessionName: string): Promise<void> {
+		const target = this.state.overrides[sessionName]?.runtime ?? (await this.deps.getAgent(sessionName).catch(() => null))?.primary;
+		if (!target || baseRuntimeOf(target) !== RUNTIME_TYPES.CLAUDE_CODE) return;
+		const entry = this.state.exhausted[target];
+		if (!entry) return;
+		if (this.now() - Date.parse(entry.since) < C.WORKING_EVIDENCE_GRACE_MS) return;
+		this.logger.info('A session is working on a runtime marked out of usage — clearing the mark', { runtime: target, sessionName, since: entry.since });
+		await this.recover(target);
 	}
 
 	/**
@@ -481,7 +563,19 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 				// A stopped agent being started after its runtime came back.
 				this.finishRevertOffline(input.sessionName, existing);
 				return configured;
+			} else if (!this.state.exhausted[existing.primary]) {
+				// Its runtime is back but not yet marked for revert: the next tick reverts it.
+				return this.decision(existing.runtime);
 			} else {
+				// Starting anyway: on the best target of its chain, not on one that ran
+				// out meanwhile or below one that came back.
+				const agent = await this.launchAgent(input);
+				const better = await this.betterTarget(agent, existing.runtime, true);
+				if (better) {
+					await this.recordSwitch(agent, existing.runtime, better, null, this.state.exhausted[existing.runtime] ? 'switch' : 'upgrade');
+					this.logger.info('Starting an agent on a better fallback runtime', { sessionName: input.sessionName, from: existing.runtime, runtime: better });
+					return this.decision(better);
+				}
 				return this.decision(existing.runtime);
 			}
 		}
@@ -493,14 +587,7 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 		}
 		if (input.isOrchestrator && !this.state.settings.orcFollows) return configured;
 
-		const agent: FallbackAgentInfo = (await this.deps.getAgent(input.sessionName).catch(() => null)) ?? {
-			sessionName: input.sessionName,
-			name: input.sessionName,
-			primary: input.configured,
-			memberId: input.memberId,
-			teamId: input.teamId,
-			isOrchestrator: input.isOrchestrator,
-		};
+		const agent = await this.launchAgent(input);
 		const target = await this.pickFallback(agent, input.configured);
 		if (!target) {
 			this.markNoFallback(input.configured);
@@ -513,6 +600,25 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 			runtime: target,
 		});
 		return this.decision(target);
+	}
+
+	/**
+	 * The agent behind a launch (from the launch input when it is not known).
+	 *
+	 * @param input - Launch input
+	 * @returns Agent
+	 */
+	private async launchAgent(input: LaunchRuntimeInput): Promise<FallbackAgentInfo> {
+		return (
+			(await this.deps.getAgent(input.sessionName).catch(() => null)) ?? {
+				sessionName: input.sessionName,
+				name: input.sessionName,
+				primary: input.configured,
+				memberId: input.memberId,
+				teamId: input.teamId,
+				isOrchestrator: input.isOrchestrator,
+			}
+		);
 	}
 
 	/**
@@ -770,8 +876,15 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 	 * @param from - Runtime it leaves (out of usage)
 	 * @param target - Runtime it goes to
 	 * @param handover - Handover file, when written
+	 * @param direction - `switch` (`from` ran out) or `upgrade` (`target` ranks higher in the chain)
 	 */
-	private async recordSwitch(agent: FallbackAgentInfo, from: string, target: string, handover: string | null = null): Promise<void> {
+	private async recordSwitch(
+		agent: FallbackAgentInfo,
+		from: string,
+		target: string,
+		handover: string | null = null,
+		direction: 'switch' | 'upgrade' = 'switch',
+	): Promise<void> {
 		const sessionName = agent.sessionName;
 		const existing = this.state.overrides[sessionName];
 		const exhausted = this.state.exhausted[from];
@@ -798,7 +911,10 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 		}
 		this.save();
 		const workItem = await this.deps.getActiveWorkItem(sessionName).catch(() => null);
-		this.kickoffNotes.set(sessionName, this.switchNote(from, target, exhausted?.until, handover, workItem));
+		this.kickoffNotes.set(
+			sessionName,
+			direction === 'upgrade' ? this.upgradeNote(agent.primary, from, target, handover, workItem) : this.switchNote(from, target, exhausted?.until, handover, workItem),
+		);
 		this.scheduleNotice(from);
 	}
 
@@ -843,6 +959,31 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 	private chainFor(agent: Pick<FallbackAgentInfo, 'memberId'>): string[] {
 		const own = agent.memberId ? this.state.settings.memberChains[agent.memberId] : undefined;
 		return own && own.length > 0 ? own : this.state.settings.chain;
+	}
+
+	/**
+	 * Where an agent whose configured runtime is out should be instead of
+	 * `current`: the earliest available entry of its chain (never its
+	 * configured runtime, never one marked out of usage), when that ranks
+	 * before `current` — or, with `orAnyWhenCurrentOut`, any available entry
+	 * when `current` itself is marked out.
+	 *
+	 * @param agent - Agent (its configured runtime is out)
+	 * @param current - Runtime target it is on
+	 * @param orAnyWhenCurrentOut - Also move off a `current` that ran out to a lower-ranked entry
+	 * @returns Better target, or null to stay
+	 */
+	private async betterTarget(agent: FallbackAgentInfo, current: string, orAnyWhenCurrentOut: boolean): Promise<string | null> {
+		const best = await this.pickFallback(agent, agent.primary);
+		if (!best || best === current) return null;
+		const chain = this.chainFor(agent);
+		const rank = (r: string): number => {
+			const i = chain.indexOf(r);
+			return i < 0 ? Number.POSITIVE_INFINITY : i;
+		};
+		if (rank(best) < rank(current)) return best;
+		if (orAnyWhenCurrentOut && this.state.exhausted[current]) return best;
+		return null;
 	}
 
 	/**
@@ -1003,10 +1144,17 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 		await this.revertIdle();
 	}
 
-	/** Revert every pending override whose agent is idle (or not running). */
+	/**
+	 * Revert every pending override whose agent is idle (or not running), and
+	 * move an idle agent whose configured runtime is still out to a better
+	 * entry of its chain ({@link betterTarget}).
+	 */
 	private async revertIdle(): Promise<void> {
 		for (const [sessionName, override] of Object.entries(this.state.overrides)) {
-			if (this.state.exhausted[override.primary]) continue;
+			if (this.state.exhausted[override.primary]) {
+				await this.upgradeIfBetter(sessionName, override);
+				continue;
+			}
 			if (!override.revertPending) {
 				// State from before a restart whose primary is no longer marked out of usage.
 				override.revertPending = true;
@@ -1020,6 +1168,71 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 			if (await this.deps.isBusy(sessionName).catch(() => true)) continue;
 			await this.revertSession(sessionName);
 		}
+	}
+
+	/**
+	 * Move an idle, running agent to a better entry of its chain. A stopped
+	 * agent is left alone: its next start picks the best target.
+	 *
+	 * @param sessionName - Session
+	 * @param override - Its override (the configured runtime is out)
+	 */
+	private async upgradeIfBetter(sessionName: string, override: RuntimeOverride): Promise<void> {
+		if (this.switching.has(sessionName) || this.isExempt(sessionName) || !this.deps.isLive(sessionName)) return;
+		// Cheap filter before reading the agent: some other chain entry must be open.
+		const { chain, memberChains } = this.state.settings;
+		const open = [...chain, ...Object.values(memberChains).flat()].some((r) => r !== override.runtime && r !== override.primary && !this.state.exhausted[r]);
+		if (!open) return;
+		const agent = await this.deps.getAgent(sessionName).catch(() => null);
+		if (!agent || agent.primary !== override.primary) return;
+		if (agent.isOrchestrator && !this.state.settings.orcFollows) return;
+		const better = await this.betterTarget(agent, override.runtime, false);
+		if (!better) return;
+		if (await this.deps.isBusy(sessionName).catch(() => true)) return;
+		if (this.switching.has(sessionName)) return;
+		this.switching.add(sessionName);
+		let outcome: SwitchOutcome = 'skipped';
+		try {
+			outcome = await this.doUpgrade(agent, override.runtime, better);
+		} catch (err) {
+			this.logger.warn('Moving an agent to a better fallback runtime failed', { sessionName, error: err instanceof Error ? err.message : String(err) });
+			outcome = 'failed';
+		} finally {
+			this.switching.delete(sessionName);
+			await this.afterSwitch(sessionName, outcome, false);
+		}
+	}
+
+	/**
+	 * Hand over and relaunch an idle agent on a better target.
+	 *
+	 * @param agent - Agent
+	 * @param from - Target it is on
+	 * @param target - Better target
+	 * @returns Outcome
+	 */
+	private async doUpgrade(agent: FallbackAgentInfo, from: string, target: string): Promise<SwitchOutcome> {
+		const sessionName = agent.sessionName;
+		// Last look right before: anything that started since means "not now".
+		if (await this.deps.isBusy(sessionName).catch(() => true)) return 'skipped';
+		const handover = await this.deps
+			.writeHandover({
+				sessionName,
+				from,
+				to: target,
+				direction: 'upgrade',
+				conversationId: this.deps.conversation.get(sessionName) ?? null,
+				workItem: await this.deps.getActiveWorkItem(sessionName).catch(() => null),
+			})
+			.catch(() => null);
+		await this.recordSwitch(agent, from, target, handover, 'upgrade');
+		this.logger.info('Moving an idle agent to a better fallback runtime (its own runtime is still out)', { sessionName, from, to: target, primary: agent.primary });
+		const ok = await this.deps.relaunch(agent).catch(() => false);
+		if (!ok) {
+			this.logger.warn('Relaunch on the better fallback runtime failed (the override stays; the next start uses it)', { sessionName, runtime: target });
+			return 'failed';
+		}
+		return 'switched';
 	}
 
 	/**
@@ -1245,6 +1458,17 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 					: kind === 'login'
 					? `Crewly moved you from ${this.label(from)} to ${this.label(to)} because the ${this.label(from)} login expired.`
 					: `Crewly moved you from ${this.label(from)} to ${this.label(to)} because ${this.label(from)} hit its usage limit${reset}; you will be moved back when it resets.`,
+			handover
+				? `This is a fresh conversation: after registering, read ${handover} once — it holds the end of your previous conversation.`
+				: 'This is a fresh conversation: your tasks, teams and wiki are all still in Crewly.',
+		];
+		if (workItem) parts.push(`Then continue WorkItem ${workItem.id} ("${workItem.title}") where you left off.`);
+		return parts.join(' ');
+	}
+
+	private upgradeNote(primary: string, from: string, to: string, handover: string | null, workItem: { id: string; title: string } | null): string {
+		const parts = [
+			`${this.label(to)} has usage again, so Crewly moved you there from ${this.label(from)}; ${this.label(primary)} is still unavailable and you will be moved back to it once it is.`,
 			handover
 				? `This is a fresh conversation: after registering, read ${handover} once — it holds the end of your previous conversation.`
 				: 'This is a fresh conversation: your tasks, teams and wiki are all still in Crewly.',

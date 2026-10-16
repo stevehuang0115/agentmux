@@ -123,7 +123,9 @@ export function writeRuntimeHandover(crewlyHome: string, req: HandoverRequest, c
 	const why =
 		req.direction === 'switch'
 			? `You were running on ${runtimeLabel(req.from)}. It ran out of usage, so Crewly moved you to ${runtimeLabel(req.to)} until it resets.`
-			: `You ran on ${runtimeLabel(req.from)} while ${runtimeLabel(req.to)} was out of usage. ${runtimeLabel(req.to)} is back, so Crewly moved you back.`;
+			: req.direction === 'upgrade'
+				? `You were running on ${runtimeLabel(req.from)}. ${runtimeLabel(req.to)} has usage again and comes first in your fallback order, so Crewly moved you there.`
+				: `You ran on ${runtimeLabel(req.from)} while ${runtimeLabel(req.to)} was out of usage. ${runtimeLabel(req.to)} is back, so Crewly moved you back.`;
 	fs.writeFileSync(
 		file,
 		[
@@ -341,8 +343,14 @@ export function startBackendRuntimeFallback(ctx: RuntimeFallbackWiringContext): 
 	setRuntimeFallbackHooks(service);
 	// One of the owner's other Claude Code accounts signed in on the phone: it
 	// is usable again (issue #942).
+	// The owner signed a default login in again (often a different account, or
+	// usage bought): a stale out-of-usage mark on it must not outlive that.
 	void import('../harness/harness-relogin.service.js')
-		.then(({ getHarnessReloginService }) => getHarnessReloginService().setAccountLoginHandler((account) => service.onAccountLogin(account)))
+		.then(({ getHarnessReloginService }) => {
+			const relogin = getHarnessReloginService();
+			relogin.setAccountLoginHandler((account) => service.onAccountLogin(account));
+			relogin.setHarnessLoginHandler((harnessId) => service.onRuntimeLogin(harnessId));
+		})
 		.catch((err) => ctx.logger.warn('Could not wire Claude Code account sign-ins', { error: err instanceof Error ? err.message : String(err) }));
 	service.start();
 	return service;
