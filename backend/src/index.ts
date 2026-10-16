@@ -264,7 +264,7 @@ import { FissionGuardService, type FissionDataProvider, type BudgetChecker, crea
 import { BudgetService } from './services/autonomous/budget.service.js';
 import { setFissionGuardService } from './controllers/fission/fission.controller.js';
 import { TaskPoolService } from './services/task-pool/task-pool.service.js';
-import { createProtectedReason } from './services/agent/resource-mode-protection.js';
+import { createProtectedReason, createWaitsOn, type ProtectionSources } from './services/agent/resource-mode-protection.js';
 import { ProjectTicketWorkflowService } from './services/project-tickets/project-ticket-workflow.service.js';
 import { WorkItemWorktreeService } from './services/worktree/workitem-worktree.service.js';
 import { WorkItemWorktreeSubscriber, createTerminalNotifier } from './services/worktree/workitem-worktree.subscriber.js';
@@ -2333,6 +2333,16 @@ void (async () => {
 			// Adaptive agent limits (pressure mode cap + start queue).
 			const resourceMode = ResourceModeService.getInstance();
 			const agentRegistration = this.apiController.agentRegistrationService;
+			// Queued messages, pending work, open tickets and open delegations keep an agent running.
+			const protectionSources: ProtectionSources = {
+				getWorkItems: () => TaskPoolService.getInstance().getAllItems(),
+				listTickets: async (name) => {
+					const workflow = ProjectTicketWorkflowService.getInstance();
+					if (!workflow) return [];
+					return (await workflow.listForSession(name)).flatMap((p) => p.tickets);
+				},
+				queuedMessageCount: (name) => SubAgentMessageQueue.getInstance().peek(name).length,
+			};
 			resourceMode.setDeps({
 				limits: async () => {
 					const g = (await getSettingsService().getSettings()).general;
@@ -2359,15 +2369,9 @@ void (async () => {
 					return out;
 				},
 				hasOwnerMessage: (name) => SubAgentMessageQueue.getInstance().peek(name).some((m) => m.meta?.owner === true),
-				// Pending work, open tickets and open delegations keep an agent running.
-				protectedReason: createProtectedReason({
-					getWorkItems: () => TaskPoolService.getInstance().getAllItems(),
-					listTickets: async (name) => {
-						const workflow = ProjectTicketWorkflowService.getInstance();
-						if (!workflow) return [];
-						return (await workflow.listForSession(name)).flatMap((p) => p.tickets);
-					},
-				}),
+				protectedReason: createProtectedReason(protectionSources),
+				// Never stop the agent doing the work the waiting start is waiting for.
+				waitsOn: createWaitsOn(protectionSources),
 				// An agent mid-conversation with the owner is the last one stopped
 				// for a slot, and its owner thread hears when it is
 				// (specs/2026-10-08-owner-thread-sentinel.md).

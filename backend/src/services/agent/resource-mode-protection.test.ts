@@ -1,4 +1,4 @@
-import { createProtectedReason, type ProtectionTicket } from './resource-mode-protection.js';
+import { createProtectedReason, createWaitsOn, type ProtectionTicket } from './resource-mode-protection.js';
 import type { WorkItem } from '../../types/v2/work-item.types.js';
 
 const wi = (over: Partial<WorkItem> & { metadata?: Record<string, unknown> }): WorkItem =>
@@ -34,5 +34,31 @@ describe('createProtectedReason', () => {
 	});
 	it('works without ticket storage', async () => {
 		expect(await reasonFor([], undefined)).toBeNull();
+	});
+	it('protects an agent with messages queued for it (2026-10-16)', async () => {
+		const check = (count: number) => createProtectedReason({ getWorkItems: async () => [], queuedMessageCount: () => count })('luna');
+		expect(await check(2)).toMatch(/2 message\(s\) are queued for it/);
+		expect(await check(0)).toBeNull();
+	});
+});
+
+describe('createWaitsOn', () => {
+	const waitsOn = (items: WorkItem[], tickets?: ProtectionTicket[]) =>
+		createWaitsOn({ getWorkItems: async () => items, ...(tickets ? { listTickets: async () => tickets } : {}) });
+
+	it('is true while the waiter waits on an open work item it delegated to the candidate', async () => {
+		const open = wi({ target: 'dex', status: 'running', metadata: { delegatedBy: 'pia' } });
+		expect(await waitsOn([open])('pia', 'dex')).toBe(true);
+		expect(await waitsOn([open])('pia', 'max')).toBe(false);
+		expect(await waitsOn([open])('max', 'dex')).toBe(false);
+		expect(await waitsOn([wi({ ...open, status: 'verified' })])('pia', 'dex')).toBe(false);
+	});
+	it('is true while the waiter waits on an open ticket it created for the candidate', async () => {
+		expect(await waitsOn([], [ticket({ source: 'agent:pia', assignee: 'dex', status: 'in_progress' })])('pia', 'dex')).toBe(true);
+		expect(await waitsOn([], [ticket({ source: 'agent:pia', assignee: 'dex', status: 'done' })])('pia', 'dex')).toBe(false);
+		expect(await waitsOn([], [ticket({ source: 'agent:max', assignee: 'dex', status: 'in_progress' })])('pia', 'dex')).toBe(false);
+	});
+	it('works without ticket storage', async () => {
+		expect(await waitsOn([])('pia', 'dex')).toBe(false);
 	});
 });

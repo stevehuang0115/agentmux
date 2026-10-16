@@ -32,6 +32,20 @@ export const RESOURCE_MODE_CONSTANTS = {
 	 * blocked forever.
 	 */
 	RELAX_AFTER_MS: 3 * 60_000,
+	/**
+	 * An agent started less than this long ago is never stopped to free a slot
+	 * (except at critical memory). Starting an agent and stopping it minutes
+	 * later wastes the whole start and releases its work back to the pool
+	 * (2026-10-16: Luna stopped 8 times in 2 h, some after 0-3 min idle).
+	 */
+	MIN_RUN_BEFORE_EVICT_MS: 10 * 60_000,
+	/**
+	 * Hysteresis: for this long after A was stopped to start B, A's own start
+	 * may not stop B (2026-10-16: Luna and Max evicted each other back and forth).
+	 * Longer than MIN_RUN_BEFORE_EVICT_MS so it still holds once B's own start
+	 * protection has run out.
+	 */
+	DISPLACED_GUARD_MS: 30 * 60_000,
 	/** A wait record older than this since its last touch is a new wait */
 	WAIT_RECORD_TTL_MS: 10 * 60_000,
 	/** A started agent counts against the cap even before it shows as running */
@@ -94,6 +108,12 @@ export interface ResourceModeDeps {
 	 * still to come). Null/undefined = free to stop. Errors count as free.
 	 */
 	protectedReason?: (sessionName: string) => Promise<string | null | undefined>;
+	/**
+	 * Whether the waiter is waiting on the candidate's work (it delegated an
+	 * open work item or ticket to it). Such a candidate is never stopped for
+	 * that waiter. Errors count as false.
+	 */
+	waitsOn?: (waiter: string, candidate: string) => Promise<boolean>;
 	/** An agent was stopped to free a slot (the owner thread it owes is told) */
 	onStoppedForSlot?: (sessionName: string) => void;
 	/** A start waited for a slot and got none (deferred; its messages stay queued) */
@@ -127,6 +147,10 @@ export class ResourceModeService {
 	/** Agents seen busy by a pump (their idle time starts at that sighting at the earliest) */
 	private lastSeenBusy = new Map<string, number>();
 	private lastCap: number = RESOURCE_MODE_CONSTANTS.DEFAULT_MAX_RUNNING_AGENTS;
+	/** When each agent's start was last allowed (it counts as freshly started for MIN_RUN_BEFORE_EVICT_MS) */
+	private startedAt = new Map<string, number>();
+	/** Who displaced each agent stopped for a slot, and when (hysteresis, DISPLACED_GUARD_MS) */
+	private displacedBy = new Map<string, { by: string; at: number }>();
 
 	/** Readings, overridable in tests. */
 	memoryStats: () => MemoryReading = getMemoryStats;
@@ -276,7 +300,10 @@ export class ResourceModeService {
 	 * @returns True when the start may proceed
 	 */
 	async requestStart(sessionName: string, ownerTriggered: boolean): Promise<boolean> {
-		if (this.mode !== 'pressure' || !this.deps) return true;
+		if (this.mode !== 'pressure' || !this.deps) {
+			this.startedAt.set(sessionName, Date.now());
+			return true;
+		}
 		// One place in line per agent (CREW-304): a second request for an agent
 		// already waiting joins that wait instead of queuing it twice. An owner
 		// message moves the existing place to the front.
@@ -334,6 +361,8 @@ export class ResourceModeService {
 		try {
 			const now = Date.now();
 			for (const [n, at] of this.admitted) if (now - at > RESOURCE_MODE_CONSTANTS.ADMIT_TTL_MS) this.admitted.delete(n);
+			for (const [n, at] of this.startedAt) if (now - at >= RESOURCE_MODE_CONSTANTS.MIN_RUN_BEFORE_EVICT_MS) this.startedAt.delete(n);
+			for (const [n, d] of this.displacedBy) if (now - d.at >= RESOURCE_MODE_CONSTANTS.DISPLACED_GUARD_MS) this.displacedBy.delete(n);
 			const { maxRunning, idleTimeoutMinutes } = await this.deps.limits();
 			this.lastCap = maxRunning;
 			const running = this.withHonestIdle(await this.deps.listRunning(), now);
@@ -348,13 +377,18 @@ export class ResourceModeService {
 				this.release(w);
 			}
 			while (this.waiters.length > 0) {
-				if (this.mode !== 'pressure') { this.release(this.waiters.shift()!); continue; }
+				if (this.mode !== 'pressure') {
+					const w = this.waiters.shift()!;
+					this.startedAt.set(w.name, Date.now());
+					this.release(w);
+					continue;
+				}
 				if (count >= maxRunning) {
 					const head = this.waiters[0];
 					const rec = this.waitingSince.get(head.name);
 					if (rec) rec.touched = now;
 					const waitedMs = rec ? now - rec.since : 0;
-					const { victim, skipped, relaxedBecause } = await this.pickVictim(pool, idleTimeoutMinutes, waitedMs >= RESOURCE_MODE_CONSTANTS.RELAX_AFTER_MS, head.owner);
+					const { victim, skipped, relaxedBecause } = await this.pickVictim(pool, idleTimeoutMinutes, waitedMs >= RESOURCE_MODE_CONSTANTS.RELAX_AFTER_MS, head.owner, head.name, now);
 					if (victim && relaxedBecause !== undefined) {
 						this.logger.warn('A start has waited too long for a slot; relaxing the eviction rules', {
 							waiter: head.name,
@@ -378,10 +412,13 @@ export class ResourceModeService {
 					}
 					pool = pool.filter((r) => r !== victim);
 					count--;
+					this.displacedBy.set(victim.sessionName, { by: head.name, at: Date.now() });
+					this.startedAt.delete(victim.sessionName);
 					try { this.deps.onStoppedForSlot?.(victim.sessionName); } catch { /* best-effort */ }
 				}
 				const w = this.waiters.shift()!;
 				this.admitted.set(w.name, Date.now());
+				this.startedAt.set(w.name, Date.now());
 				count++;
 				this.release(w);
 			}
@@ -398,14 +435,24 @@ export class ResourceModeService {
 	 * Longest-idle agent that may be stopped for a slot. Never one that is
 	 * busy, waiting for a start itself, always-on, holding an owner message,
 	 * Drive-warm, idle for less than the pressure idle timeout, or protected
-	 * by {@link ResourceModeDeps.protectedReason} (pending work, an open
-	 * ticket, an open delegation). An agent that owes the owner is never picked
-	 * unless memory is critical.
+	 * by {@link ResourceModeDeps.protectedReason} (queued messages, pending
+	 * work, an open ticket, an open delegation). An agent that owes the owner
+	 * is never picked unless memory is critical.
+	 *
+	 * Anti-thrash rules (2026-10-16, Luna and Max evicting each other), which
+	 * hold in every mode, relaxed included, unless memory is critical:
+	 *  - an agent started less than MIN_RUN_BEFORE_EVICT_MS ago is kept,
+	 *  - an agent whose work the waiter waits on ({@link ResourceModeDeps.waitsOn}) is kept,
+	 *  - an agent that displaced the waiter less than DISPLACED_GUARD_MS ago is kept (hysteresis).
+	 * Relaxing only lifts the idle timeout; protected agents are never stopped.
+	 * When no agent qualifies, the waiter waits.
 	 *
 	 * @param running - Running agents
 	 * @param idleTimeoutMinutes - Pressure idle timeout; a younger idle is never stopped
 	 * @param relax - The first waiter has waited past RELAX_AFTER_MS: when no agent passes the rules, stop the best one anyway
 	 * @param ownerWaiter - The first waiter carries an owner message: the idle timeout does not protect an agent (the longest-idle one goes at once); busy, owner-message, Drive-warm and pending-work/ticket/delegation protections still apply
+	 * @param waiterName - The first waiter (for the waits-on and hysteresis rules)
+	 * @param now - Epoch ms of this pump
 	 * @returns The victim (if any), why each skipped agent was kept, and, when the rules were relaxed, why the victim had been kept
 	 */
 	private async pickVictim(
@@ -413,8 +460,11 @@ export class ResourceModeService {
 		idleTimeoutMinutes: number,
 		relax = false,
 		ownerWaiter = false,
+		waiterName = '',
+		now: number = Date.now(),
 	): Promise<{ victim?: RunningAgent; skipped: string[]; relaxedBecause?: string }> {
 		const waiting = new Set(this.waiters.map((w) => w.name));
+		const critical = this.memoryCritical();
 		const minIdleMs = ownerWaiter ? 0 : Math.max(0, idleTimeoutMinutes) * 60_000;
 		const skipped: string[] = [];
 		const ordered = running
@@ -429,6 +479,11 @@ export class ResourceModeService {
 		const keptBecause = new Map<RunningAgent, string>();
 		const unprotected: RunningAgent[] = [];
 		for (const r of ordered) {
+			const thrash = critical ? null : await this.thrashReason(r.sessionName, waiterName, now);
+			if (thrash) {
+				skipped.push(`${r.sessionName}: ${thrash}`);
+				continue;
+			}
 			let why: string | null | undefined;
 			try { why = await this.deps!.protectedReason?.(r.sessionName); } catch { why = null; }
 			const tooYoung = r.idleMs < minIdleMs;
@@ -441,7 +496,6 @@ export class ResourceModeService {
 			}
 			candidates.push(r);
 		}
-		const critical = this.memoryCritical();
 		const owes = (r: RunningAgent): boolean => {
 			try { return this.deps!.owesOwnerThread?.(r.sessionName) === true; } catch { return false; }
 		};
@@ -456,9 +510,36 @@ export class ResourceModeService {
 		};
 		const victim = choose(candidates);
 		if (victim || !relax) return { victim, skipped };
-		// Relaxed: agents kept only by the idle timeout first, then the rest; longest idle within each.
-		const fallback = choose(unprotected) ?? choose(ordered);
+		// Relaxed: only agents kept by nothing but the idle timeout; longest idle
+		// first. A protected agent (queued messages, work in hand, an open
+		// ticket or delegation) is never stopped: the waiter waits instead.
+		const fallback = choose(unprotected);
 		return fallback ? { victim: fallback, skipped, relaxedBecause: keptBecause.get(fallback) ?? '' } : { skipped };
+	}
+
+	/**
+	 * Why stopping this agent for the waiter would thrash, or null when it would not.
+	 *
+	 * @param candidate - Running agent considered as a victim
+	 * @param waiter - First waiting start
+	 * @param now - Epoch ms of this pump
+	 * @returns English reason, or null
+	 */
+	private async thrashReason(candidate: string, waiter: string, now: number): Promise<string | null> {
+		const started = this.startedAt.get(candidate);
+		if (started !== undefined && now - started < RESOURCE_MODE_CONSTANTS.MIN_RUN_BEFORE_EVICT_MS) {
+			return `started ${Math.round((now - started) / 60000)} min ago, under the ${RESOURCE_MODE_CONSTANTS.MIN_RUN_BEFORE_EVICT_MS / 60000} min protection window`;
+		}
+		const displaced = this.displacedBy.get(waiter);
+		if (displaced && displaced.by === candidate && now - displaced.at < RESOURCE_MODE_CONSTANTS.DISPLACED_GUARD_MS) {
+			return `it displaced ${waiter} ${Math.round((now - displaced.at) / 60000)} min ago (no ping-pong)`;
+		}
+		if (waiter && this.deps?.waitsOn) {
+			let dependsOn = false;
+			try { dependsOn = await this.deps.waitsOn(waiter, candidate); } catch { dependsOn = false; }
+			if (dependsOn) return `${waiter} is waiting on its work`;
+		}
+		return null;
 	}
 
 	/** Log why a waiting start got no slot (at most once a minute per agent). */
