@@ -41,10 +41,17 @@ and nothing model-specific.
 
 ## Why this and not a headless browser
 
-Use this when the task needs the user's **actual logged-in state** — an account
-only they are signed into, a site behind SSO, a page whose content differs for
-an authenticated user. For anything that works logged-out, a headless browser is
-cheaper and will not disturb the user's window.
+This is the **first choice for every web task**, logged-in or not. It runs in
+the user's real Chrome, with their real cookies, logins and browser
+fingerprint, so sites treat it as the user: CAPTCHAs, Cloudflare challenges,
+403s and login walls that stop headless or automation browsers rarely appear.
+The agent works in its own background tab, so the user's window is not
+disturbed.
+
+Use Playwright, `browse-stealth`, `chrome-attach` or another headless browser
+only when `status` shows Crewly in Chrome is not drivable. If one of those hits
+a bot check or login wall, come back here and redo the step instead of fighting
+the block.
 
 ## Usage
 

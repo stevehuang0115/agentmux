@@ -47,6 +47,7 @@ import {
 	ORC_CONVERSATION_CONSTANTS,
 	SLACK_THREAD_KEY_CONSTANTS,
 	OPEN_ITEMS_CONSTANTS,
+	BROWSER_PRIORITY_CONSTANTS,
 	WORKTREE_JANITOR_CONSTANTS,
 	SPEND_CAP_CONSTANTS,
 	RUNTIME_INPUT_SAFETY,
@@ -2713,9 +2714,8 @@ export class AgentRegistrationService {
 
 			// Inject skill authorization section — tells agents about available capabilities
 			prompt += '\n\n## Available Capabilities\n\n'
-				+ 'This session has browser automation enabled via the Playwright MCP server. '
-				+ 'Browser skills (e.g. remote-browser) are the preferred way to perform browser tasks. '
 				+ 'Bash skills in the Crewly skills directory are available for team communication and status reporting.'
+				+ '\n\n' + BROWSER_PRIORITY_CONSTANTS.promptSection(path.join(agentSkillsPath, 'remote-browser', 'execute.sh'))
 				// specs/2026-10-01-reply-open-items.md — promises and questions in replies are tracked.
 				+ '\n\n' + OPEN_ITEMS_CONSTANTS.PROMPT_LINE
 				// crewly#1078 — a 40 GB runaway file in a scratch dir filled a disk.

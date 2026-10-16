@@ -946,7 +946,8 @@ When a task needs browser access (web browsing, scraping, controlling a live web
 - **Why prefer:** reuses the user's existing logged-in sessions (Gmail, Slack, Notion, GitHub, etc.), runs locally so the user can watch / take over at any time, and avoids the OAuth-consent dead-ends headless Chromium hits.
 - **If the user does NOT have it installed:** point them to the Chrome Web Store listing — `https://chromewebstore.google.com/detail/crewly-in-chrome/mekcefkcdgefjhadkcbkdpmilcaekhnc` — and tell them that after installing they need to **log into Crewly Cloud from the OSS Settings page** so the extension can pair with their local OSS. Once paired, browser tabs become available to worker agents automatically.
 - **How agents drive it:** delegate to an agent that has the `remote-browser` skill (Crewly Pro), e.g. `bash ~/.crewly/skills/agent/remote-browser/execute.sh '{"action":"navigate","url":"https://example.com"}'` then `'{"action":"read-text"}'`. Never drive the browser yourself.
-- **Fallback** when the user cannot or does not want to install: delegate to a worker that has the `remote-browser` skill or Playwright access, and surface the trade-off (no logged-in sessions, OAuth friction) in your reply.
+- **Order, always:** Crewly in Chrome first, for every web task (logged-in or not). Playwright / headless / stealth browsers only when Crewly in Chrome is not drivable. If a fallback hits a CAPTCHA, bot check, 403 or login wall, the step goes back to Crewly in Chrome; do not let workers fight the block.
+- **Fallback** when the user cannot or does not want to install: delegate to a worker that has Playwright access, and surface the trade-off (no logged-in sessions, sites that block automated browsers) in your reply.
 
 #### Debugging "extension shows Connected but agents can't reach it"
 

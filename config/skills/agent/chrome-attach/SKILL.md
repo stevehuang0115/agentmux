@@ -1,6 +1,6 @@
 ---
 name: Chrome Live Attach
-description: "One-click attach to user's running Chrome browser via CDP. Auto-discovers Chrome processes, connects via DevTools Protocol, preserves real logins."
+description: "Fallback only: use the remote-browser skill (Crewly in Chrome) first; use this only when Crewly in Chrome is not drivable. One-click attach to user's running Chrome browser via CDP. Auto-discovers Chrome processes, connects via DevTools Protocol, preserves real logins."
 version: 1.0.0
 category: browser
 skillType: claude-skill

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "lastUpdated": "2026-10-14T03:53:59.392Z",
+  "lastUpdated": "2026-10-16T16:52:24.796Z",
   "cdnBaseUrl": "https://raw.githubusercontent.com/stevehuang0115/crewly/main",
   "source": "github",
   "items": [
@@ -104,7 +104,7 @@
       "id": "browse-stealth",
       "type": "skill",
       "name": "Stealth Browser (Patchright + CDP)",
-      "description": "Anti-detection browser automation using Patchright (Playwright fork) connected to a real Chrome instance via CDP. Bypasses navigator.webdriver checks, fingerprint anomalies, and headless detection used by platforms like 小红书, X/Twitter, and LinkedIn.",
+      "description": "Fallback only: use the remote-browser skill (Crewly in Chrome) first; use this only when Crewly in Chrome is not drivable. Anti-detection browser automation using Patchright (Playwright fork) connected to a real Chrome instance via CDP. Bypasses navigator.webdriver checks, fingerprint anomalies, and headless detection used by platforms like 小红书, X/Twitter, and LinkedIn.",
       "author": "Crewly Team",
       "version": "1.0.0",
       "category": "development",
@@ -120,12 +120,12 @@
       "downloads": 0,
       "rating": 0,
       "createdAt": "2026-02-28T00:00:00.000Z",
-      "updatedAt": "2026-09-24T19:55:44.195Z",
+      "updatedAt": "2026-10-16T16:52:24.796Z",
       "source": "config/skills/agent/browse-stealth",
       "assets": {
         "archive": "config/skills/agent/browse-stealth",
         "checksum": "",
-        "sizeBytes": 23734
+        "sizeBytes": 23859
       },
       "metadata": {
         "skillType": "claude-skill",
@@ -1171,7 +1171,7 @@
       "id": "playwright-chrome-browser",
       "type": "skill",
       "name": "Playwright Chrome Browser",
-      "description": "Enable browser automation capabilities using Playwright MCP server. This allows agents to interact with web pages, take screenshots, fill forms, and perform automated browser tasks through the Playwright automation framework.",
+      "description": "Fallback only: use the remote-browser skill (Crewly in Chrome) first; use this only when Crewly in Chrome is not drivable. Enable browser automation capabilities using Playwright MCP server. This allows agents to interact with web pages, take screenshots, fill forms, and perform automated browser tasks through the Playwright automation framework.",
       "author": "Crewly Team",
       "version": "1.0.0",
       "category": "automation",
@@ -1188,12 +1188,12 @@
       "downloads": 0,
       "rating": 0,
       "createdAt": "2026-02-22T23:57:06.027Z",
-      "updatedAt": "2026-09-24T19:55:44.195Z",
+      "updatedAt": "2026-10-16T16:52:24.796Z",
       "source": "config/skills/agent/marketplace/playwright-chrome-browser",
       "assets": {
         "archive": "config/skills/agent/marketplace/playwright-chrome-browser",
         "checksum": "",
-        "sizeBytes": 4667
+        "sizeBytes": 4792
       },
       "metadata": {
         "skillType": "mcp",

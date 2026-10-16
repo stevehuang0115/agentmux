@@ -1,4 +1,5 @@
 import { PromptModule, ModuleConfig } from './prompt-module.interface.js';
+import { BROWSER_PRIORITY_CONSTANTS } from '../../../constants.js';
 
 /**
  * Skills reference module — tells the agent how to discover and use skills.
@@ -247,7 +248,7 @@ export class SkillsReferenceModule implements PromptModule {
 				'- **Read** project files for status awareness (not for implementation)',
 				'- **Execute** orchestrator skill scripts for team coordination',
 				'- **Execute** agent skill scripts (`core/` memory and status tools)',
-				'- **Browser automation** via Playwright MCP server (when enabled)',
+				'- **Browser automation**: Crewly in Chrome first; Playwright MCP / headless only as a fallback (see Browser order below)',
 				'',
 				'Implementation work (editing code, creating files) should be delegated to agents.',
 			);
@@ -257,14 +258,14 @@ export class SkillsReferenceModule implements PromptModule {
 				`- **Read/Write** files within the project directory`,
 				`- **Execute** bash scripts in \`${config.agentSkillsPath}/\` (agent core skills)`,
 				`- **Execute** bash scripts in \`${config.tlSkillsPath}/\` (team leader skills)`,
-				'- **Browser automation** via Playwright MCP server (when enabled)',
+				'- **Browser automation**: Crewly in Chrome first; Playwright MCP / headless only as a fallback (see Browser order below)',
 			);
 		} else {
 			lines.push(
 				'This session has access to:',
 				`- **Read/Write** files within the project directory`,
 				`- **Execute** bash scripts in \`${config.agentSkillsPath}/\` (agent core skills)`,
-				'- **Browser automation** via Playwright MCP server (when enabled)',
+				'- **Browser automation**: Crewly in Chrome first; Playwright MCP / headless only as a fallback (see Browser order below)',
 			);
 		}
 
@@ -284,6 +285,8 @@ export class SkillsReferenceModule implements PromptModule {
 			'- **NOT Chrome DevTools / CDP** — This is a higher-level tool that works through the Chrome Extension.',
 			'- **NOT computer-use** — computer-use controls the entire desktop; remote-browser only controls Chrome tabs.',
 			'',
+			'- **Gets past bot checks:** real cookies and a real browser fingerprint, so sites that block headless/automation browsers usually let it through.',
+			'',
 			'When asked to "use Chrome", "browse the web", or "check a website", use the `remote-browser` skill:',
 			'```bash',
 			`bash ${remoteBrowserPath} '{"action":"navigate","url":"https://example.com"}'`,
@@ -291,6 +294,8 @@ export class SkillsReferenceModule implements PromptModule {
 			`bash ${remoteBrowserPath} '{"action":"read-text"}'`,
 			`bash ${remoteBrowserPath} '{"action":"status"}'`,
 			'```',
+			'',
+			BROWSER_PRIORITY_CONSTANTS.promptSection(remoteBrowserPath),
 		);
 
 		return lines.join('\n');
