@@ -441,7 +441,8 @@ export class ResourceModeService {
 	 *
 	 * Anti-thrash rules (2026-10-16, Luna and Max evicting each other), which
 	 * hold in every mode, relaxed included, unless memory is critical:
-	 *  - an agent started less than MIN_RUN_BEFORE_EVICT_MS ago is kept,
+	 *  - an agent started less than MIN_RUN_BEFORE_EVICT_MS ago is kept (not for an
+	 *    owner-message waiter: the owner never waits behind a just-started agent),
 	 *  - an agent whose work the waiter waits on ({@link ResourceModeDeps.waitsOn}) is kept,
 	 *  - an agent that displaced the waiter less than DISPLACED_GUARD_MS ago is kept (hysteresis).
 	 * Relaxing only lifts the idle timeout; protected agents are never stopped.
@@ -479,7 +480,7 @@ export class ResourceModeService {
 		const keptBecause = new Map<RunningAgent, string>();
 		const unprotected: RunningAgent[] = [];
 		for (const r of ordered) {
-			const thrash = critical ? null : await this.thrashReason(r.sessionName, waiterName, now);
+			const thrash = critical ? null : await this.thrashReason(r.sessionName, waiterName, now, ownerWaiter);
 			if (thrash) {
 				skipped.push(`${r.sessionName}: ${thrash}`);
 				continue;
@@ -523,11 +524,12 @@ export class ResourceModeService {
 	 * @param candidate - Running agent considered as a victim
 	 * @param waiter - First waiting start
 	 * @param now - Epoch ms of this pump
+	 * @param ownerWaiter - The waiter carries an owner message: the start window does not apply (hysteresis and waits-on still do)
 	 * @returns English reason, or null
 	 */
-	private async thrashReason(candidate: string, waiter: string, now: number): Promise<string | null> {
+	private async thrashReason(candidate: string, waiter: string, now: number, ownerWaiter = false): Promise<string | null> {
 		const started = this.startedAt.get(candidate);
-		if (started !== undefined && now - started < RESOURCE_MODE_CONSTANTS.MIN_RUN_BEFORE_EVICT_MS) {
+		if (!ownerWaiter && started !== undefined && now - started < RESOURCE_MODE_CONSTANTS.MIN_RUN_BEFORE_EVICT_MS) {
 			return `started ${Math.round((now - started) / 60000)} min ago, under the ${RESOURCE_MODE_CONSTANTS.MIN_RUN_BEFORE_EVICT_MS / 60000} min protection window`;
 		}
 		const displaced = this.displacedBy.get(waiter);

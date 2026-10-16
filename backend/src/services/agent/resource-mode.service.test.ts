@@ -373,16 +373,45 @@ describe('anti-thrash rules (2026-10-16: Luna and Max evicting each other)', () 
 		expect(stopped).toEqual(['luna']);
 	});
 
-	it('the start window applies to owner-triggered starts too', async () => {
+	it('an owner-message start is not bound by the start window: it takes a just-started agent at once', async () => {
 		const { svc, stopped, run } = setup([], { max: 1 });
 		await enter(svc);
 		expect(await svc.requestStart('luna', false)).toBe(true);
-		run('luna');
-		const p = svc.requestStart('max', true);
-		await jest.advanceTimersByTimeAsync(20);
+		run('luna', 60_000);
+		expect(await settleWithin(svc.requestStart('max', true), 20)).toBe(true);
+		expect(stopped).toEqual(['luna']);
+	});
+
+	it('an owner-message start still keeps the agent whose work it waits on', async () => {
+		const { svc, stopped } = setup([agent('dex', 9e6)], { waitsOn: async (w, c) => w === 'pia' && c === 'dex' });
+		await enter(svc);
+		expect(await waitedStart(svc, 'pia', true)).toBe(false);
 		expect(stopped).toEqual([]);
-		await jest.advanceTimersByTimeAsync(RESOURCE_MODE_CONSTANTS.START_WAIT_MS);
-		expect(await p).toBe(false);
+	});
+
+	it('an owner-message start still keeps an agent with queued work', async () => {
+		const svc = ResourceModeService.getInstance();
+		const stopped: string[] = [];
+		svc.setDeps({
+			limits: async () => ({ maxRunning: 1, idleTimeoutMinutes: 10 }),
+			listRunning: async () => [agent('luna', 9e6)],
+			hasOwnerMessage: () => false,
+			protectedReason: async () => '2 message(s) are queued for it',
+			stopAgent: async (n) => { stopped.push(n); },
+		});
+		await enter(svc);
+		expect(await waitedStart(svc, 'max', true)).toBe(false);
+		expect(stopped).toEqual([]);
+	});
+
+	it('no ping-pong for an owner-message start either: it cannot stop the agent that displaced it', async () => {
+		const { svc, stopped, run } = setup([agent('luna', 9e6)], { max: 1 });
+		await enter(svc);
+		expect(await waitedStart(svc, 'max')).toBe(true);
+		run('max');
+		// Inside Max's start window, which an owner start ignores; only the hysteresis keeps Max.
+		expect(await waitedStart(svc, 'luna', true)).toBe(false);
+		expect(stopped).toEqual(['luna']);
 	});
 
 	it('never stops the agent whose work the waiter is waiting on', async () => {
