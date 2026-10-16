@@ -51,6 +51,7 @@ import { slackArchiveLink } from '../decisions/ticket-thread-store.js';
 import { isStaleCommitment, staleCommitmentNotice, supersededReason } from './stale-commitment.js';
 import { isPastReminderCutoff, leadStaleNotice, reminderFooter } from '../orc/harness-reminder.js';
 import { gateVerdict, siblingQuestion, type GateVerdict } from './open-item-gate.js';
+import { questionCardSkipReason } from './question-card-gate.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -925,6 +926,8 @@ export class OpenItemsService {
     }
     let qi = 0;
     let where: QuestionPlace | undefined;
+    let carded = false;
+    let recentLifted: OwnerDecision[] | undefined;
     for (const group of groupEitherOr(found.questions)) {
       const q = group[0];
       qi += 1;
@@ -961,6 +964,24 @@ export class OpenItemsService {
         out.push({ item });
         continue;
       }
+      // Fragments, questions for someone else, a thread that already has a card, repeats, and past the daily cap: tracked, no card (#1334).
+      const skip = carded
+        ? 'one_card_per_message'
+        : questionCardSkipReason({
+            question: q.text,
+            cardQuestion: derived.question,
+            agent: message.senderId,
+            place: where.cardPlace === undefined ? slackPlaceOf(request) : where.cardPlace,
+            recent: (recentLifted ??= await this.recentLifted(message.senderId, at)),
+            ...(names ? { colleagueNames: names } : {}),
+            now: at,
+          });
+      if (skip) {
+        this.logger.info('Lifted question not carded', { tkt: ticketLabel(request), agent: message.senderId, item: item.id, reason: skip });
+        out.push({ item });
+        continue;
+      }
+      carded = true;
       out.push({ item, card: { ...derived, context }, ...(where.cardPlace !== undefined ? { cardPlace: where.cardPlace } : {}) });
     }
     return out;
@@ -1007,6 +1028,18 @@ export class OpenItemsService {
     const win = OPEN_ITEMS_CONSTANTS.ASK_OWNER_DEDUPE_WINDOW_MS;
     const recent = await this.deps.recentDecisionsBy(agent, at.getTime() - win).catch(() => [] as OwnerDecision[]);
     return recent.filter((d) => d.kind !== 'reply_question' && Date.parse(d.createdAt) <= at.getTime() + 60_000).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0] ?? null;
+  }
+
+  /**
+   * Everything the agent asked the owner within the lifted-card window (for the card gate).
+   *
+   * @param agent - Asking agent
+   * @param at - When the reply was posted
+   * @returns Its decisions (empty when unknown)
+   */
+  private async recentLifted(agent: string, at: Date): Promise<OwnerDecision[]> {
+    if (!this.deps.recentDecisionsBy) return [];
+    return this.deps.recentDecisionsBy(agent, at.getTime() - OPEN_ITEMS_CONSTANTS.REPLY_CARD_WINDOW_MS).catch(() => [] as OwnerDecision[]);
   }
 
   /**
