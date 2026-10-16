@@ -55,6 +55,8 @@ export interface RuntimeFallbackHooks {
 	reportOutput(sessionName: string, runtime: string, text: string, source: RuntimeOutputSource): boolean;
 	/** One-time note for the session's next kickoff (after a switch), consumed */
 	takeKickoffNote(sessionName: string): string | null;
+	/** The session's model just answered with a tool call: its runtime target has usage (optional) */
+	reportWorking?(sessionName: string): void;
 }
 
 let hooks: RuntimeFallbackHooks | null = null;
@@ -188,5 +190,27 @@ export function takeRuntimeSwitchKickoffNote(sessionName: string): string | null
 		return hooks.takeKickoffNote(sessionName);
 	} catch {
 		return null;
+	}
+}
+
+/**
+ * Report that a session's model just answered (a Claude Code PreToolUse
+ * hook: the model produced a tool call, which it cannot do while its account
+ * is out of usage). Clears a stale "out of usage" mark on the runtime target
+ * the session runs on.
+ *
+ * @param sessionName - Session the hook came from
+ *
+ * @example
+ * ```ts
+ * if (event === 'PreToolUse') reportRuntimeWorking(sessionName);
+ * ```
+ */
+export function reportRuntimeWorking(sessionName: string | undefined | null): void {
+	if (!hooks?.reportWorking || !sessionName) return;
+	try {
+		hooks.reportWorking(sessionName);
+	} catch {
+		// never breaks the caller
 	}
 }

@@ -865,3 +865,170 @@ describe('RuntimeFallbackService — runtime not installed / signed in on this m
 		expect(h.relaunched).toContain('ruth-1');
 	});
 });
+
+describe('RuntimeFallbackService — two Claude accounts: prefer the better target, clear stale marks', () => {
+	const STEVE = 'claude-code@steve';
+	const CHAIN = ['claude-code', STEVE, 'antigravity-cli', 'codex-cli', 'crewly-agent'];
+	const AVAIL: RuntimeAvailability[] = [
+		{ runtime: 'claude-code', label: 'Claude Code', selectable: true },
+		{ runtime: STEVE, label: 'Claude Code (steve)', selectable: true },
+		{ runtime: 'antigravity-cli', label: 'Antigravity', selectable: true },
+		{ runtime: 'codex-cli', label: 'Codex', selectable: true },
+		{ runtime: 'crewly-agent', label: 'DeepSeek', selectable: true },
+	];
+	const ORC: FallbackAgentInfo = { sessionName: 'crewly-orc', name: 'Orc', primary: 'crewly-agent', isOrchestrator: true };
+	const iso = (ms: number) => new Date(ms).toISOString();
+	const mark = (runtime: string, extra: Record<string, unknown> = {}) => ({
+		runtime,
+		since: iso(T0 - 60 * 60_000),
+		kind: 'usage_limit',
+		ruleId: 'x',
+		switched: [],
+		switchedTo: [],
+		notified: true,
+		...extra,
+	});
+
+	/**
+	 * The 2026-10-16 state: DeepSeek out of credit, orc on the second account,
+	 * both Claude accounts, Antigravity and Codex marked out of usage.
+	 */
+	function incident(opts: { orcRuntime?: string; marked?: string[] } = {}) {
+		const h = make({ availability: AVAIL });
+		(h.deps as { getAgent: RuntimeFallbackDeps['getAgent'] }).getAgent = async (s) => (s === 'crewly-orc' ? ORC : (AGENTS[s] ?? null));
+		const marked = opts.marked ?? ['claude-code', STEVE, 'antigravity-cli', 'codex-cli'];
+		const exhausted: Record<string, unknown> = { 'crewly-agent': mark('crewly-agent', { kind: 'billing' }) };
+		for (const r of marked) exhausted[r] = mark(r, { until: iso(T0 + 30 * 3600_000) });
+		h.store.save({
+			...h.store.load(),
+			settings: { ...h.store.load().settings, chain: CHAIN },
+			exhausted,
+			overrides: { 'crewly-orc': { runtime: opts.orcRuntime ?? STEVE, primary: 'crewly-agent', reason: 'usage_limit', since: iso(T0 - 15 * 24 * 3600_000) } },
+		} as never);
+		const service = new RuntimeFallbackService(h.deps);
+		return { ...h, service };
+	}
+
+	it('moves the orc from the second account back to the default login once it has usage, though DeepSeek is still out', async () => {
+		const h = incident({ marked: [STEVE, 'antigravity-cli', 'codex-cli'] });
+		await h.service.tick();
+		await settle();
+		expect(h.store.load().overrides['crewly-orc']).toMatchObject({ runtime: 'claude-code', primary: 'crewly-agent' });
+		expect(h.service.accountFor('crewly-orc')).toBeNull();
+		expect(h.handovers).toEqual([{ sessionName: 'crewly-orc', from: STEVE, to: 'claude-code', direction: 'upgrade' }]);
+		expect(h.relaunched).toEqual(['crewly-orc']);
+		expect(h.service.takeKickoffNote('crewly-orc')).toMatch(/Claude Code has usage again, so Crewly moved you there from Claude Code \(steve\); DeepSeek is still unavailable/);
+	});
+
+	it('waits for the idle boundary', async () => {
+		const h = incident({ marked: [STEVE] });
+		h.busy.add('crewly-orc');
+		await h.service.tick();
+		expect(h.relaunched).toEqual([]);
+		h.busy.delete('crewly-orc');
+		await h.service.tick();
+		await settle();
+		expect(h.store.load().overrides['crewly-orc'].runtime).toBe('claude-code');
+	});
+
+	it('never moves down the chain at an idle boundary (that is left to the next work)', async () => {
+		const h = incident({ orcRuntime: STEVE, marked: ['claude-code'] });
+		await h.service.tick();
+		await settle();
+		expect(h.store.load().overrides['crewly-orc'].runtime).toBe(STEVE);
+		expect(h.relaunched).toEqual([]);
+	});
+
+	it('stays put while everything better is out', async () => {
+		const h = incident();
+		await h.service.tick();
+		await settle();
+		expect(h.store.load().overrides['crewly-orc'].runtime).toBe(STEVE);
+		expect(h.relaunched).toEqual([]);
+	});
+
+	it('a restart of an orc on an exhausted account starts it on the best available target', async () => {
+		const h = incident({ marked: [STEVE, 'antigravity-cli', 'codex-cli'] });
+		await expect(h.service.resolveLaunch({ sessionName: 'crewly-orc', configured: 'crewly-agent', isOrchestrator: true })).resolves.toEqual({
+			runtime: 'claude-code',
+			overridden: true,
+		});
+		expect(h.store.load().overrides['crewly-orc']).toMatchObject({ runtime: 'claude-code', primary: 'crewly-agent' });
+	});
+
+	it('a restart while everything else is out keeps the current target', async () => {
+		const h = incident();
+		await expect(h.service.resolveLaunch({ sessionName: 'crewly-orc', configured: 'crewly-agent', isOrchestrator: true })).resolves.toEqual({
+			runtime: 'claude-code',
+			overridden: true,
+			claudeAccount: 'steve',
+		});
+	});
+
+	it('another session working on the default login clears its stale mark, and the orc moves there', async () => {
+		const h = incident();
+		// Ella runs on the default login (no override) and makes tool calls.
+		h.service.reportWorking('dev-1');
+		await settle();
+		expect(h.store.load().exhausted['claude-code']).toBeUndefined();
+		expect(h.store.load().exhausted[STEVE]).toBeDefined();
+		await h.service.tick();
+		await settle();
+		expect(h.store.load().overrides['crewly-orc'].runtime).toBe('claude-code');
+	});
+
+	it('a working session on the second account clears that account only', async () => {
+		const h = incident();
+		h.store.save({ ...h.store.load(), overrides: { ...h.store.load().overrides, 'dev-2': { runtime: STEVE, primary: 'claude-code', reason: 'usage_limit', since: iso(T0) } } } as never);
+		const service = new RuntimeFallbackService(h.deps);
+		service.reportWorking('dev-2');
+		await settle();
+		expect(h.store.load().exhausted[STEVE]).toBeUndefined();
+		expect(h.store.load().exhausted['claude-code']).toBeDefined();
+	});
+
+	it('ignores working signals within the grace after the mark, and throttles per session', async () => {
+		const h = incident();
+		h.store.save({ ...h.store.load(), exhausted: { ...h.store.load().exhausted, 'claude-code': mark('claude-code', { since: iso(T0 - 30_000) }) } } as never);
+		const service = new RuntimeFallbackService(h.deps);
+		service.reportWorking('dev-1');
+		await settle();
+		expect(h.store.load().exhausted['claude-code']).toBeDefined();
+		h.clock.now += 3 * 60_000;
+		service.reportWorking('dev-1'); // past the grace and the throttle
+		await settle();
+		expect(h.store.load().exhausted['claude-code']).toBeUndefined();
+	});
+
+	it('does nothing for a session on a non-Claude runtime', async () => {
+		const h = incident();
+		h.service.reportWorking('nova-1');
+		await settle();
+		expect(Object.keys(h.store.load().exhausted)).toContain('codex-cli');
+	});
+
+	it('a sign-in of the default login clears its mark when the probe answers', async () => {
+		const h = incident();
+		h.probe.mockResolvedValue('available');
+		await h.service.onRuntimeLogin('claude-code');
+		await settle();
+		expect(h.probe).toHaveBeenCalledWith('claude-code');
+		expect(h.store.load().exhausted['claude-code']).toBeUndefined();
+		expect(h.store.load().overrides['crewly-orc'].runtime).toBe('claude-code');
+	});
+
+	it('a sign-in that finds the default login still limited keeps the mark', async () => {
+		const h = incident();
+		h.probe.mockResolvedValue('limited');
+		await h.service.onRuntimeLogin('claude-code');
+		expect(h.store.load().exhausted['claude-code']).toMatchObject({ kind: 'usage_limit' });
+	});
+
+	it('signing the second account in again clears its usage mark too (not only a sign-out)', async () => {
+		const h = incident();
+		h.probe.mockResolvedValue('available');
+		await h.service.onAccountLogin('steve');
+		await settle();
+		expect(h.store.load().exhausted[STEVE]).toBeUndefined();
+	});
+});

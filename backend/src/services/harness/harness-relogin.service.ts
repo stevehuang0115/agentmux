@@ -59,6 +59,7 @@
 import * as os from 'os';
 import { HARNESS_CONSTANTS } from '../../constants.js';
 import { listClaudeAccounts } from './claude-accounts.js';
+import { effectiveClaudeAccount } from '../runtime-fallback/effective-runtime.js';
 import { LoggerService } from '../core/logger.service.js';
 import type { HarnessApiKeyService } from './harness-api-key.service.js';
 import { getHarnessCredentialsStore, type HarnessCredentialsStore } from './harness-credentials.store.js';
@@ -226,6 +227,14 @@ export interface HarnessReloginDeps {
 	onLoginRestored?: (harnessId: HarnessId, resumed: readonly string[]) => Promise<number> | number;
 	/** After one of the owner's other Claude Code accounts was signed in (the runtime fallback) */
 	onAccountLogin?: (account: string) => Promise<void> | void;
+	/** After a harness's default login was signed in again (the runtime fallback re-checks its usage mark) */
+	onHarnessLogin?: (harnessId: HarnessId) => Promise<void> | void;
+	/**
+	 * The owner's other Claude Code account an agent session runs on right now
+	 * (the runtime fallback moved it there), or null for the default login.
+	 * Default: the runtime fallback's {@link effectiveClaudeAccount}.
+	 */
+	accountOfSession?: (sessionName: string) => string | null;
 	/** The owner's existing other Claude Code accounts (default: claude-accounts.ts) */
 	listClaudeAccounts?: () => string[];
 	/** This machine's name, for the owner ("iriss-air.lan") */
@@ -711,6 +720,8 @@ export class HarnessReloginService {
 	private sessionNeedsLogin: HarnessReloginDeps['sessionNeedsLogin'] | null;
 	private onLoginRestored: HarnessReloginDeps['onLoginRestored'] | null;
 	private onAccountLogin: HarnessReloginDeps['onAccountLogin'] | null;
+	private onHarnessLogin: HarnessReloginDeps['onHarnessLogin'] | null;
+	private readonly accountOfSession: (sessionName: string) => string | null;
 	private readonly listClaudeAccounts: () => string[];
 	private readonly machineName: () => string;
 	private readonly state: ReloginStateStore;
@@ -754,6 +765,8 @@ export class HarnessReloginService {
 		this.sessionNeedsLogin = deps.sessionNeedsLogin ?? null;
 		this.onLoginRestored = deps.onLoginRestored ?? null;
 		this.onAccountLogin = deps.onAccountLogin ?? null;
+		this.onHarnessLogin = deps.onHarnessLogin ?? null;
+		this.accountOfSession = deps.accountOfSession ?? ((sessionName) => effectiveClaudeAccount(sessionName));
 		this.listClaudeAccounts = deps.listClaudeAccounts ?? (() => listClaudeAccounts());
 		this.machineName = deps.machineName ?? (() => os.hostname());
 		this.state = deps.state ?? new MemoryReloginStateStore();
@@ -799,6 +812,15 @@ export class HarnessReloginService {
 	 */
 	setAccountLoginHandler(handler: HarnessReloginDeps['onAccountLogin'] | null): void {
 		this.onAccountLogin = handler ?? null;
+	}
+
+	/**
+	 * Set what learns that a harness's default login was signed in again.
+	 *
+	 * @param handler - Handler (the runtime fallback), or null
+	 */
+	setHarnessLoginHandler(handler: HarnessReloginDeps['onHarnessLogin'] | null): void {
+		this.onHarnessLogin = handler ?? null;
 	}
 
 	/**
@@ -886,12 +908,18 @@ export class HarnessReloginService {
 		if (typeof text !== 'string') return false;
 		if (this.flows.size > 0 && this.consumeFlowReply(text, target)) return true;
 
-		// `login` in an agent's DM while that agent sits at a sign-in screen:
-		// sign in its harness (the watchdog's note asks for exactly this).
-		if (scope === 'agent' && isLoginKeyword(text) && target?.agentSession) {
-			const harnessId = this.harnessOfSession(target.agentSession);
-			if (harnessId && hasBrokerLogin(harnessId) && (this.isSignedOut(harnessId) || this.sessionNeedsLogin?.(target.agentSession))) {
-				this.startOwnerLogin(harnessId, { replyTarget: target, requestedBy: 'owner_dm' });
+		// `login` in an agent's own bot DM (the orc's too) while that agent sits
+		// at a sign-in screen: sign in the login it actually runs on (the
+		// watchdog's note asks for exactly this). An agent the runtime fallback
+		// moved to another Claude Code account needs THAT account signed in, not
+		// the default login.
+		if (isLoginKeyword(text) && target?.agentSession) {
+			const session = target.agentSession;
+			const harnessId = this.harnessOfSession(session);
+			const account = harnessId === HARNESS_CONSTANTS.IDS.CLAUDE_CODE ? this.safeAccountOf(session) : null;
+			const waitsForLogin = this.sessionNeedsLogin?.(session) === true;
+			if (harnessId && hasBrokerLogin(harnessId) && (waitsForLogin || (!account && this.isSignedOut(harnessId)))) {
+				this.startOwnerLogin(harnessId, { replyTarget: target, requestedBy: 'owner_dm', ...(account ? { account } : {}) });
 				return true;
 			}
 		}
@@ -901,6 +929,20 @@ export class HarnessReloginService {
 		if (scope === 'agent' && request.kind !== 'harness') return false;
 		void this.handleOwnerLoginRequest(request, target);
 		return true;
+	}
+
+	/**
+	 * The other Claude Code account a session runs on, never throwing.
+	 *
+	 * @param sessionName - Agent session
+	 * @returns Account name, or null for the default login
+	 */
+	private safeAccountOf(sessionName: string): string | null {
+		try {
+			return this.accountOfSession(sessionName);
+		} catch {
+			return null;
+		}
 	}
 
 	/**
@@ -1610,6 +1652,13 @@ export class HarnessReloginService {
 			}
 		}
 		this.logger.info('Re-login finished', { harnessId, resumed: result.resumed.length, failed: result.failed.length, redelivered });
+		if (this.onHarnessLogin) {
+			try {
+				await this.onHarnessLogin(harnessId);
+			} catch (error) {
+				this.logger.warn('Harness sign-in handler failed', { harnessId, error: error instanceof Error ? error.message : String(error) });
+			}
+		}
 		if (notify) {
 			const text =
 				flow.trigger === 'owner'

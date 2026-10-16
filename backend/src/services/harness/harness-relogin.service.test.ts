@@ -1021,3 +1021,64 @@ describe("HarnessReloginService — another of the owner's Claude Code accounts 
 		expect(ctx.resumer.resume).not.toHaveBeenCalled();
 	});
 });
+
+describe('HarnessReloginService — the runtime fallback learns about sign-ins (failback)', () => {
+	/** Sign the default Claude login out, reply `login`, send the code, succeed. */
+	async function relogDefault(ctx: ReturnType<typeof setup>): Promise<void> {
+		await signOutClaude(ctx);
+		expect(ctx.service.handleOwnerReply('login', ORC_DM)).toBe(true);
+		ctx.broker.patch('s1', { state: 'awaiting_user', url: CLAUDE_URL, needsInput: true });
+		await flush();
+		ctx.service.handleOwnerReply(AUTH_CODE, ORC_DM);
+		ctx.login.probe = 'logged_in';
+		ctx.broker.finish('s1', 'succeeded', 'Logged in.');
+		await flush();
+	}
+
+	it('tells the fallback when the default login is signed in again', async () => {
+		const ctx = setup();
+		const onHarnessLogin = jest.fn(async () => undefined);
+		ctx.service.setHarnessLoginHandler(onHarnessLogin);
+		await relogDefault(ctx);
+		expect(onHarnessLogin).toHaveBeenCalledWith('claude-code');
+	});
+
+	it('an account sign-in does not report a default-login sign-in', async () => {
+		const ctx = setup({ listClaudeAccounts: () => ['b'] });
+		const onHarnessLogin = jest.fn();
+		ctx.service.setHarnessLoginHandler(onHarnessLogin);
+		ctx.service.handleOwnerReply('login claude b', ORC_THREAD);
+		await flush();
+		const id = [...ctx.broker.sessions.keys()][0];
+		ctx.broker.patch(id, { state: 'awaiting_user', url: CLAUDE_URL, needsInput: true });
+		await flush();
+		ctx.service.handleOwnerReply(AUTH_CODE, ORC_THREAD);
+		ctx.broker.finish(id, 'succeeded', 'Logged in.');
+		await flush();
+		expect(onHarnessLogin).not.toHaveBeenCalled();
+	});
+
+	it('a failing handler does not break the success DM', async () => {
+		const ctx = setup({ onHarnessLogin: () => Promise.reject(new Error('boom')) });
+		await relogDefault(ctx);
+		expect(ctx.dms[ctx.dms.length - 1]).toMatch(/^Done: Claude Code on iriss-air\.lan is signed in again/);
+	});
+});
+
+describe('HarnessReloginService — `login` signs in the account the agent actually runs on', () => {
+	it('an agent the fallback moved to account b gets account b signed in, not the default login', async () => {
+		const ctx = setup({ sessionNeedsLogin: (s) => s === 'ella-1', accountOfSession: (s) => (s === 'ella-1' ? 'b' : null) });
+		ctx.login.probe = 'logged_in';
+		await ctx.service.checkHarnesses();
+		expect(ctx.service.handleOwnerReply('login', ELLA_DM, 'agent')).toBe(true);
+		expect(ctx.broker.startCalls).toEqual([{ harnessId: 'claude-code', method: 'subscription', account: 'b' }]);
+	});
+
+	it("works in the orc's own DM too, while the orc sits at a sign-in screen on account b", async () => {
+		const ctx = setup({ sessionNeedsLogin: (s) => s === 'crewly-orc', accountOfSession: (s) => (s === 'crewly-orc' ? 'b' : null) });
+		ctx.login.probe = 'logged_in';
+		await ctx.service.checkHarnesses();
+		expect(ctx.service.handleOwnerReply('login', ORC_DM)).toBe(true);
+		expect(ctx.broker.startCalls).toEqual([{ harnessId: 'claude-code', method: 'subscription', account: 'b' }]);
+	});
+});

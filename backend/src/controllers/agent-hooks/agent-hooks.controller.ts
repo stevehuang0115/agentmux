@@ -24,6 +24,7 @@ import { joinHookNotes, ownerHookNoteFor } from '../../services/messaging/owner-
 import { WindDownService } from '../../services/system/wind-down.service.js';
 import { getBoardActivity } from '../../services/board/board-activity.tracker.js';
 import { parseToolInput } from '../../services/board/board-activity.normalizer.js';
+import { reportRuntimeWorking } from '../../services/runtime-fallback/effective-runtime.js';
 
 /** Header the hook identifies its session with (same as the skills' lib.sh). */
 const SESSION_HEADER = 'x-agent-session';
@@ -141,6 +142,9 @@ export function receiveAgentHook(req: Request, res: Response): void {
 	} catch {
 		// the board must never break a hook
 	}
+	// The model just produced a tool call, which it cannot do while its account
+	// is out of usage: a stale out-of-usage mark on that account is cleared.
+	if (event === 'PreToolUse') reportRuntimeWorking(sessionName);
 	const signal = recordHookEvent(sessionName, event, notificationType);
 	const turnChanged = AgentTurnStateService.getInstance().recordHook(sessionName, event, ids);
 	const recorded = signal !== null || turnChanged;

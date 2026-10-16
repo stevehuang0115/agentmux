@@ -11,6 +11,7 @@ import { CredentialGuardAlertService } from '../../services/monitoring/credentia
 import { ownerHookNoteFor } from '../../services/messaging/owner-hook-message.js';
 import { WindDownService } from '../../services/system/wind-down.service.js';
 import { BoardActivityTracker, getBoardActivity } from '../../services/board/board-activity.tracker.js';
+import { setRuntimeFallbackHooks, type RuntimeFallbackHooks } from '../../services/runtime-fallback/effective-runtime.js';
 
 // The owner-message note reads the real queue; stub that one lookup (the
 // joining stays real).
@@ -100,6 +101,20 @@ describe('receiveAgentHook', () => {
 			expect(call({}, { event: 'SubagentSendBack' }).status).toBe(400);
 		} finally {
 			spy.mockRestore();
+		}
+	});
+
+	it('a PreToolUse tells the runtime fallback the session is working (only that event)', () => {
+		const reportWorking = jest.fn();
+		setRuntimeFallbackHooks({ reportWorking } as unknown as RuntimeFallbackHooks);
+		try {
+			call(SESSION, { event: 'UserPromptSubmit' });
+			call(SESSION, { event: 'Stop' });
+			expect(reportWorking).not.toHaveBeenCalled();
+			call(SESSION, { event: 'PreToolUse', toolUseId: 'toolu_01XYZ' });
+			expect(reportWorking).toHaveBeenCalledWith('crewly-dev-1');
+		} finally {
+			setRuntimeFallbackHooks(null);
 		}
 	});
 

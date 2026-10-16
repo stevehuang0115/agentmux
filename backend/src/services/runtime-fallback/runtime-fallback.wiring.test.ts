@@ -106,6 +106,11 @@ describe('writeRuntimeHandover', () => {
 		const file = writeRuntimeHandover(home, { sessionName: 'dev-1', from: 'crewly-agent', to: 'claude-code', direction: 'revert', conversationId: null, workItem: null }, undefined);
 		expect(fs.readFileSync(file, 'utf-8')).toContain('Claude Code is back, so Crewly moved you back.');
 	});
+
+	it('words a move to a better fallback', () => {
+		const file = writeRuntimeHandover(home, { sessionName: 'crewly-orc', from: 'claude-code@b', to: 'claude-code', direction: 'upgrade', conversationId: null, workItem: null }, undefined);
+		expect(fs.readFileSync(file, 'utf-8')).toContain('You were running on Claude Code (b). Claude Code has usage again and comes first in your fallback order, so Crewly moved you there.');
+	});
 });
 
 describe('crewlyAgentModelsInUse', () => {
