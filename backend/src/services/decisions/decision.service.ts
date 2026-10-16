@@ -1748,6 +1748,9 @@ export class DecisionService {
       const updated = await this.deps.store.update(d.id, (cur) => (cur.status === 'open' && !cur.deadlineNoticeAt ? { deadlineNoticeAt: now.toISOString() } : null));
       if (!updated) return null;
       if (updated.ticket) await this.logTicket(updated, `owner decision ${updated.id}: no answer by the deadline — still waiting (nothing posted to the owner)`, false);
+      // A question Crewly lifted out of a reply is bookkeeping: waking the
+      // agent about it only makes it chase the owner (2026-10-16, Fern).
+      if (updated.kind === 'reply_question') return 'acted';
       await this.tellAsker(
         updated,
         `[DECISION ${updated.id}] The deadline for "${updated.question}" passed with no answer. Nothing was posted to the owner. ` +
@@ -1764,6 +1767,10 @@ export class DecisionService {
     if (quietSince && now.getTime() >= Date.parse(quietSince) + DECISION_CONSTANTS.WAIT_EXPIRE_AFTER_REMINDER_MS) {
       const expired = await this.expire(d.id);
       if (!expired) return null;
+      // Lifted reply question: the ticket log is enough. Telling the agent
+      // "ask again if it still matters" woke Fern ~40h later to re-ask about
+      // work it had already finished in another thread (2026-10-16).
+      if (expired.kind === 'reply_question') return 'acted';
       await this.tellAsker(
         expired,
         `[DECISION ${expired.id}] "${expired.question}" timed out: the owner did not answer after the deadline and a reminder, so the card was closed as expired. ` +

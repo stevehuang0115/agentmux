@@ -1019,6 +1019,31 @@ describe('deadlines', () => {
     expect(h.delivered.at(-1)?.text).toContain('timed out');
   });
 
+  it('lifted reply question: deadline and expiry are logged on the ticket only, the agent is never woken', async () => {
+    const h = await harness();
+    const d = await h.service.askPrebuilt({
+      kind: 'reply_question',
+      asker: 'dev-ann',
+      question: 'Which Google Doc did you mean?',
+      options: [
+        { key: 'a', label: 'Doc A' },
+        { key: 'b', label: 'Doc B' },
+      ],
+      defaultKey: 'wait',
+      place: { slackChannelId: 'C-BOOK', threadTs: '17900.001' },
+      requestRef: { requestId: 'req-1', itemId: 'q-1' },
+      deadline: new Date(2026, 9, 2, 12, 0),
+    });
+    const deliveredBefore = h.delivered.length;
+    h.clock.now = new Date(2026, 9, 2, 12, 1);
+    expect(await h.service.tick()).toEqual([d.id]);
+    expect((await h.service.get(d.id))?.deadlineNoticeAt).toBeDefined();
+    h.clock.now = new Date(h.clock.now.getTime() + DECISION_CONSTANTS.WAIT_EXPIRE_AFTER_REMINDER_MS);
+    expect(await h.service.tick()).toEqual([d.id]);
+    expect((await h.service.get(d.id))?.status).toBe('expired');
+    expect(h.delivered.length).toBe(deliveredBefore);
+  });
+
   it('wait default: a card the owner replied to in the thread is never expired (#1243)', async () => {
     const h = await harness();
     const d = await h.service.ask('dev-ann', { ...ticketAsk, default: 'wait' });
