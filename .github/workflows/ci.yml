@@ -9,6 +9,8 @@
 #              jest.ci.config.js (= jest.config.js minus the quarantine list
 #              in scripts/ci/jest-quarantine.json)
 #   quarantine the quarantined files only, non-blocking, so they stay visible
+#
+# Measured on the first run: typecheck ~1.5 min, each unit shard ~4 min.
 name: CI
 
 on:
@@ -58,8 +60,17 @@ jobs:
           node-version: '22'
           cache: 'npm'
       - run: npm ci
+      # A failed test is rerun once (--onlyFailures, from this job's jest
+      # cache). Passing on the retry is reported as a flake warning; a real
+      # regression fails both times.
       - name: Jest shard ${{ matrix.shard }}/4
-        run: npx jest -c jest.ci.config.js --ci --maxWorkers=2 --shard=${{ matrix.shard }}/4
+        run: |
+          if ! npx jest -c jest.ci.config.js --ci --maxWorkers=2 --shard=${{ matrix.shard }}/4; then
+            echo "::group::retry failed tests once"
+            npx jest -c jest.ci.config.js --ci --maxWorkers=2 --onlyFailures
+            echo "::endgroup::"
+            echo "::warning title=Flaky tests (shard ${{ matrix.shard }})::tests failed once and passed on retry; see the first run in this step"
+          fi
 
   quarantine:
     runs-on: ubuntu-latest

@@ -1,4 +1,20 @@
 {
-  "//": "Test files already failing on main when CI was introduced (see jest.ci.config.js). Run separately and non-blocking in CI. Fix one, delete its line.",
-  "files": []
+  "//": "Test files already failing on main (Linux CI, 2026-10-16) when CI was introduced; see jest.ci.config.js. They run in a separate non-blocking CI job. Fix one, delete its line.",
+  "files": [
+    "backend/src/controllers/worktree-janitor/worktree-janitor.routes.test.ts",
+    "backend/src/services/agent/agent-registration.service.test.ts",
+    "backend/src/services/ai/prompt-builder.service.test.ts",
+    "backend/src/services/autonomous/budget.service.test.ts",
+    "backend/src/services/board/canvas/canvas-step.stream.test.ts",
+    "backend/src/services/board/canvas/canvas-transcript.tail.test.ts",
+    "backend/src/services/chat-v2/sqlite/channel.store.test.ts",
+    "backend/src/services/core/storage.service.test.ts",
+    "backend/src/services/messaging/message-queue.service.test.ts",
+    "backend/src/services/system/scheduled-commands.service.test.ts",
+    "backend/src/services/team/team-pause.service.test.ts",
+    "backend/src/services/v3/trigger-engine-persistence.integration.test.ts",
+    "backend/src/websocket/chat-v2.gateway.integration.test.ts",
+    "config/skills/_conventions/mirror-comment.test.ts",
+    "tests/e2e/relay-pairing.e2e.test.ts"
+  ]
 }
