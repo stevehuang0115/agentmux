@@ -14,6 +14,9 @@
  * {@link markUsageLimited}. A state lifts on its own at the reset time (plus
  * a short grace), or after {@link USAGE_LIMIT_STATE_CONSTANTS.NO_RESET_BACKOFF_MS}
  * when no reset time was given; it is set again if the limit is still there.
+ * It is lifted early ({@link liftUsageLimit}) as soon as the agent works
+ * again: a finished turn or tool call (Claude Code hooks), or fresh live
+ * output that is not a limit message.
  * It is held in memory only: it describes the live screen, and after a Crewly
  * restart the screen is read again.
  *
@@ -42,6 +45,8 @@ export interface UsageLimitedInfo {
 	source: UsageLimitSource;
 	/** ISO time of first detection */
 	detectedAt: string;
+	/** ISO time the limit was last seen (every detection refreshes it) */
+	lastSeenAt: string;
 	/** ISO time the runtime says the limit resets, when it says so */
 	until?: string;
 	/** ISO time the session may be tried again (reset + grace, or the backoff) */
@@ -117,6 +122,7 @@ export function markUsageLimited(input: MarkUsageLimitedInput, now: number = Dat
 		}
 		if (input.runtime && !existing.runtime) existing.runtime = input.runtime;
 		if (input.source === 'menu') existing.source = 'menu';
+		existing.lastSeenAt = new Date(now).toISOString();
 		return { info: existing, isNew: false };
 	}
 	const info: UsageLimitedInfo = {
@@ -125,6 +131,7 @@ export function markUsageLimited(input: MarkUsageLimitedInput, now: number = Dat
 		ruleId: input.ruleId,
 		source: input.source,
 		detectedAt: new Date(now).toISOString(),
+		lastSeenAt: new Date(now).toISOString(),
 		...(until ? { until } : {}),
 		retryAt: new Date(retryAtFor(resetAt, now)).toISOString(),
 	};
@@ -181,6 +188,31 @@ export function noteUsageLimitMenuAnswered(sessionName: string, now: number = Da
  */
 export function clearUsageLimit(sessionName: string): boolean {
 	return states.delete(sessionName);
+}
+
+/**
+ * Lift a session's usage-limit state because the agent works again: it
+ * finished a turn, or wrote fresh output that is not a limit message.
+ * Activity within {@link USAGE_LIMIT_STATE_CONSTANTS.LIFT_GRACE_MS} of the
+ * limit last being seen, or of Crewly answering its menu, is the repaint of
+ * that screen and does not count.
+ *
+ * @param sessionName - Agent session
+ * @param now - Current time (ms)
+ * @returns The lifted state, or null when none was in force or it was too soon
+ *
+ * @example
+ * ```ts
+ * if (liftUsageLimit('crewly-orc')) logger.info('Orchestrator works again');
+ * ```
+ */
+export function liftUsageLimit(sessionName: string, now: number = Date.now()): UsageLimitedInfo | null {
+	const info = usageLimitOf(sessionName, now);
+	if (!info) return null;
+	const lastSeen = Math.max(Date.parse(info.lastSeenAt), info.menuAnsweredAt ? Date.parse(info.menuAnsweredAt) : 0);
+	if (now - lastSeen < USAGE_LIMIT_STATE_CONSTANTS.LIFT_GRACE_MS) return null;
+	states.delete(sessionName);
+	return info;
 }
 
 /**

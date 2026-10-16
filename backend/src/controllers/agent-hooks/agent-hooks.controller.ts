@@ -25,6 +25,7 @@ import { WindDownService } from '../../services/system/wind-down.service.js';
 import { getBoardActivity } from '../../services/board/board-activity.tracker.js';
 import { parseToolInput } from '../../services/board/board-activity.normalizer.js';
 import { reportRuntimeWorking } from '../../services/runtime-fallback/effective-runtime.js';
+import { liftUsageLimit } from '../../services/runtime-fallback/usage-limit-state.js';
 
 /** Header the hook identifies its session with (same as the skills' lib.sh). */
 const SESSION_HEADER = 'x-agent-session';
@@ -147,6 +148,9 @@ export function receiveAgentHook(req: Request, res: Response): void {
 	if (event === 'PreToolUse') reportRuntimeWorking(sessionName);
 	const signal = recordHookEvent(sessionName, event, notificationType);
 	const turnChanged = AgentTurnStateService.getInstance().recordHook(sessionName, event, ids);
+	// A finished turn or tool call means the runtime is working again: lift a
+	// usage-limit state now instead of holding the agent until the parsed reset.
+	if (event === 'Stop' || event === 'PostToolUse') liftUsageLimit(sessionName);
 	const recorded = signal !== null || turnChanged;
 	// The orchestrator's context was just compacted or cleared: the roster in
 	// its start prompt is gone, so hand it back (never blocks: no note on failure).

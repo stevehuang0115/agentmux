@@ -5,6 +5,7 @@
 import { USAGE_LIMIT_STATE_CONSTANTS } from '../../constants.js';
 import {
 	clearUsageLimit,
+	liftUsageLimit,
 	listUsageLimited,
 	markUsageLimited,
 	noteUsageLimitMenuAnswered,
@@ -82,5 +83,30 @@ describe('usage-limit state', () => {
 		expect(usageLimitReason('Orchestrator', limited)).toMatch(/^Orchestrator is out of .*usage until 2026-10-17T00:00:00.000Z$/);
 		const unknown = markUsageLimited({ sessionName: 'x', runtime: null, ruleId: 'r', resetAt: null, source: 'output' }, NOW).info;
 		expect(usageLimitReason('Ella', unknown)).toContain('Ella is out of usage (reset time unknown; trying again at');
+	});
+
+	describe('liftUsageLimit (the agent works again)', () => {
+		const G = USAGE_LIMIT_STATE_CONSTANTS.LIFT_GRACE_MS;
+
+		it('lifts the state once the limit has not been seen for the grace period', () => {
+			markUsageLimited({ sessionName: ORC, runtime: 'claude-code', ruleId: 'r', resetAt: RESET, source: 'screen' }, NOW);
+			expect(liftUsageLimit(ORC, NOW + G - 1)).toBeNull();
+			expect(usageLimitOf(ORC, NOW + G - 1)).not.toBeNull();
+			expect(liftUsageLimit(ORC, NOW + G)?.until).toBe(new Date(RESET).toISOString());
+			expect(usageLimitOf(ORC, NOW + G)).toBeNull();
+		});
+
+		it('counts the grace from the latest sighting and from the menu answer', () => {
+			markUsageLimited({ sessionName: ORC, runtime: 'claude-code', ruleId: 'r', resetAt: RESET, source: 'menu' }, NOW);
+			markUsageLimited({ sessionName: ORC, runtime: 'claude-code', ruleId: 'r', resetAt: RESET, source: 'menu' }, NOW + 30_000);
+			expect(liftUsageLimit(ORC, NOW + 30_000 + G - 1)).toBeNull();
+			noteUsageLimitMenuAnswered(ORC, NOW + 60_000);
+			expect(liftUsageLimit(ORC, NOW + 60_000 + G - 1)).toBeNull();
+			expect(liftUsageLimit(ORC, NOW + 60_000 + G)).not.toBeNull();
+		});
+
+		it('is a no-op for a session that is not limited', () => {
+			expect(liftUsageLimit(ORC, NOW)).toBeNull();
+		});
 	});
 });

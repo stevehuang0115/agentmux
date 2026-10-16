@@ -7,7 +7,7 @@
  * Code does on screen.
  */
 
-import { detectUsageLimit, detectUsageLimitScreen, getUsageLimitRules } from './usage-limit-rules.js';
+import { detectUsageLimit, detectUsageLimitScreen, getUsageLimitRules, isFreshNonLimitOutput } from './usage-limit-rules.js';
 
 /** 2026-10-01 12:00 UTC. */
 const NOW = Date.UTC(2026, 9, 1, 12, 0);
@@ -247,11 +247,27 @@ describe('detectUsageLimitScreen — Claude Code usage-limit states on screen', 
 
 	it.each([
 		["  ⎿  You've hit your weekly limit · resets Oct 16 at 8pm (America/New_York)", INCIDENT_RESET],
-		["  ⎿  You've hit your session limit · resets 3pm (America/New_York)", Date.UTC(2026, 9, 16, 19, 0)],
-		['  ⎿  5-hour limit reached ∙ resets 3pm (America/New_York)', Date.UTC(2026, 9, 16, 19, 0)],
-	])('recognises the plain limit line %s at the bottom of the screen', (line, resetAt) => {
+		["  ⎿  You've hit your session limit · resets Oct 16, 3pm (America/New_York)", Date.UTC(2026, 9, 16, 19, 0)],
+	])('recognises the dated plain limit line %s at the bottom of the screen', (line, resetAt) => {
 		const screen = ['> do the thing', line, '', '╭────────╮', '│ >      │', '╰────────╯'].join('\n');
 		expect(detectUsageLimitScreen(screen, 'claude-code', INCIDENT_NOW)).toMatchObject({ resetAt, menu: null });
+	});
+
+	it.each([
+		"  ⎿  You've hit your session limit · resets 3pm (America/New_York)",
+		'  ⎿  5-hour limit reached ∙ resets 3pm (America/New_York)',
+		"  ⎿  You've hit your weekly limit · resets 8pm (America/New_York)",
+		'Claude usage limit reached. Your limit will reset at 5pm (Asia/Shanghai).',
+	])('ignores the undated plain limit line %s on a screen (a resumed conversation repaints old ones)', (line) => {
+		const resumed = ['> earlier request', line, '', '> next request', '⏺ Done.', '╭────────╮', '│ >      │', '╰────────╯'].join('\n');
+		expect(detectUsageLimitScreen(resumed, 'claude-code', INCIDENT_NOW)).toBeNull();
+		// The same line as new live output still counts (the output stream reads it).
+		expect(detectUsageLimit(line, 'claude-code', INCIDENT_NOW)).not.toBeNull();
+	});
+
+	it('still reads the menu when its limit line has no date (the menu is live, not history)', () => {
+		const screen = WEEKLY_LIMIT_MENU_SCREEN.replace('resets Oct 16 at 8pm', 'resets 8pm');
+		expect(detectUsageLimitScreen(screen, 'claude-code', INCIDENT_NOW)).toMatchObject({ resetAt: INCIDENT_RESET, menu: { selected: 1 } });
 	});
 
 	it('ignores a plain limit line whose dated reset already passed (an old message)', () => {
@@ -276,5 +292,22 @@ describe('detectUsageLimitScreen — Claude Code usage-limit states on screen', 
 
 	it('only reads the menu for Claude Code', () => {
 		expect(detectUsageLimitScreen(WEEKLY_LIMIT_MENU_SCREEN, 'codex-cli', INCIDENT_NOW)).toBeNull();
+	});
+});
+
+describe('isFreshNonLimitOutput — activity that lifts a usage-limit state', () => {
+	it('is true for ordinary work output', () => {
+		expect(isFreshNonLimitOutput('⏺ Read(src/app.ts)\n  ⎿  Read 120 lines\n⏺ Updating the request handler now', 'claude-code', INCIDENT_NOW)).toBe(true);
+	});
+
+	it('is false for the limit line, the menu, and their repaints', () => {
+		expect(isFreshNonLimitOutput(WEEKLY_LIMIT_MENU_SCREEN, 'claude-code', INCIDENT_NOW)).toBe(false);
+		expect(isFreshNonLimitOutput("  ⎿  You've hit your weekly limit · resets Oct 16 at 8pm (America/New_York)", 'claude-code', INCIDENT_NOW)).toBe(false);
+		expect(isFreshNonLimitOutput('   ❯ 2. Wait here, then continue automatically at 8pm   ', 'claude-code', INCIDENT_NOW)).toBe(false);
+	});
+
+	it('is false for short chunks (cursor moves, spinner ticks)', () => {
+		expect(isFreshNonLimitOutput('\x1b[2K\x1b[1G✻ ', 'claude-code', INCIDENT_NOW)).toBe(false);
+		expect(isFreshNonLimitOutput('', 'claude-code', INCIDENT_NOW)).toBe(false);
 	});
 });

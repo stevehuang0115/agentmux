@@ -29,8 +29,8 @@ import {
 	createSessionCommandHelper,
 } from '../session/index.js';
 import { inspectUsageLimitScreen, type UsageLimitMenuIO } from '../runtime-fallback/usage-limit-screen.js';
-import { detectUsageLimit, isExhaustingKind } from '../runtime-fallback/usage-limit-rules.js';
-import { markUsageLimited } from '../runtime-fallback/usage-limit-state.js';
+import { detectUsageLimit, isExhaustingKind, isFreshNonLimitOutput } from '../runtime-fallback/usage-limit-rules.js';
+import { liftUsageLimit, markUsageLimited } from '../runtime-fallback/usage-limit-state.js';
 import { stripAnsiCodes } from '../../utils/terminal-output.utils.js';
 import {
 	OAUTH_RELOGIN_CONSTANTS,
@@ -1147,6 +1147,14 @@ export class OAuthReloginMonitorService {
 					until: info.until ?? null,
 					retryAt: info.retryAt,
 				});
+			}
+		} else if (state.runtimeType && isFreshNonLimitOutput(data, state.runtimeType)) {
+			// The agent writes new, non-limit output: it works again (the limit
+			// reset, or the owner switched account). Lift the state at once
+			// instead of waiting for the parsed reset time.
+			const lifted = liftUsageLimit(sessionName);
+			if (lifted) {
+				this.logger.info('Agent works again — usage-limit state lifted', { sessionName, until: lifted.until ?? null });
 			}
 		}
 		if (reportRuntimeOutput(sessionName, state.runtimeType, data, 'output')) {

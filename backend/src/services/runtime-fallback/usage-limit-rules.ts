@@ -372,8 +372,11 @@ function plausibleReset(resetAt: number | null, now: number): number | null {
  *   from the limit line above it or from option 2 ("continue automatically
  *   at 8pm").
  * - A plain limit line ("You've hit your … limit · resets …") counts only
- *   with a plausible reset time ({@link plausibleReset}), so an old line that
- *   names a past date is not read as a new limit.
+ *   when its reset names a calendar date and is plausible
+ *   ({@link plausibleReset}), so an old line that names a past date is not
+ *   read as a new limit. A line whose reset has no date ("resets 8pm",
+ *   "try again in 2h") never counts here: on a resumed conversation it may
+ *   be old. Only new live output may report it.
  *
  * Transient rate limits and expired logins are never reported.
  *
@@ -417,7 +420,57 @@ export function detectUsageLimitScreen(
 	}
 
 	if (!exhausting) return null;
+	// A screen holds history (a resumed conversation repaints old limit
+	// lines). A reset with only a clock time ("resets 8pm") or a duration
+	// cannot tell an old line from a new one — it would be read as the next
+	// 8pm — so only a dated reset counts here. Undated lines count only as
+	// new live output (detectUsageLimit on the output stream).
+	if (!hasDatedReset(tail)) return null;
 	const resetAt = plausibleReset(exhausting.resetAt, now);
 	if (resetAt === null) return null;
 	return { runtime: exhausting.runtime, ruleId: exhausting.ruleId, resetAt, menu: null };
+}
+
+/** A calendar date in a reset phrase: "Oct 16", "2026-10-16", or the old "|<epoch>" form. */
+const DATED_RESET = /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?\b|\b\d{4}-\d{2}-\d{2}\b|\|\d{10}\b/i;
+
+/** The phrase that carries a reset time. */
+const RESET_PHRASE = /\b(?:resets?|reset\s+at|try\s+again|limit\s+will\s+reset)\b|\|\d{10}\b/i;
+
+/**
+ * Whether the last line naming a reset in `text` names a calendar date.
+ *
+ * @param text - Screen tail
+ * @returns True when the reset is dated
+ */
+function hasDatedReset(text: string): boolean {
+	const line = text.split('\n').reverse().find((l) => RESET_PHRASE.test(l));
+	return line !== undefined && DATED_RESET.test(line);
+}
+
+/** Words of a usage-limit screen (the limit line, its menu, Crewly's answer). */
+const LIMIT_SCREEN_WORDS = /limit|resets?\b|continue\s*automatically|wait\s*here|what\s*do\s*you\s*want\s*to\s*do|enter\s*to\s*confirm/i;
+
+/**
+ * Whether a live output chunk is fresh activity that is not a usage-limit
+ * message: at least {@link USAGE_LIMIT_STATE_CONSTANTS.FRESH_OUTPUT_MIN_CHARS}
+ * printable characters, no usage-limit match, and none of the words of the
+ * limit screen. Used to lift a usage-limit state once the agent works again.
+ *
+ * @param output - Output chunk (escape sequences allowed)
+ * @param runtime - Runtime the session runs
+ * @param now - Current time (ms)
+ * @returns True for fresh non-limit output
+ *
+ * @example
+ * ```ts
+ * isFreshNonLimitOutput('⏺ Read(src/app.ts) … 120 lines, editing the handler now', 'claude-code'); // true
+ * ```
+ */
+export function isFreshNonLimitOutput(output: string, runtime: string, now: number = Date.now()): boolean {
+	if (!output) return false;
+	const text = normalizeTerminalOutput(output).text.replace(/\s+/g, ' ').trim();
+	if (text.length < USAGE_LIMIT_STATE_CONSTANTS.FRESH_OUTPUT_MIN_CHARS) return false;
+	if (LIMIT_SCREEN_WORDS.test(text)) return false;
+	return detectUsageLimit(text, runtime, now) === null;
 }

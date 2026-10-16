@@ -7754,6 +7754,18 @@ export const USAGE_LIMIT_STATE_CONSTANTS = {
 	MENU_KEY_DELAY_MS: 300,
 	/** Marker on a delivery result held because the agent is usage-limited */
 	QUEUED_MARKER: '[USAGE_LIMITED]',
+	/**
+	 * Fewest printable characters (whitespace collapsed) a live output chunk
+	 * needs to count as fresh activity that lifts a usage-limit state; cursor
+	 * moves and spinner ticks stay below it.
+	 */
+	FRESH_OUTPUT_MIN_CHARS: 40,
+	/**
+	 * After a limit is last seen (or its menu answered), activity this soon is
+	 * not trusted to lift the state: it is the repaint of the limit screen or
+	 * of the key Crewly pressed (ms).
+	 */
+	LIFT_GRACE_MS: 10_000,
 } as const;
 
 /**
