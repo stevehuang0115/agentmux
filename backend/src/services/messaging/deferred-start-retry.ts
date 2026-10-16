@@ -18,8 +18,17 @@ import { LoggerService } from '../core/logger.service.js';
 export const DEFERRED_START_RETRY_CONSTANTS = {
 	/** Pause between rounds (a round itself waits up to the slot-queue timeout) */
 	ROUND_PAUSE_MS: 5_000,
-	/** Rounds before the retry gives up (the message stays queued for the next wake) */
+	/** Rounds at the short pause before the retry slows down */
 	MAX_ROUNDS: 6,
+	/** Pause between later rounds, while every slot stays taken */
+	SLOW_ROUND_PAUSE_MS: 2 * 60_000,
+	/**
+	 * How long the retry keeps going in all. Giving up after the fast rounds
+	 * (about 13 minutes) left Pia down for over an hour with 8 messages and
+	 * the owner's thread waiting (2026-10-16): the slots freed later, but
+	 * nothing tried again.
+	 */
+	MAX_TOTAL_MS: 6 * 60 * 60_000,
 } as const;
 
 /** What the retry needs. */
@@ -32,6 +41,8 @@ export interface DeferredStartRetryDeps {
 	sleep?: (ms: number) => Promise<void>;
 	/** Pause before the first round (default: the usual round pause) */
 	firstPauseMs?: number;
+	/** Clock (tests inject one) */
+	now?: () => number;
 }
 
 const logger = LoggerService.getInstance().createComponentLogger('DeferredStartRetry');
@@ -44,7 +55,8 @@ export function resetDeferredStartRetries(): void {
 
 /**
  * Keep trying to start an agent whose start was deferred, until it starts, its
- * queue empties, a start fails for another reason, or the rounds run out.
+ * queue empties, a start fails for another reason, or MAX_TOTAL_MS passes.
+ * The first MAX_ROUNDS rounds come quickly, later ones every SLOW_ROUND_PAUSE_MS.
  * One retry loop per agent.
  *
  * @param sessionName - Agent whose start was deferred
@@ -55,9 +67,17 @@ export async function scheduleDeferredStartRetry(sessionName: string, deps: Defe
 	if (inFlight.has(sessionName)) return;
 	inFlight.add(sessionName);
 	const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => { const t = setTimeout(resolve, ms); t.unref?.(); }));
+	const now = deps.now ?? Date.now;
+	const giveUpAt = now() + DEFERRED_START_RETRY_CONSTANTS.MAX_TOTAL_MS;
 	try {
-		for (let round = 1; round <= DEFERRED_START_RETRY_CONSTANTS.MAX_ROUNDS; round++) {
-			await sleep(round === 1 && deps.firstPauseMs !== undefined ? deps.firstPauseMs : DEFERRED_START_RETRY_CONSTANTS.ROUND_PAUSE_MS);
+		for (let round = 1; now() < giveUpAt; round++) {
+			const pause =
+				round === 1 && deps.firstPauseMs !== undefined
+					? deps.firstPauseMs
+					: round <= DEFERRED_START_RETRY_CONSTANTS.MAX_ROUNDS
+						? DEFERRED_START_RETRY_CONSTANTS.ROUND_PAUSE_MS
+						: DEFERRED_START_RETRY_CONSTANTS.SLOW_ROUND_PAUSE_MS;
+			await sleep(pause);
 			if (!deps.hasPending(sessionName)) return;
 			let res: { success: boolean; deferred?: boolean };
 			try {
