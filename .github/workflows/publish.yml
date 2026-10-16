@@ -24,7 +24,13 @@ permissions:
   contents: read
 
 jobs:
+  # Typecheck + unit tests (the same workflow PRs run). Nothing is published
+  # unless it passes.
+  test:
+    uses: ./.github/workflows/ci.yml
+
   publish:
+    needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

@@ -46,12 +46,12 @@ Mark a task as complete with a summary of the work done. If the task has an outp
 | `workItemId` | Preferred | ID of the V3 WorkItem to complete. This is the only input that selects the WorkItem |
 | `sessionName` | Yes | Your agent session name |
 | `summary` | Yes | Summary of the work completed |
-| `evidence` | Yes* | Array of evidence entries — see **Evidence contract** below. *Accepted without it this release (with a warning); required from the next release |
+| `evidence` | Yes* | Array of evidence entries — see **Evidence contract** below. *Required: refused without it (400 `evidence_required`), except a review `verdict` |
 | `absoluteTaskPath` | No | **Legacy (V1).** Still accepted so older callers keep working, but it does NOT identify a WorkItem |
 | `output` | No | Structured output object (required if task has an output schema) |
 | ~~`skipGates`~~ | **Rejected** | **Not supported.** This endpoint runs no quality gates, so there is nothing to skip. Passing it is a hard error. Use the `check-quality-gates` skill for gates. |
 
-**Any other field is an error.** The skill accepts only the fields in this table plus `verdict`/`feedback` (reviews) and `taskId`/`artifacts`/`testResults`/`structured` (verification requests). An unknown field (for example `projectPath`, `skipGates`, `force`) stops the call before anything is sent, and the error names the field. Put extra results inside `output`.
+**Any other field is an error.** The skill accepts only the fields in this table plus `verdict`/`feedback`/`checks` (reviews) and `taskId`/`artifacts`/`testResults`/`structured` (verification requests). An unknown field (for example `projectPath`, `skipGates`, `force`) stops the call before anything is sent, and the error names the field. Put extra results inside `output`.
 
 On success the skill prints **one JSON line** that always names the `workItemId`, plus the server's reply (`success`, `message`, any `warning`).
 
@@ -83,8 +83,8 @@ items for one session.
 
 If you could not finish, do **not** report done: send a `blocked` entry (or use
 `report-status --status blocked`). Malformed evidence is rejected with 400
-naming the bad entry. A completion with no evidence is accepted this release
-but the response (and stderr) carries a `warning`; next release it is a 400.
+naming the bad entry. A completion with no evidence is refused with 400
+`evidence_required` and nothing is completed (#1312).
 A review verdict (`verdict` set) needs no evidence.
 
 ## Example
@@ -154,9 +154,10 @@ JSON confirmation of task completion status. If validation fails:
 
 When the item you're completing is a review of another agent's work:
 
-- **Accept:** complete it normally with a summary.
+- **Accept:** open or re-run the worker's evidence (the item lists it numbered; `verify-output` shows it in full) and send `"verdict":"verified"` with `"checks"`: one `{"entry":<index>,"did":"<what you did and saw>","outcome":"pass"}` per entry you checked, `"entry":null` for a direct look at the work. At least one check must name a worker evidence entry when there is any. An accept without checks, or with a `"fail"` check, is refused (400 `review_unchecked` / `review_check_failed`) and nothing is accepted.
 - **Send it back:** add `"verdict":"rejected"` and `"feedback":"<what is wrong>"`. The worker gets a retry that includes your feedback. Feedback is required when you reject.
 
 ```bash
+bash execute.sh '{"workItemId":"<verify item id>","sessionName":"<you>","summary":"Export is right","verdict":"verified","checks":[{"entry":0,"did":"opened export.csv: 120 rows, header present","outcome":"pass"},{"entry":1,"did":"re-ran npm test: exit 0","outcome":"pass"}]}'
 bash execute.sh '{"workItemId":"<verify item id>","sessionName":"<you>","summary":"Header row missing","verdict":"rejected","feedback":"Add the header row and re-run the export"}'
 ```

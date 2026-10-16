@@ -14,6 +14,7 @@ import {
   createRequestHandler,
   planRequest,
   updateRequest,
+  getRequestWhereabouts,
 } from './request.controller.js';
 import { listOpenItems, backfillOpenItemsHandler, skipOpenItemHandler } from './open-items.controller.js';
 
@@ -28,6 +29,7 @@ import { listOpenItems, backfillOpenItemsHandler, skipOpenItemHandler } from './
  * - POST /open-items/backfill — scan the last 7 days (dry-run unless apply)
  * - POST /:id/open-items/:itemId/skip — the owner skips an open item
  * - GET  /:id    — get a single request
+ * - GET  /:id/whereabouts — who holds it now, doing what, since when
  * - PUT  /:id    — update a request
  *
  * @returns Express router for /api/requests routes
@@ -50,6 +52,9 @@ export function createRequestRouter(): Router {
 
   // Get a single request by ID
   router.get('/:id', getRequest);
+
+  // Where it is now (holder, state, since)
+  router.get('/:id/whereabouts', getRequestWhereabouts);
 
   // Update a request
   router.put('/:id', updateRequest);

@@ -24,6 +24,9 @@ class H(BaseHTTPRequestHandler):
         def send(code, obj):
             self.send_response(code); self.send_header('Content-Type', 'application/json'); self.end_headers()
             self.wfile.write(json.dumps(obj).encode())
+        if '/data/bigcol' in self.path:
+            # Synthetic oversized page: 40 docs x 2,000 chars = over the 60,000-byte skill output cap.
+            return send(200, {'success': True, 'data': {'docs': [{'id': 'd%d' % i, 'data': {'text': 'x' * 2000}, 'rev': 1, 'updatedAt': 't', 'updatedBy': {'kind': 'owner', 'id': 'u'}} for i in range(40)], 'next': None}})
         if self.path.endswith('/pretty'):
             self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers()
             return self.wfile.write(json.dumps({'success': True, 'data': {'id': 'pretty', 'data': {'text': 'line1\nline2'}, 'rev': 3, 'updatedAt': 't'}}, indent=2).encode())
@@ -270,6 +273,15 @@ OUT=$(run_err --app $A --download aaaaaaaaaaaaaaaa --out "$WORK/home/.crewly/x.p
 check "download: --out under ~/.crewly refused" "$(printf '%s' "$OUT" | grep -c "inside")" "1"
 OUT=$(run --app $A --get items withfile)
 check "get: file reference gets the --download hint" "$(printf '%s' "$OUT" | jq -r '.fileHint | test("--download")')" "true"
+
+# An oversized page must never come back as an empty success (the shared skill
+# output cap replaces a body over 60,000 bytes with a {"truncated":true} envelope).
+OUT=$(run --app $A --list bigcol --limit 40; true)
+check "list: oversized page is a loud failure" "$(printf '%s' "$OUT" | jq -c '{success, reason}')" '{"success":false,"reason":"page_too_large"}'
+check "list: oversized page hint says to use a smaller --limit" "$(printf '%s' "$OUT" | jq -r '.hint | test("--limit")')" "true"
+check "list: oversized page is not an empty docs list" "$(printf '%s' "$OUT" | jq -r 'has("docs")')" "false"
+OUT=$(run --app $A --list bigcol --limit 40 --full; true)
+check "list: --full returns every doc of the oversized page" "$(printf '%s' "$OUT" | jq -c '{success, n: (.docs | length)}')" '{"success":true,"n":40}'
 
 echo "app-data: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

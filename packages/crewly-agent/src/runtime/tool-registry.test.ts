@@ -1309,6 +1309,19 @@ describe('Tool Registry', () => {
     });
   });
 
+  describe('complete_task review fields (#1314)', () => {
+    it('sends verdict, feedback and checks inside result', async () => {
+      mockClient.post.mockResolvedValue({ success: true, data: {}, status: 200 });
+      mockClient.get.mockResolvedValue({ success: true, data: [], status: 200 });
+      const checks = [{ entry: 0, did: 'opened it', outcome: 'pass' }];
+      await (tools.complete_task as any).execute({ workItemId: 'wi-v', sessionName: 'tl', summary: 'ok', verdict: 'verified', checks });
+      expect(mockClient.post).toHaveBeenCalledWith('/task-pool/complete/wi-v', {
+        agentId: 'tl',
+        result: { summary: 'ok', verdict: 'verified', checks },
+      });
+    });
+  });
+
   describe('report_status', () => {
     it('should send status via chat API with formatted message', async () => {
       mockClient.post.mockResolvedValue({
@@ -1374,6 +1387,19 @@ describe('Tool Registry', () => {
         '/task-pool/complete/wi-running-2',
         { agentId: 'crewly-orc', result: { summary: 'Could not finish', evidence } },
       );
+    });
+
+    it('returns a refused completion instead of swallowing it (#1312)', async () => {
+      mockClient.post.mockImplementation(async (endpoint: string) => endpoint.startsWith('/task-pool/complete/')
+        ? { success: false, error: 'complete requires evidence', status: 400 }
+        : { success: true, data: { acknowledged: true }, status: 200 });
+      mockClient.get.mockResolvedValueOnce({ success: true, data: { workItems: [{ id: 'wi-running-3' }] }, status: 200 });
+
+      const result = await (tools.report_status as any).execute({ status: 'done', summary: 'Done' });
+
+      expect(result.acknowledged).toBe(true);
+      expect(result.completionError).toContain('wi-running-3 is still OPEN');
+      expect(result.completionError).toContain('complete requires evidence');
     });
 
     it('should not auto-complete tasks when status is in_progress', async () => {

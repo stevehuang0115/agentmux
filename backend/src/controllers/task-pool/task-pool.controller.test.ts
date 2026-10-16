@@ -121,6 +121,16 @@ function mockRes(): any {
 // Tests
 // ---------------------------------------------------------------------------
 
+// Most completion tests here are about other contracts (summary, shape,
+// actors, give-up) and send no evidence; they run in warn mode. The evidence
+// describe clears this and tests the enforce default itself (#1312).
+beforeEach(() => {
+  process.env.CREWLY_EVIDENCE_MODE = 'warn';
+});
+afterAll(() => {
+  delete process.env.CREWLY_EVIDENCE_MODE;
+});
+
 describe('TaskPoolController', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -1041,7 +1051,6 @@ describe('TaskPoolController', () => {
   describe('completeItem (evidence contract #873)', () => {
     let dir: string;
     let artifact: string;
-    const savedMode = process.env.CREWLY_EVIDENCE_MODE;
 
     beforeEach(() => {
       dir = mkdtempSync(join(tmpdir(), 'tp-evidence-'));
@@ -1057,8 +1066,6 @@ describe('TaskPoolController', () => {
 
     afterEach(() => {
       rmSync(dir, { recursive: true, force: true });
-      if (savedMode === undefined) delete process.env.CREWLY_EVIDENCE_MODE;
-      else process.env.CREWLY_EVIDENCE_MODE = savedMode;
     });
 
     /** Run completeItem with the given result and return the response mock. */
@@ -1069,7 +1076,21 @@ describe('TaskPoolController', () => {
       return res;
     }
 
-    it('warn mode (default): no evidence is accepted and the response carries a warning', async () => {
+    it('enforce mode (default): no evidence returns 400 telling the worker what to send', async () => {
+      const res = await complete({ summary: 'Did the thing', evidence: [] });
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        code: 'evidence_required',
+        error: expect.stringContaining('body.result.evidence'),
+      }));
+      expect(mockService.completeItem).not.toHaveBeenCalled();
+      expect(mockService.setOutput).not.toHaveBeenCalled();
+    });
+
+    it('warn mode (CREWLY_EVIDENCE_MODE=warn): no evidence is accepted with a warning', async () => {
+      process.env.CREWLY_EVIDENCE_MODE = 'warn';
       const res = await complete({ summary: 'Did the thing' });
 
       expect(res.status).not.toHaveBeenCalled();
@@ -1081,18 +1102,75 @@ describe('TaskPoolController', () => {
       }));
     });
 
-    it('enforce mode: no evidence returns 400 telling the worker what to send', async () => {
-      process.env.CREWLY_EVIDENCE_MODE = 'enforce';
-      const res = await complete({ summary: 'Did the thing', evidence: [] });
+    it('enforce mode: bookkeeping types complete without evidence; deliverables do not (#1312)', async () => {
+      for (const type of ['goal_replan', 'ticket_triage', 'autopilot_retro']) {
+        mockService.completeItem.mockClear();
+        mockService.findWorkItem.mockResolvedValue({ id: 'wi-ev', type, status: 'running', output: null, metadata: {} });
+        const res = await complete({ summary: 'Replanned' });
+        expect(res.status).not.toHaveBeenCalled();
+        expect(mockService.completeItem).toHaveBeenCalled();
+      }
+      for (const type of ['delegate', 'project_task', 'review']) {
+        mockService.completeItem.mockClear();
+        mockService.findWorkItem.mockResolvedValue({ id: 'wi-ev', type, status: 'running', output: null, metadata: {} });
+        const res = await complete({ summary: 'Did it' });
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(mockService.completeItem).not.toHaveBeenCalled();
+      }
+    });
 
-      expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
-        success: false,
-        code: 'evidence_required',
-        error: expect.stringContaining('body.result.evidence'),
-      }));
-      expect(mockService.completeItem).not.toHaveBeenCalled();
-      expect(mockService.setOutput).not.toHaveBeenCalled();
+    describe('review accept needs a check record (#1314)', () => {
+      const review = { id: 'wi-ev', type: 'review', status: 'running', output: null, metadata: { verifyOf: 'wi-src' } };
+      const source = {
+        id: 'wi-src',
+        status: 'done_by_worker',
+        output: { evidence: [{ type: 'artifact', path: '/out/a.md' }] },
+        metadata: {},
+      };
+      beforeEach(() => {
+        delete process.env.CREWLY_EVIDENCE_MODE;
+        mockService.mergeItemMetadata.mockClear();
+        mockService.findWorkItem.mockImplementation(async (id: string) => (id === 'wi-src' ? source : review));
+      });
+
+      it('an accept without checks is refused and nothing is completed', async () => {
+        const res = await complete({ summary: 'LGTM', verdict: 'verified' });
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'review_unchecked' }));
+        expect(mockService.completeItem).not.toHaveBeenCalled();
+      });
+
+      it('an accept with checks completes, stores them and stamps the worker item', async () => {
+        const checks = [{ entry: 0, did: 'opened a.md: covers all 3 asks', outcome: 'pass' }];
+        const res = await complete({ summary: 'LGTM', verdict: 'verified', checks });
+        expect(res.status).not.toHaveBeenCalled();
+        expect(mockService.completeItem).toHaveBeenCalled();
+        expect(mockService.setOutput).toHaveBeenCalledWith('wi-ev', expect.objectContaining({ checks }));
+        expect(mockService.mergeItemMetadata).toHaveBeenCalledWith('wi-src', {
+          reviewChecks: expect.objectContaining({ reviewItemId: 'wi-ev', reviewer: 'dev-1', checks }),
+        });
+      });
+
+      it('sending it back needs no checks', async () => {
+        const res = await complete({ summary: 'wrong file', verdict: 'rejected', feedback: 'wrong file' });
+        expect(res.status).not.toHaveBeenCalled();
+        expect(mockService.completeItem).toHaveBeenCalled();
+        expect(mockService.mergeItemMetadata).not.toHaveBeenCalled();
+      });
+
+      it('warn mode accepts without checks and flags the worker item unchecked', async () => {
+        process.env.CREWLY_EVIDENCE_MODE = 'warn';
+        const res = await complete({ summary: 'LGTM', verdict: 'verified' });
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, warning: expect.stringContaining('unchecked') }));
+        expect(mockService.mergeItemMetadata).toHaveBeenCalledWith('wi-src', { reviewChecks: expect.objectContaining({ unchecked: true }) });
+      });
+
+      it('a review whose source is no longer awaiting review is not checked', async () => {
+        mockService.findWorkItem.mockImplementation(async (id: string) => (id === 'wi-src' ? { ...source, status: 'verified' } : review));
+        const res = await complete({ summary: 'LGTM', verdict: 'verified' });
+        expect(res.status).not.toHaveBeenCalled();
+        expect(mockService.mergeItemMetadata).not.toHaveBeenCalled();
+      });
     });
 
     it('enforce mode: a review verdict completion needs no evidence', async () => {
@@ -1183,9 +1261,11 @@ describe('TaskPoolController', () => {
       const res = await complete({ summary: 'Report written and tested', evidence });
 
       expect(res.status).not.toHaveBeenCalled();
+      // Local files carry the size and mtime the server checked (#1313).
+      const checked = { sizeBytes: expect.any(Number), mtime: expect.any(String) };
       expect(mockService.setOutput).toHaveBeenCalledWith('wi-ev', expect.objectContaining({
         summary: 'Report written and tested',
-        evidence,
+        evidence: [{ ...evidence[0], ...checked }, { ...evidence[1], ...checked }, evidence[2], evidence[3]],
       }));
       expect(mockService.completeItem).toHaveBeenCalledWith(
         'wi-ev',
@@ -1994,6 +2074,39 @@ describe('scoreItem', () => {
         mockRes(),
       );
       expect(mockService.verifyItem).not.toHaveBeenCalledWith('wi-src', expect.objectContaining({ role: 'owner' }), 'rejected', undefined);
+    });
+
+    describe('verdict: check record (#1314)', () => {
+      const worker = { id: 'wi-src', status: 'done_by_worker', output: { evidence: [{ type: 'artifact', path: '/a.md' }] }, metadata: {} };
+      beforeEach(() => {
+        delete process.env.CREWLY_EVIDENCE_MODE;
+        mockService.findWorkItem.mockResolvedValue(worker);
+        mockService.verifyItem.mockResolvedValue({ id: 'wi-src', status: 'verified' });
+        mockService.verifyItem.mockClear();
+        mockService.mergeItemMetadata.mockClear();
+      });
+
+      it('an agent accept without checks is refused before anything is verified', async () => {
+        const res = mockRes();
+        await renderVerdict(mockReq({ params: { workItemId: 'wi-src' }, headers: { 'x-agent-session': 'crewly-orc' }, body: { verdict: 'verified' } }), res);
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'review_unchecked' }));
+        expect(mockService.verifyItem).not.toHaveBeenCalled();
+      });
+
+      it('an agent accept with checks is verified and the checks are stamped', async () => {
+        const checks = [{ entry: 0, did: 'read a.md', outcome: 'pass' }];
+        await renderVerdict(mockReq({ params: { workItemId: 'wi-src' }, headers: { 'x-agent-session': 'crewly-orc' }, body: { verdict: 'verified', checks } }), mockRes());
+        expect(mockService.verifyItem).toHaveBeenCalled();
+        expect(mockService.mergeItemMetadata).toHaveBeenCalledWith('wi-src', { reviewChecks: expect.objectContaining({ reviewer: 'crewly-orc', checks }) });
+      });
+
+      it('the owner and rejections need no checks', async () => {
+        await renderVerdict(mockReq({ params: { workItemId: 'wi-src' }, headers: ownerAuthHeaders(), body: { verdict: 'verified' } }), mockRes());
+        await renderVerdict(mockReq({ params: { workItemId: 'wi-src' }, headers: { 'x-agent-session': 'crewly-orc' }, body: { verdict: 'rejected', comment: 'no' } }), mockRes());
+        expect(mockService.verifyItem).toHaveBeenCalledTimes(2);
+        expect(mockService.mergeItemMetadata).not.toHaveBeenCalled();
+      });
     });
 
     it('verdict: a caller that is not the reviewer gets 403', async () => {

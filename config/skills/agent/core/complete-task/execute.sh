@@ -35,7 +35,7 @@ SUMMARY=$(printf '%s' "$INPUT" | jq -r '.summary // empty')
 # ignoring a field is the worst disposition: the caller believes it did
 # something, and nothing ever fails. So every field this skill does not use
 # fails loudly, with its name, before any request is sent.
-ALLOWED_FIELDS='["workItemId","absoluteTaskPath","sessionName","summary","output","evidence","verdict","feedback","taskId","artifacts","testResults","structured"]'
+ALLOWED_FIELDS='["workItemId","absoluteTaskPath","sessionName","summary","output","evidence","verdict","feedback","checks","taskId","artifacts","testResults","structured"]'
 SKIP_GATES=$(printf '%s' "$INPUT" | jq -r 'has("skipGates")')
 if [ "$SKIP_GATES" = "true" ]; then
   error_exit "skipGates is not supported by complete-task and never was — it was accepted and silently discarded. POST /task-pool/complete runs no quality gates, so there is nothing here to skip. Quality gates live behind the 'check-quality-gates' skill (POST /quality-gates/check); run or skip them there. Remove skipGates from this call."
@@ -66,6 +66,13 @@ if [ -n "$VERDICT" ] && [ "$VERDICT" != "rejected" ] && [ "$VERDICT" != "verifie
 fi
 if [ "$VERDICT" = "rejected" ] && [ -z "$FEEDBACK" ]; then
   error_exit "verdict \"rejected\" needs feedback: say what is wrong so the retry can fix it"
+fi
+# Accepting a review records what you checked, per worker evidence entry
+# (#1314): [{"entry":<index or null>,"did":"<what you did and saw>","outcome":"pass"|"fail"}].
+# The server refuses an accept without it; this only catches a non-array.
+CHECKS_JSON=$(printf '%s' "$INPUT" | jq -c '.checks // empty')
+if [ -n "$CHECKS_JSON" ] && [ "$(printf '%s' "$CHECKS_JSON" | jq -r 'type')" != "array" ]; then
+  error_exit "checks must be a JSON array, e.g. [{\"entry\":0,\"did\":\"opened report.md: covers all 3 asks\",\"outcome\":\"pass\"}]"
 fi
 require_param "sessionName" "$SESSION_NAME"
 require_param "summary" "$SUMMARY"
@@ -167,6 +174,7 @@ BODY=$(jq -n \
   --arg verdict "$VERDICT" \
   --arg feedback "$FEEDBACK" \
   --argjson evidence "${EVIDENCE_JSON:-null}" \
+  --argjson checks "${CHECKS_JSON:-null}" \
   '{
     agentId: $agentId,
     result: ({summary: $summary}
@@ -175,7 +183,8 @@ BODY=$(jq -n \
                  else {} end)
               + (if $verdict != "" then {verdict: $verdict} else {} end)
               + (if $feedback != "" then {feedback: $feedback} else {} end)
-              + (if $evidence != null then {evidence: $evidence} else {} end))
+              + (if $evidence != null then {evidence: $evidence} else {} end)
+              + (if $checks != null then {checks: $checks} else {} end))
   }')
 
 COMPLETE_RESPONSE=$(api_call POST "/task-pool/complete/${WORK_ITEM_ID}" "$BODY")
@@ -191,8 +200,8 @@ if [ -z "$RESULT_LINE" ]; then
     '{success: true, workItemId: $id, message: ("WorkItem " + $id + " completion was accepted; the server reply was not JSON."), raw: $raw}')
 fi
 printf '%s\n' "$RESULT_LINE"
-# Warn-mode rollout (#873): the server accepts a completion without evidence
-# for one release but says so. Repeat it on stderr so it is not missed.
+# With CREWLY_EVIDENCE_MODE=warn the server accepts a completion without
+# evidence but says so (#873, #1312). Repeat it on stderr so it is not missed.
 EVIDENCE_WARNING=$(printf '%s' "$COMPLETE_RESPONSE" | jq -r '.warning // empty' 2>/dev/null || true)
 if [ -n "$EVIDENCE_WARNING" ]; then
   jq -n --arg w "$EVIDENCE_WARNING" '{warning: $w}' >&2

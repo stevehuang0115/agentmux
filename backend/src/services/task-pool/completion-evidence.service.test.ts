@@ -14,18 +14,21 @@ import { pathToFileURL } from 'url';
 import { COMPLETION_EVIDENCE_CONSTANTS } from '../../constants.js';
 import {
   artifactBaseDirs,
+  artifactNotBefore,
   blockedReason,
   decideCompletion,
   describeEvidenceForReviewer,
+  decideReviewAccept,
   resolveEvidenceEnforcementMode,
+  evidenceRequiredFor,
 } from './completion-evidence.service.js';
 
 const CODES = COMPLETION_EVIDENCE_CONSTANTS.CODES;
 
 describe('resolveEvidenceEnforcementMode', () => {
-  it('defaults to the constant (warn this release)', () => {
-    expect(COMPLETION_EVIDENCE_CONSTANTS.EVIDENCE_ENFORCEMENT_MODE).toBe('warn');
-    expect(resolveEvidenceEnforcementMode({})).toBe('warn');
+  it('defaults to the constant (enforce since #1312)', () => {
+    expect(COMPLETION_EVIDENCE_CONSTANTS.EVIDENCE_ENFORCEMENT_MODE).toBe('enforce');
+    expect(resolveEvidenceEnforcementMode({})).toBe('enforce');
   });
 
   it('honours CREWLY_EVIDENCE_MODE, case-insensitively', () => {
@@ -35,7 +38,14 @@ describe('resolveEvidenceEnforcementMode', () => {
   });
 
   it('ignores an unknown value', () => {
-    expect(resolveEvidenceEnforcementMode({ CREWLY_EVIDENCE_MODE: 'strict' })).toBe('warn');
+    expect(resolveEvidenceEnforcementMode({ CREWLY_EVIDENCE_MODE: 'strict' })).toBe('enforce');
+  });
+});
+
+describe('evidenceRequiredFor (#1312)', () => {
+  it('deliverables and untyped items need evidence; bookkeeping types do not', () => {
+    for (const t of ['delegate', 'project_task', 'review', undefined, null, '']) expect(evidenceRequiredFor(t)).toBe(true);
+    for (const t of ['goal_replan', 'ticket_triage', 'autopilot_retro', 'notify', 'reconcile']) expect(evidenceRequiredFor(t)).toBe(false);
   });
 });
 
@@ -69,6 +79,19 @@ describe('describeEvidenceForReviewer', () => {
       { type: 'artifact', path: 'https://x' },
       { type: 'command', command: 'npm test', exitCode: 0 },
     ] })).toMatch(/^Evidence: 2 artifact\(s\), 1 command\(s\)/);
+  });
+
+  it('numbers each entry so checks can name it, and caps the list (#1314)', () => {
+    const d = describeEvidenceForReviewer({ evidence: [
+      { type: 'artifact', path: '/out/report.md' },
+      { type: 'command', command: 'npm test', exitCode: 0 },
+    ] });
+    expect(d).toContain('[0] artifact /out/report.md');
+    expect(d).toContain('[1] command `npm test` → exit 0');
+    const many = describeEvidenceForReviewer({ evidence: Array.from({ length: 13 }, (_, i) => ({ type: 'artifact', path: `/f${i}` })) });
+    expect(many).toContain('[9] artifact /f9');
+    expect(many).not.toContain('[10]');
+    expect(many).toContain('and 3 more');
   });
 
   it.each([undefined, {}, { evidence: [] }, { evidence: 'nope' }])('flags no (usable) evidence: %j', (output) => {
@@ -153,7 +176,8 @@ describe('decideCompletion', () => {
       { type: 'command', command: 'npm test', exitCode: 0, outputTail: '12 passed' },
     ];
     const d = await decideCompletion(evidence, null, { mode: 'enforce' });
-    expect(d).toEqual({ action: 'complete', evidence });
+    // The checked file carries its size and mtime (#1313).
+    expect(d).toEqual({ action: 'complete', evidence: [{ ...evidence[0], sizeBytes: expect.any(Number), mtime: expect.any(String) }, ...evidence.slice(1)] });
   });
 
   it('rejects an absolute artifact that does not exist, naming it', async () => {
@@ -189,13 +213,13 @@ describe('decideCompletion', () => {
   });
 
   it('accepts http(s) URLs without checking them', async () => {
-    const pathExists = jest.fn().mockResolvedValue(false);
+    const statPath = jest.fn().mockResolvedValue(null);
     const d = await decideCompletion([
       { type: 'artifact', path: 'https://github.com/o/r/pull/1' },
       { type: 'artifact', path: 'HTTP://example.com/x' },
-    ], null, { mode: 'enforce', pathExists });
+    ], null, { mode: 'enforce', statPath });
     expect(d.action).toBe('complete');
-    expect(pathExists).not.toHaveBeenCalled();
+    expect(statPath).not.toHaveBeenCalled();
   });
 
   it('accepts file:// URLs that exist and expands ~/', async () => {
@@ -207,5 +231,102 @@ describe('decideCompletion', () => {
   it('rejects other URL schemes', async () => {
     const d = await decideCompletion([{ type: 'artifact', path: 's3://bucket/key' }], null, { mode: 'warn' });
     expect(d).toEqual(expect.objectContaining({ action: 'reject', code: CODES.MALFORMED }));
+  });
+});
+
+describe('empty and stale artifacts (#1313)', () => {
+  const at = (iso: string) => Date.parse(iso);
+  const stat = (sizeBytes: number, mtime: string, isDirectory = false) => jest.fn().mockResolvedValue({ isDirectory, sizeBytes, mtimeMs: at(mtime) });
+  const wi = { metadata: {}, createdAt: '2026-10-14T13:43:00.000Z' };
+
+  it('rejects an empty file', async () => {
+    const d = await decideCompletion([{ type: 'artifact', path: '/out/report.md' }], wi, { mode: 'warn', statPath: stat(0, '2026-10-14T14:00:00Z') });
+    expect(d).toEqual(expect.objectContaining({ action: 'reject', code: CODES.ARTIFACT_EMPTY }));
+    if (d.action === 'reject') expect(d.error).toContain('is empty (0 bytes)');
+  });
+
+  it('rejects a file last changed before the WorkItem existed (past the grace)', async () => {
+    const d = await decideCompletion([{ type: 'artifact', path: '/out/old.png' }], wi, { mode: 'warn', statPath: stat(10, '2026-10-13T09:00:00Z') });
+    expect(d).toEqual(expect.objectContaining({ action: 'reject', code: CODES.ARTIFACT_STALE }));
+    if (d.action === 'reject') expect(d.error).toContain('before this WorkItem existed');
+  });
+
+  it('accepts a file saved within the grace before the WorkItem, and records size and mtime', async () => {
+    const mtime = new Date(at(wi.createdAt) - COMPLETION_EVIDENCE_CONSTANTS.STALE_GRACE_MS + 1000).toISOString();
+    const d = await decideCompletion([{ type: 'artifact', path: '/out/v1.mp4' }, { type: 'artifact', path: 'https://x.test/a' }], wi, { mode: 'warn', statPath: stat(4096, mtime) });
+    expect(d.action).toBe('complete');
+    if (d.action === 'complete') {
+      expect(d.evidence?.[0]).toEqual({ type: 'artifact', path: '/out/v1.mp4', sizeBytes: 4096, mtime });
+      expect(d.evidence?.[1]).toEqual({ type: 'artifact', path: 'https://x.test/a' });
+    }
+  });
+
+  it('a directory only needs to exist; no age check without createdAt', async () => {
+    expect((await decideCompletion([{ type: 'artifact', path: '/out/dir' }], wi, { mode: 'warn', statPath: stat(0, '2020-01-01T00:00:00Z', true) })).action).toBe('complete');
+    expect((await decideCompletion([{ type: 'artifact', path: '/out/old.md' }], { metadata: {} }, { mode: 'warn', statPath: stat(5, '2020-01-01T00:00:00Z') })).action).toBe('complete');
+  });
+
+  it('artifactNotBefore', () => {
+    expect(artifactNotBefore(null)).toBeNull();
+    expect(artifactNotBefore({ createdAt: 'nope' })).toBeNull();
+    expect(artifactNotBefore({ createdAt: wi.createdAt })).toBe(at(wi.createdAt) - COMPLETION_EVIDENCE_CONSTANTS.STALE_GRACE_MS);
+  });
+
+  it('a real empty file on disk is rejected by the default check', async () => {
+    const d = mkdtempSync(path.join(os.tmpdir(), 'ev-empty-'));
+    try {
+      writeFileSync(path.join(d, 'e.md'), '');
+      expect((await decideCompletion([{ type: 'artifact', path: path.join(d, 'e.md') }], null, { mode: 'warn' })).action).toBe('reject');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('decideReviewAccept (#1314)', () => {
+  const evidence = [{ type: 'artifact', path: '/out/report.md' }, { type: 'command', command: 'npm test', exitCode: 0 }];
+  const pass = (entry: number | null, did = 'opened it: 3 sections, matches the brief') => ({ entry, did, outcome: 'pass' });
+
+  it('accepts checks that name worker evidence, trimmed and with only known fields', () => {
+    const d = decideReviewAccept([{ ...pass(0, '  opened it  '), extra: 1 }, pass(null)], evidence, 'enforce');
+    expect(d).toEqual({ action: 'accept', checks: [{ entry: 0, did: 'opened it', outcome: 'pass' }, { entry: null, did: 'opened it: 3 sections, matches the brief', outcome: 'pass' }] });
+  });
+
+  it.each([undefined, null, []])('enforce: no record is refused (%j)', (raw) => {
+    const d = decideReviewAccept(raw, evidence, 'enforce');
+    expect(d).toMatchObject({ action: 'reject', status: 400, code: CODES.REVIEW_UNCHECKED });
+    expect((d as { error: string }).error).toContain('2 evidence entries');
+  });
+
+  it('warn: no record is accepted and flagged unchecked', () => {
+    expect(decideReviewAccept(undefined, evidence, 'warn')).toMatchObject({ action: 'accept_unchecked', warning: expect.stringContaining('unchecked') });
+  });
+
+  it('with worker evidence, only direct looks are not enough', () => {
+    expect(decideReviewAccept([pass(null)], evidence, 'enforce')).toMatchObject({ action: 'reject', code: CODES.REVIEW_UNCHECKED });
+  });
+
+  it('without worker evidence, a direct look is enough', () => {
+    expect(decideReviewAccept([pass(null)], undefined, 'enforce')).toMatchObject({ action: 'accept' });
+  });
+
+  it.each([
+    ['not an array', { entry: 0 }],
+    ['entry out of range', [pass(2)]],
+    ['negative entry', [pass(-1)]],
+    ['fractional entry', [{ entry: 0.5, did: 'x', outcome: 'pass' }]],
+    ['empty did', [pass(0, '  ')]],
+    ['bad outcome', [{ entry: 0, did: 'x', outcome: 'ok' }]],
+    ['non-object entry', ['looked']],
+  ])('malformed is refused in both modes: %s', (_name, raw) => {
+    for (const mode of ['warn', 'enforce'] as const) {
+      expect(decideReviewAccept(raw, evidence, mode)).toMatchObject({ action: 'reject', code: CODES.REVIEW_CHECKS_MALFORMED });
+    }
+  });
+
+  it('a failed check cannot be accepted', () => {
+    const d = decideReviewAccept([pass(0), { entry: 1, did: 're-ran npm test: 2 failing', outcome: 'fail' }], evidence, 'enforce');
+    expect(d).toMatchObject({ action: 'reject', code: CODES.REVIEW_CHECK_FAILED });
+    expect((d as { error: string }).error).toContain('verdict');
   });
 });

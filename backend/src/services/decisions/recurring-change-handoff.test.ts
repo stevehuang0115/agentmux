@@ -1,4 +1,4 @@
-import { handOffRecurringChange, isApprovedChange, recurringSchedules, scheduleOfDecision, termsOf, type RecurringSchedule } from './recurring-change-handoff.js';
+import { handOffRecurringChange, isApprovedChange, recurringSchedules, scheduleOfDecision, subjectTermsOf, termsOf, type RecurringSchedule } from './recurring-change-handoff.js';
 import fixtures from './recurring-change-handoff.fixtures.json';
 import labels from './recurring-change-handoff.labels.json';
 import type { OwnerDecision } from '../../types/decision.types.js';
@@ -92,6 +92,38 @@ describe('recurring change hand-off (crewly#1137)', () => {
 			expect(scheduleOfDecision(card, jobs)?.triggerId).toBe('809619f3');
 			const watch = decision({ question: 'Should the listings-pr-watch job also check the PRs on weekends?', asker: 'ella', requestedBy: 'ella' });
 			expect(scheduleOfDecision(watch, jobs)?.triggerId).toBe('8e8feaf6');
+		});
+	});
+
+	describe('when-words are not a subject (D-747: two unrelated 8am jobs)', () => {
+		// Synthetic text only: a job whose name starts with "every morning", and a card about something else at the same hour.
+		const morningJob: RecurringSchedule = { triggerId: 'cad-1', label: 'ledger-check 每天早上：核对账本，到期的逐条对答案', owner: 'runner-a' };
+		const otherCard = (over: Partial<OwnerDecision> = {}) => decision({
+			id: 'D-SYN',
+			question: '没事的那一项就不写 — 这样可以吗？',
+			options: [{ key: 'a', label: 'Yes', detail: '每天早上 8 点，在这个频道发一条当天安排，由小王来写' }, { key: 'b', label: 'No' }],
+			asker: 'ella',
+			requestedBy: 'ella',
+			...over,
+		});
+
+		it('subjectTermsOf drops cadence and weekday words in both scripts', () => {
+			expect(subjectTermsOf('每天早上 Daily ledger-check on Monday morning 周五')).toEqual(new Set(['ledger', 'check']));
+		});
+
+		it('"every morning" alone does not hand a card to another job', () => {
+			expect(scheduleOfDecision(otherCard(), [morningJob])).toBeNull();
+		});
+
+		it('the same cadence plus the job subject still matches', () => {
+			const card = otherCard({ question: 'Should the ledger check 每天早上 only post the mismatches?', options: [{ key: 'a', label: 'Yes' }, { key: 'b', label: 'No' }] });
+			expect(scheduleOfDecision(card, [morningJob])?.triggerId).toBe('cad-1');
+		});
+
+		it('a daily English job name is matched by its subject, not by "daily"', () => {
+			const job: RecurringSchedule = { triggerId: 'cad-2', label: 'daily-tech-brief Daily tech brief: post it', owner: 'runner-b' };
+			expect(scheduleOfDecision(otherCard({ question: 'Should the daily standup note move to 9am?', options: [{ key: 'a', label: 'Yes' }] }), [job])).toBeNull();
+			expect(scheduleOfDecision(otherCard({ question: 'Make the tech brief shorter?', options: [{ key: 'a', label: 'Yes' }] }), [job])?.triggerId).toBe('cad-2');
 		});
 	});
 });

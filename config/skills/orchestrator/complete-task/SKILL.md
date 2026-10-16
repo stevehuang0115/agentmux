@@ -38,7 +38,7 @@ bash config/skills/orchestrator/complete-task/execute.sh '{"workItemId":"wi-123"
 |-----------|----------|-------------|
 | `workItemId` (alias `taskId`) | Yes | The WorkItem to complete |
 | `summary` (alias `result`) | Yes | What was produced |
-| `evidence` | Yes* | Evidence array (#873): `{"type":"artifact","path":…}` (must exist, or an https URL), `{"type":"command","command":…,"exitCode":0,"outputTail":…}`, or `{"type":"blocked","step":…,"reason":…}` (records the item as blocked, not done). *Accepted without it this release with a `warning`; required from the next |
+| `evidence` | Yes* | Evidence array (#873): `{"type":"artifact","path":…}` (must exist, or an https URL), `{"type":"command","command":…,"exitCode":0,"outputTail":…}`, or `{"type":"blocked","step":…,"reason":…}` (records the item as blocked, not done). *Required for delegate/project_task/review items (400 `evidence_required` without it); bookkeeping types (triage, replans, retros) may omit it |
 | `output` | No | Structured output stored on the WorkItem before completion |
 | `agentId` / `sessionName` | No | Who completed it (defaults to `crewly-orc`) |
 

@@ -88,9 +88,19 @@ describe('planAgentReply', () => {
         plan({
           session: 'crewly-orc',
           isOrchestrator: true,
-          origin: { conversationId: 'conv-orc', slackChannelId: 'D0MASTER', slackThreadTs: '1790.5', receivedAt: 1 },
+          origin: { conversationId: 'conv-orc', slackChannelId: 'D0MASTER', slackThreadTs: '1790.5', receivedAt: Date.now() },
         }),
       ).toEqual(expect.objectContaining({ kind: 'orc-slack', channelId: 'D0MASTER', threadTs: '1790.5' }));
+    });
+
+    it('does not answer into a stale Slack origin: a late relay goes through chat routing, which places it', () => {
+      expect(
+        plan({
+          session: 'crewly-orc',
+          isOrchestrator: true,
+          origin: { conversationId: 'conv-orc', slackChannelId: 'C0OLD', slackThreadTs: '1790.5', receivedAt: 1 },
+        }),
+      ).toEqual(expect.objectContaining({ kind: 'orc-chat' }));
     });
 
     it('answers a chat turn through its own chat routing', () => {

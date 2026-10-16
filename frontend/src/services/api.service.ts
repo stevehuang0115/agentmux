@@ -1048,6 +1048,18 @@ class ApiService {
     return response.data.data;
   }
 
+  /**
+   * Where a Request is now: who holds it, doing what, since when.
+   *
+   * @param id - Request id
+   * @returns `{summary, holders, finished, …}` from GET /api/requests/:id/whereabouts
+   */
+  async getRequestWhereabouts(id: string): Promise<{ summary: string; finished: boolean; holders: Array<{ session: string; state: string; forMs: number }> }> {
+    const response = await axios.get<ApiResponse<{ summary: string; finished: boolean; holders: Array<{ session: string; state: string; forMs: number }> }>>(`${API_BASE}/requests/${id}/whereabouts`);
+    if (!response.data.success || !response.data.data) throw new Error('Request not found');
+    return response.data.data;
+  }
+
   async updateRequest(id: string, updates: Record<string, unknown>): Promise<void> {
     const response = await axios.put<ApiResponse<unknown>>(`${API_BASE}/requests/${id}`, updates);
     if (!response.data.success) throw new Error(response.data.error || 'Failed to update request');

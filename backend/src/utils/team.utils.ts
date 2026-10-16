@@ -292,3 +292,20 @@ export function setTeamLead(team: Team, memberId: string, mode: SetTeamLeadMode 
   const changed = before.length !== after.length || before.some((id, i) => after[i] !== id);
   return { before, after, changed };
 }
+
+/**
+ * The session of the lead who answers for a member: the first lead (with a
+ * session) of the first team the member belongs to, other than the member.
+ *
+ * @param teams - All teams
+ * @param session - The member's session name
+ * @returns The lead's session name, or null when none is found
+ */
+export function findLeadSessionFor(teams: readonly Team[], session: string): string | null {
+  for (const team of teams) {
+    if (!(team.members ?? []).some((m) => m.sessionName === session)) continue;
+    const lead = getTeamLeads(team).find((m) => m.sessionName && m.sessionName !== session);
+    if (lead?.sessionName) return lead.sessionName;
+  }
+  return null;
+}

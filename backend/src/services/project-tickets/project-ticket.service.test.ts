@@ -49,6 +49,29 @@ describe('ProjectTicketService', () => {
     expect(ensureTracked).toHaveBeenCalledTimes(1);
   });
 
+  it('the same creator making the same ticket again within minutes gets the first one back', async () => {
+    const a = await svc.create(project, 'ce', { title: 'Write the 律所 follow-up', source: 'agent:ce-owen' }, 'ce-owen');
+    const b = await svc.create(project, 'ce', { title: '  write the 律所 follow-up! ', source: 'agent:ce-owen' }, 'ce-owen');
+    expect(b.id).toBe(a.id);
+    expect((await svc.list(project)).tickets).toHaveLength(1);
+    // A different creator, a different title, or no creator: new tickets.
+    const c = await svc.create(project, 'ce', { title: 'Write the 律所 follow-up', source: 'agent:ce-vera' }, 'ce-vera');
+    const d = await svc.create(project, 'ce', { title: 'Another thing', source: 'agent:ce-owen' }, 'ce-owen');
+    const e = await svc.create(project, 'ce', { title: 'Write the 律所 follow-up' }, 'owner');
+    expect(new Set([a.id, c.id, d.id, e.id]).size).toBe(4);
+  });
+
+  it('a same-title ticket after the window, or after the first was closed, is new', async () => {
+    const t0 = Date.now();
+    const clock = jest.spyOn(Date, 'now');
+    const a = await svc.create(project, 'ce', { title: 'Weekly report', source: 'agent:ce-owen' }, 'ce-owen');
+    clock.mockReturnValue(t0 + 11 * 60_000);
+    const later = new ProjectTicketService({ logger, ensureTracked, now: () => new Date(t0 + 11 * 60_000).toISOString() });
+    const b = await later.create(project, 'ce', { title: 'Weekly report', source: 'agent:ce-owen' }, 'ce-owen');
+    clock.mockRestore();
+    expect(b.id).not.toBe(a.id);
+  });
+
   it('rejects an empty title or an unreadable priority', async () => {
     await expect(svc.create(project, 'p', { title: ' ' }, 'owner')).rejects.toMatchObject({ status: 400 });
     await expect(svc.create(project, 'p', { title: 'x', priority: 'P7' }, 'owner')).rejects.toBeInstanceOf(ProjectTicketError);

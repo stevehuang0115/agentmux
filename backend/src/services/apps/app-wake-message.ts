@@ -80,6 +80,8 @@ export interface AppChange {
   op?: 'set' | 'update' | 'delete' | string;
   rev?: number;
   event?: { type?: string; text?: string; agent?: string };
+  /** `kind: 'decision'`: the owner's answer in Crewly's own prompt (crewly-services apps/SPEC.md §21) */
+  decision?: { id?: string; action?: string; question?: string; outcome?: 'approved' | 'declined' | string };
   /** `kind: 'comment'`: what happened, and the thread as it is now */
   comment?: { id?: string; op?: string; replyId?: string; mentions?: AppCommentMention[]; thread?: AppCommentThread | null };
   actor?: AppChangeActor;
@@ -118,6 +120,8 @@ export interface WakeMessageInput {
   comments?: AppChange[];
   /** Comment changes in the batch, when more arrived than were kept */
   commentsTotal?: number;
+  /** The owner's answers to Crewly's decision prompt (crewly#1228) */
+  decisions?: AppChange[];
   /** Agent skills root, for the app-data command line */
   skillsPath: string;
   /** Voice comment recordings downloaded for this delivery, by blob id (crewly-services apps/SPEC.md §16) */
@@ -471,6 +475,37 @@ function describeCommentText(c: AppChange): string[] {
   return [`  Owner commented on ${where} (${num}, comment id ${id}${details ? `; ${details}` : ''})${mentioned}:`, commentBodyBlock(t.body)];
 }
 
+const DECISION_ID_RE = /^dec_[A-Za-z0-9_-]{1,40}$/;
+
+/**
+ * The owner's answers to Crewly's decision prompt (crewly#1228): one
+ * `[APP DECISION]` line each. Crewly's shell showed the prompt and recorded
+ * the click, which the app's page cannot do, so an APPROVED line is the
+ * owner's approval for that action as worded, once. The action and question
+ * were written by the app; they are shown as the owner saw them, cleaned.
+ * (`[APP DECISION]`, not `[DECISION …]`: those are decision cards.)
+ *
+ * @param decisions - Decision changes, oldest first
+ * @returns Lines
+ */
+export function describeDecisions(decisions: AppChange[]): string[] {
+  const lines: string[] = [];
+  for (const d of decisions) {
+    const info = d.decision ?? {};
+    const action = inline(info.action, 200) || '(no action named)';
+    const id = typeof info.id === 'string' && DECISION_ID_RE.test(info.id) ? `, decision ${info.id}` : '';
+    const t = timeOf(d.at);
+    lines.push(`[APP DECISION] The owner ${info.outcome === 'approved' ? 'APPROVED' : 'DECLINED'} "${action}"${t ? ` at ${t}` : ''}${id}.`);
+    const q = sanitizeAppText(info.question);
+    if (q) lines.push('  Question shown:', quoteAppText(q));
+  }
+  lines.push(
+    "The owner answered in Crewly's own decision prompt (the app's page can open it but cannot answer it). An APPROVED action is the owner's " +
+      'approval for that action as worded, once, and nothing else. Do not do a DECLINED action. Tell the owner in one line when it is done.',
+  );
+  return lines;
+}
+
 /**
  * The warning above anonymous submissions (P3 §3).
  */
@@ -492,8 +527,9 @@ export function buildAppWakeMessage(input: WakeMessageInput): string {
   const visitors = input.visitorChanges ?? [];
   const skipped = Math.max(0, Math.floor(input.visitorSkipped ?? 0));
   const comments = input.comments ?? [];
-  const byOwner = input.dataChanges.length > 0 || input.events.length > 0 || comments.length > 0;
-  const onlyComments = comments.length > 0 && input.dataChanges.length === 0 && input.events.length === 0;
+  const decisions = (input.decisions ?? []).filter((d) => d.decision?.outcome === 'approved' || d.decision?.outcome === 'declined');
+  const byOwner = input.dataChanges.length > 0 || input.events.length > 0 || comments.length > 0 || decisions.length > 0;
+  const onlyComments = comments.length > 0 && input.dataChanges.length === 0 && input.events.length === 0 && decisions.length === 0;
   lines.push(
     !byOwner && (visitors.length > 0 || skipped > 0)
       ? `[APP CHANGES] Public visitors submitted to your app "${name}" (${input.appId}) — ${url}`
@@ -509,6 +545,7 @@ export function buildAppWakeMessage(input: WakeMessageInput): string {
             : `[APP CHANGES] The owner mentioned you in a comment on the app "${name}" (${input.appId}) — ${url}`
           : `[APP CHANGES] The owner's app "${name}" (${input.appId}) addressed you — ${url}`,
   );
+  if (decisions.length > 0) lines.push(...describeDecisions(decisions));
   const gone = (input.goneMentions ?? []).map((n) => inline(n, 40)).filter(Boolean);
   if (gone.length > 0) {
     lines.push(
@@ -533,7 +570,11 @@ export function buildAppWakeMessage(input: WakeMessageInput): string {
       lines.push('The owner @mentioned other agents in some of these comments; they got them too. Coordinate in the thread rather than both doing the same work.');
     }
     lines.push(`Reply in the thread: ${cmd} --reply <comment id> --text "<what you did or a question>"`);
-    lines.push(`Resolve once addressed (often after publishing a fix or updating app data): ${cmd} --resolve <comment id> [--text "<what changed>"]`);
+    lines.push(
+      `Resolve once addressed: a fix published, data updated, or the question answered. ${cmd} --resolve <comment id> --text "<what changed, or your answer>" ` +
+        'posts your reply and resolves in one step. Keep a thread open only while you cannot go on without the owner\'s answer; an optional offer ' +
+        '("say X if you want me to …") is no reason, because an owner reply reopens the thread and wakes you.',
+    );
     if (input.isPublisher || input.owns) {
       lines.push(`Full anchors (outerHTML, position, attributes): ${cmd} --list`);
     } else {

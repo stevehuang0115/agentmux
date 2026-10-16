@@ -20,6 +20,7 @@ import { formatWhen } from '../decisions/decision-card.js';
 import { LoggerService } from '../core/logger.service.js';
 import { staleCommitmentNotice } from './stale-commitment.js';
 import { OpenItemsService, slackPlaceOf, type FollowUpInput, type QuestionCardInput } from './open-items.service.js';
+import { findLeadSessionFor } from '../../utils/team.utils.js';
 import { memberNameFromSession } from '../../utils/member-session-name.utils.js';
 
 /** What the composition root provides. */
@@ -162,6 +163,10 @@ export function createOpenItemsService(input: OpenItemsWiringInput): OpenItemsSe
     },
     getDecision: async (id) => (await DecisionService.getInstance()?.get(id)) ?? null,
     deliverToAgent: input.sendToAgent,
+    notifyLead: async (agent, text) => {
+      const lead = findLeadSessionFor(await input.getTeams().catch(() => []), agent);
+      return lead ? input.sendToAgent(lead, text) : false;
+    },
     postOwnerNote: async (request: Request, text: string) => {
       const place = slackPlaceOf(request);
       const slack = getSlackService();

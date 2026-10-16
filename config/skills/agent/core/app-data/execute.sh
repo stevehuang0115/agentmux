@@ -48,6 +48,7 @@ Options:
   --owner      Show who owns the app's comments (an agent, a team or a channel)
   --set-owner  Change it: channel:#<name>, team:<name>, agent:<name> or default (the publishing agent). Only the app's owner agents (and the owner) may
   --add-collaborator  An owner agent lets another agent work in the app's data and comments. The agent may be on any of the owner's machines: Rex, or Rex@iriss-air when the name is on several machines
+  --full       Print an answer over the 60,000-byte output cap whole (default: --list/--get refuse it with page_too_large and a hint to use a smaller --limit)
   --help | -h  Show this help
 EOF_USAGE
 }
@@ -70,6 +71,13 @@ call() {
   if [ "$rc" -ne 0 ]; then
     # The error object is the last non-empty stderr line (warnings come first).
     fail_from "$(printf '%s\n' "$err" | awk 'NF{l=$0} END{print l}')"
+  fi
+  # The shared output cap (lib.sh, 60,000 bytes) replaces an oversized body with a
+  # {"truncated":true,"bytes":N,"file":...} envelope. Reading that as a page of docs
+  # printed an EMPTY list with success:true (silent success): refuse it loudly instead.
+  if printf '%s' "$out" | jq -e 'type == "object" and .truncated == true and has("bytes") and (has("success") | not)' >/dev/null 2>&1; then
+    printf '%s' "$out" | jq -c '{success: false, status: 200, reason: "page_too_large", message: ("The answer is " + (.bytes | tostring) + " bytes, over the skill output cap, so it was not read. Nothing is missing from the app; this call just cannot show it."), hint: "Ask for a smaller page: --limit 10 (or lower) and continue with --after <next>. Or pass --full to print the whole page (large: it all lands in your context)."}'
+    exit 1
   fi
   printf '%s\n' "$out"
 }
@@ -161,6 +169,7 @@ while [[ $# -gt 0 ]]; do
     --field)     [ $# -ge 2 ] || error_exit "--field requires a JSON pointer"; FIELD="$2"; shift 2 ;;
     --out)       [ $# -ge 2 ] || error_exit "--out requires a file path";   OUT_FILE="$2"; shift 2 ;;
     --decode)    DECODE=1; shift ;;
+    --full)      shift ;;  # read by lib.sh at source time: lifts the output cap
     --get|--set|--update|--delete)
       [ $# -ge 3 ] || error_exit "$1 requires a collection and a doc id"
       OP="${1#--}"; COLL="$2"; DOC="$3"; shift 3 ;;

@@ -9,7 +9,7 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import { RequestService } from './request.service.js';
-import { TicketReviewService, nudgeText, type ReworkInput } from './ticket-review.service.js';
+import { TicketReviewService, handsWorkOn, nudgeText, type ReworkInput } from './ticket-review.service.js';
 import { TICKET_CONSTANTS } from '../../constants.js';
 import type { Request } from '../../types/v2/request.types.js';
 import type { TicketOriginChannel } from '../../types/v2/ticket.types.js';
@@ -21,6 +21,7 @@ let openWork: Map<string, number>;
 let reworks: ReworkInput[];
 let doneReceipts: string[];
 let review: TicketReviewService;
+let openAsks: Map<string, number>;
 
 /**
  * Create a ticket straight through RequestService (as intake would).
@@ -73,6 +74,7 @@ beforeEach(async () => {
   openWork = new Map();
   reworks = [];
   doneReceipts = [];
+  openAsks = new Map();
   review = new TicketReviewService({
     requests,
     fallbackAgent: 'crewly-orc',
@@ -85,6 +87,8 @@ beforeEach(async () => {
     markReceiptDone: async (t) => {
       doneReceipts.push(t.id);
     },
+    openAsksBy: (session) => openAsks.get(session) ?? 0,
+    agentNames: async () => ['Ella', 'Pia', 'Dex'],
   });
 });
 
@@ -152,6 +156,34 @@ describe('onChatMessage — answer detection', () => {
   });
 });
 
+describe('hand-offs (2026-10-14 dropped video replica)', () => {
+  it('handsWorkOn: an @-mention of another agent, CJK right after the name', () => {
+    const names = ['Ella', 'Pia', 'Dex'];
+    expect(handsWorkOn('@Pia 请你接这件', names, 'crewly-marketing-ella-e6a6b8ea')).toBe(true);
+    expect(handsWorkOn('@pia请你接', names, 'crewly-marketing-ella-e6a6b8ea')).toBe(true);
+    expect(handsWorkOn('@Ella here is the answer', names, 'crewly-marketing-ella-e6a6b8ea')).toBe(false);
+    expect(handsWorkOn('@Piano is a word', names, 'ella')).toBe(false);
+    expect(handsWorkOn('Pia will do it', names, 'ella')).toBe(false);
+    expect(handsWorkOn('@Pia', [], 'ella')).toBe(false);
+  });
+
+  it('a reply that hands the work on is not the answer', async () => {
+    const t = await ticket(1, { chatChannelId: 'ch1', messageId: 'm1' });
+    expect(await review.onChatMessage(agentMsg('ch1', 'crewly-marketing-ella-e6a6b8ea', '@Pia please take this one', 'm1'))).toBeNull();
+    expect((await requests.getById(t.id))?.reply).toBeUndefined();
+  });
+
+  it('does not submit while the answering agent has unanswered asks out', async () => {
+    const t = await ticket(1, { chatChannelId: 'ch1', messageId: 'm1' });
+    await review.onChatMessage(agentMsg('ch1', 'atlas', 'started, results soon', 'm1'));
+    openAsks.set('atlas', 1);
+    expect(await review.onAgentIdle('atlas')).toHaveLength(0);
+    expect((await requests.getById(t.id))?.status).toBe('running');
+    openAsks.delete('atlas');
+    expect(await review.onAgentIdle('atlas')).toHaveLength(1);
+  });
+});
+
 describe('submit — idle and settle', () => {
   it('the answering agent going idle puts the ticket in 待验收 (not done)', async () => {
     const t = await ticket(1, { chatChannelId: 'ch1', messageId: 'm1' });
@@ -165,7 +197,7 @@ describe('submit — idle and settle', () => {
 
   it('does not submit while the ticket has open WorkItems', async () => {
     const t = await ticket(1, { chatChannelId: 'ch1', messageId: 'm1' });
-    await review.onChatMessage(agentMsg('ch1', 'atlas', '收到，我来做', 'm1'));
+    await review.onChatMessage(agentMsg('ch1', 'atlas', 'first part attached', 'm1'));
     openWork.set(t.id, 2);
     expect(await review.onAgentIdle('atlas')).toHaveLength(0);
     expect((await requests.getById(t.id))?.status).toBe('running');
@@ -326,6 +358,23 @@ describe('auto-accept: the owner moved on in the thread', () => {
     clock = Date.now() + TICKET_CONSTANTS.REVIEW.AUTO_ACCEPT_MS + 60_000;
     expect((await review.sweep()).autoAccepted).toBe(1);
     expect((await requests.getById(t.id))?.discussion?.some((d) => d.text === 'auto-accepted: no objection')).toBe(true);
+  });
+
+  it('an answer on a decision card after the submit counts; a send-back on the card does not', async () => {
+    const card = (id: string, answer: string, closedAt: string) => ({
+      id, type: 'question' as const, agent: 'atlas', sourceMessageId: 'x', createdAt: closedAt, status: 'resolved' as const, text: '你看一眼对不对？', decisionId: 'D-1', answer, closedAt,
+    });
+    const a = await submitted(1);
+    const after = (t: { submittedAt?: string }) => new Date(Date.parse(t.submittedAt!) + 60_000).toISOString();
+    await requests.update(a.id, { openItems: [card('q-a', '对的', after(a))] });
+    const b = await submitted(2);
+    await requests.update(b.id, { openItems: [card('q-b', '打回 少了截图', after(b))] });
+    const c = await submitted(3);
+    await requests.update(c.id, { openItems: [card('q-c', '对的', new Date(Date.parse(c.submittedAt!) - 60_000).toISOString())] });
+    expect((await review.sweep()).autoAccepted).toBe(1);
+    expect((await requests.getById(a.id))?.status).toBe('done');
+    expect((await requests.getById(b.id))?.status).toBe('waiting_confirmation');
+    expect((await requests.getById(c.id))?.status).toBe('waiting_confirmation');
   });
 
   it('does not settle early while the agent still owes the owner an open item', async () => {

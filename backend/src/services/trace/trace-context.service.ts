@@ -41,6 +41,8 @@ import {
 	type TraceRefs,
 	type TraceRootKind,
 } from './trace.types.js';
+import { getTurnTriggerTracker } from './turn-trigger.js';
+import { getAgentAskLedger } from '../messaging/agent-ask-ledger.service.js';
 
 /** How a delivered message reached the turn. */
 export type DeliveryKind =
@@ -509,6 +511,20 @@ export class TraceContext {
 			const kind = classifyDelivery(text);
 			const traces = this.resolveTracesFromText(text, session);
 			const now = this.now();
+			// The finer trigger (reminder, restart, agent message + sender) is
+			// kept per session, so a reply posted from this turn can say why.
+			const current = this.currentTrace(session);
+			const traceId = traces.length === 0 ? null : current && traces.includes(current) ? current : traces[0];
+			const trigger = getTurnTriggerTracker().noteDelivery(session, text, { traceId }, now);
+			// Another agent's message reached this turn: remember it, so an answer
+			// the receiver never sends back can be returned for it.
+			if (trigger.triggerKind === 'agent_message' && trigger.sender) {
+				try {
+					getAgentAskLedger()?.noteDelivered(session, trigger.sender, text);
+				} catch {
+					/* best effort */
+				}
+			}
 			if (traces.length === 0) {
 				// Nothing in the text names a run. An owner message may start one
 				// (pending root); anything else — a cron / scheduled prompt, a system
@@ -518,19 +534,27 @@ export class TraceContext {
 				if (kind === 'owner_message') this.pending.set(session, { summary: safeSummary(text), at: now });
 				return null;
 			}
-			const current = this.currentTrace(session);
-			const next = current && traces.includes(current) ? current : traces[0];
+			const next = traceId ?? traces[0];
 			this.setCurrent(session, next, now, traces.filter((id) => id !== next));
 			this.pending.delete(session);
-			const actor: TraceActor = kind === 'owner_message' ? { kind: 'owner' } : { kind: 'system' };
-			for (const traceId of traces) {
+			const actor: TraceActor = kind === 'owner_message'
+				? { kind: 'owner' }
+				: trigger.sender
+					? { kind: 'agent', session: trigger.sender }
+					: { kind: 'system' };
+			for (const id of traces) {
 				this.record({
-					traceId,
+					traceId: id,
 					type: 'turn.delivered',
 					actor,
 					summary: `${DELIVERY_LABELS[kind]} delivered to ${session}: ${text}`,
 					refs: { session },
-					data: { kind, runtime },
+					data: {
+						kind,
+						subkind: trigger.triggerKind,
+						...(trigger.sender ? { sender: trigger.sender } : {}),
+						runtime,
+					},
 				});
 			}
 			return next;

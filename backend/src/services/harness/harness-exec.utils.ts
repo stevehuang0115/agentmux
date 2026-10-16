@@ -18,6 +18,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { HARNESS_CONSTANTS } from '../../constants.js';
+import { LoggerService } from '../core/logger.service.js';
 import { getCrewlyHomePath } from '../core/crewly-home.utils.js';
 import type { CommandResult, RunCommand, RunCommandOptions } from './harness.types.js';
 
@@ -149,76 +150,174 @@ function killTree(child: ReturnType<typeof spawn>): void {
 	child.kill('SIGKILL');
 }
 
+/** Injectable seams of {@link createRunCommand}. */
+export interface RunCommandDeps {
+	spawn?: typeof spawn;
+	now?: () => number;
+	/** Whether a pid still exists (default: `process.kill(pid, 0)`) */
+	isAlive?: (pid: number) => boolean;
+	/** Receives the rate-limited stuck-executable warning */
+	warn?: (message: string, data: Record<string, unknown>) => void;
+}
+
+/**
+ * Whether anything from a run is still alive. Runs are spawned as their own
+ * process group (pgid = the child's pid), and the process that hangs is
+ * usually the native binary a wrapper started, not the wrapper itself, so on
+ * POSIX the whole group is checked.
+ *
+ * @param pid - Pid of the spawned child (its process group id on POSIX)
+ * @returns True when signal 0 to the group (or pid) succeeds; EPERM still means alive
+ */
+function defaultIsAlive(pid: number): boolean {
+	try {
+		process.kill(process.platform === 'win32' ? pid : -pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === 'EPERM';
+	}
+}
+
+/**
+ * Build a command runner with per-executable pile-up protection.
+ *
+ * On macOS a process stuck in exec / Gatekeeper verification survives SIGKILL
+ * until the kernel call returns, so killing a timed-out probe does not free
+ * it, and every new probe of that executable hangs too (hundreds of `codex`
+ * processes). The runner therefore remembers killed-but-still-alive children
+ * per executable and, while any exist, returns `{ code: null, error }`
+ * without spawning. It also caps concurrent timeout-bounded runs per
+ * executable. Callers already treat `code: null` as "could not run".
+ *
+ * @param deps - Injectable seams (tests)
+ * @returns A {@link RunCommand}
+ */
+export function createRunCommand(deps: RunCommandDeps = {}): RunCommand {
+	const spawnFn = deps.spawn ?? spawn;
+	const now = deps.now ?? Date.now;
+	const isAlive = deps.isAlive ?? defaultIsAlive;
+	const warn =
+		deps.warn ??
+		((message: string, data: Record<string, unknown>): void =>
+			LoggerService.getInstance().createComponentLogger('HarnessExec').warn(message, data));
+	const stuck = new Map<string, Set<number>>();
+	const inflight = new Map<string, number>();
+	const lastWarnAt = new Map<string, number>();
+
+	const stuckCount = (key: string): number => {
+		const pids = stuck.get(key);
+		if (!pids) return 0;
+		for (const pid of [...pids]) if (!isAlive(pid)) pids.delete(pid);
+		if (pids.size === 0) stuck.delete(key);
+		return pids.size;
+	};
+	const warnOnce = (key: string, count: number): void => {
+		const last = lastWarnAt.get(key);
+		if (last !== undefined && now() - last < HARNESS_CONSTANTS.STUCK_WARN_INTERVAL_MS) return;
+		lastWarnAt.set(key, now());
+		warn(`${key} is not responding; skipping new runs until the stuck ones exit`, { executable: key, stuckPids: count });
+	};
+
+	return (command: string, args: readonly string[], options: RunCommandOptions = {}): Promise<CommandResult> =>
+		new Promise((resolve) => {
+			const key = resolveExecutable(command, options.env?.PATH ?? process.env.PATH) ?? command;
+			const stuckNow = stuckCount(key);
+			if (stuckNow > 0) {
+				warnOnce(key, stuckNow);
+				resolve({ code: null, stdout: '', stderr: '', error: `${key} is not responding (an earlier run is still stuck)` });
+				return;
+			}
+			const bounded = Boolean(options.timeoutMs);
+			if (bounded && (inflight.get(key) ?? 0) >= HARNESS_CONSTANTS.MAX_INFLIGHT_PER_EXECUTABLE) {
+				warnOnce(key, 0);
+				resolve({ code: null, stdout: '', stderr: '', error: `${key} is not responding (too many runs in flight)` });
+				return;
+			}
+
+			let stdout = '';
+			let stderr = '';
+			let settled = false;
+			let timer: NodeJS.Timeout | null = null;
+			let released = false;
+			const release = (): void => {
+				if (released || !bounded) return;
+				released = true;
+				inflight.set(key, Math.max(0, (inflight.get(key) ?? 1) - 1));
+			};
+			const finish = (result: CommandResult): void => {
+				if (settled) return;
+				settled = true;
+				if (timer) clearTimeout(timer);
+				release();
+				resolve(result);
+			};
+
+			let child: ReturnType<typeof spawn>;
+			try {
+				child = spawnFn(command, [...args], {
+					env: options.env ?? process.env,
+					...(options.cwd ? { cwd: options.cwd } : {}),
+					stdio: ['pipe', 'pipe', 'pipe'],
+					detached: process.platform !== 'win32',
+				});
+			} catch (error) {
+				resolve({ code: null, stdout: '', stderr: '', error: error instanceof Error ? error.message : String(error) });
+				return;
+			}
+			if (bounded) inflight.set(key, (inflight.get(key) ?? 0) + 1);
+
+			if (options.timeoutMs) {
+				timer = setTimeout(() => {
+					killTree(child);
+					// Remember the group even if the wrapper itself dies: its native
+					// child may be the one that cannot be reaped. stuckCount() drops it
+					// once nothing in the group is left.
+					if (child.pid !== undefined) {
+						const pids = stuck.get(key) ?? new Set<number>();
+						pids.add(child.pid);
+						stuck.set(key, pids);
+					}
+					finish({ code: null, stdout, stderr, error: `timed out after ${options.timeoutMs} ms` });
+				}, options.timeoutMs);
+			}
+
+			child.stdout?.on('data', (chunk: Buffer) => {
+				const text = chunk.toString();
+				stdout += text;
+				options.onOutput?.(text);
+			});
+			child.stderr?.on('data', (chunk: Buffer) => {
+				const text = chunk.toString();
+				stderr += text;
+				options.onOutput?.(text);
+			});
+			child.on('error', (error) => finish({ code: null, stdout, stderr, error: error.message }));
+			child.on('close', (code) => finish({ code, stdout, stderr }));
+
+			child.stdin?.on('error', () => undefined);
+			if (options.stdin !== undefined) {
+				child.stdin?.end(options.stdin);
+			} else {
+				child.stdin?.end();
+			}
+		});
+}
+
 /**
  * Run a command without a shell and collect its output.
  *
- * Never rejects: a spawn failure (ENOENT) or timeout comes back as
+ * Never rejects: a spawn failure (ENOENT), timeout, or a refusal because an
+ * earlier run of the same executable is still stuck comes back as
  * `{ code: null, error }`. The command runs in its own process group and a
  * timeout kills the whole group: harness CLIs such as `codex` are Node
  * wrappers around a native binary, and SIGKILL on the wrapper alone left the
- * native child running forever (hundreds of hung `codex login status`).
- * Secrets must go through `options.stdin`, never through `args`, so they
- * cannot appear in `ps` output.
+ * native child running forever. See {@link createRunCommand} for the
+ * pile-up guard. Secrets must go through `options.stdin`, never through
+ * `args`, so they cannot appear in `ps` output.
  *
  * @param command - Executable
  * @param args - Arguments
  * @param options - env, timeout, stdin, streaming output callback
  * @returns Exit code and output
  */
-export const runCommand: RunCommand = (
-	command: string,
-	args: readonly string[],
-	options: RunCommandOptions = {},
-): Promise<CommandResult> =>
-	new Promise((resolve) => {
-		let stdout = '';
-		let stderr = '';
-		let settled = false;
-		let timer: NodeJS.Timeout | null = null;
-		const finish = (result: CommandResult): void => {
-			if (settled) return;
-			settled = true;
-			if (timer) clearTimeout(timer);
-			resolve(result);
-		};
-
-		let child: ReturnType<typeof spawn>;
-		try {
-			child = spawn(command, [...args], {
-				env: options.env ?? process.env,
-				...(options.cwd ? { cwd: options.cwd } : {}),
-				stdio: ['pipe', 'pipe', 'pipe'],
-				detached: process.platform !== 'win32',
-			});
-		} catch (error) {
-			resolve({ code: null, stdout: '', stderr: '', error: error instanceof Error ? error.message : String(error) });
-			return;
-		}
-
-		if (options.timeoutMs) {
-			timer = setTimeout(() => {
-				killTree(child);
-				finish({ code: null, stdout, stderr, error: `timed out after ${options.timeoutMs} ms` });
-			}, options.timeoutMs);
-		}
-
-		child.stdout?.on('data', (chunk: Buffer) => {
-			const text = chunk.toString();
-			stdout += text;
-			options.onOutput?.(text);
-		});
-		child.stderr?.on('data', (chunk: Buffer) => {
-			const text = chunk.toString();
-			stderr += text;
-			options.onOutput?.(text);
-		});
-		child.on('error', (error) => finish({ code: null, stdout, stderr, error: error.message }));
-		child.on('close', (code) => finish({ code, stdout, stderr }));
-
-		child.stdin?.on('error', () => undefined);
-		if (options.stdin !== undefined) {
-			child.stdin?.end(options.stdin);
-		} else {
-			child.stdin?.end();
-		}
-	});
+export const runCommand: RunCommand = createRunCommand();

@@ -28,6 +28,7 @@ import {
   isAssistantRoom,
   isDirectRequest,
   roomWatcherInstance,
+  roomTakeoverInstance,
   roomOwnerInstance,
   setSlackTeamChannelService,
   isBareMention,
@@ -37,6 +38,7 @@ import {
   type TeamChannelSlackApi,
   type TeamChannelStorageApi,
 } from './slack-team-channel.service.js';
+import { SLACK_TEAM_CHANNEL_CONSTANTS } from '../../constants.js';
 import type { Team, TeamMember } from '../../types/index.js';
 import type { SlackAgentIdentityRecord, SlackIncomingMessage, SlackOutgoingMessage } from '../../types/slack.types.js';
 import type { ChatChannelDTO, ChatMessageDTO } from '../chat-v2/types.js';
@@ -2365,7 +2367,105 @@ describe('who in the room is awake', () => {
       });
     });
 
-    it('only the owner machine watches for an answer: a deferring machine never runs the fallback', async () => {
+    describe('a message deferred to the owner machine that never answers (2026-10-14, #ce-x-wang-law)', () => {
+      const silentDispatcher = () => {
+        // The hand-off reaches an agent; the deferred message itself (the
+        // first call after joinAdhoc, see `deferred`) reaches nobody here.
+        const dispatchMessage = jest.fn(async () => ({ strategy: 'huddle-broadcast', dispatched: true, huddleOutcomes: [{ sessionName: 'crewly-marketing-ella', responseMode: 'required', dispatched: true }] }));
+        dispatcher = { dispatchMessage } as unknown as typeof dispatcher;
+        return dispatchMessage;
+      };
+      const takeoverService = (instanceId: string, local: string, after: Array<{ ts: string; text: string; isBot: boolean; authorName: string }> | null) => {
+        isLocal = (s) => s === local;
+        awake = (s) => s === local;
+        return new SlackTeamChannelService({
+          slack,
+          chat: chat as unknown as TeamChannelChatApi,
+          storage,
+          getDispatcher: () => dispatcher,
+          isAgentAwake: (s) => awake(s),
+          isLocalAgent: (s) => isLocal(s),
+          resolveInstanceId: async () => instanceId,
+          getOwnerUserId: () => 'UOWNER',
+          slackRepliesAfter: async () => after,
+          storePath: path.join(tmpDir, `slack-team-channels-${instanceId}.json`),
+        });
+      };
+      const deferred = (fn: jest.Mock) => fn.mockImplementationOnce(async () => ({ strategy: 'huddle-broadcast', dispatched: false, huddleOutcomes: [] }));
+      const pendingOf = (svc: SlackTeamChannelService) => [...(svc as unknown as { unanswered: Map<string, unknown> }).unanswered.values()];
+
+      it('the one backup machine arms a long takeover watch; the owner machine does not', async () => {
+        const d0 = silentDispatcher();
+        const mac = takeoverService('mac', 'crewly-marketing-ella', []);
+        await joinAdhoc(mac, 'crewly-marketing-ella');
+        deferred(d0);
+        await mac.routeInbound(inbound({ channelId: 'C-mkt', ts: '910.1', userId: 'UOWNER', room: shared() }));
+        expect(pendingOf(mac)).toEqual([expect.objectContaining({ takeover: true })]);
+        mac.stop();
+      });
+
+      it('after ROOM_TAKEOVER_WATCH_MS with no reply in the thread, it hands the message to a local agent', async () => {
+        jest.useFakeTimers();
+        try {
+          const dispatchMessage = silentDispatcher();
+          const mac = takeoverService('mac', 'crewly-marketing-ella', []);
+          await joinAdhoc(mac, 'crewly-marketing-ella');
+          deferred(dispatchMessage);
+          await mac.routeInbound(inbound({ channelId: 'C-mkt', ts: '910.2', userId: 'UOWNER', room: shared() }));
+          const calls = dispatchMessage.mock.calls.length;
+          await jest.advanceTimersByTimeAsync(91_000);
+          expect(dispatchMessage.mock.calls.length).toBe(calls);
+          await jest.advanceTimersByTimeAsync(SLACK_TEAM_CHANNEL_CONSTANTS.ROOM_TAKEOVER_WATCH_MS);
+          expect(dispatchMessage.mock.calls.length).toBe(calls + 1);
+          mac.stop();
+        } finally {
+          jest.useRealTimers();
+        }
+      });
+
+      it('a remote agent\'s reply or "working on it" placeholder counts as held: no takeover', async () => {
+        jest.useFakeTimers();
+        try {
+          const dispatchMessage = silentDispatcher();
+          const mac = takeoverService('mac', 'crewly-marketing-ella', [{ ts: '910.4', text: ':gear: Lead is working on it…', isBot: true, authorName: 'Lead' }]);
+          await joinAdhoc(mac, 'crewly-marketing-ella');
+          deferred(dispatchMessage);
+          await mac.routeInbound(inbound({ channelId: 'C-mkt', ts: '910.3', userId: 'UOWNER', room: shared() }));
+          const calls = dispatchMessage.mock.calls.length;
+          await jest.advanceTimersByTimeAsync(SLACK_TEAM_CHANNEL_CONSTANTS.ROOM_TAKEOVER_WATCH_MS + 1000);
+          expect(dispatchMessage.mock.calls.length).toBe(calls);
+          mac.stop();
+        } finally {
+          jest.useRealTimers();
+        }
+      });
+
+      it('an unreadable thread never triggers a takeover (a second answer is worse)', async () => {
+        jest.useFakeTimers();
+        try {
+          const dispatchMessage = silentDispatcher();
+          const mac = takeoverService('mac', 'crewly-marketing-ella', null);
+          await joinAdhoc(mac, 'crewly-marketing-ella');
+          deferred(dispatchMessage);
+          await mac.routeInbound(inbound({ channelId: 'C-mkt', ts: '910.5', userId: 'UOWNER', room: shared() }));
+          const calls = dispatchMessage.mock.calls.length;
+          await jest.advanceTimersByTimeAsync(SLACK_TEAM_CHANNEL_CONSTANTS.ROOM_TAKEOVER_WATCH_MS + 1000);
+          expect(dispatchMessage.mock.calls.length).toBe(calls);
+          mac.stop();
+        } finally {
+          jest.useRealTimers();
+        }
+      });
+
+      it('roomTakeoverInstance: lowest non-owner machine, never one Cloud marks not live', () => {
+        const m = (instanceId: string, live?: boolean) => ({ agentSession: `a-${instanceId}`, displayName: 'A', instanceId, deviceName: instanceId, awake: true, ...(live === undefined ? {} : { live }) });
+        expect(roomTakeoverInstance({ members: [m('aa'), m('bb'), m('cc')] }, 'aa')).toBe('bb');
+        expect(roomTakeoverInstance({ members: [m('aa'), m('bb', false), m('cc')] }, 'aa')).toBe('cc');
+        expect(roomTakeoverInstance({ members: [m('aa')] }, 'aa')).toBeNull();
+      });
+    });
+
+    it('only the owner machine runs the 90 s fallback: a deferring machine arms only the long takeover watch', async () => {
       const silent = {
         dispatchMessage: jest.fn(async () => ({ strategy: 'huddle-broadcast', dispatched: false, huddleOutcomes: [] })),
       } as unknown as typeof dispatcher;
@@ -2373,7 +2473,7 @@ describe('who in the room is awake', () => {
       const mac = serviceOn('mac', 'crewly-marketing-ella');
       await joinAdhoc(mac, 'crewly-marketing-ella');
       await mac.routeInbound(inbound({ channelId: 'C-mkt', ts: '900.4', userId: 'UOWNER', room: shared() }));
-      expect((mac as unknown as { unanswered: Map<string, unknown> }).unanswered.size).toBe(0);
+      expect([...(mac as unknown as { unanswered: Map<string, { takeover?: boolean }> }).unanswered.values()].every((w) => w.takeover === true)).toBe(true);
       mac.stop();
     });
 
@@ -3974,6 +4074,16 @@ describe('follow-ups of a person-to-person exchange', () => {
     });
   });
 
+  it('an agent of this machine @\'d but outside the room\'s roster is not answered for by the room (2026-10-14, #crewly-marketing: Dana answered "@Pia")', async () => {
+    isLocal = () => true;
+    await service.routeInbound(inbound({ text: '<@UPIA> 这个视频是你剪的吗？', userId: 'UOWNER', ts: '1100.1', mentionedAgentSessions: ['flopost-pia'] }));
+    expect(dispatcher!.dispatchMessage).not.toHaveBeenCalled();
+    expect(infoOf()).toHaveBeenCalledWith(
+      'Slack team message addressed to an agent on another machine — recorded, not dispatched',
+      expect.objectContaining({ mentionedElsewhere: ['flopost-pia'] }),
+    );
+  });
+
   it('an agent that already spoke in the thread does not make a person-to-person follow-up its own', async () => {
     // Info @'d Sam, Sam answered; then Steve and Info talk to each other.
     await service.routeInbound(inbound({ text: '<@USAM> 帮我查一下日历授权', userId: INFO, ts: ROOT_TS }));
@@ -4594,7 +4704,8 @@ describe('one responder per owner message (specs/2026-10-03-one-responder-per-me
       const result = await service.routeInbound(ownerReply({ threadContext: ariaThread(), room: sharedRoom({ aria: false }) }));
       expect(prompts).toEqual([]);
       expect(result!.dispatch?.contextOnly).toEqual([ATLAS, ELLA]);
-      expect(unansweredOf(service).size).toBe(0);
+      // No 90 s watch here; at most the long takeover backup.
+      expect([...unansweredOf(service).values()].every((w) => (w as { takeover?: boolean }).takeover === true)).toBe(true);
       service.stop();
     });
 
@@ -4694,7 +4805,8 @@ describe('one responder per owner message (specs/2026-10-03-one-responder-per-me
       const result = await service.routeInbound(ownerReply({ threadContext: Promise.resolve(null), room: sharedRoom() }));
       expect(prompts).toEqual([]);
       expect(result!.dispatch?.contextOnly).toEqual([ATLAS, ELLA]);
-      expect(unansweredOf(service).size).toBe(0);
+      // No 90 s watch here; at most the long takeover backup.
+      expect([...unansweredOf(service).values()].every((w) => (w as { takeover?: boolean }).takeover === true)).toBe(true);
       service.stop();
     });
 

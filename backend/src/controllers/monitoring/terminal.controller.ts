@@ -47,6 +47,8 @@ import { getInProcessTurnFailureService } from '../../services/agent/in-process-
 import { getActingFor } from '../../services/people/acting-for.service.js';
 import { getOwnerRequestContext } from '../../services/orc/owner-request-context.js';
 import { readAgentSessionHeader } from '../../utils/agent-caller.utils.js';
+import { getTurnTriggerTracker } from '../../services/trace/turn-trigger.js';
+import { getAgentAskLedger } from '../../services/messaging/agent-ask-ledger.service.js';
 import { getCallerIdentity, isOwnerCaller } from '../../middleware/caller-identity.middleware.js';
 import { pausedRefusalMessage, pausedTeamOfSession } from '../../services/team/team-pause.registry.js';
 import { noteTurnDelivery, withWorkItemTraceMarker } from '../../services/trace/trace-recorder.js';
@@ -1667,14 +1669,25 @@ export function rejectMessageToPausedTeam(target: string, req: Request, res: Res
  * After a message from one agent to another, the target acts for the same
  * person the sender acts for (issue #968). The sender comes from the request's
  * agent session (corrected by the agent-origin middleware), never the body.
+ * The text is noted as that sender's, for the reply's "Triggered by" line.
  *
  * @param target - Receiving session
- * @param req - The request
+ * @param req - The request (headers; body for the message text)
  */
-export function noteAgentToAgent(target: string, req: Pick<Request, 'headers'>): void {
+export function noteAgentToAgent(target: string, req: Pick<Request, 'headers'> & { body?: unknown }): void {
 	try {
 		const sender = readAgentSessionHeader(req);
 		if (!sender || sender === target) return;
+		// Who sent it, so the reply the target posts can say "Triggered by <sender>'s message".
+		const body = (req.body ?? {}) as Record<string, unknown>;
+		const text = typeof body.message === 'string' ? body.message : body.mode === 'message' && typeof body.data === 'string' ? body.data : null;
+		if (text) getTurnTriggerTracker().noteSender(target, text, sender);
+		// Writing to an agent answers what that agent asked this one.
+		try {
+			getAgentAskLedger()?.noteAnswered(sender, target);
+		} catch {
+			/* best effort */
+		}
 		// A hand-over of the owner's request: work the target creates from it
 		// keeps the owner origin, so its completion is reported to the owner.
 		try {

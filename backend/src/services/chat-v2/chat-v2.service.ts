@@ -15,7 +15,7 @@ import { ChannelStore } from './sqlite/channel.store.js';
 import { EventEmitter } from 'events';
 import { MessageStore } from './sqlite/message.store.js';
 import { redactOpenLinkTokens } from '../apps/app-open-link.js';
-import { CHAT_SEARCH_CONSTANTS } from '../../constants.js';
+import { CHAT_SEARCH_CONSTANTS, TURN_TRIGGER_CONSTANTS } from '../../constants.js';
 import { openChatDatabase, type ChatDatabase } from './sqlite/chat-db.js';
 import { CloudOutboxStore } from './sqlite/cloud-outbox.store.js';
 import { reclassifyOwnerSlackRows, type OwnerIdentity } from './sqlite/unified-log.js';
@@ -220,6 +220,11 @@ export interface SendMessageArgs {
    * channel before persisting.
    */
   threadId?: string;
+  /**
+   * Why an agent posted ("Triggered by" provenance, turn-trigger.ts). Only
+   * honoured for agent senders; stored as `metadata.triggeredBy`.
+   */
+  triggeredBy?: Record<string, unknown>;
 }
 
 /**
@@ -1900,10 +1905,11 @@ export class ChatV2Service extends EventEmitter {
       nowMs: this.now(),
       ...(agentAuthoredAsUser
         ? { metadata: { [OWNER_EVIDENCE_METADATA.AUTHOR_AGENT_SESSION]: args.principal.agentSession } }
-        : senderType === 'agent' && (args.interim || slackKey)
+        : senderType === 'agent' && (args.interim || slackKey || args.triggeredBy)
           ? {
               metadata: {
                 ...(args.interim ? { [SLACK_TYPING_CONSTANTS.INTERIM_METADATA_KEY]: true } : {}),
+                ...(args.triggeredBy ? { [TURN_TRIGGER_CONSTANTS.METADATA_KEY]: args.triggeredBy } : {}),
                 ...(slackKey
                   ? { [SLACK_THREAD_KEY_CONSTANTS.METADATA_KEY]: formatSlackThreadKey(slackKey.slackChannelId, slackKey.threadTs) }
                   : {}),

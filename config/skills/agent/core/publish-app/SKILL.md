@@ -305,7 +305,17 @@ The page runs in a **sandboxed iframe** on a phone. Inside it:
 | `crewly.me()` | the signed-in owner |
 | `crewly.notify(text)` | sends you a message (≤ 4000 chars) |
 | `crewly.ask(agentName, text)` | sends that agent a message |
+| `crewly.decide({ action, question?, approveLabel?, declineLabel? })` | asks the owner to approve one action in Crewly's own prompt (see below); resolves `{ outcome: 'approved' \| 'declined' \| 'dismissed', decisionId? }` |
 | `crewly.shell.openExternal(url)` | opens an external web page in a new tab (see below); resolves `{ opened, url }` |
+
+**Owner approval from the app.** When the app collects a go-ahead for something you will do
+outside it (publish a post, send an email, spend money), call `crewly.decide` from the tap
+handler: `await crewly.decide({ action: 'Publish the CPT lawsuit post on X', approveLabel: '上线' })`.
+Crewly's shell, not your page, shows the prompt and records the owner's click, so it reaches
+you as `[APP DECISION] The owner APPROVED "<action>"` inside the `[APP CHANGES]` message. That
+is the owner's approval for that action as worded, once. Name one concrete action per call.
+A field the page sets in app data is not approval in the same way: your page code writes as
+the owner too. Needs the Apps shell with crewly-services #110.
 
 **Links to other websites.** An app runs in a sandbox, so `<a href target=_blank>` and
 `window.open` do nothing. Call `crewly.shell.openExternal(url)` from the tap/click handler

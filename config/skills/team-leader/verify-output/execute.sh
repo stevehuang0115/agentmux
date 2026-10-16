@@ -39,8 +39,8 @@ WI_OUTPUT_RAW=$(echo "$WI_DATA" | jq -c '.data.output // empty' 2>/dev/null || t
 # Evidence first (#873). The worker's completion carries an evidence block
 # (artifacts that exist, commands with exit codes, or blocked steps), stored
 # at output.evidence. Read it before anything else, and flag an item that was
-# marked done WITHOUT evidence — accepted only because the server is in warn
-# mode this release — so it is not verified on its summary alone.
+# marked done WITHOUT evidence — possible only with CREWLY_EVIDENCE_MODE=warn
+# or on an item completed before #1312 — so it is not verified on its summary alone.
 WI_FOUND=$(echo "$WI_DATA" | jq -r 'if (.data // null) != null then "yes" else "no" end' 2>/dev/null || echo "no")
 WI_EVIDENCE=$(echo "$WI_DATA" | jq -c 'if (.data.output.evidence | type) == "array" then .data.output.evidence else [] end' 2>/dev/null || echo '[]')
 EVIDENCE_WARNING=""
@@ -359,7 +359,8 @@ jq -n \
   --arg workerId "$WORKER_ID" \
   --arg templateId "$TEMPLATE_ID" \
   '{
-    evidence: $evidence,
+    evidence: ($evidence | to_entries | map(.value + {index: .key})),
+    acceptWith: "complete-task with \"verdict\":\"verified\" and \"checks\":[{\"entry\":<evidence index, or null for a direct look>,\"did\":\"<what you did and saw>\",\"outcome\":\"pass\"}] (#1314)",
     evidenceWarning: (if $evidenceWarning != "" then $evidenceWarning else null end),
     passed: ($passed == "true"),
     score: ($score | tonumber),

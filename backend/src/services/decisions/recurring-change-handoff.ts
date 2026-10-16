@@ -56,6 +56,19 @@ export function termsOf(text: string): Set<string> {
 }
 
 /**
+ * Terms that say what a text is about: {@link termsOf} without the when-words
+ * (every morning, daily, Monday...) that unrelated jobs share.
+ *
+ * @param text - Any text
+ * @returns Lower-cased distinct subject terms
+ */
+export function subjectTermsOf(text: string): Set<string> {
+	const out = termsOf(text.replace(C.GENERIC_CADENCE_PATTERN, ' '));
+	for (const w of C.GENERIC_CADENCE_WORDS) out.delete(w);
+	return out;
+}
+
+/**
  * The part of a schedule label that names the job: its name and the start of
  * its title, up to the first `:` / `(` / sentence end. The rest of a label is
  * the job's instructions (hundreds of words), whose common words made any
@@ -110,11 +123,11 @@ export function scheduleOfDecision(d: OwnerDecision, schedules: readonly Recurri
 	// The card says what it is about; the owner's free-text answer (often a long
 	// voice transcript) says what they want, and its common words match any job.
 	const text = [d.question, ...d.options.map((o) => `${o.label} ${o.detail ?? ''}`)].join(' ');
-	const have = termsOf(text);
+	const have = subjectTermsOf(text);
 	let best: { s: RecurringSchedule; coverage: number } | null = null;
 	for (const s of schedules) {
 		if (s.owner === d.asker || s.owner === d.requestedBy) continue;
-		const terms = termsOf(identityOf(s.label));
+		const terms = subjectTermsOf(identityOf(s.label));
 		if (terms.size === 0) continue;
 		const shared = [...terms].filter((t) => have.has(t)).length;
 		const coverage = shared / terms.size;

@@ -637,6 +637,9 @@ export class SlackTypingPlaceholderService {
           ...principalOf(identity),
           senderSession: key.agentSession,
           skipChatV2Mirror: true,
+          // An interim note: the answer is still owed, so the unanswered
+          // watchdog must keep waiting for it.
+          ...(opts.reopen ? { notAnAnswer: true } : {}),
         });
         if (postedTs) opts.onMessageTs?.(postedTs);
         if (oldest && this.deps.slack.deleteMessage) {

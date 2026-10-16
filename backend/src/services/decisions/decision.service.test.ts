@@ -127,7 +127,7 @@ describe('listSince (Settings › Security)', () => {
     const h = await harness();
     const old = await h.service.ask('crewly-orc', ticketAsk);
     h.clock.now = new Date(2026, 9, 9, 10, 0, 0);
-    const fresh = await h.service.ask('crewly-orc', { ...ticketAsk, question: 'Send the follow-up email to the partners on Friday?' });
+    const fresh = await h.service.ask('crewly-orc', { ...ticketAsk, ticket: 'APP-13', question: 'Send the follow-up email to the partners on Friday?' });
     const since = new Date(2026, 9, 5).getTime();
     expect((await h.service.listSince(since)).map((d) => d.id).sort()).toEqual([old.id, fresh.id].sort());
     await h.service.cancelWhere((d) => d.id === old.id);
@@ -201,6 +201,35 @@ describe('ask + routing', () => {
     // after the window the either/or is accepted
     h.clock.now = new Date(h.clock.now.getTime() + DECISION_CONSTANTS.EITHER_OR_WINDOW_MS + 1000);
     await h.service.ask('dev-ann', { ...yn, question: '还是先按现在的版本试一周再看？', deadline: new Date(h.clock.now.getTime() + 3_600_000).toISOString() });
+  });
+
+  it('a short ticket question gets the ticket title in front of it; a self-explaining one is left alone', async () => {
+    const h = await harness();
+    const short = await h.service.ask('dev-ann', { ...ticketAsk, question: 'Ship it Monday?' });
+    expect(short.question).toBe('Partner outreach email — Ship it Monday?');
+    const long = await h.service.ask('dev-ann', { ...ticketAsk, ticket: 'APP-13', question: 'Send the draft to the 3 partners on Monday?' });
+    expect(long.question).toBe('Send the draft to the 3 partners on Monday?');
+  });
+
+  it('one open card per ticket: a newer card withdraws the older one (TKT-357: 11 cards in 105 min)', async () => {
+    const h = await harness();
+    const first = await h.service.ask('dev-ann', { ...ticketAsk, question: 'Send the draft to the 3 partners on Monday?' });
+    h.clock.now = new Date(h.clock.now.getTime() + 10 * 60_000);
+    const second = await h.service.ask('dev-ann', { ...ticketAsk, question: 'Use the long or the short partner email?', options: ['Long', 'Short'], default: 'Short' });
+    expect(await h.service.get(first.id)).toMatchObject({ status: 'cancelled', closedReason: `superseded by ${second.id}` });
+    expect(await h.service.get(second.id)).toMatchObject({ status: 'open' });
+    // Another ticket's card is untouched.
+    const other = await h.service.ask('dev-ann', { ...ticketAsk, ticket: 'APP-13', question: 'Ship the release notes on Friday?' });
+    expect(await h.service.get(second.id)).toMatchObject({ status: 'open' });
+    expect(await h.service.get(other.id)).toMatchObject({ status: 'open' });
+  });
+
+  it('cards asked together (one reply) stay side by side', async () => {
+    const h = await harness();
+    const a = await h.service.ask('dev-ann', { ...ticketAsk, question: 'Send the draft to the 3 partners on Monday?' });
+    const b = await h.service.ask('dev-ann', { ...ticketAsk, question: 'Use the long or the short partner email?', options: ['Long', 'Short'], default: 'Short' });
+    expect(await h.service.get(a.id)).toMatchObject({ status: 'open' });
+    expect(await h.service.get(b.id)).toMatchObject({ status: 'open' });
   });
 
   it('one multiple-choice card with 4 options is posted with one button per option and records the chosen label', async () => {
@@ -558,6 +587,21 @@ describe('thread answers: voice notes, files, DM threads (specs/2026-10-02-decis
     expect(again.reused).toBe(true);
     expect(h.slack.sent).toHaveLength(posted);
     expect((await h.service.list('all')).map((d) => d.id)).toEqual([d51.id]);
+  });
+  it('a newer question card for the same ticket withdraws the older one; siblings made together stay', async () => {
+    const h = await harness();
+    const deadline = new Date(h.clock.now.getTime() + 26 * HOUR);
+    const q1 = await h.service.askPrebuilt({ ...d52, question: '周报要不要改成每周一早上发？', requestRef: { requestId: 'r', itemId: 'q-1' }, deadline });
+    const sibling = await h.service.askPrebuilt({ ...d52, question: '周报要不要抄送给销售团队吗？', requestRef: { requestId: 'r', itemId: 'q-2' }, deadline });
+    expect(await h.service.get(q1.id)).toMatchObject({ status: 'open' });
+    h.clock.now = new Date(h.clock.now.getTime() + 20 * 60_000);
+    const later = await h.service.askPrebuilt({ ...d52, question: '封面用 F2c 还是 F3 这个版本好？', requestRef: { requestId: 'r', itemId: 'q-3' }, deadline });
+    expect(await h.service.get(q1.id)).toMatchObject({ status: 'cancelled', closedReason: `superseded by ${later.id}` });
+    expect(await h.service.get(sibling.id)).toMatchObject({ status: 'cancelled' });
+    expect(await h.service.get(later.id)).toMatchObject({ status: 'open' });
+    const otherTicket = await h.service.askPrebuilt({ ...d52, question: '另一个工单的问题是不是这样处理？', requestRef: { requestId: 'other', itemId: 'q-9' }, deadline });
+    expect(await h.service.get(later.id)).toMatchObject({ status: 'open' });
+    expect(await h.service.get(otherTicket.id)).toMatchObject({ status: 'open' });
   });
   it('a voice message with no text answers the NEWEST open card "in thread"; the other stays open and its asker hears about the file in the same note', async () => {
     const h = await harness();

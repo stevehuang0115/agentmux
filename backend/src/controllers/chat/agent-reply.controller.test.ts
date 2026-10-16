@@ -237,7 +237,17 @@ describe('POST /api/chat/reply', () => {
     const r = req({ content: 'On it.' }, 'crewly-orc');
     await createAgentReplyHandler(deps)(r, res, next);
     expect(agentResponse).toHaveBeenCalled();
-    expect(r.body).toEqual(expect.objectContaining({ senderType: 'orchestrator', conversationId: 'conv-orc' }));
+    // Unnamed: the harness places the post (agent-response defaults to the turn origin).
+    expect(r.body).toEqual(expect.objectContaining({ senderType: 'orchestrator' }));
+    expect(r.body.conversationId).toBeUndefined();
+  });
+
+  it('the orchestrator\'s named thread and work item are passed on for placement', async () => {
+    const { deps, agentResponse } = makeDeps();
+    const r = req({ content: 'Owen is done.', thread: 'C0X:1790.1', workItemId: 'wi-1' }, 'crewly-orc');
+    await createAgentReplyHandler(deps)(r, mockRes(), next);
+    expect(agentResponse).toHaveBeenCalled();
+    expect(r.body).toEqual(expect.objectContaining({ slackThread: 'C0X:1790.1', workItemId: 'wi-1' }));
   });
 
   it('rejects anonymous calls and empty text', async () => {

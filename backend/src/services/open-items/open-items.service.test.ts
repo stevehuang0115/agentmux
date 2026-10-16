@@ -1216,10 +1216,10 @@ describe('stale commitments are re-checked before they are resurfaced (TKT-334, 
 
   it('old but still valid: the nudge tells the agent to verify before contacting the owner', async () => {
     const h = harness();
-    const t = await oldPromise(h);
+    const t = await oldPromise(h, { createdAt: new Date(h.clock.now.getTime() - 30 * HOUR).toISOString(), due: new Date(h.clock.now.getTime() - 6 * HOUR).toISOString() });
     await h.service.sweep();
     expect(h.woken).toHaveLength(1);
-    expect(h.woken[0].text).toContain('This is from 2026-09-26. Before contacting the owner, verify it is still needed');
+    expect(h.woken[0].text).toContain('This is from 2026-09-30. Before contacting the owner, verify it is still needed');
     expect(h.woken[0].text).toContain('Sent folder and existing drafts (you have read access)');
     expect(h.woken[0].text).toContain('close it without messaging the owner');
     expect((await h.requests.getById(t.id))!.openItems![0].status).toBe('overdue');
@@ -1236,12 +1236,48 @@ describe('stale commitments are re-checked before they are resurfaced (TKT-334, 
 
   it('the child work finishing after days wakes the agent with the verify-first notice', async () => {
     const h = harness();
-    const t = await oldPromise(h, { childWorkItemIds: ['28b09370-7751-4963-8ba8-4836a2ccc7d0'], due: new Date(h.clock.now.getTime() + DAY).toISOString() });
+    const t = await oldPromise(h, {
+      createdAt: new Date(h.clock.now.getTime() - 30 * HOUR).toISOString(),
+      childWorkItemIds: ['28b09370-7751-4963-8ba8-4836a2ccc7d0'],
+      due: new Date(h.clock.now.getTime() + DAY).toISOString(),
+    });
     const wi = kaiWork(h, t.id, 'verified');
     wi.completedAt = h.clock.now.toISOString();
     await h.service.onWorkItemSettled(wi.id);
     expect(h.woken).toHaveLength(1);
     expect(h.woken[0].text).toContain('Before contacting the owner, verify it is still needed');
+  });
+
+  it('reminders carry the attempt, the request age and the never-re-post rule', async () => {
+    const h = harness();
+    await oldPromise(h, { createdAt: new Date(h.clock.now.getTime() - 30 * HOUR).toISOString(), due: new Date(h.clock.now.getTime() - HOUR).toISOString() });
+    await h.service.sweep();
+    expect(h.woken[0].text).toContain('Automatic reminder 1 of 2');
+    expect(h.woken[0].text).toContain('the original request was 30 h ago');
+    expect(h.woken[0].text).toContain('send NOTHING to the owner');
+    expect(h.woken[0].text).toContain('Never re-post');
+  });
+
+  it('past the reminder cutoff: the team lead is told once, the agent is not woken, the owner hears nothing', async () => {
+    const lead: Array<{ agent: string; text: string }> = [];
+    const h = harness({
+      notifyLead: async (agent, text) => {
+        lead.push({ agent, text });
+        return true;
+      },
+    });
+    const t = await oldPromise(h, { createdAt: new Date(h.clock.now.getTime() - 3 * DAY).toISOString(), due: new Date(h.clock.now.getTime() - 2 * DAY).toISOString() });
+    await h.service.sweep();
+    h.clock.now = new Date(h.clock.now.getTime() + 3 * HOUR);
+    await h.service.sweep();
+    h.clock.now = new Date(h.clock.now.getTime() + 3 * HOUR);
+    await h.service.sweep();
+    expect(h.woken).toEqual([]);
+    expect(h.ownerNotes).toEqual([]);
+    expect(lead).toHaveLength(1);
+    expect(lead[0].agent).toBe(ATLAS);
+    expect(lead[0].text).toContain('[STALE ITEM]');
+    expect((await h.requests.getById(t.id))!.openItems![0].leadNotifiedAt).toBeDefined();
   });
 
   it('a restart does not replay a superseded old promise, and a valid old one carries the notice', async () => {

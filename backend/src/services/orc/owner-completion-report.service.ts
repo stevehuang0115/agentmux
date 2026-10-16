@@ -41,6 +41,7 @@ import * as path from 'path';
 import { ORCHESTRATOR_SESSION_NAME, OWNER_COMPLETION_REPORT_CONSTANTS as C } from '../../constants.js';
 import type { WorkItem, WorkItemStatus } from '../../types/v2/work-item.types.js';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
+import { isPastReminderCutoff, leadStaleNotice, reminderFooter } from './harness-reminder.js';
 import { originOfWorkItem, type WorkItemOrigin } from './work-item-destination.js';
 
 /** An owner origin. */
@@ -254,6 +255,8 @@ export interface OwnerCompletionReportDeps {
   resolvePlace: (origin: OwnerOrigin) => Promise<ReportPlace | null>;
   /** Post the harness's own summary in that place, as the agent when possible; true when posted */
   postFallback: (place: ReportPlace, agentSession: string, text: string) => Promise<boolean>;
+  /** Tell the responsible agent's team lead something (finished work too old to ask a report for); false when it could not */
+  notifyLead?: (agentSession: string, text: string) => Promise<boolean>;
   /** Display name of an agent */
   displayNameOf?: (session: string) => string;
   /** The app-comments command agents run (`bash <skills>/core/app-comments/execute.sh`) */
@@ -461,6 +464,19 @@ export class OwnerCompletionReportService {
       this.end(record, 'answered', now);
       return;
     }
+    // Finished too long ago to ask the agent now (a restart, a long outage): the lead decides, the
+    // owner is not told about old work as if it were new.
+    if ((record.stage === 'settling' || record.stage === 'asked') && isPastReminderCutoff(record.finishedAt, now)) {
+      const lead = await this.deps
+        .notifyLead?.(
+          record.responsible,
+          leadStaleNotice(`finished owner work without a report to the owner (${record.titles})`, record.responsible, record.finishedAt, now),
+        )
+        .catch(() => false);
+      this.log.info('Finished owner work is too old to ask for a report; team lead told instead', { key: record.key, agent: record.responsible, lead: lead ?? false });
+      this.end(record, 'skipped', now);
+      return;
+    }
     switch (record.stage) {
       case 'settling': {
         if (now - record.closedSince < C.SETTLE_MS) return;
@@ -520,7 +536,7 @@ export class OwnerCompletionReportService {
    * @param reminder - The second (last) ask
    * @returns English harness text
    */
-  askText(record: ChainReportRecord, place: ReportPlace, reminder: boolean): string {
+  askText(record: ChainReportRecord, place: ReportPlace, reminder: boolean, now: number = Date.now()): string {
     const cmd =
       place.kind === 'app-comment'
         ? `${this.deps.appCommentsCmd ?? 'app-comments'} --app ${place.appId} --reply ${place.commentId} --text "<summary + where the files are>"`
@@ -529,7 +545,10 @@ export class OwnerCompletionReportService {
     const tail = reminder
       ? ` The owner has still not been told. If nothing is posted there within ${Math.round(C.REPORT_WAIT_MS / 60_000)} minutes, Crewly posts a short summary there for you.`
       : ' Write it for the owner: what was done, the result, and where the files are. One message; the owner only reads it.';
-    return `${head} The work the owner asked for in ${place.label} is finished (${record.titles}). Report the result to the owner there now: ${cmd}.${tail}`;
+    return (
+      `${head} The work the owner asked for in ${place.label} is finished (${record.titles}). Report the result to the owner there now: ${cmd}.${tail}` +
+      reminderFooter(reminder ? 2 : 1, record.finishedAt, now)
+    );
   }
 
   /**

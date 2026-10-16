@@ -406,8 +406,8 @@ describe('ProjectTicketWorkflowService', () => {
     });
 
     it('syncAll sweeps every project', async () => {
-      const a = await started();
-      const b = await started();
+      const a = await started({ title: 'First sweep ticket' });
+      const b = await started({ title: 'Second sweep ticket' });
       pool.set(a.workItem.id, { status: 'done' });
       pool.set(b.workItem.id, { status: 'cancelled' });
       expect(await wf.syncAll()).toBe(2);

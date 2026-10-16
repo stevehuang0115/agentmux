@@ -1497,12 +1497,20 @@ export const COMPLETION_EVIDENCE_CONSTANTS = {
 	/** The two rollout modes for a completion that carries no evidence. */
 	MODES: ['warn', 'enforce'] as readonly string[],
 	/**
-	 * Default mode for a completion with no evidence. `warn` (this release):
-	 * accepted, logged, and the response carries a `warning`. `enforce` (next
-	 * release): 400. Malformed evidence, missing artifacts, failing commands and
-	 * `blocked` entries are handled the same in both modes.
+	 * Default mode for a completion with no evidence. `enforce` (default since
+	 * #1312): 400 `evidence_required`. `warn` (the escape hatch, set with
+	 * {@link ENV_MODE}): accepted, logged, and the response carries a `warning`.
+	 * Malformed evidence, missing artifacts, failing commands and `blocked`
+	 * entries are handled the same in both modes.
 	 */
-	EVIDENCE_ENFORCEMENT_MODE: 'warn' as 'warn' | 'enforce',
+	EVIDENCE_ENFORCEMENT_MODE: 'enforce' as 'warn' | 'enforce',
+	/**
+	 * WorkItem types whose completion must carry evidence: a worker's
+	 * deliverable. Every other type is harness bookkeeping (triage, replans,
+	 * retros, reconciles, notifications) and may complete without it. An item
+	 * with no known type is treated as a deliverable.
+	 */
+	REQUIRED_FOR_TYPES: ['delegate', 'project_task', 'review'] as readonly string[],
 	/** Env var that overrides {@link EVIDENCE_ENFORCEMENT_MODE} (`warn` | `enforce`). */
 	ENV_MODE: 'CREWLY_EVIDENCE_MODE',
 	/** Most evidence entries accepted on one completion. */
@@ -1518,8 +1526,28 @@ export const COMPLETION_EVIDENCE_CONSTANTS = {
 		MISSING: 'evidence_required',
 		ARTIFACT_NOT_FOUND: 'evidence_artifact_not_found',
 		ARTIFACT_UNRESOLVABLE: 'evidence_artifact_relative_path',
+		ARTIFACT_EMPTY: 'evidence_artifact_empty',
+		ARTIFACT_STALE: 'evidence_artifact_stale',
 		COMMAND_FAILED: 'evidence_command_failed',
+		REVIEW_UNCHECKED: 'review_unchecked',
+		REVIEW_CHECKS_MALFORMED: 'review_checks_malformed',
+		REVIEW_CHECK_FAILED: 'review_check_failed',
 	},
+	/** Worker evidence entries listed, numbered, in a review item's description (#1314). */
+	REVIEW_LISTED_ENTRIES: 10,
+	/** Outcomes a reviewer records for one check (#1314). */
+	CHECK_OUTCOMES: ['pass', 'fail'] as readonly string[],
+	/** The shape of a reviewer's check record, quoted in every refusal (#1314). */
+	CHECKS_HINT:
+		'Send body.result.checks: an array of {"entry":<index in the worker\'s output.evidence, or null for a direct look at the work>,' +
+		'"did":"<what you did: opened it and read X / re-ran it, exit 0 / looked at the page>","outcome":"pass"|"fail"}. ' +
+		'At least one check must name a worker evidence entry when there is any. A failed check cannot be accepted: send it back with {"verdict":"rejected","feedback":"..."}.',
+	/**
+	 * A local file artifact last modified more than this before its WorkItem
+	 * was created is stale: it was not made for this task (#1313). The slack
+	 * covers clock skew and a file saved just before the item was filed.
+	 */
+	STALE_GRACE_MS: 5 * 60_000,
 	/** The shape a worker must send, quoted in every rejection and warning. */
 	SHAPE_HINT:
 		'Send body.result.evidence: an array of {"type":"artifact","path":"<existing file or https URL>"}, ' +
@@ -2124,6 +2152,16 @@ export const SLACK_TEAM_CHANNEL_CONSTANTS = {
 	 * that agent, told only optionally, stays quiet (2026-09-30, Think Tank room).
 	 */
 	ROOM_UNANSWERED_FALLBACK_MS: 90 * 1000,
+	/**
+	 * How long the one backup machine of a shared room waits, for an owner
+	 * message it deferred to the room's owner machine, before handing it to
+	 * its own best responder. The owner machine's agent normally answers
+	 * (or shows "working on it") well inside this; it only fires when that
+	 * agent never replied (2026-10-14, #ce-x-wang-law: the owner machine's
+	 * runtime was broken and nobody answered). Longer than the 90 s fallback
+	 * on purpose: the owner machine runs its own 90 s fallback first.
+	 */
+	ROOM_TAKEOVER_WATCH_MS: 10 * 60 * 1000,
 	/**
 	 * Pending unanswered-message watches survive a restart in this file
 	 * (under CREWLY_HOME): a watch armed seconds before a restart would
@@ -6118,6 +6156,14 @@ export const HARNESS_CONSTANTS = {
 	LATEST_VERSION_FAILURE_TTL_MS: 5 * 60 * 1000,
 	/** Timeout for short probe commands (which, --version, login status) */
 	PROBE_TIMEOUT_MS: 15_000,
+	/**
+	 * Guard against probe pile-ups (500 hung `codex` on one Mac). Concurrent
+	 * timeout-bounded runs allowed per executable; beyond it `runCommand`
+	 * fails fast instead of spawning.
+	 */
+	MAX_INFLIGHT_PER_EXECUTABLE: 4,
+	/** Minimum gap between "executable is stuck" warnings, per executable (ms) */
+	STUCK_WARN_INTERVAL_MS: 30 * 60 * 1000,
 	/** Timeout for `npm view` */
 	NPM_VIEW_TIMEOUT_MS: 20_000,
 	/** Timeout for one `npm install -g` attempt */
@@ -6983,6 +7029,13 @@ export const DECISION_CONSTANTS = {
 	MAX_OPTIONS: 5,
 	/** Two yes/no asks on one ticket this close together that read as either/or are rejected (ms) */
 	EITHER_OR_WINDOW_MS: 60 * 1000,
+	/** A ticket's question shorter than this (characters) gets the ticket title prepended so the card says what is decided */
+	CONTEXT_FREE_QUESTION_CHARS: 20,
+	/**
+	 * A new card for a ticket withdraws the ticket's older open cards (one open card per ticket; TKT-357 had
+	 * 11 in 105 min). Cards made less than this long before the new one belong to the same reply and stay (ms)
+	 */
+	SAME_REPLY_WINDOW_MS: 2 * 60 * 1000,
 	/** Max characters of an option label (Slack button text max is 75) */
 	OPTION_LABEL_MAX_CHARS: 40,
 	/** Max characters of an option's optional detail line */
@@ -7294,6 +7347,37 @@ export const REPLY_ROUTING_CONSTANTS = {
 	PROJECT_TICKET_PATTERN: /^[A-Z][A-Z0-9]{0,9}-\d+$/,
 	/** Decision ids (`D-12`) */
 	DECISION_PATTERN: /^D-\d+$/i,
+} as const;
+
+/**
+ * "Triggered by" provenance on agent messages (agent-provenance audit
+ * 2026-10-14): what started the turn an agent posted from, stored on the chat
+ * row and shown as one muted line when the post is not a direct answer to the
+ * owner's message in the same conversation.
+ */
+export const TURN_TRIGGER_CONSTANTS = {
+	/** chat-v2 message metadata key holding the provenance record */
+	METADATA_KEY: 'triggeredBy',
+	/** A turn's trigger is used for posts this long after the delivery (ms); older posts get no line */
+	FRESH_MS: 6 * 60 * 60 * 1000,
+	/** An agent-to-agent send is matched to its delivery for this long (queued messages arrive later) (ms) */
+	SENDER_MATCH_MS: 24 * 60 * 60 * 1000,
+	/** A post into a conversation where the owner wrote to the agent this recently is an answer: no line (ms) */
+	OWNER_ANSWER_WINDOW_MS: 30 * 60 * 1000,
+	/** Agent-to-agent sends remembered per target */
+	MAX_SENDERS_PER_TARGET: 20,
+	/** Characters of a sent text used to recognise it in the delivered prompt */
+	SENDER_MATCH_CHARS: 160,
+	/** A sender counts as an agent only with a session-shaped name (harness services send `WorkItemDispatch` etc.) */
+	AGENT_SESSION_PATTERN: /^[a-z0-9][a-z0-9_-]*$/,
+	/** Agents listed in a hand-off chain */
+	MAX_VIA_AGENTS: 4,
+	/** Characters of a work-item title quoted in the line */
+	MAX_TITLE_CHARS: 60,
+	/** Opening of the rendered line (Slack mrkdwn / chat markdown italics) */
+	LINE_PREFIX: '_↳ Triggered by ',
+	/** Closing of the rendered line */
+	LINE_SUFFIX: '_',
 } as const;
 
 /**
@@ -7957,6 +8041,54 @@ export const RECONCILER_WAKE_CONSTANTS = {
 	 * the reconciler must not stall every other rule meanwhile, nor ask again.
 	 */
 	START_AWAIT_MS: 15_000,
+	/**
+	 * Wait after a SUCCESSFUL wake before the same session + WorkItem is woken again (ms). Failed wakes
+	 * were paced (CREW-304) but successful ones were not: a WorkItem that stayed queued after its
+	 * wake "worked" got a wake every pass (637 wakes for one agent in ~2h, 2026-10-07).
+	 */
+	SUCCESS_BACKOFF_BASE_MS: 2 * 60_000,
+	/** Ceiling of the doubling success backoff (ms) */
+	SUCCESS_BACKOFF_MAX_MS: 60 * 60_000,
+	/** At most this many successful wakes per session inside {@link SESSION_WAKE_WINDOW_MS}, whatever the WorkItem */
+	MAX_WAKES_PER_SESSION_PER_WINDOW: 6,
+	/** Rolling window of {@link MAX_WAKES_PER_SESSION_PER_WINDOW} (ms) */
+	SESSION_WAKE_WINDOW_MS: 60 * 60_000,
+} as const;
+
+/**
+ * Creation-time dedupe (audit 2026-10-14): tickets CE-169..176 were created as four pairs within 90s,
+ * one promise became ten "Follow through" WorkItems, and 93 identical agent-to-agent messages were
+ * resent within 5 minutes. The same creator making the same thing again inside the window gets the
+ * existing one back.
+ */
+export const DUPLICATE_CREATION_CONSTANTS = {
+	/** Same creator + same normalized title for a project ticket within this long is the same ticket (ms) */
+	TICKET_WINDOW_MS: 10 * 60 * 1000,
+	/** Same creator + target + normalized title for a WorkItem within this long is the same WorkItem (ms) */
+	WORK_ITEM_WINDOW_MS: 10 * 60 * 1000,
+	/** One harness "Follow through" WorkItem per target + promise text within this long, whatever its status (ms) */
+	FOLLOW_THROUGH_WINDOW_MS: 24 * 60 * 60 * 1000,
+	/** An identical agent message to the same target within this long is dropped (ms) */
+	AGENT_MESSAGE_WINDOW_MS: 5 * 60 * 1000,
+	/** Messages shorter than this (characters, normalized) are never treated as duplicates ("ok", "thanks") */
+	AGENT_MESSAGE_MIN_CHARS: 20,
+	/** Senders whose repeats are deliberate redeliveries paced elsewhere (the reconciler) */
+	AGENT_MESSAGE_EXEMPT_SENDERS: ['WorkItemDispatch'] as readonly string[],
+	/** Most message fingerprints kept in memory */
+	AGENT_MESSAGE_MAX_TRACKED: 2000,
+} as const;
+
+/**
+ * Harness reminders (follow-up, owner report due, follow-through). A reminder says which attempt it
+ * is and how old the original request is, tells the agent not to re-post what the owner already has,
+ * and stops once the request is too old (audit 2026-10-14: 317 reminders in 7 days, 77 sent more
+ * than 24h after the request).
+ */
+export const HARNESS_REMINDER_CONSTANTS = {
+	/** Reminders sent for one item before the harness stops (the first prompt counts as attempt 1) */
+	MAX_REMINDERS_PER_ITEM: 2,
+	/** A request older than this is not reminded about; the team lead is told once instead (ms) */
+	CUTOFF_MS: 48 * 60 * 60 * 1000,
 } as const;
 
 /**
@@ -8635,6 +8767,15 @@ export const RECURRING_CHANGE_HANDOFF_CONSTANTS = {
 	MIN_WORD_CHARS: 3,
 	/** Chars of a schedule label that name the job (the rest is its instructions) */
 	MAX_IDENTITY_CHARS: 80,
+	/**
+	 * When-words that say how often or at what time of day a job runs, not what
+	 * it is about. Two unrelated jobs share them ("every morning"), so they never
+	 * count towards a match (D-747 was matched to a different 8am job through
+	 * "每天早上" alone).
+	 */
+	GENERIC_CADENCE_PATTERN: /每天早上|每天晚上|每天|每日|每周|每週|每月|每晚|每早|早上|早晨|上午|下午|晚上|今天|明天|昨天|今晚|明早|周一|周二|周三|周四|周五|周六|周日|星期[一二三四五六日天]/gu,
+	/** Latin words of the same kind (lower-case) */
+	GENERIC_CADENCE_WORDS: ['daily', 'weekly', 'monthly', 'nightly', 'hourly', 'every', 'each', 'day', 'week', 'month', 'morning', 'evening', 'night', 'today', 'tomorrow', 'yesterday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
 	/** `WorkItem.metadata` marker on the hand-off WorkItem */
 	METADATA_KEY: 'recurringChangeHandoff',
 	/** Option labels / answers that decline a change (nothing to hand off) */

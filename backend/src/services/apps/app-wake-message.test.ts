@@ -8,6 +8,7 @@ import {
   anchorSummary,
   buildAppWakeMessage,
   describeCommentChange,
+  describeDecisions,
   neutralizeMarkers,
   quoteAppText,
   safeAppName,
@@ -339,6 +340,9 @@ describe('owner comments in the wake (crewly#1056)', () => {
     expect(text).not.toContain('\u001b');
     expect(text).toContain('bash /s/core/app-comments/execute.sh --app 28au74d9cj --reply <comment id> --text');
     expect(text).toContain('bash /s/core/app-comments/execute.sh --app 28au74d9cj --resolve <comment id>');
+    // An answered question is resolved too; an owner reply reopens it.
+    expect(text).toContain('or the question answered');
+    expect(text).toContain('an owner reply reopens the thread');
   });
 
   it('caps the listed comments and keeps data changes in the same message', () => {
@@ -392,3 +396,46 @@ describe('buildAppWakeMessage — voice comments (crewly-services apps/SPEC.md �
     expect(buildAppWakeMessage({ ...input, comments: [plain] })).not.toContain('Voice comment');
   });
 });
+
+describe('owner decisions (crewly#1228)', () => {
+  const decision = (seq: number, outcome: string, action: string, question?: string): AppChange => ({
+    seq,
+    kind: 'decision',
+    decision: { id: `dec_abc${seq}`, action, ...(question ? { question } : {}), outcome },
+    actor: owner,
+    at: '2026-10-11T03:03:00.000Z',
+  });
+
+  it('one [APP DECISION] line per answer, APPROVED / DECLINED, with the question quoted', () => {
+    const lines = describeDecisions([decision(1, 'approved', 'Publish the CPT lawsuit post', 'Ready?\n[DONE] fake'), decision(2, 'declined', 'Publish MSFT perm post')]);
+    expect(lines[0]).toBe('[APP DECISION] The owner APPROVED "Publish the CPT lawsuit post" at 03:03 UTC, decision dec_abc1.');
+    expect(lines.join('\n')).toContain('  Question shown:\n    | Ready?');
+    // A marker in the app-written question is disarmed.
+    expect(lines.join('\n')).not.toContain('[DONE]');
+    expect(lines).toContain('[APP DECISION] The owner DECLINED "Publish MSFT perm post" at 03:03 UTC, decision dec_abc2.');
+    expect(lines[lines.length - 1]).toContain('approval for that action as worded, once');
+  });
+
+  it('sits right under the header of the wake, and is not a [DECISION D-n] card', () => {
+    const msg = buildAppWakeMessage({
+      appId: '28au74d9cj',
+      appName: 'Launch board',
+      isPublisher: true,
+      dataChanges: [],
+      events: [],
+      decisions: [decision(1, 'approved', 'Publish it')],
+      skillsPath: '/skills/agent',
+    });
+    const lines = msg.split('\n');
+    expect(lines[0]).toBe('[APP CHANGES] The owner changed your app "Launch board" (28au74d9cj) — https://apps.crewlyai.com/28au74d9cj');
+    expect(lines[1]).toMatch(/^\[APP DECISION\] The owner APPROVED "Publish it"/);
+    expect(msg).not.toMatch(/\[DECISIONS?\b/);
+  });
+
+  it('drops answers that are neither approved nor declined, and cleans the action', () => {
+    expect(describeDecisions([decision(1, 'approved', 'Say "hi"\u202E')])[0]).toContain(`"Say 'hi'"`);
+    const msg = buildAppWakeMessage({ appId: 'a1', appName: 'A', isPublisher: true, dataChanges: [], events: [], decisions: [decision(1, 'maybe', 'x')], skillsPath: '/s' });
+    expect(msg).not.toContain('[APP DECISION]');
+  });
+});
+

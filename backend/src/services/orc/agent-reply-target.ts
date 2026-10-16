@@ -13,7 +13,7 @@
  * @see specs/2026-09-30-owner-message-guarantee.md §B
  */
 
-import { ORC_STATUS_FORWARDING } from '../../constants.js';
+import { ORC_REPLY_ROUTE_CONSTANTS, ORC_STATUS_FORWARDING } from '../../constants.js';
 import type { TurnOrigin } from './orc-reply-route.service.js';
 
 /** The decision. */
@@ -47,6 +47,8 @@ export interface AgentReplyRequest {
   origin?: TurnOrigin;
   /** Whether `conversationId` is one this agent may answer in (its DM, a room it is in) */
   ownsConversation: (conversationId: string) => boolean;
+  /** Clock (epoch ms); defaults to now */
+  now?: number;
 }
 
 /**
@@ -86,7 +88,12 @@ export function planAgentReply(req: AgentReplyRequest): AgentReplyPlan {
 
   if (req.isOrchestrator) {
     if (requestedConv) return { kind: 'orc-chat', conversationId: requestedConv, reason: 'conversation named' };
-    if (origin?.slackChannelId) {
+    // A stale origin is not "where the orchestrator was asked": a relay sent
+    // hours later would land in whatever channel the owner wrote to last.
+    // Those go through the conversation path, which places them (work item,
+    // else the owner DM).
+    const originFresh = !!origin && (req.now ?? Date.now()) - origin.receivedAt <= ORC_REPLY_ROUTE_CONSTANTS.ORIGIN_TTL_MS;
+    if (origin?.slackChannelId && originFresh) {
       return {
         kind: 'orc-slack',
         channelId: origin.slackChannelId,

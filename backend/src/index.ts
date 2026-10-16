@@ -222,6 +222,10 @@ import { getChatV2Service } from './services/chat-v2/chat-v2.singleton.js';
 import { isOwnerStopped } from './services/agent/owner-stopped.registry.js';
 import { pausedTeamOfSession } from './services/team/team-pause.registry.js';
 import { getFollowThrough } from './services/agent/follow-through.service.js';
+import { getAgentAskLedger } from './services/messaging/agent-ask-ledger.service.js';
+import { isInterim } from './services/slack/slack-typing-placeholder.service.js';
+import { detectStatedIntent } from './services/agent/stated-intent.js';
+import { createAgentAskLedger, type AskTranscriptLocator } from './services/messaging/agent-ask-ledger.wiring.js';
 import { BackgroundWorkWatchdog } from './services/monitoring/background-work-watchdog.js';
 import { createFollowThrough, settleFollowThrough, idlePendingWorkCheck, releaseWorkForStop, restoreStoppedOwingWork, owedWorkReminder, OWED_REMINDER_MARKER } from './services/agent/follow-through.wiring.js';
 import { isSessionPaused } from './services/team/team-pause.registry.js';
@@ -812,6 +816,9 @@ export class CrewlyServer {
 			const ticketReview = new TicketReviewService({
 				requests: RequestService.getInstance(),
 				fallbackAgent: ORCHESTRATOR_SESSION_NAME,
+				// An agent that handed the work on has not answered the ticket yet.
+				openAsksBy: (session) => getAgentAskLedger()?.openAsksBy(session).length ?? 0,
+				agentNames: () => this.agentDisplayNames(),
 				// Live work only: a rejected verify superseded by its retry, or a
 				// failed attempt, no longer means somebody is on it (TKT-017/021/053
 				// sat for days behind `rejected` WorkItems).
@@ -913,6 +920,11 @@ export class CrewlyServer {
 				},
 			});
 			getChatV2Service().on('chat_message', (dto: ChatMessageDTO) => {
+				// An agent's answer (not an interim note or a stated plan) in chat
+				// answers the agent messages it was given before it.
+				if (dto.senderType === 'agent' && !isInterim(dto) && !detectStatedIntent(dto.content)) {
+					getAgentAskLedger()?.notePost(dto.senderId);
+				}
 				// Open items read the same message after the review recorded it, so
 				// the two never write the ticket at once (specs/2026-10-01-reply-open-items.md).
 				void ticketReview
@@ -2288,6 +2300,13 @@ void (async () => {
 			createFollowThrough({
 				crewlyHome: this.config.crewlyHome,
 				sendToAgent: (session, text) => this.apiController.agentRegistrationService.sendMessageToAgent(session, text),
+			});
+			// Return path of agent-to-agent messages: an answer the receiver never
+			// sent back is handed to the asker at the end of its turn (2026-10-14).
+			createAgentAskLedger({
+				crewlyHome: this.config.crewlyHome,
+				sendToAgent: (session, text) => this.apiController.agentRegistrationService.sendMessageToAgent(session, text),
+				locate: this.askTranscriptLocator(),
 			});
 			// Background subagents / forks that stopped writing are not busy work:
 			// the agent is told and no longer counted busy (2026-10-12, Pia).
@@ -5721,9 +5740,64 @@ void (async () => {
 		// owner ticket with no WorkItem one — before the review looks at it.
 		// Ticket loop Phase 2: an agent that finished its turn has answered
 		// the tickets it replied in — submit them (待验收 or done).
-		void settleFollowThrough(sessionName)
+		// An agent message it worked on and never answered: hand its last words
+		// to the asker. Before the review, so the asker's open asks are current.
+		void (getAgentAskLedger()?.onTurnEnded(sessionName) ?? Promise.resolve(0))
+			.catch(() => 0)
+			.then(() => settleFollowThrough(sessionName))
 			.then(() => getTicketReviewService()?.onAgentIdle(sessionName))
 			.catch(() => undefined);
+	}
+
+	/** Agent display names, refreshed at most once a minute. */
+	private agentNamesCache: { at: number; names: string[] } = { at: 0, names: [] };
+
+	/**
+	 * Display names of every team member (for telling a hand-off from an answer).
+	 *
+	 * @returns Names
+	 */
+	private async agentDisplayNames(): Promise<string[]> {
+		if (Date.now() - this.agentNamesCache.at > 60_000) {
+			const teams = await this.storageService.getTeams().catch(() => []);
+			this.agentNamesCache = { at: Date.now(), names: [...new Set(teams.flatMap((t) => (t.members ?? []).map((m) => m.name)).filter(Boolean))] };
+		}
+		return this.agentNamesCache.names;
+	}
+
+	/**
+	 * Transcript locator for the ask ledger (Claude Code and Codex sessions),
+	 * built on first use.
+	 *
+	 * @returns Locator
+	 */
+	private askTranscriptLocator(): AskTranscriptLocator {
+		let built: Promise<AskTranscriptLocator> | null = null;
+		const build = async (): Promise<AskTranscriptLocator> => {
+			const [{ createTranscriptLocator }, recovery, { findCodexRollout }] = await Promise.all([
+				import('./services/board/canvas/canvas-wiring.js'),
+				import('./services/agent/runtime-session-recovery.js'),
+				import('./services/monitoring/codex-rollout-sync.service.js'),
+			]);
+			const persistence = getSessionStatePersistence();
+			return createTranscriptLocator({
+				meta: (session) => {
+					try {
+						return persistence.getSessionMetadata(session);
+					} catch {
+						return undefined;
+					}
+				},
+				claudeHomes: (meta) => [meta.env?.CLAUDE_CONFIG_DIR, recovery.defaultClaudeHome()].filter((h): h is string => typeof h === 'string' && h.length > 0),
+				findClaude: recovery.findClaudeTranscript,
+				codexHome: recovery.defaultCodexHome,
+				findCodex: findCodexRollout,
+			});
+		};
+		return async (session) => {
+			built ??= build();
+			return (await built)(session);
+		};
 	}
 
 	/**
@@ -7007,6 +7081,17 @@ void (async () => {
 							await activateAgentBySession(this.apiController, session).catch(() => undefined);
 						}
 						const res = await this.apiController.agentRegistrationService.sendMessageToAgent(session, text);
+						return (res as { success?: boolean } | undefined)?.success !== false;
+					} catch {
+						return false;
+					}
+				},
+				notifyLead: async (agent, text) => {
+					const { findLeadSessionFor } = await import('./utils/team.utils.js');
+					const lead = findLeadSessionFor(await this.storageService.getTeams().catch(() => []), agent);
+					if (!lead) return false;
+					try {
+						const res = await this.apiController.agentRegistrationService.sendMessageToAgent(lead, text);
 						return (res as { success?: boolean } | undefined)?.success !== false;
 					} catch {
 						return false;

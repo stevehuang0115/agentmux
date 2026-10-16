@@ -76,25 +76,33 @@ export function isOwnerObjection(text: string): boolean {
 
 /**
  * Whether the owner already moved on in a 待验收 ticket's thread: they posted
- * after the answer and nothing they said is an objection. Pure
+ * after the answer, or answered one of the agent's questions on a decision
+ * card after it, and nothing they said is an objection. Pure
  * acknowledgements are not stored in the discussion (they accept at once), so
  * a later entry is a follow-up the agent answers in the thread, not a
  * complaint about the finished work. Notes written by Crewly itself do not
- * count.
+ * count. A card answer is not stored in the discussion either (2026-10-15:
+ * "你看一眼内容对不对" answered on its card left the ticket waiting).
  *
  * @param ticket - The ticket in 待验收
  * @returns True when silence-about-the-work can be taken as acceptance now
  */
-export function ownerMovedOn(ticket: Pick<Request, 'submittedAt' | 'discussion'>): boolean {
+export function ownerMovedOn(ticket: Pick<Request, 'submittedAt' | 'discussion' | 'openItems'>): boolean {
   const since = ticket.submittedAt ? Date.parse(ticket.submittedAt) : NaN;
   if (!Number.isFinite(since)) return false;
-  const later = (ticket.discussion ?? []).filter(
-    (d) =>
-      d.author !== TICKET_CONSTANTS.STALE.NOTE_AUTHOR &&
-      d.author !== TICKET_CONSTANTS.REVIEW.AUTO_ACCEPT_NOTE_AUTHOR &&
-      Date.parse(d.at) > since,
-  );
-  return later.length > 0 && !later.some((d) => isOwnerObjection(d.text));
+  const later = (ticket.discussion ?? [])
+    .filter(
+      (d) =>
+        d.author !== TICKET_CONSTANTS.STALE.NOTE_AUTHOR &&
+        d.author !== TICKET_CONSTANTS.REVIEW.AUTO_ACCEPT_NOTE_AUTHOR &&
+        Date.parse(d.at) > since,
+    )
+    .map((d) => d.text);
+  const cardAnswers = (ticket.openItems ?? [])
+    .filter((i) => i.type === 'question' && i.status === 'resolved' && !!i.decisionId && !!i.closedAt && Date.parse(i.closedAt) > since)
+    .map((i) => i.answer ?? '');
+  const said = [...later, ...cardAnswers];
+  return said.length > 0 && !said.some((t) => isOwnerObjection(t));
 }
 
 /**

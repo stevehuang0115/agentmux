@@ -27,6 +27,10 @@ Options:
                         post there). Without it, an orchestrator reply aimed at a
                         conversation nobody wrote to you from recently is sent
                         back to the conversation the turn came from.
+  --thread             Slack thread key (`[SLACK-THREAD:<key>]`) the post answers; it
+                        lands in that thread instead of top level
+  --work-item          Work item id the post reports on (e.g. relaying a teammate's
+                        result): the post goes to the thread that work came from
   --json         | -j   Raw JSON payload
   --help         | -h   Show this help
 EOF_USAGE
@@ -38,6 +42,8 @@ TEXT=""
 SENDER_NAME="Orchestrator"
 SENDER_TYPE="orchestrator"
 CROSS_POST="false"
+THREAD_KEY=""
+WORK_ITEM_ID=""
 
 # Detect legacy JSON argument as the first parameter
 if [[ $# -gt 0 && ${1:0:1} == '{' ]]; then
@@ -70,6 +76,14 @@ while [[ $# -gt 0 ]]; do
     --cross-post)
       CROSS_POST="true"
       shift
+      ;;
+    --thread)
+      THREAD_KEY="$2"
+      shift 2
+      ;;
+    --work-item)
+      WORK_ITEM_ID="$2"
+      shift 2
       ;;
     --json|-j)
       INPUT_JSON="$2"
@@ -128,7 +142,11 @@ BODY=$(jq -n \
   --arg senderType "$SENDER_TYPE" \
   --arg conversationId "$CONVERSATION_ID" \
   --argjson crossPost "$CROSS_POST" \
+  --arg slackThread "$THREAD_KEY" \
+  --arg workItemId "$WORK_ITEM_ID" \
   '{content: $content, senderName: $senderName, senderType: $senderType} +
+   (if $slackThread != "" then {slackThread: $slackThread} else {} end) +
+   (if $workItemId != "" then {workItemId: $workItemId} else {} end) +
    (if $conversationId != "" then {conversationId: $conversationId} else {} end) +
    (if $crossPost then {crossPost: true} else {} end)')
 

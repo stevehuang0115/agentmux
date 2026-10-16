@@ -34,7 +34,7 @@ import type {
   DecisionSystemRef,
   OwnerDecision,
 } from '../../types/decision.types.js';
-import { DecisionContractError, eitherOrMessage, isYesNoOptions, readsAsEitherOr, matchOption, parseOptions, resolveDefault, validateAskOwner } from './decision-contract.js';
+import { DecisionContractError, eitherOrMessage, isYesNoOptions, readsAsEitherOr, matchOption, parseOptions, resolveDefault, validateAskOwner, withTicketContext } from './decision-contract.js';
 import {
   answerFilesOf,
   canRemind,
@@ -575,6 +575,8 @@ export class DecisionService {
       );
       if (recent.length > 0) throw new DecisionError(400, eitherOrMessage(recent[0].id));
     }
+    // A short question says nothing on its own phone screen: the ticket title goes in front of it.
+    if (ticket) ask.question = withTicketContext(ask.question, ticket.title);
     if (!teamId) teamId = await this.deps.teamOf(asker).catch(() => undefined);
     // The same question already waits on an open card of this asker, in the
     // same thread / ticket: that card stands — no second post.
@@ -605,6 +607,13 @@ export class DecisionService {
         .catch((err) => this.logger.warn('Could not mark the ticket as waiting on the owner', { decisionId: decision.id, error: errText(err) }));
     }
     this.logger.info('Owner decision asked', { decisionId: decision.id, asker, requestedBy: decision.requestedBy, ticket: ticket?.id, sensitive: decision.sensitive });
+    // One open card per ticket: this one replaces the ticket's older open cards.
+    if (ticket) {
+      await this.cancelWhere(
+        (d) => d.id !== decision.id && !d.kind && d.ticket?.projectPath === ticket!.projectPath && d.ticket.id === ticket!.id && this.olderThanSameReply(d, decision),
+        `superseded by ${decision.id}`,
+      ).catch((err) => this.logger.debug('Could not withdraw the ticket\'s older card', { error: errText(err) }));
+    }
     // The same question Crewly already carded from the agent's reply
     // (specs/2026-10-01-reply-open-items.md §4): this ask replaces that card.
     await this.cancelWhere(
@@ -701,6 +710,15 @@ export class DecisionService {
       status: 'open',
     });
     this.logger.info('Owner decision asked by Crewly', { decisionId: decision.id, kind: ask.kind, asker: ask.asker });
+    // One open question card per ticket: a newer question replaces the ticket's older open ones (a
+    // reply's own sibling questions, made together, stay).
+    const requestId = ask.requestRef?.requestId;
+    if (ask.kind === 'reply_question' && requestId) {
+      await this.cancelWhere(
+        (d) => d.id !== decision.id && d.kind === 'reply_question' && d.requestRef?.requestId === requestId && d.asker === ask.asker && this.olderThanSameReply(d, decision),
+        `superseded by ${decision.id}`,
+      ).catch((err) => this.logger.debug('Could not withdraw the ticket\'s older question card', { error: errText(err) }));
+    }
     return this.postCard(decision);
   }
 
@@ -1334,6 +1352,18 @@ export class DecisionService {
     const askedAt = d.askedAt ?? (await this.deps.openItemAskedAt?.(d.requestRef).catch(() => undefined));
     if (!askedAt) return false;
     return Date.parse(d.createdAt) - Date.parse(askedAt) >= DECISION_CONSTANTS.BACKFILL_CARD_MIN_LAG_MS;
+  }
+
+  /**
+   * Whether a card was made long enough before another to be a different ask
+   * (cards of one reply are made together and stay side by side).
+   *
+   * @param older - The earlier card
+   * @param newer - The card just made
+   * @returns True when the earlier one is older than the same-reply window
+   */
+  private olderThanSameReply(older: OwnerDecision, newer: OwnerDecision): boolean {
+    return Date.parse(newer.createdAt) - Date.parse(older.createdAt) >= DECISION_CONSTANTS.SAME_REPLY_WINDOW_MS;
   }
 
   /**

@@ -224,6 +224,13 @@ assert_not_contains "no request sent without feedback" "/task-pool/complete" "$R
 run_skill '{"workItemId":"wi-verify","sessionName":"tl-1","summary":"x","verdict":"maybe"}'
 assert_contains "unknown verdict is refused" "verdict must be" "$OUT"
 
+run_skill '{"workItemId":"wi-verify","sessionName":"tl-1","summary":"ok","verdict":"verified","checks":[{"entry":0,"did":"opened it","outcome":"pass"}]}'
+CHECKS_BODY="$(printf '%s' "$BODIES" | grep 'agentId' | head -1 || true)"
+assert_contains "checks land in result (#1314)" '"did": "opened it"' "$CHECKS_BODY"
+
+run_skill '{"workItemId":"wi-verify","sessionName":"tl-1","summary":"ok","verdict":"verified","checks":"looked at it"}'
+assert_contains "non-array checks are refused" "checks must be a JSON array" "$OUT"
+
 run_skill '{"workItemId":"wi-plain","sessionName":"dev-1","summary":"done"}'
 PLAIN_BODY="$(printf '%s' "$BODIES" | grep 'agentId' | head -1 || true)"
 assert_not_contains "no verdict key when none given" '"verdict"' "$PLAIN_BODY"
