@@ -4,50 +4,70 @@ jest.mock('../core/logger.service.js', () => ({
 
 import { DEFERRED_START_RETRY_CONSTANTS, resetDeferredStartRetries, scheduleDeferredStartRetry } from './deferred-start-retry.js';
 
-const sleep = async (): Promise<void> => undefined;
+/** Fake clock: each pause moves time forward, so the loop's time bound holds without real waiting. */
+let t = 0;
+const now = (): number => t;
+const sleep = async (ms: number): Promise<void> => {
+	t += ms;
+};
 
-beforeEach(() => resetDeferredStartRetries());
+beforeEach(() => {
+	resetDeferredStartRetries();
+	t = 0;
+});
 
 describe('scheduleDeferredStartRetry', () => {
 	it('retries until the start goes through', async () => {
 		const results = [{ success: false, deferred: true }, { success: false, deferred: true }, { success: true }];
 		const activate = jest.fn(async () => results.shift()!);
-		await scheduleDeferredStartRetry('ella', { activate, hasPending: () => true, sleep });
+		await scheduleDeferredStartRetry('ella', { activate, hasPending: () => true, sleep, now });
 		expect(activate).toHaveBeenCalledTimes(3);
 	});
 
 	it('waits the first pause before the first round when one is given', async () => {
 		const pauses: number[] = [];
 		const activate = jest.fn(async () => ({ success: false, deferred: true }));
-		await scheduleDeferredStartRetry('ella', { activate, hasPending: () => true, sleep: async (ms) => void pauses.push(ms), firstPauseMs: 60_000 });
+		await scheduleDeferredStartRetry('ella', { activate, hasPending: () => true, sleep: async (ms) => { pauses.push(ms); await sleep(ms); }, now, firstPauseMs: 60_000 });
 		expect(pauses[0]).toBe(60_000);
 		expect(pauses[1]).toBe(DEFERRED_START_RETRY_CONSTANTS.ROUND_PAUSE_MS);
 	});
 
 	it('stops when the queue has emptied', async () => {
 		const activate = jest.fn(async () => ({ success: true }));
-		await scheduleDeferredStartRetry('ella', { activate, hasPending: () => false, sleep });
+		await scheduleDeferredStartRetry('ella', { activate, hasPending: () => false, sleep, now });
 		expect(activate).not.toHaveBeenCalled();
 	});
 
 	it('stops on a failure that is not a deferral', async () => {
 		const activate = jest.fn(async () => ({ success: false }));
-		await scheduleDeferredStartRetry('ella', { activate, hasPending: () => true, sleep });
+		await scheduleDeferredStartRetry('ella', { activate, hasPending: () => true, sleep, now });
 		expect(activate).toHaveBeenCalledTimes(1);
 	});
 
-	it('is bounded', async () => {
+	it('keeps trying at the slow pause after the fast rounds, until MAX_TOTAL_MS (Pia, 2026-10-16)', async () => {
+		const pauses: number[] = [];
 		const activate = jest.fn(async () => ({ success: false, deferred: true }));
-		await scheduleDeferredStartRetry('ella', { activate, hasPending: () => true, sleep });
-		expect(activate).toHaveBeenCalledTimes(DEFERRED_START_RETRY_CONSTANTS.MAX_ROUNDS);
+		await scheduleDeferredStartRetry('pia', { activate, hasPending: () => true, sleep: async (ms) => { pauses.push(ms); await sleep(ms); }, now });
+		const { MAX_ROUNDS, ROUND_PAUSE_MS, SLOW_ROUND_PAUSE_MS, MAX_TOTAL_MS } = DEFERRED_START_RETRY_CONSTANTS;
+		expect(pauses.slice(0, MAX_ROUNDS).every((p) => p === ROUND_PAUSE_MS)).toBe(true);
+		expect(pauses.slice(MAX_ROUNDS).every((p) => p === SLOW_ROUND_PAUSE_MS)).toBe(true);
+		expect(activate.mock.calls.length).toBeGreaterThan(MAX_ROUNDS);
+		expect(t).toBeGreaterThanOrEqual(MAX_TOTAL_MS);
+		expect(t).toBeLessThan(MAX_TOTAL_MS + SLOW_ROUND_PAUSE_MS + 1);
+	});
+
+	it('a slot freeing late still gets the agent started', async () => {
+		const activate = jest.fn(async () => (t > 60 * 60_000 ? { success: true } : { success: false, deferred: true }));
+		await scheduleDeferredStartRetry('pia', { activate, hasPending: () => true, sleep, now });
+		expect(await activate.mock.results[activate.mock.results.length - 1].value).toEqual({ success: true });
 	});
 
 	it('runs one loop per agent', async () => {
 		let release!: () => void;
 		const gate = new Promise<void>((r) => { release = r; });
 		const activate = jest.fn(async () => { await gate; return { success: true }; });
-		const first = scheduleDeferredStartRetry('ella', { activate, hasPending: () => true, sleep });
-		await scheduleDeferredStartRetry('ella', { activate, hasPending: () => true, sleep });
+		const first = scheduleDeferredStartRetry('ella', { activate, hasPending: () => true, sleep, now });
+		await scheduleDeferredStartRetry('ella', { activate, hasPending: () => true, sleep, now });
 		release();
 		await first;
 		expect(activate).toHaveBeenCalledTimes(1);

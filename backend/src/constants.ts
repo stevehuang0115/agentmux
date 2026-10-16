@@ -4239,6 +4239,8 @@ export const AGENT_MESSAGE_DELIVERY_CONSTANTS = {
 export const SUB_AGENT_QUEUE_CONSTANTS = {
 	/** Wait this long after an agent goes down before waking it for its queued messages (ms) */
 	QUEUED_WAKE_DELAY_MS: 5_000,
+	/** After boot, pause before starting agents that were down with messages queued (lets the restore queue claim its own first; a start in between drains the queue and ends the retry) */
+	BOOT_QUEUED_WAKE_DELAY_MS: 60_000,
 	/** At most one such wake per agent in this window, so a crashing agent is not relaunched in a loop (ms) */
 	QUEUED_WAKE_COOLDOWN_MS: 10 * 60 * 1000,
 	/** Maximum messages per agent before dropping oldest */

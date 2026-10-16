@@ -4646,6 +4646,7 @@ void (async () => {
 			// Auto-restore agent sessions that were running before the last shutdown.
 			// Starts the staggered restore queue; it drains in the background.
 			await this.autoRestoreAgentSessionsIfEnabled();
+			this.wakeQueuedAgentsAfterBoot();
 
 			// Re-deliver interrupted turns now that their agents are coming back.
 			// Background: the orchestrator may take minutes to register.
@@ -7306,7 +7307,11 @@ void (async () => {
 					this.logger.info('Woke an agent that went down with messages queued for it', {
 						sessionName,
 						success: res.success,
+						...(res.deferred ? { deferred: true } : {}),
 					});
+					// Every slot was taken: keep trying, or the messages wait for the next
+					// message someone happens to send (Pia, 2026-10-16: over an hour).
+					if (!res.success && res.deferred) this.retryStartWhileQueued(sessionName);
 				} catch (err) {
 					this.logger.warn('Could not wake an agent with queued messages', {
 						sessionName,
@@ -7315,6 +7320,56 @@ void (async () => {
 				}
 			})();
 		}, SUB_AGENT_QUEUE_CONSTANTS.QUEUED_WAKE_DELAY_MS);
+	}
+
+	/**
+	 * Keep trying to start an agent that has messages queued for it until a
+	 * slot frees (see scheduleDeferredStartRetry). Never throws.
+	 *
+	 * @param sessionName - The agent to start
+	 * @param firstPauseMs - Pause before the first attempt (default: the retry's own)
+	 */
+	private retryStartWhileQueued(sessionName: string, firstPauseMs?: number): void {
+		void (async () => {
+			const { scheduleDeferredStartRetry } = await import('./services/messaging/deferred-start-retry.js');
+			const { activateAgentBySession } = await import('./controllers/team/team.controller.js');
+			await scheduleDeferredStartRetry(sessionName, {
+				activate: (n) => activateAgentBySession(this.apiController, n),
+				hasPending: (n) => SubAgentMessageQueue.getInstance().hasPending(n),
+				...(firstPauseMs !== undefined ? { firstPauseMs } : {}),
+			});
+		})().catch((err) => {
+			this.logger.warn('Could not retry starting an agent with queued messages', {
+				sessionName,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		});
+	}
+
+	/**
+	 * After boot, start every agent that still has messages queued for it and
+	 * is not running or being restored. The restore only brings back agents
+	 * that were running at shutdown; an agent already down for want of a slot
+	 * (with its messages persisted) was never started again (Pia, 2026-10-16).
+	 */
+	private wakeQueuedAgentsAfterBoot(): void {
+		const restoring = new Set(getRestoreQueue().stats().order);
+		const backend = getSessionBackendSync();
+		const registration = this.apiController.agentRegistrationService;
+		const sessions = SubAgentMessageQueue.getInstance()
+			.sessionsWithPending()
+			.filter(
+				(name) =>
+					name !== ORCHESTRATOR_SESSION_NAME &&
+					!restoring.has(name) &&
+					!isOwnerStopped(name) &&
+					!pausedTeamOfSession(name) &&
+					!backend?.sessionExists(name) &&
+					!registration.getInProcessRuntime(name),
+			);
+		if (sessions.length === 0) return;
+		this.logger.info('Starting agents that were down with messages queued for them', { sessions });
+		for (const name of sessions) this.retryStartWhileQueued(name, SUB_AGENT_QUEUE_CONSTANTS.BOOT_QUEUED_WAKE_DELAY_MS);
 	}
 
 	/**
