@@ -263,7 +263,7 @@ describe('relaxing after a long wait', () => {
 		return { svc, stopped };
 	}
 
-	it('stops the longest-idle protected agent once the start has waited past RELAX_AFTER_MS, across a deferral', async () => {
+	it('never stops a protected agent even after the start has waited past RELAX_AFTER_MS, across a deferral (2026-10-16)', async () => {
 		jest.useFakeTimers();
 		try {
 			const { svc, stopped } = setup(
@@ -271,14 +271,14 @@ describe('relaxing after a long wait', () => {
 				{ 'waiting-on-dex': 'it is waiting on work item w2', queued: 'work item w1 is queued for it' },
 			);
 			await enter(svc);
-			const first = svc.requestStart('new', true);
+			const first = svc.requestStart('new', false);
 			await jest.advanceTimersByTimeAsync(RESOURCE_MODE_CONSTANTS.START_WAIT_MS + 10);
 			expect(await first).toBe(false);
+			const second = svc.requestStart('new', false);
+			await jest.advanceTimersByTimeAsync(RESOURCE_MODE_CONSTANTS.START_WAIT_MS + 10);
+			// waited past RELAX_AFTER_MS, yet every agent is busy, holds an owner message or is protected: the waiter waits
+			expect(await second).toBe(false);
 			expect(stopped).toEqual([]);
-			await jest.advanceTimersByTimeAsync(RESOURCE_MODE_CONSTANTS.RELAX_AFTER_MS - RESOURCE_MODE_CONSTANTS.START_WAIT_MS + 10);
-			expect(await svc.requestStart('new', true)).toBe(true);
-			// never busy / owner-message holders; longest idle of the rest
-			expect(stopped).toEqual(['waiting-on-dex']);
 		} finally {
 			jest.useRealTimers();
 		}
@@ -311,6 +311,166 @@ describe('relaxing after a long wait', () => {
 		} finally {
 			jest.useRealTimers();
 		}
+	});
+});
+
+describe('anti-thrash rules (2026-10-16: Luna and Max evicting each other)', () => {
+	function setup(running: RunningAgent[], opts: { max?: number; waitsOn?: (w: string, c: string) => Promise<boolean> } = {}) {
+		const svc = ResourceModeService.getInstance();
+		const stopped: string[] = [];
+		const list = new Map(running.map((r) => [r.sessionName, r]));
+		svc.setDeps({
+			limits: async () => ({ maxRunning: opts.max ?? running.length, idleTimeoutMinutes: 10 }),
+			listRunning: async () => [...list.values()],
+			hasOwnerMessage: () => false,
+			protectedReason: async () => null,
+			...(opts.waitsOn ? { waitsOn: opts.waitsOn } : {}),
+			stopAgent: async (n) => { stopped.push(n); list.delete(n); },
+		});
+		/** The admitted agent shows as running (and long idle, so only the anti-thrash rules can keep it) */
+		const run = (name: string, idleMs = 9e6) => list.set(name, agent(name, idleMs));
+		return { svc, stopped, run };
+	}
+	/** Advance fake time and return the start's result (false when it was deferred) */
+	async function settleWithin(p: Promise<boolean>, ms: number): Promise<boolean> {
+		let result: boolean | null = null;
+		void p.then((r) => { result = r; });
+		await jest.advanceTimersByTimeAsync(ms);
+		return result === true;
+	}
+	/** Ask for a start and let it run past RELAX_AFTER_MS; resolves with the result once settled or deferred */
+	async function waitedStart(svc: ResourceModeService, name: string, owner = false): Promise<boolean> {
+		const first = await settleWithin(svc.requestStart(name, owner), RESOURCE_MODE_CONSTANTS.START_WAIT_MS + 10);
+		if (first) return true;
+		// Deferred after START_WAIT_MS (before RELAX_AFTER_MS): ask again, as the reconciler would.
+		const again = svc.requestStart(name, owner);
+		await jest.advanceTimersByTimeAsync(RESOURCE_MODE_CONSTANTS.START_WAIT_MS + 10);
+		return again;
+	}
+
+	beforeEach(() => jest.useFakeTimers());
+	afterEach(() => jest.useRealTimers());
+
+	it('a relaxed start never stops an agent started less than MIN_RUN_BEFORE_EVICT_MS ago', async () => {
+		const { svc, stopped, run } = setup([agent('old', 30_000)], { max: 2 });
+		await enter(svc);
+		expect(await svc.requestStart('fresh', false)).toBe(true);
+		run('fresh', 60_000);
+		// Both are under the idle timeout and 'fresh' is idle longer, but it was just started: relaxing may only stop 'old'
+		expect(await waitedStart(svc, 'waiter')).toBe(true);
+		expect(stopped).toEqual(['old']);
+	});
+
+	it('the waiter waits when the only candidate was started inside the protection window, then gets it once the window passes', async () => {
+		const { svc, stopped, run } = setup([], { max: 1 });
+		await enter(svc);
+		expect(await svc.requestStart('luna', false)).toBe(true);
+		run('luna', 0);
+		expect(await waitedStart(svc, 'max')).toBe(false);
+		expect(stopped).toEqual([]);
+		await jest.advanceTimersByTimeAsync(RESOURCE_MODE_CONSTANTS.MIN_RUN_BEFORE_EVICT_MS);
+		expect(await waitedStart(svc, 'max')).toBe(true);
+		expect(stopped).toEqual(['luna']);
+	});
+
+	it('an owner-message start is not bound by the start window: it takes a just-started agent at once', async () => {
+		const { svc, stopped, run } = setup([], { max: 1 });
+		await enter(svc);
+		expect(await svc.requestStart('luna', false)).toBe(true);
+		run('luna', 60_000);
+		expect(await settleWithin(svc.requestStart('max', true), 20)).toBe(true);
+		expect(stopped).toEqual(['luna']);
+	});
+
+	it('an owner-message start still keeps the agent whose work it waits on', async () => {
+		const { svc, stopped } = setup([agent('dex', 9e6)], { waitsOn: async (w, c) => w === 'pia' && c === 'dex' });
+		await enter(svc);
+		expect(await waitedStart(svc, 'pia', true)).toBe(false);
+		expect(stopped).toEqual([]);
+	});
+
+	it('an owner-message start still keeps an agent with queued work', async () => {
+		const svc = ResourceModeService.getInstance();
+		const stopped: string[] = [];
+		svc.setDeps({
+			limits: async () => ({ maxRunning: 1, idleTimeoutMinutes: 10 }),
+			listRunning: async () => [agent('luna', 9e6)],
+			hasOwnerMessage: () => false,
+			protectedReason: async () => '2 message(s) are queued for it',
+			stopAgent: async (n) => { stopped.push(n); },
+		});
+		await enter(svc);
+		expect(await waitedStart(svc, 'max', true)).toBe(false);
+		expect(stopped).toEqual([]);
+	});
+
+	it('an owner-message start skips the ping-pong guard: it may stop the agent that displaced it at once', async () => {
+		const { svc, stopped, run } = setup([agent('luna', 9e6)], { max: 1 });
+		await enter(svc);
+		expect(await waitedStart(svc, 'max')).toBe(true);
+		run('max');
+		// Inside both Max's start window and the hysteresis window; an owner start ignores both.
+		expect(await settleWithin(svc.requestStart('luna', true), 20)).toBe(true);
+		expect(stopped).toEqual(['luna', 'max']);
+	});
+
+	it('never stops the agent whose work the waiter is waiting on', async () => {
+		const { svc, stopped } = setup([agent('dex', 9e6), agent('other', 1e6)], {
+			waitsOn: async (w, c) => w === 'pia' && c === 'dex',
+		});
+		await enter(svc);
+		expect(await waitedStart(svc, 'pia')).toBe(true);
+		expect(stopped).toEqual(['other']);
+	});
+
+	it('waits when the only candidate is doing the waiter\'s work', async () => {
+		const { svc, stopped } = setup([agent('dex', 9e6)], { waitsOn: async () => true });
+		await enter(svc);
+		expect(await waitedStart(svc, 'pia')).toBe(false);
+		expect(stopped).toEqual([]);
+	});
+
+	it('treats a failing waitsOn check as "not waiting"', async () => {
+		const { svc, stopped } = setup([agent('dex', 9e6)], { waitsOn: async () => { throw new Error('boom'); } });
+		await enter(svc);
+		expect(await waitedStart(svc, 'pia')).toBe(true);
+		expect(stopped).toEqual(['dex']);
+	});
+
+	it('no ping-pong: a displaced agent\'s restart cannot stop the agent that displaced it within DISPLACED_GUARD_MS', async () => {
+		const { svc, stopped, run } = setup([agent('luna', 9e6)], { max: 1 });
+		await enter(svc);
+		// Max's start (relaxed) stops Luna.
+		expect(await waitedStart(svc, 'max')).toBe(true);
+		expect(stopped).toEqual(['luna']);
+		run('max');
+		// Past Max's start protection, inside the hysteresis window: Luna's restart may not stop Max.
+		await jest.advanceTimersByTimeAsync(RESOURCE_MODE_CONSTANTS.MIN_RUN_BEFORE_EVICT_MS);
+		expect(await waitedStart(svc, 'luna')).toBe(false);
+		expect(stopped).toEqual(['luna']);
+		// Hysteresis is per pair: another agent's start may still take Max's slot.
+		expect(await waitedStart(svc, 'sage')).toBe(true);
+		expect(stopped).toEqual(['luna', 'max']);
+	});
+
+	it('the hysteresis expires after DISPLACED_GUARD_MS', async () => {
+		const { svc, stopped, run } = setup([agent('luna', 9e6)], { max: 1 });
+		await enter(svc);
+		expect(await waitedStart(svc, 'max')).toBe(true);
+		run('max');
+		await jest.advanceTimersByTimeAsync(RESOURCE_MODE_CONSTANTS.DISPLACED_GUARD_MS);
+		expect(await waitedStart(svc, 'luna')).toBe(true);
+		expect(stopped).toEqual(['luna', 'max']);
+	});
+
+	it('critical memory overrides the anti-thrash rules', async () => {
+		const { svc, stopped, run } = setup([], { max: 1 });
+		await enter(svc);
+		expect(await svc.requestStart('luna', false)).toBe(true);
+		run('luna');
+		svc.memoryStats = () => ({ usedPercent: 99, freeMB: 100, totalMB: 16384 });
+		expect(await waitedStart(svc, 'max')).toBe(true);
+		expect(stopped).toEqual(['luna']);
 	});
 });
 

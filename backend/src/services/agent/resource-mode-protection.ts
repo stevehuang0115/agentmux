@@ -43,6 +43,8 @@ export interface ProtectionSources {
 	getWorkItems: () => Promise<WorkItem[]>;
 	/** Tickets of the projects the session works on; absent when ticket storage is not up */
 	listTickets?: (sessionName: string) => Promise<ProtectionTicket[]>;
+	/** Number of messages queued for the session (sub-agent message queue); absent = not checked */
+	queuedMessageCount?: (sessionName: string) => number;
 }
 
 /**
@@ -53,6 +55,8 @@ export interface ProtectionSources {
  */
 export function createProtectedReason(sources: ProtectionSources): (sessionName: string) => Promise<string | null> {
 	return async (sessionName) => {
+		const messages = sources.queuedMessageCount?.(sessionName) ?? 0;
+		if (messages > 0) return `${messages} message(s) are queued for it`;
 		const items = await sources.getWorkItems();
 		const queued = items.find((wi) => wi.target === sessionName && PENDING_WORK_STATUSES.has(wi.status));
 		if (queued) return `work item ${queued.id} is queued for it`;
@@ -68,5 +72,34 @@ export function createProtectedReason(sources: ProtectionSources): (sessionName:
 			if (requested) return `it is waiting on ticket ${requested.id} (${requested.status}) that it created for ${requested.assignee ?? 'a teammate'}`;
 		}
 		return null;
+	};
+}
+
+/**
+ * Build the `waitsOn` dependency of ResourceMode: whether a waiting start
+ * depends on a running agent's work. Stopping that agent to start the waiter
+ * would only make the waiter wait longer (and release the very work it needs
+ * back to the pool).
+ *
+ * The waiter depends on the candidate when the waiter delegated an open
+ * WorkItem to it (`metadata.delegatedBy` = waiter, target = candidate) or
+ * created an open ticket assigned to it (`source: agent:<waiter>`).
+ *
+ * @param sources - WorkItem and ticket readers
+ * @returns Function `(waiter, candidate) => true` when the waiter is waiting on the candidate's work
+ *
+ * @example
+ * ```typescript
+ * const waitsOn = createWaitsOn({ getWorkItems: () => pool.getAllItems() });
+ * await waitsOn('pia', 'dex'); // true while Dex works on a task Pia delegated
+ * ```
+ */
+export function createWaitsOn(sources: ProtectionSources): (waiter: string, candidate: string) => Promise<boolean> {
+	return async (waiter, candidate) => {
+		const items = await sources.getWorkItems();
+		if (items.some((wi) => wi.target === candidate && wi.metadata?.delegatedBy === waiter && OPEN_DELEGATION_STATUSES.has(wi.status))) return true;
+		if (!sources.listTickets) return false;
+		const tickets = await sources.listTickets(waiter);
+		return tickets.some((t) => t.source === `agent:${waiter}` && t.assignee === candidate && !FINISHED_TICKET_STATUSES.has(t.status));
 	};
 }
