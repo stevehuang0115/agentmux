@@ -4102,6 +4102,7 @@ void (async () => {
 					configPath: path.join(home, SCHEDULED_COMMANDS.CONFIG_FILE),
 					logDir: path.join(home, SCHEDULED_COMMANDS.LOG_DIR),
 					logger: LoggerService.getInstance().createComponentLogger('ScheduledCommands'),
+					notify: slackOwnerAlertNotifier,
 				});
 				this.scheduledCommands.start();
 			} catch (schedErr) {
