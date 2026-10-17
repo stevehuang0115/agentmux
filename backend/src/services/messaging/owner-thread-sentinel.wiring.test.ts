@@ -2,7 +2,7 @@ jest.mock('../core/logger.service.js', () => ({
   LoggerService: { getInstance: () => ({ createComponentLogger: () => ({ info: jest.fn(), debug: jest.fn(), warn: jest.fn(), error: jest.fn() }) }) },
 }));
 
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { DECISION_CONSTANTS, OWNER_THREAD_SENTINEL_CONSTANTS } from '../../constants.js';
@@ -19,6 +19,8 @@ import {
   ownerThreadOfAgentWork,
   ownerThreadSessionsAtBoot,
   ownerThreadOfWorkItem,
+  liveAgentSessions,
+  movedAwayTeamIds,
   postSentinelStatus,
   sentinelEventForDecision,
   slackMessageLink,
@@ -258,6 +260,53 @@ describe('ownerThreadSessionsAtBoot (boot restore rule)', () => {
 
   it('an empty CREWLY_HOME restores nobody', async () => {
     expect(await ownerThreadSessionsAtBoot(home)).toEqual([]);
+  });
+
+  it('an agent that is no longer on this machine is not restored, however long its thread was watched (crewly#1344)', async () => {
+    const now = Date.parse('2026-10-08T16:49:00Z');
+    const sentinel = new OwnerThreadSentinelService({
+      postAllStates: true,
+      postStatus: async () => true,
+      nudgeAgent: async () => true,
+      storePath: path.join(home, OWNER_THREAD_SENTINEL_CONSTANTS.STORE_FILENAME),
+      now: () => now - 20 * 60_000,
+    });
+    sentinel.noteOwnerMessage({ slackChannelId: CH, threadTs: '1.1', agent: 'fern' });
+    sentinel.noteOwnerMessage({ slackChannelId: CH, threadTs: '2.2', agent: 'ella' });
+    expect((await ownerThreadSessionsAtBoot(home, now)).sort()).toEqual(['ella', 'fern']);
+    expect(await ownerThreadSessionsAtBoot(home, now, undefined, (s) => s === 'ella')).toEqual(['ella']);
+  });
+});
+
+describe('agents on this machine (team moves, crewly#1344)', () => {
+  let home: string;
+  beforeEach(() => {
+    home = mkdtempSync(path.join(os.tmpdir(), 'sentinel-moves-'));
+  });
+  afterEach(() => rmSync(home, { recursive: true, force: true }));
+
+  it('movedAwayTeamIds reads finished stop_archive moves from team-moves/*/state.json', () => {
+    const write = (id: string, state: Record<string, unknown>) => {
+      mkdirSync(path.join(home, 'team-moves', id), { recursive: true });
+      writeFileSync(path.join(home, 'team-moves', id, 'state.json'), JSON.stringify(state));
+    };
+    write('m1', { moveId: 'm1', teamId: 'steamfun', role: 'source', action: 'stop_archive', phase: 'done' });
+    write('m2', { moveId: 'm2', teamId: 'edu', role: 'source', action: 'rollback', phase: 'done' });
+    write('m3', { moveId: 'm3', teamId: 'bible', role: 'target', action: 'import', phase: 'done' });
+    mkdirSync(path.join(home, 'team-moves', 'm4'));
+    writeFileSync(path.join(home, 'team-moves', 'm4', 'state.json'), 'not json');
+    expect([...movedAwayTeamIds(home)]).toEqual(['steamfun']);
+    expect([...movedAwayTeamIds(path.join(home, 'nope'))]).toEqual([]);
+  });
+
+  it('liveAgentSessions leaves out archived and moved-away teams', () => {
+    const teams = [
+      { id: 'here', members: [{ sessionName: 'ella' }, { sessionName: '' }] },
+      { id: 'archived', moveArchive: { moveId: 'x' }, members: [{ sessionName: 'fern' }] },
+      { id: 'gone', members: [{ sessionName: 'max' }] },
+    ] as never;
+    expect([...liveAgentSessions(teams, new Set(['gone']))]).toEqual(['ella']);
+    expect([...liveAgentSessions(teams)].sort()).toEqual(['ella', 'max']);
   });
 });
 

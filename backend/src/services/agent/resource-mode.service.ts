@@ -46,6 +46,14 @@ export const RESOURCE_MODE_CONSTANTS = {
 	 * protection has run out.
 	 */
 	DISPLACED_GUARD_MS: 30 * 60_000,
+	/**
+	 * An agent idle for less than this is never stopped to free a slot — not
+	 * for an owner-message waiter, not when the rules relax — unless memory is
+	 * critical. Eviction at `idleMinutes: 0` (32 slot stops in 9 h on
+	 * 2026-10-16, Luna and Max taking turns) throws away an agent that just
+	 * finished a turn and is about to get the next one (crewly#1344).
+	 */
+	MIN_IDLE_BEFORE_EVICT_MS: 5 * 60_000,
 	/** A wait record older than this since its last touch is a new wait */
 	WAIT_RECORD_TTL_MS: 10 * 60_000,
 	/** A started agent counts against the cap even before it shows as running */
@@ -441,6 +449,7 @@ export class ResourceModeService {
 	 *
 	 * Anti-thrash rules (2026-10-16, Luna and Max evicting each other), which
 	 * hold in every mode, relaxed included, unless memory is critical:
+	 *  - an agent idle for less than MIN_IDLE_BEFORE_EVICT_MS is kept (also for an owner-message waiter),
 	 *  - an agent started less than MIN_RUN_BEFORE_EVICT_MS ago is kept,
 	 *  - an agent whose work the waiter waits on ({@link ResourceModeDeps.waitsOn}) is kept,
 	 *  - an agent that displaced the waiter less than DISPLACED_GUARD_MS ago is kept (hysteresis).
@@ -482,6 +491,13 @@ export class ResourceModeService {
 		const keptBecause = new Map<RunningAgent, string>();
 		const unprotected: RunningAgent[] = [];
 		for (const r of ordered) {
+			// Floor under every rule (owner waiter and relaxed included): an agent
+			// that went idle moments ago is not a slot, it is the next turn's
+			// agent (crewly#1344). Only critical memory overrides it.
+			if (!critical && r.idleMs < RESOURCE_MODE_CONSTANTS.MIN_IDLE_BEFORE_EVICT_MS) {
+				skipped.push(`${r.sessionName}: idle ${Math.round(r.idleMs / 60000)} min, under the ${RESOURCE_MODE_CONSTANTS.MIN_IDLE_BEFORE_EVICT_MS / 60000} min eviction floor`);
+				continue;
+			}
 			const thrash = critical ? null : await this.thrashReason(r.sessionName, waiterName, now, ownerWaiter);
 			if (thrash) {
 				skipped.push(`${r.sessionName}: ${thrash}`);

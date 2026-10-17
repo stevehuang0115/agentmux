@@ -2375,7 +2375,12 @@ void (async () => {
 				// An agent mid-conversation with the owner is the last one stopped
 				// for a slot, and its owner thread hears when it is
 				// (specs/2026-10-08-owner-thread-sentinel.md).
-				owesOwnerThread: (name) => getOwnerThreadSentinel()?.owesOwner(name) === true || getFollowThrough()?.holdsIntent(name) === true,
+				// … and so is an agent the owner spoke to in the last two hours, answered
+				// or not: evicting it loses the conversation the owner is in (crewly#1344).
+				owesOwnerThread: (name) =>
+					getOwnerThreadSentinel()?.owesOwner(name) === true ||
+					getOwnerThreadSentinel()?.ownerActiveRecently(name) === true ||
+					getFollowThrough()?.holdsIntent(name) === true,
 				onStoppedForSlot: (name) => {
 					reportOwnerThreadBlocking(name, { kind: 'stopped', why: 'slot' });
 					// Same hook as every other stop path: what it owes goes back to the queue and it is brought back.
@@ -4216,7 +4221,8 @@ void (async () => {
 			// Idle-boundary context cap for Claude Code members: a long single
 			// task keeps growing its conversation (sessions at 650k–965k per
 			// turn); between turns, save + clear + re-orient it past the cap
-			// (CREWLY_MEMBER_CONTEXT_CAP_TOKENS, default 300k, 0 disables).
+			// (CREWLY_MEMBER_CONTEXT_CAP_TOKENS, default 450k — above Claude
+			// Code's own 350k auto-compact, crewly#1344 — 0 disables).
 			try {
 				const { FreshTaskConversationService } = await import('./services/agent/fresh-task-conversation.service.js');
 				FreshTaskConversationService.getInstance().startContextCapSweep();
@@ -6443,9 +6449,20 @@ void (async () => {
 	 * @returns Session names (never the orchestrator)
 	 */
 	private async ownerThreadSessionsAtBoot(): Promise<string[]> {
-		const { ownerThreadSessionsAtBoot } = await import('./services/messaging/owner-thread-sentinel.wiring.js');
-		const sessions = await ownerThreadSessionsAtBoot(this.config.crewlyHome, Date.now(), (msg, error) =>
-			this.logger.warn(msg, { error: error instanceof Error ? error.message : String(error) }),
+		const { ownerThreadSessionsAtBoot, liveAgentSessions, movedAwayTeamIds } = await import('./services/messaging/owner-thread-sentinel.wiring.js');
+		// Agents of a team that moved to another machine are not restored here
+		// however long their owner thread was watched (crewly#1344).
+		let live: Set<string> | null = null;
+		try {
+			live = liveAgentSessions(await this.storageService.getTeams(), movedAwayTeamIds(this.config.crewlyHome));
+		} catch {
+			live = null;
+		}
+		const sessions = await ownerThreadSessionsAtBoot(
+			this.config.crewlyHome,
+			Date.now(),
+			(msg, error) => this.logger.warn(msg, { error: error instanceof Error ? error.message : String(error) }),
+			live ? (session) => (live as Set<string>).has(session) : undefined,
 		);
 		if (sessions.length > 0) this.logger.info('Owner threads wait on these agents; restoring them as work in hand', { sessions });
 		return sessions;
@@ -7131,6 +7148,10 @@ void (async () => {
 				displayNameOf: (session) => (session === ORCHESTRATOR_SESSION_NAME ? 'Orc' : names.get(session) ?? session),
 				listItems: () => TaskPoolService.getInstance().getAllItems(),
 				workingStatusOf: (session) => activity.getObservedWorkingStatus(session) ?? null,
+				// A thread whose agent left this machine (team moved, member removed)
+				// is dropped instead of being re-stamped "restarted" forever (crewly#1344).
+				// `names` holds this machine's current members, kept fresh by the watchdog.
+				agentOnThisMachine: (session) => session === ORCHESTRATOR_SESSION_NAME || names.size === 0 || names.has(session),
 			});
 			watchdog.onTrack((entry) => wiring.onOwnerMessageTracked(sentinel, entry));
 			this.logger.info('Owner thread sentinel started', { watched: sentinel.list().length });

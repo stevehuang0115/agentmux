@@ -1123,8 +1123,16 @@ export class AgentRegistrationService {
 	 * resume, and if so write the handover file its fresh one will read.
 	 *
 	 * The orchestrator's threshold is {@link orcFreshContextTokens} (300k);
-	 * team members use {@link memberFreshContextTokens} (150k) — their tasks
-	 * are narrower and a fresh conversation per task is the norm for them.
+	 * team members use {@link memberFreshContextTokens} (400k, above Claude
+	 * Code's own 350k auto-compact so compaction runs first and this is only a
+	 * safety net — crewly#1344).
+	 *
+	 * The transcript is looked for under the Claude home the session runs on
+	 * NOW (`claudeHomeOverride`: another account's config dir after a runtime
+	 * fallback moved it there), which is also where `conversationExists` looks
+	 * before `--resume`. A switch between accounts copies the transcript there
+	 * first (runtime-fallback.wiring `carryClaudeConversation`), so the
+	 * conversation is found and resumed instead of starting fresh.
 	 * Only Claude Code, and only here — at a launch — so a conversation is
 	 * never cut in the middle of anything. Real state (tasks, teams, OKRs,
 	 * wiki) lives in Crewly and is read back at startup; the handover keeps

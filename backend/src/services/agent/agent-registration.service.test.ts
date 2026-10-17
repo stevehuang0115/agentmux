@@ -361,15 +361,15 @@ describe('AgentRegistrationService', () => {
 		});
 		afterEach(() => tokensSpy.mockRestore());
 
-		it('starts a member fresh above the member threshold (150k) with a handover', () => {
-			tokensSpy.mockReturnValue(200_000);
+		it('starts a member fresh above the member threshold (400k, over Claude Code\'s 350k auto-compact — crewly#1344) with a handover', () => {
+			tokensSpy.mockReturnValue(450_000);
 			const fresh = (service as any).closeOversizedConversation('team-dev-1', RUNTIME_TYPES.CLAUDE_CODE, 'conv-1', '/proj');
 			expect(fresh).toBe(true);
-			expect((service as any).pendingHandovers.get('team-dev-1')).toMatchObject({ tokens: 200_000 });
+			expect((service as any).pendingHandovers.get('team-dev-1')).toMatchObject({ tokens: 450_000 });
 		});
 
-		it('keeps a member conversation below the threshold, and the orchestrator below 300k', () => {
-			tokensSpy.mockReturnValue(120_000);
+		it('keeps a member conversation below the threshold (compaction\'s job first), and the orchestrator below 300k', () => {
+			tokensSpy.mockReturnValue(350_000);
 			expect((service as any).closeOversizedConversation('team-dev-1', RUNTIME_TYPES.CLAUDE_CODE, 'conv-1', '/proj')).toBe(false);
 			tokensSpy.mockReturnValue(200_000);
 			expect((service as any).closeOversizedConversation('crewly-orc', RUNTIME_TYPES.CLAUDE_CODE, 'conv-1', '/proj')).toBe(false);

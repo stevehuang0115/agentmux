@@ -2,7 +2,7 @@ jest.mock('../core/logger.service.js', () => ({
   LoggerService: { getInstance: () => ({ createComponentLogger: () => ({ info: jest.fn(), debug: jest.fn(), warn: jest.fn(), error: jest.fn() }) }) },
 }));
 
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
@@ -420,6 +420,19 @@ describe('slot / idle preference and boot restore', () => {
     expect(h.sentinel.owesOwner(ATLAS)).toBe(false);
   });
 
+  it('ownerActiveRecently: the owner wrote to the agent (answered or not) or it promised, within two hours (crewly#1344)', () => {
+    const h = make();
+    expect(h.sentinel.ownerActiveRecently(ATLAS)).toBe(false);
+    h.sentinel.noteOwnerMessage({ ...THREAD, agent: ATLAS, at: h.clock.t });
+    h.sentinel.noteAgentPost({ ...THREAD, agent: ATLAS, text: 'Done — the draft is above.' });
+    // Answered, so nothing is owed — but the conversation is live.
+    expect(h.sentinel.owesOwner(ATLAS)).toBe(false);
+    expect(h.sentinel.ownerActiveRecently(ATLAS)).toBe(true);
+    h.clock.t += 2 * 60 * MIN + MIN;
+    expect(h.sentinel.ownerActiveRecently(ATLAS)).toBe(false);
+    expect(h.sentinel.ownerActiveRecently('nobody')).toBe(false);
+  });
+
   it('ownerThreadFor: the thread a card should go into', () => {
     const h = make();
     expect(h.sentinel.ownerThreadFor(ATLAS)).toBeNull();
@@ -457,6 +470,49 @@ describe('slot / idle preference and boot restore', () => {
 
     it('a corrupt or missing state file means nobody is owed', () => {
       expect(owingAgentsOnDisk(path.join(dir, 'missing.json'))).toEqual([]);
+    });
+
+    // crewly#1344: a thread from 10-07 whose owner last wrote on 10-08 was
+    // re-stamped "restarted" on every boot and listed as work in hand for ten days.
+    it('a thread with no owner activity for three days is dropped at load and never counted as owed', async () => {
+      const storePath = path.join(dir, 'owner-thread-sentinel.json');
+      const h = make({ storePath });
+      promised(h);
+      expect(owingAgentsOnDisk(storePath, h.clock.t)).toEqual([ATLAS]);
+
+      const later = h.clock.t + 3 * 24 * 60 * MIN + MIN;
+      expect(owingAgentsOnDisk(storePath, later)).toEqual([]);
+      // Loaded three days later (the clock is read at load).
+      const after = make({ storePath, now: () => later });
+      expect(after.sentinel.list()).toEqual([]);
+      await after.sentinel.tick();
+      expect(after.posts).toEqual([]);
+      // The pruned file stays pruned for the next boot too.
+      expect(JSON.parse(readFileSync(storePath, 'utf8')).entries).toEqual([]);
+    });
+
+    it('a thread whose agent is no longer on this machine (its team moved away) is dropped at load and on a tick', async () => {
+      const storePath = path.join(dir, 'owner-thread-sentinel.json');
+      const h = make({ storePath });
+      promised(h);
+      h.sentinel.noteOwnerMessage({ slackChannelId: CH, threadTs: '2.2', agent: 'vera', at: h.clock.t });
+
+      expect(owingAgentsOnDisk(storePath, h.clock.t, (agent) => agent !== ATLAS)).toEqual(['vera']);
+      const after = make({ storePath, agentOnThisMachine: (agent) => agent !== ATLAS });
+      after.clock.t = h.clock.t + 5 * MIN;
+      expect(after.sentinel.list().map((e) => e.agent)).toEqual(['vera']);
+      await after.sentinel.tick();
+      expect(after.posts.map((p) => p.text)).not.toEqual(expect.arrayContaining([expect.stringContaining('Atlas')]));
+
+      // Vera's team moves away while running: the next tick forgets her thread.
+      let present = true;
+      const live = make({ storePath, agentOnThisMachine: () => present });
+      live.clock.t = after.clock.t;
+      expect(live.sentinel.owesOwner('vera')).toBe(true);
+      present = false;
+      await live.sentinel.tick();
+      expect(live.sentinel.owesOwner('vera')).toBe(false);
+      expect(live.sentinel.list()).toEqual([]);
     });
   });
 });

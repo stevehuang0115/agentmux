@@ -26,6 +26,9 @@ describe('team-move-chat', () => {
     mem.run('c-huddle', 's2', 1);
     mem.run('c-mixed', 's1', 1);
     mem.run('c-mixed', 'outsider', 1);
+    const msg = db.prepare('INSERT INTO chat_messages (id, channel_id, seq, sender_type, sender_id, content, created_at, thread_id) VALUES (?,?,?,?,?,?,?,?)');
+    for (let i = 1; i <= 5; i++) msg.run(`m-${i}`, 'c-mixed', i, i % 2 ? 'user' : 'agent', i % 2 ? 'owner' : 's1', `room message ${i}`, i, i > 1 ? 'm-1' : null);
+    msg.run('m-team', 'c-team', 1, 'user', 'owner', 'team message', 1, null);
     db.close();
   });
   afterEach(async () => {
@@ -48,6 +51,32 @@ describe('team-move-chat', () => {
     expect(applyTeamChat(b, records)).toEqual({ channelsAdded: 3, channelsExisting: 0, membersAdded: 2 });
     expect(applyTeamChat(b, records)).toEqual({ channelsAdded: 0, channelsExisting: 3, membersAdded: 0 });
     expect(applyTeamChat(b, { channels: [], members: [] })).toEqual({ channelsAdded: 0, channelsExisting: 0, membersAdded: 0 });
+  });
+
+  // crewly#1344 (#air-steamfun): the Slack mapping pointed at a room the
+  // orchestrator was in, so the roster rule left it out and the target had
+  // no channel behind the mapping — 404 on its messages, no thread history.
+  it('always carries the room behind the Slack mapping, with its newest messages, and writes them once on the target', () => {
+    const r = readTeamChat(a, id, { includeChannelIds: ['c-mixed'], messages: { channelIds: ['c-mixed', 'c-team', 'c-nope'], perChannel: 3, totalBytes: 1_000_000 } });
+    expect(r.channels.map((c) => c['id']).sort()).toEqual(['c-dm', 'c-huddle', 'c-mixed', 'c-team']);
+    expect(r.members.map((m) => `${m.channel_id}:${m.member_session}`).sort()).toEqual(['c-huddle:s1', 'c-huddle:s2', 'c-mixed:outsider', 'c-mixed:s1']);
+    // The newest three of the room, oldest first; the team channel's too; unknown channels ignored.
+    expect(r.messages!.map((m) => m['id'])).toEqual(['m-3', 'm-4', 'm-5', 'm-team']);
+
+    expect(applyTeamChat(b, r)).toEqual({ channelsAdded: 4, channelsExisting: 0, membersAdded: 4, messagesAdded: 4 });
+    expect(applyTeamChat(b, r)).toEqual({ channelsAdded: 0, channelsExisting: 4, membersAdded: 0, messagesAdded: 0 });
+    const db = openChatDatabase({ dbPath: path.join(b, 'chat.db'), skipIntegrityCheck: true });
+    try {
+      const rows = db.prepare('SELECT id, thread_id FROM chat_messages WHERE channel_id = ? ORDER BY seq').all('c-mixed') as Array<{ id: string; thread_id: string | null }>;
+      expect(rows).toEqual([{ id: 'm-3', thread_id: 'm-1' }, { id: 'm-4', thread_id: 'm-1' }, { id: 'm-5', thread_id: 'm-1' }]);
+    } finally {
+      db.close();
+    }
+    // The byte cap keeps the newest.
+    const small = readTeamChat(a, id, { includeChannelIds: ['c-mixed'], messages: { channelIds: ['c-mixed'], perChannel: 5, totalBytes: 600 } });
+    expect(small.messages!.length).toBeGreaterThan(0);
+    expect(small.messages!.length).toBeLessThan(5);
+    expect(small.messages![small.messages!.length - 1]!['id']).toBe('m-5');
   });
 
   it('archives and unarchives channels', () => {

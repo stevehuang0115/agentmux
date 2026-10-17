@@ -5,7 +5,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { crewlyAgentModelsInUse, writeRuntimeHandover } from './runtime-fallback.wiring.js';
+import { carryClaudeConversation, claudeHomeOfTarget, crewlyAgentModelsInUse, writeRuntimeHandover } from './runtime-fallback.wiring.js';
 
 describe('writeRuntimeHandover', () => {
 	let home: string;
@@ -110,6 +110,43 @@ describe('writeRuntimeHandover', () => {
 	it('words a move to a better fallback', () => {
 		const file = writeRuntimeHandover(home, { sessionName: 'crewly-orc', from: 'claude-code@b', to: 'claude-code', direction: 'upgrade', conversationId: null, workItem: null }, undefined);
 		expect(fs.readFileSync(file, 'utf-8')).toContain('You were running on Claude Code (b). Claude Code has usage again and comes first in your fallback order, so Crewly moved you there.');
+	});
+});
+
+describe('carryClaudeConversation (account switch keeps the conversation, crewly#1344)', () => {
+	let home: string;
+	let previous: string | undefined;
+	beforeEach(() => {
+		home = fs.mkdtempSync(path.join(os.tmpdir(), 'rf-carry-'));
+		previous = process.env.CREWLY_HOME;
+		process.env.CREWLY_HOME = home;
+	});
+	afterEach(() => {
+		if (previous === undefined) delete process.env.CREWLY_HOME;
+		else process.env.CREWLY_HOME = previous;
+		fs.rmSync(home, { recursive: true, force: true });
+	});
+
+	it("copies the transcript from one account's config dir into the other's, under the same cwd slug", () => {
+		const cwd = path.join(home, 'proj');
+		fs.mkdirSync(cwd);
+		const slug = path.resolve(cwd).replace(/[/.]/g, '-');
+		const fromDir = path.join(claudeHomeOfTarget('claude-code@a'), 'projects', slug);
+		fs.mkdirSync(fromDir, { recursive: true });
+		fs.writeFileSync(path.join(fromDir, 'conv-1.jsonl'), '{"type":"user","message":{"content":"hello"}}\n');
+
+		expect(carryClaudeConversation({ sessionName: 'dev-1', from: 'claude-code@a', to: 'claude-code@b', conversationId: 'conv-1', cwd })).toBe(true);
+		expect(fs.readFileSync(path.join(claudeHomeOfTarget('claude-code@b'), 'projects', slug, 'conv-1.jsonl'), 'utf8')).toContain('hello');
+		expect(claudeHomeOfTarget('claude-code@b')).toBe(path.join(home, 'claude-accounts', 'b'));
+		expect(claudeHomeOfTarget('claude-code')).toBe(path.join(os.homedir(), '.claude'));
+	});
+
+	it('is true for the same account on both sides, false with no cwd or no transcript', () => {
+		const cwd = path.join(home, 'proj');
+		fs.mkdirSync(cwd);
+		expect(carryClaudeConversation({ sessionName: 'dev-1', from: 'claude-code@a', to: 'claude-code@a', conversationId: 'x', cwd })).toBe(true);
+		expect(carryClaudeConversation({ sessionName: 'dev-1', from: 'claude-code@a', to: 'claude-code@b', conversationId: 'x', cwd: undefined })).toBe(false);
+		expect(carryClaudeConversation({ sessionName: 'dev-1', from: 'claude-code@a', to: 'claude-code@b', conversationId: 'missing', cwd })).toBe(false);
 	});
 });
 

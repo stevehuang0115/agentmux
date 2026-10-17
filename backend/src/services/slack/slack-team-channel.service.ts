@@ -826,6 +826,7 @@ export class SlackTeamChannelService {
         void this.inviteInstalledEverywhere(record.agentSession);
       }) ?? null;
     this.started = true;
+    await this.healMissingChatChannels();
     await this.restoreUnanswered();
     this.logger.info('Slack team channels started', {
       mappings: this.store?.mappings.length ?? 0,
@@ -857,6 +858,54 @@ export class SlackTeamChannelService {
       (this.pruneTimer as { unref?: () => void }).unref?.();
       (this.pruneInterval as { unref?: () => void }).unref?.();
     }
+  }
+
+  /**
+   * Give every mapping a chat channel that exists. A mapping whose
+   * `chatChannelId` is not in the chat store (a team moved here without its
+   * room, a wiped chat.db) made every Slack turn reach its agents with no
+   * local thread history and `GET …/messages` answer 404 (crewly#1344,
+   * #air-steamfun). A fresh huddle with the known roster takes its place.
+   *
+   * @returns Mappings re-pointed
+   */
+  async healMissingChatChannels(): Promise<number> {
+    const store = await this.load();
+    let healed = 0;
+    for (const mapping of store.mappings) {
+      let exists = false;
+      try {
+        exists = this.deps.chat.getChannelForBridge(mapping.chatChannelId) !== null;
+      } catch {
+        exists = true; // the store cannot say: leave the mapping alone
+      }
+      if (exists) continue;
+      try {
+        const team = (await this.deps.storage.getTeams()).find((t) => t.id === mapping.teamId);
+        const roster = mapping.members && mapping.members.length > 0 ? mapping.members : team ? teamChannelMembers(team).map((m) => m.sessionName) : [];
+        const huddle = this.deps.chat.createHuddle({
+          name: `#${mapping.slackChannelName}`,
+          purpose: team ? `Slack team channel for ${team.name}` : `Slack channel #${mapping.slackChannelName}`,
+          memberSessions: roster.length > 0 ? roster : [`team:${mapping.teamId}`],
+          principal: { userId: 'system', source: 'oss' },
+        });
+        this.logger.warn('Slack channel mapping pointed at a chat channel that does not exist here — created a new one', {
+          slackChannel: `#${mapping.slackChannelName}`,
+          teamId: mapping.teamId,
+          missing: mapping.chatChannelId,
+          chatChannelId: huddle.id,
+        });
+        mapping.chatChannelId = huddle.id;
+        healed += 1;
+      } catch (err) {
+        this.logger.warn('Could not recreate the chat channel behind a Slack mapping', {
+          slackChannel: `#${mapping.slackChannelName}`,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    if (healed > 0) await this.save();
+    return healed;
   }
 
   /**
@@ -2260,11 +2309,19 @@ export class SlackTeamChannelService {
           ...(bareMentionNote ? { bareMentionNote } : {}),
           ...(slackContext
             ? {
-                slackContextFor: (session: string) =>
-                  renderSlackThreadContext(slackContext, {
+                slackContextFor: (session: string) => {
+                  const block = renderSlackThreadContext(slackContext, {
                     botUserId: this.deps.identities?.get(session)?.botUserId,
                     name: members.find((m) => m.sessionName === session)?.name,
-                  }),
+                  });
+                  // Where the whole thread lives on this machine, the way the
+                  // orchestrator path names its thread file (crewly#1344): the
+                  // block is a clipped window, the chat thread is the record.
+                  const localThread = threadId ?? persisted.threadId;
+                  return block && localThread
+                    ? `${block}\n[Full thread: chat channel ${mapping.chatChannelId}, thread ${localThread} — read it with search-chat when the lines above are not enough]`
+                    : block;
+                },
               }
             : {}),
         });

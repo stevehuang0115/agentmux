@@ -113,6 +113,7 @@ jest.mock('../workflow/cron-task.service.js', () => ({
 
 // Import after mocks
 import { IdleDetectionService, PENDING_WORK_STATUSES } from './idle-detection.service.js';
+import { setOwnerThreadSentinel } from '../messaging/owner-thread-sentinel.service.js';
 
 describe('IdleDetectionService', () => {
 	beforeEach(() => {
@@ -379,6 +380,47 @@ describe('IdleDetectionService', () => {
 			await service.performCheck();
 
 			expect(mockTerminate).toHaveBeenCalled();
+		});
+	});
+
+	describe('owner conversation keep-alive (crewly#1344)', () => {
+		const idleDev = () => {
+			mockGetTeams.mockResolvedValue([{
+				id: 'team1',
+				members: [{ id: 'dev1', sessionName: 'agent-dev', role: 'developer', agentStatus: 'active' }],
+			}]);
+		};
+		afterEach(() => setOwnerThreadSentinel(null));
+
+		it('a member the owner spoke to in the last two hours waits 30 minutes before an idle stop, whatever the configured timeout', async () => {
+			idleDev();
+			setOwnerThreadSentinel({ ownerActiveRecently: (s: string) => s === 'agent-dev' } as never);
+			mockGetSettings.mockResolvedValue({ general: { agentIdleTimeoutMinutes: 10 } });
+			// Idle for 10 minutes but not for 30: kept.
+			mockIsIdleFor.mockImplementation((_s: string, ms: number) => ms <= 10 * 60_000);
+			const mockTerminate = jest.fn().mockResolvedValue({ success: true });
+			const service = IdleDetectionService.getInstance();
+			service.setAgentRegistrationService({ terminateAgentSession: mockTerminate } as any);
+
+			await service.performCheck();
+			expect(mockIsIdleFor).toHaveBeenCalledWith('agent-dev', AGENT_SUSPEND_CONSTANTS.OWNER_THREAD_IDLE_TIMEOUT_MINUTES * 60_000);
+			expect(mockTerminate).not.toHaveBeenCalled();
+
+			// Idle for 30 minutes: stopped as before (memory is tight in this file).
+			mockIsIdleFor.mockReturnValue(true);
+			await service.performCheck();
+			expect(mockTerminate).toHaveBeenCalledWith('agent-dev', 'developer');
+		});
+
+		it('an agent the owner has not spoken to keeps the configured timeout', async () => {
+			idleDev();
+			setOwnerThreadSentinel({ ownerActiveRecently: () => false } as never);
+			mockGetSettings.mockResolvedValue({ general: { agentIdleTimeoutMinutes: 10 } });
+			mockIsIdleFor.mockReturnValue(true);
+			const service = IdleDetectionService.getInstance();
+			service.setAgentRegistrationService({ terminateAgentSession: jest.fn().mockResolvedValue({ success: true }) } as any);
+			await service.performCheck();
+			expect(mockIsIdleFor).toHaveBeenCalledWith('agent-dev', 10 * 60_000);
 		});
 	});
 

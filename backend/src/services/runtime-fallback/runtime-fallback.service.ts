@@ -150,6 +150,14 @@ export interface RuntimeFallbackDeps {
 		set: (sessionName: string, id: string) => void;
 		clear: (sessionName: string) => void;
 	};
+	/**
+	 * Carry a Claude Code conversation from one Claude Code target to another
+	 * (the default login and the owner's other accounts keep their transcripts
+	 * in different config dirs): copy the transcript so `--resume` finds it on
+	 * the target. True when the conversation can be resumed there; false (or
+	 * absent) means the target starts fresh with the handover (crewly#1344).
+	 */
+	carryConversation?: (args: { sessionName: string; from: string; to: string; conversationId: string }) => Promise<boolean>;
 	/** Stop the session and start it again (the launch resolves the runtime) */
 	relaunch: (agent: FallbackAgentInfo) => Promise<boolean>;
 	/** After a relaunch: re-deliver unanswered owner messages */
@@ -562,7 +570,7 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 				this.save();
 			} else if (existing.revertPending && !this.state.exhausted[existing.primary]) {
 				// A stopped agent being started after its runtime came back.
-				this.finishRevertOffline(input.sessionName, existing);
+				await this.finishRevertOffline(input.sessionName, existing);
 				return configured;
 			} else if (!this.state.exhausted[existing.primary]) {
 				// Its runtime is back but not yet marked for revert: the next tick reverts it.
@@ -896,13 +904,19 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 		const sessionName = agent.sessionName;
 		const existing = this.state.overrides[sessionName];
 		const exhausted = this.state.exhausted[from];
-		// The primary's conversation is kept for the switch back; the fallback
-		// runtime starts fresh.
-		const primarySessionId = existing?.primarySessionId ?? (from === agent.primary ? this.deps.conversation.get(sessionName) : undefined);
+		const currentId = this.deps.conversation.get(sessionName);
+		// The primary's conversation is kept for the switch back. Between two
+		// Claude Code targets (the default login and another account) the
+		// conversation itself travels: its transcript is copied into the target
+		// account's config dir and resumed there (crewly#1344). Any other hop
+		// starts fresh with the handover.
+		const primarySessionId = existing?.primarySessionId ?? (from === agent.primary ? currentId : undefined);
+		const carried = currentId ? await this.carryConversation(sessionName, from, target, currentId) : false;
 		this.deps.conversation.clear(sessionName);
+		if (carried) this.deps.conversation.set(sessionName, currentId as string);
 		if (target === agent.primary) {
 			delete this.state.overrides[sessionName];
-			if (primarySessionId) this.deps.conversation.set(sessionName, primarySessionId);
+			if (!carried && primarySessionId) this.deps.conversation.set(sessionName, primarySessionId);
 		} else {
 			this.state.overrides[sessionName] = {
 				runtime: target,
@@ -921,9 +935,34 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 		const workItem = await this.deps.getActiveWorkItem(sessionName).catch(() => null);
 		this.kickoffNotes.set(
 			sessionName,
-			direction === 'upgrade' ? this.upgradeNote(agent.primary, from, target, handover, workItem) : this.switchNote(from, target, exhausted?.until, handover, workItem),
+			direction === 'upgrade'
+				? this.upgradeNote(agent.primary, from, target, handover, workItem, carried)
+				: this.switchNote(from, target, exhausted?.until, handover, workItem, carried),
 		);
+		if (carried) this.logger.info('Conversation carried to the target Claude Code account', { sessionName, from, to: target, conversationId: currentId });
 		this.scheduleNotice(from);
+	}
+
+	/**
+	 * Whether the conversation can continue on the target: both targets run
+	 * Claude Code (different accounts or the default login) and the wiring
+	 * copied its transcript there. Never throws.
+	 *
+	 * @param sessionName - Session
+	 * @param from - Target it leaves
+	 * @param to - Target it goes to
+	 * @param conversationId - Its conversation on `from`
+	 * @returns True when `--resume <conversationId>` works on `to`
+	 */
+	private async carryConversation(sessionName: string, from: string, to: string, conversationId: string): Promise<boolean> {
+		if (!this.deps.carryConversation) return false;
+		if (baseRuntimeOf(from) !== RUNTIME_TYPES.CLAUDE_CODE || baseRuntimeOf(to) !== RUNTIME_TYPES.CLAUDE_CODE) return false;
+		try {
+			return await this.deps.carryConversation({ sessionName, from, to, conversationId });
+		} catch (err) {
+			this.logger.warn('Could not carry the conversation to the target account; it starts fresh with the handover', { sessionName, from, to, error: err instanceof Error ? err.message : String(err) });
+			return false;
+		}
 	}
 
 	/**
@@ -1170,7 +1209,7 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 			}
 			if (this.switching.has(sessionName)) continue;
 			if (!this.deps.isLive(sessionName)) {
-				this.finishRevertOffline(sessionName, override);
+				await this.finishRevertOffline(sessionName, override);
 				continue;
 			}
 			if (await this.deps.isBusy(sessionName).catch(() => true)) continue;
@@ -1249,12 +1288,18 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 	 * @param sessionName - Session
 	 * @param override - Its override
 	 */
-	private finishRevertOffline(sessionName: string, override: RuntimeOverride): void {
+	private async finishRevertOffline(sessionName: string, override: RuntimeOverride): Promise<void> {
 		delete this.state.overrides[sessionName];
-		if (override.primarySessionId) this.deps.conversation.set(sessionName, override.primarySessionId);
+		const currentId = this.deps.conversation.get(sessionName);
+		// The conversation that went on on the fallback account comes back with
+		// the agent when both sides are Claude Code (crewly#1344); otherwise the
+		// primary's own conversation from before the switch is resumed.
+		const carried = currentId ? await this.carryConversation(sessionName, override.runtime, override.primary, currentId) : false;
+		if (carried) this.deps.conversation.set(sessionName, currentId as string);
+		else if (override.primarySessionId) this.deps.conversation.set(sessionName, override.primarySessionId);
 		else this.deps.conversation.clear(sessionName);
 		this.save();
-		this.logger.info('Fallback ended for a stopped agent (its next start uses its own runtime)', { sessionName, runtime: override.primary });
+		this.logger.info('Fallback ended for a stopped agent (its next start uses its own runtime)', { sessionName, runtime: override.primary, carried });
 	}
 
 	/**
@@ -1296,10 +1341,15 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 				})
 				.catch(() => null);
 			delete this.state.overrides[sessionName];
-			if (override.primarySessionId) this.deps.conversation.set(sessionName, override.primarySessionId);
+			const currentId = this.deps.conversation.get(sessionName);
+			// Both sides Claude Code: the conversation that went on while on the
+			// fallback account comes back with the agent (crewly#1344).
+			const carried = currentId ? await this.carryConversation(sessionName, override.runtime, override.primary, currentId) : false;
+			if (carried) this.deps.conversation.set(sessionName, currentId as string);
+			else if (override.primarySessionId) this.deps.conversation.set(sessionName, override.primarySessionId);
 			else this.deps.conversation.clear(sessionName);
 			this.save();
-			this.kickoffNotes.set(sessionName, this.revertNote(override, handover, workItem));
+			this.kickoffNotes.set(sessionName, this.revertNote(override, handover, workItem, carried));
 			this.logger.info('Switching agent back to its own runtime at an idle boundary', { sessionName, from: override.runtime, to: override.primary });
 			const ok = await this.deps.relaunch(agent).catch(() => false);
 			if (!ok) {
@@ -1455,7 +1505,15 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 		}).format(new Date(epochMs));
 	}
 
-	private switchNote(from: string, to: string, until: string | undefined, handover: string | null, workItem: { id: string; title: string } | null): string {
+	/** The second sentence of a kickoff note: whether the conversation came along. */
+	private continuity(handover: string | null, carried: boolean): string {
+		if (carried) return 'Your conversation came with you — carry on where you were; nothing was lost.';
+		return handover
+			? `This is a fresh conversation: after registering, read ${handover} once — it holds the end of your previous conversation.`
+			: 'This is a fresh conversation: your tasks, teams and wiki are all still in Crewly.';
+	}
+
+	private switchNote(from: string, to: string, until: string | undefined, handover: string | null, workItem: { id: string; title: string } | null, carried = false): string {
 		const reset = until ? ` (it resets ~${this.formatTime(Date.parse(until))})` : '';
 		const kind = this.state.exhausted[from]?.kind;
 		const parts = [
@@ -1466,31 +1524,29 @@ export class RuntimeFallbackService implements RuntimeFallbackHooks {
 					: kind === 'login'
 					? `Crewly moved you from ${this.label(from)} to ${this.label(to)} because the ${this.label(from)} login expired.`
 					: `Crewly moved you from ${this.label(from)} to ${this.label(to)} because ${this.label(from)} hit its usage limit${reset}; you will be moved back when it resets.`,
-			handover
-				? `This is a fresh conversation: after registering, read ${handover} once — it holds the end of your previous conversation.`
-				: 'This is a fresh conversation: your tasks, teams and wiki are all still in Crewly.',
+			this.continuity(handover, carried),
 		];
 		if (workItem) parts.push(`Then continue WorkItem ${workItem.id} ("${workItem.title}") where you left off.`);
 		return parts.join(' ');
 	}
 
-	private upgradeNote(primary: string, from: string, to: string, handover: string | null, workItem: { id: string; title: string } | null): string {
+	private upgradeNote(primary: string, from: string, to: string, handover: string | null, workItem: { id: string; title: string } | null, carried = false): string {
 		const parts = [
 			`${this.label(to)} has usage again, so Crewly moved you there from ${this.label(from)}; ${this.label(primary)} is still unavailable and you will be moved back to it once it is.`,
-			handover
-				? `This is a fresh conversation: after registering, read ${handover} once — it holds the end of your previous conversation.`
-				: 'This is a fresh conversation: your tasks, teams and wiki are all still in Crewly.',
+			this.continuity(handover, carried),
 		];
 		if (workItem) parts.push(`Then continue WorkItem ${workItem.id} ("${workItem.title}") where you left off.`);
 		return parts.join(' ');
 	}
 
-	private revertNote(override: RuntimeOverride, handover: string | null, workItem: { id: string; title: string } | null): string {
+	private revertNote(override: RuntimeOverride, handover: string | null, workItem: { id: string; title: string } | null, carried = false): string {
 		const parts = [
 			`${this.label(override.primary)} is available again, so Crewly moved you back from ${this.label(override.runtime)}.`,
-			handover
-				? `Work went on while you were away: read ${handover} once for what happened since.`
-				: 'Work went on while you were away: check your WorkItems and wiki for what happened since.',
+			carried
+				? 'Your conversation came back with you — carry on where you were.'
+				: handover
+					? `Work went on while you were away: read ${handover} once for what happened since.`
+					: 'Work went on while you were away: check your WorkItems and wiki for what happened since.',
 		];
 		if (workItem) parts.push(`Then continue WorkItem ${workItem.id} ("${workItem.title}").`);
 		return parts.join(' ');

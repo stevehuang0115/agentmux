@@ -13,13 +13,16 @@
  *                           wiki vault, cron tasks
  *   agents/<session>/**     agent memory, standing answers, session summaries
  *   handover/<file>         newest handover notes per agent
+ *   transcripts/<session>/  each member's latest Claude Code conversation,
+ *                           resumed on the target (crewly#1344)
  *   records/*.json          task-pool items, decisions, chat channels and
- *                           rooms, Slack channel mapping, scheduled messages
+ *                           rooms (with the Slack room's recent messages),
+ *                           Slack channel mapping, scheduled messages
  *   projects/<id>/data/**   `<project>/.crewly/**` (or the package-tree stores)
  *
- * Not in it: credentials, tokens, runtime logins, logs and transcripts,
- * node_modules/build output and repository working trees (the repo list in
- * the manifest lets the target clone them).
+ * Not in it: credentials, tokens, runtime logins, logs, node_modules/build
+ * output and repository working trees (the repo list in the manifest lets
+ * the target clone them).
  *
  * @module services/team-move/team-move-exporter
  */
@@ -37,6 +40,7 @@ import { safeReadJson } from '../../utils/file-io.utils.js';
 import { collectSecretEnvValues, type SecretEnvValue } from '../../utils/secret-env.js';
 import { PACKAGE_TREE_STORES, getCrewlyHomePath, isInsidePackageTree, resolveProjectDataDir } from '../core/crewly-home.utils.js';
 import { readTeamChat } from './team-move-chat.js';
+import { collectAgentTranscripts } from './team-move-transcripts.js';
 import { createEncryptStream, createHashTap } from './team-move-crypto.js';
 import { StagingArea, walkFiles } from './team-move-fs.js';
 import { collectCarry, describeLeft, resolveCarryLimits, type CarryLimits, type CollectCarryResult, type CollectedCarry } from './team-move-carry.js';
@@ -125,6 +129,8 @@ export interface ExportDeps {
   bundleLimits?: BundleLimits;
   /** Caps for project-local `.crewly` files; default from constants / env. */
   projectLimits?: ProjectFileLimits;
+  /** Claude homes the members' transcripts may be under (tests); default: the default login and the accounts under the Crewly home. */
+  claudeHomes?: readonly string[];
 }
 
 /** Size caps for project-local `.crewly` files. */
@@ -604,6 +610,17 @@ export class TeamMoveExporter {
       }
     }
 
+    // 3b. Each member's latest Claude Code conversation (crewly#1344): what the
+    // agent remembers by. Over the cap or unreadable → listed, and the agent
+    // starts on the target from its handover note as before.
+    const conversations = await collectAgentTranscripts({
+      home: this.home,
+      members: team.members,
+      copyIn: (abs, rel) => staging.copyIn(abs, rel),
+      ...(this.deps.claudeHomes ? { claudeHomes: this.deps.claudeHomes } : {}),
+    });
+    counts['conversations'] = conversations.filter((c) => c.file).length;
+
     // 4. Records from the global stores.
     await this.collectRecords(staging, id, team, counts);
 
@@ -674,6 +691,7 @@ export class TeamMoveExporter {
       team: { id: team.id, name: team.name, members, projectIds: [...team.projectIds] },
       counts,
       projects: packageProjects,
+      conversations,
       repos,
       requiredTools,
       requiredRuntimes,
@@ -812,8 +830,8 @@ export class TeamMoveExporter {
       'Credentials, API keys, OAuth/connector grants and runtime logins (Claude, Codex, ...)',
       'Slack bot tokens (Crewly Cloud re-points the agents\' Slack apps to the target)',
       'Source code of git projects that have a remote (cloned from it on the target; projects that are not git repositories, and repositories without a remote or with unpushed commits, travel in the package)',
-      'Chat message history (channels and rooms move, messages stay on the source)',
-      'Running sessions, logs, transcripts, build output and node_modules',
+      "Chat message history beyond the team's Slack room (channels and rooms move; the room's recent messages come along, other messages stay on the source)",
+      'Running sessions, logs, build output and node_modules (each member\'s latest Claude Code conversation does come along)',
       'Short-lived agent reminders (they are set again by the agents)',
     ];
   }
@@ -841,16 +859,22 @@ export class TeamMoveExporter {
     await staging.writeJson('records/scheduled-messages.json', { messages: mine });
     counts['scheduledMessages'] = mine.length;
 
-    // Chat channels, rooms and DMs with their membership.
-    const chat = readTeamChat(this.home, id);
-    await staging.writeJson('records/chat-channels.json', chat);
-    counts['chatChannels'] = chat.channels.length;
-
     // The Slack channel mapping of the team, so the target reuses the same channel.
     const slackFile = await safeReadJson<{ mappings?: Array<Record<string, unknown>> }>(path.join(this.home, 'slack-team-channels.json'), {});
     const mapping = (Array.isArray(slackFile.mappings) ? slackFile.mappings : []).find((m) => m['teamId'] === team.id) ?? null;
     await staging.writeJson('records/slack-team-channel.json', { mapping });
     if (mapping) counts['slackChannelMappings'] = 1;
+
+    // Chat channels, rooms and DMs with their membership — the room behind the
+    // Slack mapping always, with its recent messages (crewly#1344).
+    const roomId = typeof mapping?.['chatChannelId'] === 'string' ? [mapping['chatChannelId'] as string] : [];
+    const chat = readTeamChat(this.home, id, {
+      includeChannelIds: roomId,
+      messages: { channelIds: roomId, perChannel: C.CHAT_MESSAGES_PER_CHANNEL, totalBytes: C.CHAT_MESSAGES_MAX_BYTES },
+    });
+    await staging.writeJson('records/chat-channels.json', chat);
+    counts['chatChannels'] = chat.channels.length;
+    if (chat.messages) counts['chatMessages'] = chat.messages.length;
   }
 
   /**

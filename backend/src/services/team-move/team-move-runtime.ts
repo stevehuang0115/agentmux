@@ -28,6 +28,9 @@ import { getHarnessService } from '../harness/harness.service.js';
 import { getRuntimeFallbackService } from '../runtime-fallback/runtime-fallback.service.js';
 import { collectSettingsSecretValues } from '../security/secret-scrub.service.js';
 import { getSlackTeamChannelService } from '../slack/slack-team-channel.service.js';
+import { getSlackService } from '../slack/slack.service.js';
+import { getSlackAgentIdentityService } from '../slack/slack-agent-identity.service.js';
+import { SlackReloginDmService } from '../slack/slack-relogin-dm.service.js';
 import type { SlackTeamChannelMapping } from '../../types/slack.types.js';
 import { TaskPoolService } from '../task-pool/task-pool.service.js';
 import { VersionCheckService } from '../system/version-check.service.js';
@@ -207,6 +210,15 @@ export function createTeamMoveDriver(input: TeamMoveRuntimeInput): TeamMoveDrive
           return out;
         },
         machineName: async () => (await identity().catch(() => null))?.deviceName || os.hostname(),
+        // One DM when a project of the team could not be placed here (crewly#1344).
+        notifyOwner: async (text) => {
+          const dm = new SlackReloginDmService(
+            () => getSlackService(),
+            undefined,
+            (agentSession) => getSlackAgentIdentityService()?.getInstalled(agentSession)?.botToken ?? null,
+          );
+          return dm.sendToOwner(text, null, { title: 'Team move: a project needs its path' });
+        },
         runtimeLogins,
         freeDisk: freeDiskBytes,
         checkRemote: checkRemoteAccess,

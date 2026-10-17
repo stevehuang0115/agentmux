@@ -11,6 +11,7 @@ import * as path from 'path';
 import {
   buildHandoverSummary,
   claudeTranscriptPath,
+  copyClaudeConversation,
   lastTurnContextTokens,
   orcFreshContextTokens,
   memberFreshContextTokens,
@@ -345,13 +346,15 @@ describe('an orchestrator conversation too big to carry on', () => {
     expect(lastTurnContextTokens(path.join(dir, 'empty.jsonl'))).toBeNull();
   });
 
-  it('hands over what was said, not the tool traffic or system reminders', () => {
+  it('hands over what was said and one clipped line per tool call and result, never system reminders (crewly#1344)', () => {
     const file = path.join(dir, 'c.jsonl');
     fs.writeFileSync(file, [
       line({ type: 'user', timestamp: 't1', message: { content: 'Slack: please draft the Sunrun email' } }),
       line({ type: 'user', timestamp: 't1', message: { content: '<system-reminder>ignore me</system-reminder>' } }),
-      line({ type: 'user', timestamp: 't2', message: { content: [{ type: 'tool_result', content: 'x'.repeat(5000) }] } }),
-      line({ type: 'assistant', timestamp: 't3', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'cat big' } }, { type: 'text', text: 'Drafted, not sent.' }] } }),
+      line({ type: 'assistant', timestamp: 't2', message: { content: [{ type: 'tool_use', id: 'tu-1', name: 'Bash', input: { command: 'cat big' } }] } }),
+      line({ type: 'user', timestamp: 't2', message: { content: [{ type: 'tool_result', tool_use_id: 'tu-1', content: 'x'.repeat(5000) }] } }),
+      line({ type: 'user', timestamp: 't2', message: { content: [{ type: 'tool_result', tool_use_id: 'tu-9', content: [{ type: 'image', source: {} }] }] } }),
+      line({ type: 'assistant', timestamp: 't3', message: { content: [{ type: 'text', text: 'Drafted, not sent.' }] } }),
       '',
     ].join('\n'));
 
@@ -360,8 +363,12 @@ describe('an orchestrator conversation too big to carry on', () => {
     expect(summary).toContain('please draft the Sunrun email');
     expect(summary).toContain('Drafted, not sent.');
     expect(summary).not.toContain('ignore me');
-    expect(summary).not.toContain('xxxxx');
-    expect(summary).not.toContain('cat big');
+    // The tool call and its result are one line each: name + the first 200 characters.
+    expect(summary).toContain('↳ Bash: {"command":"cat big"}');
+    expect(summary).toContain(`↳ Bash result: ${'x'.repeat(200)}…`);
+    expect(summary).not.toContain('x'.repeat(201));
+    // An image is described, never copied.
+    expect(summary).toContain('↳ tool result: [1 image returned]');
   });
 
   it('keeps the handover short however long the conversation was', () => {
@@ -372,7 +379,7 @@ describe('an orchestrator conversation too big to carry on', () => {
 
     const summary = buildHandoverSummary(file);
 
-    expect(summary.length).toBeLessThanOrEqual(16_000 + 200);
+    expect(summary.length).toBeLessThanOrEqual(40_000 + 200);
     // Newest last: the end of the conversation is what survives.
     expect(summary).toContain('message 499');
     expect(summary).not.toContain('message 0 ');
@@ -449,9 +456,52 @@ describe('an orchestrator conversation too big to carry on', () => {
     expect(orcFreshContextTokens({ CREWLY_ORC_FRESH_CONTEXT_TOKENS: 'nope' })).toBe(300_000);
   });
 
-  it('members start fresh above 150k unless the environment says otherwise', () => {
-    expect(memberFreshContextTokens({})).toBe(150_000);
+  it('members start fresh above 400k (over Claude Code\'s 350k auto-compact) unless the environment says otherwise', () => {
+    expect(memberFreshContextTokens({})).toBe(400_000);
     expect(memberFreshContextTokens({ CREWLY_MEMBER_FRESH_CONTEXT_TOKENS: '200000' })).toBe(200_000);
-    expect(memberFreshContextTokens({ CREWLY_MEMBER_FRESH_CONTEXT_TOKENS: '-1' })).toBe(150_000);
+    expect(memberFreshContextTokens({ CREWLY_MEMBER_FRESH_CONTEXT_TOKENS: '-1' })).toBe(400_000);
+  });
+});
+
+describe('copyClaudeConversation (account switch keeps the conversation, crewly#1344)', () => {
+  let root: string;
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-copy-'));
+  });
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  it('copies the transcript and its sidecar folder under the same cwd slug, so the target home resumes it', () => {
+    const cwd = path.join(root, 'proj');
+    fs.mkdirSync(cwd);
+    const fromHome = path.join(root, 'default-claude');
+    const toHome = path.join(root, 'account-b');
+    const source = claudeTranscriptPath({ sessionId: 'conv-1', cwd, claudeHome: fromHome });
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    fs.writeFileSync(source, '{"type":"user","message":{"content":"hi"}}\n');
+    fs.mkdirSync(path.join(path.dirname(source), 'conv-1', 'subagents'), { recursive: true });
+    fs.writeFileSync(path.join(path.dirname(source), 'conv-1', 'subagents', 'agent-1.jsonl'), '{}\n');
+
+    expect(conversationExists({ runtimeType: 'claude-code', sessionId: 'conv-1', cwd, claudeHome: toHome })).toBe(false);
+    const result = copyClaudeConversation({ sessionId: 'conv-1', cwd, fromHomes: [toHome, fromHome], toHome });
+
+    expect(result?.source).toBe(source);
+    expect(result?.target).toBe(claudeTranscriptPath({ sessionId: 'conv-1', cwd, claudeHome: toHome }));
+    expect(fs.readFileSync(result!.target, 'utf8')).toContain('"hi"');
+    expect(fs.existsSync(path.join(path.dirname(result!.target), 'conv-1', 'subagents', 'agent-1.jsonl'))).toBe(true);
+    // What the launch checks before `--resume`: the target home now has it.
+    expect(conversationExists({ runtimeType: 'claude-code', sessionId: 'conv-1', cwd, claudeHome: toHome })).toBe(true);
+    // Nothing else of the account is touched.
+    expect(fs.readdirSync(toHome)).toEqual(['projects']);
+  });
+
+  it('is a no-op when both homes are the same, and null when the transcript is nowhere', () => {
+    const cwd = path.join(root, 'proj');
+    fs.mkdirSync(cwd);
+    const home = path.join(root, 'claude');
+    const source = claudeTranscriptPath({ sessionId: 'conv-2', cwd, claudeHome: home });
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    fs.writeFileSync(source, '{}\n');
+    expect(copyClaudeConversation({ sessionId: 'conv-2', cwd, fromHomes: [home], toHome: home })).toEqual({ source, target: source, copied: [] });
+    expect(copyClaudeConversation({ sessionId: 'missing', cwd, fromHomes: [home], toHome: path.join(root, 'other') })).toBeNull();
   });
 });
