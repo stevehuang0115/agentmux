@@ -311,7 +311,7 @@ export interface JanitorRunSummary {
 	/** Worktrees kept */
 	kept: number;
 	/** Number of scheduled-command cwds read for the keep check (null = unreadable) */
-	scheduledCwdsRead: number | null;
+	scheduledCwdsRead?: number | null;
 	/** Bytes freed by deleting regenerable dirs (node_modules, .next, dist, …) from kept worktrees (strip tier) */
 	reclaimedBytes: number;
 	/** Worktrees archived as a patch and removed (archive tier) */
@@ -1061,7 +1061,7 @@ export class WorktreeJanitorService {
 					? `; not yet armed: would strip ${wouldStrip.length} (${formatBytes(wouldStrip.reduce((n, w) => n + (w.tier?.freedBytes ?? 0), 0))}), archive ${would.length - wouldStrip.length}`
 					: '';
 			this.logger.info(
-				`Worktree janitor: removed ${summary.removed}${summary.archived > 0 ? ` (${summary.archived} archived as patches, ${formatBytes(summary.archivedBytes)})` : ''}, kept ${summary.kept}${reasons ? ` (${reasons})` : ''}${summary.reclaimedBytes > 0 ? `, stripped ${formatBytes(summary.reclaimedBytes)} of node_modules/build output from idle kept worktrees` : ''}${wouldText} across ${summary.repos.length} repo(s) in ${summary.durationMs}ms; ${summary.scheduledCwdsRead === null ? 'scheduled-command cwds unreadable (all clean worktrees kept)' : `${summary.scheduledCwdsRead} scheduled-command cwd(s) read`}`,
+				`Worktree janitor: removed ${summary.removed}${summary.archived > 0 ? ` (${summary.archived} archived as patches, ${formatBytes(summary.archivedBytes)})` : ''}, kept ${summary.kept}${reasons ? ` (${reasons})` : ''}${summary.reclaimedBytes > 0 ? `, stripped ${formatBytes(summary.reclaimedBytes)} of node_modules/build output from idle kept worktrees` : ''}${wouldText} across ${summary.repos.length} repo(s) in ${summary.durationMs}ms; ${summary.scheduledCwdsRead == null ? 'scheduled-command cwds unreadable (all clean worktrees kept)' : `${summary.scheduledCwdsRead} scheduled-command cwd(s) read`}`,
 				{ removed: summary.worktrees.filter((w) => w.removed).map((w) => w.path), lowDisk: summary.lowDisk, retentionArmed: summary.retentionArmed },
 			);
 			const sc = summary.scratch;
