@@ -810,7 +810,7 @@ describe('file replies in a thread with several cards (PR #957 review)', () => {
     expect((await h.service.tick()).sort()).toEqual(cards.map((c) => c.id).sort());
     expect(h.slack.sent).toHaveLength(sentBefore + 1);
     expect(h.slack.sent.at(-1)!.text).toBe(
-      '<@U-OWNER> Still waiting on you for 3 questions in this thread:\n• Ship the pricing page today?\n• Should Vera redo the logo?\n• Keep the appendix in chapter 3?\nTap an answer on each card above, or reply here.',
+      '<@U-OWNER> Still waiting on you for 3 questions in this thread — tap an answer on each card above, or reply here.',
     );
     for (const c of cards) expect((await h.service.get(c.id))?.waitReminderAt).toBeDefined();
     expect(await h.service.tick()).toEqual([]);
@@ -991,7 +991,7 @@ describe('deadlines', () => {
     expect(h.slack.sent.at(-1)).toMatchObject({
       threadTs: '100.0001',
       botToken: 'xoxb-ann',
-      text: '<@U-OWNER> Still waiting on you: Send the draft to the 3 partners? — tap an answer on the card above, or reply here.',
+      text: '<@U-OWNER> Still waiting on you: “Send the draft to the 3 partners?” — tap an answer on the card above, or reply here.',
     });
     expect((await h.service.get(d.id))?.waitReminderAt).toBeDefined();
     // Only once.
@@ -1103,7 +1103,7 @@ describe('deadlines', () => {
     h.clock.now = new Date(2026, 9, 2, 9, 0, 30);
     expect(await h.service.tick()).toEqual([d.id]);
     const reminder = h.slack.sent[h.slack.sent.length - 1];
-    expect(reminder).toMatchObject({ threadTs: '100.0001', text: '<@U-OWNER> Reminder: Send the draft to the 3 partners? — tap an answer on the card above, or reply here.' });
+    expect(reminder).toMatchObject({ threadTs: '100.0001', text: '<@U-OWNER> Reminder: “Send the draft to the 3 partners?” — tap an answer on the card above, or reply here.' });
     expect((await h.service.get(d.id))?.remindAt).toBeUndefined();
     // deadline moved past noon: nothing applied yet
     h.clock.now = new Date(2026, 9, 2, 12, 30);
@@ -1702,3 +1702,51 @@ describe('card hygiene (2026-10-08: duplicates, decided topics, closed cards)', 
   });
 });
 
+
+describe('owner wording (crewly#1367, crewly#1369 §3)', () => {
+  it('a Chinese owner: an English question is refused; a Chinese one gets Chinese buttons and keeps its language', async () => {
+    const places: unknown[] = [];
+    const h = await harness({
+      ownerLanguage: async (place) => {
+        places.push(place);
+        return 'zh';
+      },
+    });
+    await expect(h.service.ask('dev-ann', { ...ticketAsk, ticket: undefined, project: undefined })).rejects.toThrow(/owner writes Chinese/);
+    const d = await h.service.ask('dev-ann', {
+      question: '要不要让 agent 发的 Gmail 先经你同意再发出？',
+      options: ['Yes, merge', 'Not now'],
+      default: 'wait',
+      context: { requestedBy: 'Ella，10月6日', runtimeChanges: '开机后每 30 秒查一次 Gmail', link: 'https://github.com/o/r/pull/1138' },
+    });
+    expect(d.ownerLanguage).toBe('zh');
+    expect(d.merge).toBe(true);
+    expect(d.options.map((o) => o.label)).toEqual(['合并', '先不合']);
+    expect(d.context?.runtimeChanges).toBe('开机后每 30 秒查一次 Gmail');
+    const card = h.slack.sent.at(-1)!;
+    const texts = JSON.stringify(card.blocks);
+    expect(texts).toContain('明天再问');
+    expect(texts).not.toContain('"Skip"');
+    expect(texts).toContain('*合并后会*：开机后每 30 秒查一次 Gmail');
+    expect(places.length).toBeGreaterThan(0);
+  });
+
+  it('a merge card without runtime changes is refused', async () => {
+    const h = await harness();
+    await expect(h.service.ask('dev-ann', { question: 'Merge the Gmail approve-then-send change?', options: ['Merge', 'Not now'], default: 'wait' })).rejects.toThrow(/--runtime-changes/);
+  });
+
+  it('ticket ids and PR numbers never reach the card title; the ticket title is stripped before it is prepended', async () => {
+    const h = await harness({
+      resolveTicket: async (project, id) => ({ projectId: project, projectPath: '/proj', projectName: 'Proj', id, title: 'CREW-646 · GOAL: Gmail approve card', asker: 'dev-ann', teamId: 'team-a' }),
+    });
+    const d = await h.service.ask('dev-ann', { ...ticketAsk, question: 'Ship it (PR #1138)?', options: ['Ship', 'Hold'], default: 'Hold' });
+    expect(d.question).toBe('Gmail approve card — Ship it?');
+    expect(d.details).toEqual(['PR #1138']);
+    const card = h.slack.sent.at(-1)!;
+    const header = (card.blocks as unknown as Array<{ type: string; text?: { text: string } }>)[0];
+    expect(header.text?.text).toBe('Gmail approve card — Ship it?');
+    expect(JSON.stringify(card.blocks)).not.toMatch(/CREW-646|APP-12|GOAL:/);
+    expect(JSON.stringify(card.blocks)).toContain('Details: PR #1138');
+  });
+});

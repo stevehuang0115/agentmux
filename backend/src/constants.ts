@@ -7427,6 +7427,24 @@ export const SYSTEM_CONTROL_CONSTANTS = {
 } as const;
 
 /**
+ * Owner-facing wording of decision cards (crewly#1367, crewly#1369 §3): the
+ * question in plain words in the owner's language, internal references only
+ * in a short details line, context on merge cards.
+ */
+export const DECISION_WORDING_CONSTANTS = {
+	/** Max characters of one card context field (who asked, what the owner said, what changes) */
+	CONTEXT_FIELD_MAX_CHARS: 200,
+	/** Max characters of the context link */
+	LINK_MAX_CHARS: 300,
+	/** Max references shown in the card's details line */
+	DETAILS_MAX_REFS: 3,
+	/** Max characters of the question quoted in a one-line reminder */
+	REMINDER_QUESTION_MAX_CHARS: 60,
+	/** Min letters (any script) left in a question once internal references are stripped */
+	QUESTION_MIN_LETTERS: 4,
+} as const;
+
+/**
  * Decision cards (specs/2026-10-01-decision-cards.md): structured owner
  * questions posted by the responsible agent's own Slack bot as a Block Kit
  * card, answered with a button, a reaction or a thread reply.
@@ -7437,7 +7455,7 @@ export const DECISION_CONSTANTS = {
 	 * (buttons added/removed): open cards drawn with an older revision are
 	 * redrawn once at startup so they get the new controls (e.g. Skip, 1.20.185).
 	 */
-	CARD_RENDER_REV: 3,
+	CARD_RENDER_REV: 4,
 	/** Delay after startup before stale open cards are redrawn (ms) */
 	STALE_CARD_REFRESH_DELAY_MS: 15_000,
 	/** Gap between two card redraws, to stay under Slack's chat.update rate limit (ms) */
@@ -7501,7 +7519,7 @@ export const DECISION_CONSTANTS = {
 	REACTION_SKIP: ['no_entry_sign', 'black_right_pointing_double_triangle_with_vertical_bar', 'next_track_button', 'track_next'] as readonly string[],
 	REACTION_REMIND: ['alarm_clock', 'clock9', 'hourglass'] as readonly string[],
 	/** Option labels that read as "no" (lower-cased, matched on the whole label or its first word) */
-	NO_WORDS: ['no', 'nope', "don't", 'dont', 'not now', 'skip', 'cancel', 'stop', 'reject', 'decline', 'hold', '不', '不行', '不要', '不用', '不可以', '别', '别点', '取消', '算了', '拒绝'] as readonly string[],
+	NO_WORDS: ['no', 'nope', "don't", 'dont', 'not now', 'skip', 'cancel', 'stop', 'reject', 'decline', 'hold', '不', '不行', '不要', '不用', '不可以', '别', '别点', '取消', '算了', '拒绝', '先不'] as readonly string[],
 	/** Free-text replies that accept the default (or first) option */
 	YES_WORDS: ['yes', 'y', 'ok', 'okay', 'sure', 'go', 'go ahead', 'do it', 'approved', 'approve', 'lgtm', '好', '好的', '可以', '行', '同意', '批准', '没问题', '👍', '✅'] as readonly string[],
 	/** Free-text replies that skip a card (checked before NO_WORDS) */

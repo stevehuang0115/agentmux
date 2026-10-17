@@ -28,13 +28,15 @@ import type {
   DecisionAnswerVia,
   DecisionChoice,
   DecisionKind,
+  DecisionLanguage,
   DecisionOption,
   DecisionSensitiveKind,
   DecisionSource,
   DecisionSystemRef,
   OwnerDecision,
 } from '../../types/decision.types.js';
-import { DecisionContractError, eitherOrMessage, isYesNoOptions, readsAsEitherOr, matchOption, parseOptions, resolveDefault, validateAskOwner, withTicketContext } from './decision-contract.js';
+import { DecisionContractError, eitherOrMessage, fitAskToOwnerLanguage, isYesNoOptions, readsAsEitherOr, matchOption, parseOptions, resolveDefault, validateAskOwner, withTicketContext } from './decision-contract.js';
+import { stripInternalRefs } from './decision-wording.js';
 import {
   answerFilesOf,
   canRemind,
@@ -46,6 +48,8 @@ import {
   describeAnswerFiles,
   slackTsAfter,
   waitReminderLine,
+  remindNowLine,
+  sensitiveReaskLine,
   defaultLabel,
   formatWhen,
   optionLabel,
@@ -184,6 +188,12 @@ export interface DecisionServiceDeps {
    * null when nothing was handed off. Must not throw.
    */
   handOffChange?: (decision: OwnerDecision) => Promise<string | null>;
+  /**
+   * The language the owner writes in at a Slack place (their own messages
+   * there, else their recent messages anywhere); null when unknown. Cards
+   * from agents follow it (crewly#1367).
+   */
+  ownerLanguage?: (place: { slackChannelId?: string; threadTs?: string } | null) => Promise<DecisionLanguage | null>;
   now?: () => Date;
   logger?: ComponentLogger;
 }
@@ -559,6 +569,14 @@ export class DecisionService {
       ticket = { projectId: ctx.projectId, projectPath: ctx.projectPath, projectName: ctx.projectName, id: ctx.id, title: ctx.title };
     }
     if (!asker) throw new DecisionError(400, 'Who is asking? Run ask-owner from an agent session, or name a --ticket.');
+    // The card speaks the owner's language (crewly#1367).
+    const ownerLanguage = await this.ownerLanguageFor(asker, ticket);
+    try {
+      ask = fitAskToOwnerLanguage(ask, ownerLanguage);
+    } catch (err) {
+      if (err instanceof DecisionContractError) throw new DecisionError(400, err.message);
+      throw err;
+    }
     const skipped = await this.findSkipped({ ...(ticket ? { ticket: { projectPath: ticket.projectPath, id: ticket.id } } : {}), asker }, ask.question);
     if (skipped) throw this.alreadySkippedError(skipped);
     if (ticket && isYesNoOptions(ask.options)) {
@@ -576,7 +594,7 @@ export class DecisionService {
       if (recent.length > 0) throw new DecisionError(400, eitherOrMessage(recent[0].id));
     }
     // A short question says nothing on its own phone screen: the ticket title goes in front of it.
-    if (ticket) ask.question = withTicketContext(ask.question, ticket.title);
+    if (ticket) ask.question = withTicketContext(ask.question, stripInternalRefs(ticket.title).text);
     if (!teamId) teamId = await this.deps.teamOf(asker).catch(() => undefined);
     // The same question already waits on an open card of this asker, in the
     // same thread / ticket: that card stands — no second post.
@@ -594,6 +612,10 @@ export class DecisionService {
       defaultKey: ask.defaultKey,
       deadline: ask.deadline.toISOString(),
       ...(ask.sensitive ? { sensitive: ask.sensitive } : {}),
+      ...(ask.context ? { context: ask.context } : {}),
+      ...(ask.details ? { details: ask.details } : {}),
+      ...(ask.merge ? { merge: true } : {}),
+      ...(ownerLanguage ? { ownerLanguage } : {}),
       requestedBy: callerSession ?? 'owner',
       asker,
       ...(ticket ? { ticket } : {}),
@@ -881,6 +903,20 @@ export class DecisionService {
     const work = await this.deps.workDestination?.(asker).catch(() => null);
     if (work?.slackChannelId && work.threadTs) return work;
     return null;
+  }
+
+  /**
+   * The owner's language where a new card of `asker` would go (its thread,
+   * else the owner's recent messages). Null when unknown or not wired.
+   *
+   * @param asker - Asking agent
+   * @param ticket - The ticket asked about, if any
+   * @returns `zh` / `en`, or null
+   */
+  private async ownerLanguageFor(asker: string, ticket: OwnerDecision['ticket'] | undefined): Promise<DecisionLanguage | null> {
+    if (!this.deps.ownerLanguage) return null;
+    const place = await this.threadPlace(asker, ticket).catch(() => null);
+    return this.deps.ownerLanguage(place ? { slackChannelId: place.slackChannelId, ...(place.threadTs ? { threadTs: place.threadTs } : {}) } : null).catch(() => null);
   }
 
   /**
@@ -1735,7 +1771,7 @@ export class DecisionService {
     const updated = await this.deps.store.update(d.id, (cur) => (cur.status === 'open' && cur.remindAt ? { remindAt: undefined } : null));
     if (!updated) return;
     const owner = this.deps.ownerUserId?.();
-    await this.postInThread(updated, `${owner ? `<@${owner}> ` : ''}Reminder: ${updated.question} — tap an answer on the card above, or reply here.`);
+    await this.postInThread(updated, remindNowLine(updated, owner));
     await this.refreshCard(updated);
   }
 
@@ -1859,10 +1895,7 @@ export class DecisionService {
       const updated = await this.deps.store.update(d.id, (cur) => (cur.status === 'open' && !cur.reaskedAt ? { reaskedAt: now.toISOString() } : null));
       if (!updated) return false;
       const owner = this.deps.ownerUserId?.();
-      await this.postInThread(
-        updated,
-        `${owner ? `<@${owner}> ` : ''}Still need your answer: ${updated.question} This needs your OK (${updated.sensitive}), so I'm not going ahead without it.`,
-      );
+      await this.postInThread(updated, sensitiveReaskLine(updated, owner));
       await this.refreshCard(updated);
       this.logger.info('Sensitive owner decision re-asked', { decisionId: d.id });
       return true;

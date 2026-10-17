@@ -48,8 +48,9 @@ import {
   VERIFY_ESCALATED_AT_KEY,
   REVIEW_OWNER_ESCALATED_AT_KEY,
   runPruningPass,
+  decisionHoldPredicate,
 } from './reconcile-rules.js';
-import type { AgentHealth } from './reconcile-rules.js';
+import type { AgentHealth, DecisionHoldLink } from './reconcile-rules.js';
 import { surfaceIdleHolders, type IdleHolderSurfacerDeps } from './idle-holder-surfacer.js';
 import { WORK_ITEM_BLOCK_SOURCES } from '../../types/v2/work-item.types.js';
 import { getSettingsService } from '../settings/index.js';
@@ -168,6 +169,11 @@ export interface ReconcilerDataProvider {
   renewClaim?(claimId: string): Promise<void>;
   /** Get all available (queued, unclaimed) WorkItems from the task pool */
   getAvailablePoolItems?(): Promise<WorkItem[]>;
+  /**
+   * Open owner decision cards (their work item / ticket): WorkItems waiting
+   * on one are not TTL-cancelled (crewly#1369 §5). Optional.
+   */
+  getOpenDecisionHolds?(): Promise<DecisionHoldLink[]>;
   /**
    * Execute a wake action — rehydrate a suspended agent, start an inactive
    * one, or re-push a brief. `true` / `false` are read as ok / failed; a
@@ -383,7 +389,8 @@ export class ReconcilerService {
       await this.disposeStrandedWorkItems(workItems);
 
       // 4. Pruning pass (F4): TTL expiry + orphan cascade + deep cascade + stale queue detection
-      const pruning = runPruningPass(workItems);
+      const holds = (await this.dataProvider.getOpenDecisionHolds?.().catch(() => [] as DecisionHoldLink[])) ?? [];
+      const pruning = runPruningPass(workItems, undefined, undefined, decisionHoldPredicate(holds));
       result.corrections.push(...pruning.totalCorrections);
       // `staleItemsCleaned` means "work that was DISCARDED", so only the
       // cancel-shaped counters may be summed here. The TTL rule also emits

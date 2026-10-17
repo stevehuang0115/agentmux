@@ -290,6 +290,37 @@ describe('LiveReconcilerDataProvider', () => {
   });
 
   // -----------------------------------------------------------------------
+  // getOpenDecisionHolds (crewly#1369 §5)
+  // -----------------------------------------------------------------------
+
+  describe('getOpenDecisionHolds', () => {
+    afterEach(async () => {
+      const { DecisionService } = await import('../decisions/decision.service.js');
+      DecisionService.setInstance(null);
+    });
+
+    it('lists the work item / ticket of each open card', async () => {
+      const { DecisionService } = await import('../decisions/decision.service.js');
+      const list = jest.fn().mockResolvedValue([
+        { id: 'D-1', status: 'open', workItemId: 'wi-1' },
+        { id: 'D-2', status: 'open', ticket: { projectId: 'p', projectPath: '/p', id: 'CREW-646', title: 't' } },
+        { id: 'D-3', status: 'parked', workItemId: 'wi-3' },
+        { id: 'D-4', status: 'open' },
+      ]);
+      DecisionService.setInstance({ list, stop: jest.fn() } as unknown as InstanceType<typeof DecisionService>);
+      expect(await provider.getOpenDecisionHolds()).toEqual([{ workItemId: 'wi-1' }, { ticket: { projectPath: '/p', id: 'CREW-646' } }]);
+      expect(list).toHaveBeenCalledWith('open');
+    });
+
+    it('is empty without a decision service or when it fails', async () => {
+      expect(await provider.getOpenDecisionHolds()).toEqual([]);
+      const { DecisionService } = await import('../decisions/decision.service.js');
+      DecisionService.setInstance({ list: jest.fn().mockRejectedValue(new Error('x')), stop: jest.fn() } as unknown as InstanceType<typeof DecisionService>);
+      expect(await provider.getOpenDecisionHolds()).toEqual([]);
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // getWorkItemsForRequest — the effective set the completion check sees
   // -----------------------------------------------------------------------
 
