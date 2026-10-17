@@ -165,6 +165,12 @@ export interface DecisionServiceDeps {
    * (specs/2026-10-02-decision-card-thread-answers.md §3).
    */
   trackedClosed?: (d: OwnerDecision) => Promise<string | null>;
+  /**
+   * Why an ask-owner card is about work a ticket put on hold (the same PR /
+   * branch / worktree), or null when it may go up. A refusal quotes the hold;
+   * a card that only asks whether to close the work passes (crewly#1369).
+   */
+  holdRefusal?: (input: { text: string; context?: string; ticketId?: string }) => Promise<string | null>;
   /** The asking agent's display name ("Owen"), for "so Owen will go with …" */
   displayName?: (session: string) => Promise<string | undefined>;
   /**
@@ -569,6 +575,11 @@ export class DecisionService {
       ticket = { projectId: ctx.projectId, projectPath: ctx.projectPath, projectName: ctx.projectName, id: ctx.id, title: ctx.title };
     }
     if (!asker) throw new DecisionError(400, 'Who is asking? Run ask-owner from an agent session, or name a --ticket.');
+    // A held ticket's work may only be closed, never merged (crewly#1369).
+    const held = await this.deps
+      .holdRefusal?.({ text: [ask.question, ...(ask.details ?? []), ask.context?.link ?? '', ...ask.options.map((o) => `${o.label} ${o.detail ?? ''}`)].join('\n'), ...(ticket ? { context: ticket.title, ticketId: ticket.id } : {}) })
+      .catch(() => null);
+    if (held) throw new DecisionError(409, held);
     // The card speaks the owner's language (crewly#1367).
     const ownerLanguage = await this.ownerLanguageFor(asker, ticket);
     try {

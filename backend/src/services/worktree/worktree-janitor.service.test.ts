@@ -855,6 +855,25 @@ describe('WorktreeJanitorService', () => {
 			expect(message).toContain('merge it to main');
 		});
 
+		it('says the work is on hold (close it) when a held ticket names the branch (crewly#1369)', async () => {
+			addWorktree(fx, agentPath(fx, 'wt-crew257'), 'feat/gmail-approve');
+			const notify = jest.fn().mockResolvedValue(true);
+			const findHold = jest.fn().mockResolvedValue({
+				ticketId: 'CREW-257',
+				title: 'Gmail approve-then-send',
+				hold: { reason: 'HOLD: PR #1138: do not merge, do not ask Steve to merge', source: 'log' },
+				matchedOn: ['worktree wt-crew257'],
+			});
+			const j = make(notify, { resolveLeadSessions: async () => ['tl-session'], findHold });
+			await j.run();
+			expect(findHold).toHaveBeenCalledWith('feat/gmail-approve', expect.stringContaining('wt-crew257'));
+			const [, message] = notify.mock.calls[0];
+			expect(message).toContain('ON HOLD on ticket CREW-257');
+			expect(message).toContain('do not merge, do not ask Steve to merge');
+			expect(message).toContain('close the PR and remove the worktree');
+			expect(message).not.toContain('merge it to main');
+		});
+
 		it('says pushed when the branch is on origin', async () => {
 			const wt = addWorktree(fx, agentPath(fx, 'pushed'), 'feat/pushed');
 			git(wt, 'push', '--quiet', 'origin', 'feat/pushed');

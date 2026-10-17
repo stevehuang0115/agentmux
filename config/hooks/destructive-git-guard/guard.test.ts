@@ -1,5 +1,5 @@
 import { spawnSync } from 'child_process';
-import { mkdtempSync, rmSync } from 'fs';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -109,5 +109,81 @@ describe('could not check', () => {
 		const r = spawnSync('node', [HOOK], { input: 'not json', encoding: 'utf-8' });
 		expect(r.status).toBe(1);
 		expect(r.stderr).toContain('0 command(s) checked');
+	});
+});
+
+describe('gh pr merge (crewly#1369)', () => {
+	const BASE_AT = '2026-10-17T10:00:00Z';
+	const BEFORE = '2026-10-17T09:00:00Z';
+	const AFTER = '2026-10-17T11:00:00Z';
+	const green = (at: string) => [{ __typename: 'CheckRun', name: 'test', status: 'COMPLETED', conclusion: 'SUCCESS', completedAt: at }];
+
+	/** A fake `gh` that answers from canned values; `fail` makes `pr view` fail. */
+	function fakeGh(opts: { behind?: number; checks?: unknown[]; fail?: boolean }): string {
+		const file = join(cwd, 'fake-gh.js');
+		const pr = { number: 42, url: 'https://github.com/o/r/pull/42', baseRefName: 'main', headRefOid: 'abc', statusCheckRollup: opts.checks ?? green(AFTER) };
+		writeFileSync(
+			file,
+			`#!/usr/bin/env node
+const a = process.argv.slice(2);
+if (${opts.fail ? 'true' : 'false'}) { process.stderr.write('auth'); process.exit(1); }
+if (a[0] === 'pr' && a[1] === 'view') { process.stdout.write(${JSON.stringify(JSON.stringify(pr))}); process.exit(0); }
+if (a[0] === 'api' && a[1].includes('/compare/main...abc')) { process.stdout.write('${opts.behind ?? 0}'); process.exit(0); }
+if (a[0] === 'api' && a[1].endsWith('/commits/main')) { process.stdout.write('${BASE_AT}'); process.exit(0); }
+process.exit(3);
+`,
+		);
+		chmodSync(file, 0o755);
+		return file;
+	}
+
+	const merge = (gh: string, cmd = 'gh pr merge 42 --squash', env: NodeJS.ProcessEnv = {}) => run(cmd, 'Bash', { CREWLY_GUARD_GH: gh, ...env });
+
+	it('allows an up-to-date PR with green CI', () => {
+		expect(merge(fakeGh({ behind: 0 })).status).toBe(0);
+	});
+
+	it('allows a PR a little behind when CI ran after the base head', () => {
+		expect(merge(fakeGh({ behind: 2, checks: green(AFTER) })).status).toBe(0);
+	});
+
+	it('blocks a PR too far behind base and says to update the branch', () => {
+		const r = merge(fakeGh({ behind: 12 }), 'gh pr merge 42 --squash --delete-branch');
+		expect(r.status).toBe(2);
+		expect(r.stderr).toContain('12 commits behind main');
+		expect(r.stderr).toContain('gh pr update-branch');
+	});
+
+	it('honours CREWLY_GUARD_MERGE_MAX_BEHIND', () => {
+		expect(merge(fakeGh({ behind: 2 }), undefined, { CREWLY_GUARD_MERGE_MAX_BEHIND: '1' }).status).toBe(2);
+	});
+
+	it('blocks when behind and the latest CI predates the base head', () => {
+		const r = merge(fakeGh({ behind: 1, checks: green(BEFORE) }));
+		expect(r.status).toBe(2);
+		expect(r.stderr).toContain('predates the head of main');
+	});
+
+	it('blocks when CI is failing or still running', () => {
+		expect(merge(fakeGh({ checks: [{ __typename: 'CheckRun', name: 'test', status: 'COMPLETED', conclusion: 'FAILURE', completedAt: AFTER }] })).stderr).toContain('CI is not green');
+		expect(merge(fakeGh({ checks: [{ __typename: 'CheckRun', name: 'build', status: 'IN_PROGRESS', conclusion: '' }] })).status).toBe(2);
+		expect(merge(fakeGh({ checks: [{ __typename: 'StatusContext', context: 'ci/x', state: 'PENDING' }] })).status).toBe(2);
+	});
+
+	it('blocks when gh cannot be asked (fail closed)', () => {
+		const r = merge(fakeGh({ fail: true }));
+		expect(r.status).toBe(2);
+		expect(r.stderr).toContain('could not read the PR');
+	});
+
+	it('checks merges inside a chain and passes -R through', () => {
+		expect(merge(fakeGh({ behind: 9 }), 'cd /tmp && gh pr merge -R o/r 42').status).toBe(2);
+	});
+
+	it('leaves other gh commands, --disable-auto and the off switch alone', () => {
+		const gh = fakeGh({ behind: 50 });
+		expect(merge(gh, 'gh pr view 42').status).toBe(0);
+		expect(merge(gh, 'gh pr merge 42 --disable-auto').status).toBe(0);
+		expect(merge(gh, undefined, { CREWLY_GUARD_MERGE_CHECK: '0' }).status).toBe(0);
 	});
 });

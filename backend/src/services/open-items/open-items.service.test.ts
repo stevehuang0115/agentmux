@@ -1812,3 +1812,46 @@ describe('a promise names project tickets: work done outside the request fulfils
     expect((await h.requests.getById(t.id))!.openItems![0].childWorkItemIds).toBeUndefined();
   });
 });
+
+describe('OpenItemsService — owner decisions asked in prose (crewly#1369)', () => {
+  const ELLA_REPLY = 'PR #1138 is still open (the Gmail card). Should I close it?\n\nThe first video cut is in the drive.';
+
+  it('a mid-message yes/no decision goes on file as an owner question due in 24 h, without a card', async () => {
+    const h = harness();
+    const t = await ticket(h);
+    const updated = await h.service.onAgentMessage(msg(h, ELLA_REPLY));
+    const q = updated!.openItems!.find((i) => i.type === 'question');
+    expect(q).toMatchObject({ type: 'question', text: 'Should I close it?', ownerQuestion: true, status: 'open', dueSource: 'default' });
+    expect(Date.parse(q!.due!) - h.clock.now.getTime()).toBe(24 * HOUR);
+    expect(h.cards).toHaveLength(0);
+    expect((await h.requests.getById(t.id))?.status).toBe('running');
+  });
+
+  it("the owner's next message in the thread is the answer on file", async () => {
+    const h = harness();
+    const t = await ticket(h);
+    await h.service.onAgentMessage(msg(h, ELLA_REPLY));
+    h.clock.now = new Date(h.clock.now.getTime() + HOUR);
+    await h.service.onAgentMessage({ id: 'owner-1', channelId: CHANNEL, threadId: ROOT, senderType: 'user', senderId: 'UOWNER', content: '关掉吧，我要的是视频', createdAt: h.clock.now.getTime() });
+    const q = (await h.requests.getById(t.id))!.openItems!.find((i) => i.type === 'question');
+    expect(q).toMatchObject({ status: 'resolved', answer: '关掉吧，我要的是视频' });
+    expect(q!.closedReason).toContain('owner-1');
+  });
+
+  it('an uncarded final decision question is marked; a carded one keeps its card', async () => {
+    const h = harness();
+    await ticket(h);
+    const carded = await h.service.onAgentMessage(msg(h, 'The draft for the three partners is ready. Should I send it to them on Monday?'));
+    const q = carded!.openItems!.find((i) => i.type === 'question')!;
+    expect(q.decisionId).toBe('D-1');
+    expect(q.ownerQuestion).toBeUndefined();
+  });
+
+  it('plain questions and backfill planning add nothing', async () => {
+    const h = harness();
+    const t = await ticket(h);
+    expect(await h.service.onAgentMessage(msg(h, 'How do I merge it?\n\nMore later.'))).toBeNull();
+    const planned = await h.service.plan(t, msg(h, ELLA_REPLY), h.clock.now);
+    expect(planned.some((p) => p.item.ownerQuestion)).toBe(false);
+  });
+});

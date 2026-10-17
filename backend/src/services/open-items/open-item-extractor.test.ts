@@ -3,7 +3,8 @@
  * commitments and owner questions in Chinese and English, the TKT-185 reply,
  * and the negatives that must NOT become items.
  */
-import { durationMs, estimateDue, extractOpenItems, isCommitment, isOwnerQuestion, numeralValue, parseDue, splitSentences } from './open-item-extractor.js';
+import { durationMs, estimateDue, extractOpenItems, extractOwnerDecisionQuestions, isCommitment, isOwnerDecisionQuestion, isOwnerQuestion, numeralValue, parseDue, splitSentences } from './open-item-extractor.js';
+import { OPEN_ITEMS_CONSTANTS } from '../../constants.js';
 
 /** Thu 2026-10-01 18:00:29 local — when Atlas replied in TKT-185. */
 const NOW = new Date(2026, 9, 1, 18, 0, 29);
@@ -403,5 +404,63 @@ describe('script lines are not owner questions (#1243)', () => {
 
   it('a plain agent question still creates a card', () => {
     expect(qs('周五的稿子已经写完。这版标题可以吗？')).toEqual(['这版标题可以吗？']);
+  });
+});
+
+describe('owner decisions asked in prose (crewly#1369)', () => {
+  it.each([
+    'Should I close PR #1138?',
+    'Do you want me to merge it now?',
+    'Shall we publish the post tomorrow?',
+    'OK if I delete the old worktree?',
+    'Are you fine with me sending this to the partners?',
+    '要不要合并这个 PR？',
+    '我可以先关闭 PR #1138 吗？',
+    '是否发布到公众号？',
+    '这个分支还要保留吗？',
+  ])('asks a decision: %s', (q) => {
+    expect(isOwnerDecisionQuestion(q, undefined, opts)).toBe(true);
+  });
+
+  it.each([
+    'How do I merge it?',
+    'What should I post?',
+    'Why would we merge it now?',
+    'Should I?',
+    'Is the build green?',
+    'Did you merge it?',
+    'Can you check the numbers?',
+    '你知道怎么发布吗？',
+    '已经合并了吗？',
+    '这周天气怎么样？',
+    '为什么要合并？',
+    'Kai, should I merge this?',
+    'Should I merge it.',
+    '你说的「要不要合并？」是指哪个？',
+  ])('not a decision: %s', (q) => {
+    expect(isOwnerDecisionQuestion(q, undefined, opts)).toBe(false);
+  });
+
+  it('a self-answered question is not one', () => {
+    expect(isOwnerDecisionQuestion('Should I merge it?', 'No, not before the review.', opts)).toBe(false);
+  });
+
+  it('finds every decision question, mid-message too, with a 24 h due', () => {
+    const msg = 'PR #1138 is still open and 233 commits behind. Should I close it?\n\nOn the video: the first cut is in the drive, the second comes tomorrow.';
+    const found = extractOwnerDecisionQuestions(msg, opts);
+    expect(found).toEqual([{ type: 'owner_question', text: 'Should I close it?', due: new Date(NOW.getTime() + OPEN_ITEMS_CONSTANTS.OWNER_QUESTION_DUE_MS) }]);
+    // extractOpenItems keeps only a final question: this one is mid-message.
+    expect(extractOpenItems(msg, opts).questions).toEqual([]);
+  });
+
+  it('skips listed questions, interview questions and code', () => {
+    const msg = ['Questions to ask the client:', '- Should we publish the case study?', '```', 'should I merge it?', '```', 'Done for today.'].join('\n');
+    expect(extractOwnerDecisionQuestions(msg, opts)).toEqual([]);
+  });
+
+  it('caps and dedupes', () => {
+    const msg = 'Should I merge A? Should I merge B? Should I merge C? Should I merge D? Should I merge A?';
+    expect(extractOwnerDecisionQuestions(msg, opts).map((q) => q.text)).toEqual(['Should I merge A?', 'Should I merge B?', 'Should I merge C?']);
+    expect(extractOwnerDecisionQuestions('', opts)).toEqual([]);
   });
 });

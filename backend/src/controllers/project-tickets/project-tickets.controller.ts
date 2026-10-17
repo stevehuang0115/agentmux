@@ -345,7 +345,7 @@ export async function createProjectTicket(req: Request, res: Response): Promise<
 /**
  * POST /api/project-tickets/:project/:id/update — fields, sections, optional status.
  *
- * @param req - Body: title, priority, labels, team, ownerReview, requestId, deferUntil, description, acceptance, status, note
+ * @param req - Body: title, priority, labels, team, ownerReview, requestId, deferUntil, hold (reason; null lifts it), description, acceptance, status, note
  * @param res - `{ success, data: ticket }`
  */
 export async function updateProjectTicket(req: Request, res: Response): Promise<void> {
@@ -363,6 +363,7 @@ export async function updateProjectTicket(req: Request, res: Response): Promise<
         ...(typeof b.ownerReview === 'boolean' ? { ownerReview: b.ownerReview } : {}),
         ...(b.requestId !== undefined ? { requestId: typeof b.requestId === 'string' ? b.requestId : null } : {}),
         ...(b.deferUntil !== undefined ? { deferUntil: typeof b.deferUntil === 'string' ? b.deferUntil : null } : {}),
+        ...(b.hold !== undefined ? { hold: typeof b.hold === 'string' ? b.hold : null } : {}),
         ...(typeof b.description === 'string' ? { description: b.description } : {}),
         ...(Array.isArray(b.acceptance) ? { acceptance: b.acceptance as Array<string> } : {}),
         ...(status ? { status } : {}),

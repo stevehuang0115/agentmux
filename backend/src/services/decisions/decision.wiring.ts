@@ -20,6 +20,7 @@ import { getOwnerMessageWatchdog } from '../messaging/owner-message-watchdog.ser
 import { getOwnerThreadSentinel, reportOwnerThreadBlocking } from '../messaging/owner-thread-sentinel.service.js';
 import { sentinelEventForDecision } from '../messaging/owner-thread-sentinel.wiring.js';
 import { ProjectTicketService } from '../project-tickets/project-ticket.service.js';
+import { checkDecisionHold } from '../project-tickets/ticket-hold-registry.js';
 import type { ProjectTicketWorkflowService } from '../project-tickets/project-ticket-workflow.service.js';
 import { DecisionError, DecisionService, type BlockActionsPayload, type DecisionServiceDeps, type DecisionPostIdentity, type DecisionSlackPlace, type DecisionTicketContext } from './decision.service.js';
 import { DecisionStore } from './decision-store.js';
@@ -167,6 +168,7 @@ export function createDecisionService(input: DecisionWiringInput): DecisionServi
       return mappings.find((m) => m.teamId === teamId)?.slackChannelId ?? null;
     },
     teamOf: async (session) => teamOfSession(session, await input.getTeams()),
+    holdRefusal: (hold) => checkDecisionHold(hold),
     ...createTicketDecisionHooks({ tickets, getTeams: input.getTeams }),
     ...(input.workDestination ? { workDestination: input.workDestination } : {}),
     ...(input.currentWorkItemId ? { currentWorkItemId: input.currentWorkItemId } : {}),

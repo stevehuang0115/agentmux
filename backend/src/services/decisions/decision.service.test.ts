@@ -203,6 +203,22 @@ describe('ask + routing', () => {
     await h.service.ask('dev-ann', { ...yn, question: '还是先按现在的版本试一周再看？', deadline: new Date(h.clock.now.getTime() + 3_600_000).toISOString() });
   });
 
+  it('refuses a card about held work with the hold reason, and posts nothing (crewly#1369)', async () => {
+    const holdRefusal = jest.fn(async (input: { text: string; context?: string; ticketId?: string }) =>
+      /merge/i.test(input.text) ? 'CREW-257 is on hold (PR #1138): "do not merge". The only allowed action is to close the PR and remove the worktree.' : null,
+    );
+    const h = await harness({ holdRefusal });
+    await expect(h.service.ask('dev-ann', { ...ticketAsk, question: 'Merge PR #1138?', options: ['Yes, merge', 'Not now'], default: 'Not now' })).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining('"do not merge"'),
+    });
+    expect(holdRefusal).toHaveBeenCalledWith({ text: expect.stringContaining('Merge PR #1138?'), context: 'Partner outreach email', ticketId: 'APP-12' });
+    expect(h.slack.sent).toHaveLength(0);
+    // A close card passes the check.
+    const close = await h.service.ask('dev-ann', { ...ticketAsk, question: 'Close PR #1138?', options: ['Yes, close it', 'Not now'], default: 'Not now' });
+    expect(close.status).toBe('open');
+  });
+
   it('a short ticket question gets the ticket title in front of it; a self-explaining one is left alone', async () => {
     const h = await harness();
     const short = await h.service.ask('dev-ann', { ...ticketAsk, question: 'Ship it Monday?' });
