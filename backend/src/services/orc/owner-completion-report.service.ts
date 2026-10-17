@@ -20,10 +20,15 @@
  *  1. after SETTLE_MS of staying closed (the lead may still hand out the next
  *     step) — unless an agent already answered in the owner's place after
  *     the work finished — the responsible agent (`receivedBy`) gets ONE
- *     message asking it to report the result there;
- *  2. no agent answer there within REPORT_WAIT_MS → one reminder;
- *  3. still none after another REPORT_WAIT_MS → the harness posts a short
- *     factual summary there itself (as the agent's bot when it can).
+ *     nudge asking it to report the result there, in plain words;
+ *  2. no agent answer there within NUDGE_GRACE_MS → the harness posts ONE
+ *     line there itself (as the agent's bot when it can): the deliverable in
+ *     plain words, in the owner's language, no ids / links / files / sizes
+ *     (crewly#1357, `owner-completion-report.text.ts`).
+ *
+ * Only a genuine owner origin forms a chain: work an agent delegated on its
+ * own initiative carries an agent origin (crewly#1357) and is never reported
+ * to the owner by the harness.
  *
  * Each chain is handled once (persisted, so a restart neither repeats nor
  * forgets a step). Work added to the same place after a chain was handled
@@ -31,7 +36,8 @@
  * skipped: OrcDeliveryEnforcer already keeps reminding the orc until it
  * answers. The owner only reads; nothing here asks the owner to act.
  *
- * Harness text is English.
+ * Harness text to agents is English; the one line to the owner is in the
+ * owner's language.
  *
  * @module services/orc/owner-completion-report.service
  */
@@ -42,6 +48,7 @@ import { ORCHESTRATOR_SESSION_NAME, OWNER_COMPLETION_REPORT_CONSTANTS as C } fro
 import type { WorkItem, WorkItemStatus } from '../../types/v2/work-item.types.js';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
 import { isPastReminderCutoff, leadStaleNotice, reminderFooter } from './harness-reminder.js';
+import { detectOwnerLanguage, fallbackLine, type OwnerLanguage } from './owner-completion-report.text.js';
 import { originOfWorkItem, type WorkItemOrigin } from './work-item-destination.js';
 
 /** An owner origin. */
@@ -191,34 +198,31 @@ export function titlesLine(items: readonly WorkItem[]): string {
 }
 
 /**
- * What the finished items left behind: their result / output summaries and
- * file paths, one line each.
+ * What the finished items delivered, for the owner's one line: the result
+ * summary of each succeeded work item when it has one, else its title.
  *
  * @param items - Chain items
- * @returns Evidence lines (possibly empty)
+ * @returns Raw texts (plain-worded later by `owner-completion-report.text.ts`)
  */
-export function evidenceLines(items: readonly WorkItem[]): string[] {
-  const lines: string[] = [];
+export function deliverableTexts(items: readonly WorkItem[]): string[] {
+  const out: string[] = [];
   for (const wi of items) {
     if (isVerifyItem(wi) || !SUCCEEDED.has(wi.status)) continue;
     const bag = { ...(wi.output ?? {}), ...(wi.result ?? {}) } as Record<string, unknown>;
-    const parts: string[] = [];
-    for (const k of ['summary', 'message', 'text', 'evidence']) {
-      if (typeof bag[k] === 'string' && (bag[k] as string).trim()) {
-        parts.push(bag[k] as string);
-        break;
-      }
-    }
-    for (const k of ['files', 'artifacts', 'paths', 'evidencePaths', 'outputPaths']) {
-      const v = bag[k];
-      if (Array.isArray(v)) parts.push(v.filter((x) => typeof x === 'string').join(', '));
-      else if (typeof v === 'string') parts.push(v);
-    }
-    if (!parts.length) continue;
-    lines.push(`${clip(wi.title, C.TITLE_MAX_CHARS)}: ${clip(parts.join(' — '), C.EVIDENCE_LINE_MAX_CHARS)}`);
-    if (lines.length >= C.MAX_EVIDENCE_LINES) break;
+    const summary = typeof bag.summary === 'string' && bag.summary.trim() ? bag.summary : null;
+    out.push(summary ?? wi.title ?? '');
   }
-  return lines;
+  return out;
+}
+
+/**
+ * The titles a legacy record's `titles` line names (`"A", "B" and 2 more`).
+ *
+ * @param line - The titles line
+ * @returns Titles
+ */
+function titlesOf(line: string): string[] {
+  return [...line.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
 }
 
 /** One chain's report state (persisted). */
@@ -232,15 +236,18 @@ export interface ChainReportRecord {
   titles: string;
   /** The item `reply --work-item` names */
   replyWorkItemId: string;
+  /** What the work delivered (titles / summaries), for the fallback line; older records lack it */
+  deliverables?: string[];
   firstCreatedAt: number;
   lastCreatedAt: number;
   finishedAt: number;
   /** Answers posted after this count as the report (see {@link OwnerChain.workDoneAt}); older records lack it */
   answerFrom?: number;
   /**
-   * `settling` (closed, waiting SETTLE_MS) → `asked` → `reminded` → `posted`;
-   * `answered`: an agent answered in the owner's place; `skipped`: the orc's
-   * own enforcer covers it.
+   * `settling` (closed, waiting SETTLE_MS) → `asked` (the one nudge) →
+   * `posted`; `answered`: an agent answered in the owner's place; `skipped`:
+   * the orc's own enforcer covers it. `reminded` is kept for records written
+   * before crewly#1357 (treated like `asked`).
    */
   stage: 'settling' | 'asked' | 'reminded' | 'posted' | 'answered' | 'skipped';
   closedSince: number;
@@ -274,6 +281,8 @@ export interface OwnerCompletionReportDeps {
   resolvePlace: (origin: OwnerOrigin) => Promise<ReportPlace | null>;
   /** Post the harness's own summary in that place, as the agent when possible; true when posted */
   postFallback: (place: ReportPlace, agentSession: string, text: string) => Promise<boolean>;
+  /** The language the owner writes in at that place (null: unknown → English) */
+  ownerLanguage?: (origin: OwnerOrigin, place: ReportPlace | null) => Promise<OwnerLanguage | null>;
   /** Tell the responsible agent's team lead something (finished work too old to ask a report for); false when it could not */
   notifyLead?: (agentSession: string, text: string) => Promise<boolean>;
   /** Display name of an agent */
@@ -452,6 +461,7 @@ export class OwnerCompletionReportService {
       responsible: chain.responsible,
       workItemIds: chain.items.map((w) => w.id),
       titles: titlesLine(chain.items),
+      deliverables: deliverableTexts(chain.items),
       replyWorkItemId: (mine ?? last).id,
       firstCreatedAt: chain.firstCreatedAt,
       lastCreatedAt: chain.lastCreatedAt,
@@ -477,6 +487,7 @@ export class OwnerCompletionReportService {
       if (chain.finishedAt > record.finishedAt) {
         record.finishedAt = chain.finishedAt;
         record.titles = titlesLine(chain.items);
+        record.deliverables = deliverableTexts(chain.items);
       }
       record.answerFrom = chain.workDoneAt;
     }
@@ -511,27 +522,21 @@ export class OwnerCompletionReportService {
           this.end(record, 'skipped', now);
           return;
         }
-        const ok = await this.deps.deliver(record.responsible, this.askText(record, place, false)).catch(() => false);
+        const ok = await this.deps.deliver(record.responsible, this.askText(record, place)).catch(() => false);
         record.stage = 'asked';
         record.askedAt = now;
         this.save();
         this.log.info('Asked the agent to report finished owner work', { key: record.key, agent: record.responsible, delivered: ok });
         return;
       }
-      case 'asked': {
-        if (now - Math.max(record.askedAt ?? 0, record.finishedAt) < C.REPORT_WAIT_MS || !place) return;
-        const ok = await this.deps.deliver(record.responsible, this.askText(record, place, true)).catch(() => false);
-        record.stage = 'reminded';
-        record.remindedAt = now;
-        this.save();
-        this.log.info('Reminded the agent to report finished owner work', { key: record.key, agent: record.responsible, delivered: ok });
-        return;
-      }
+      case 'asked':
       case 'reminded': {
-        if (now - Math.max(record.remindedAt ?? 0, record.finishedAt) < C.REPORT_WAIT_MS || !place) return;
-        const items = chain?.items ?? [];
-        const posted = await this.deps.postFallback(place, record.responsible, this.fallbackText(record, items)).catch(() => false);
-        this.log.info('Posted the finished owner work summary for the agent', { key: record.key, agent: record.responsible, posted });
+        // One nudge, then the grace period; the harness posts one plain line.
+        const nudgedAt = Math.max(record.askedAt ?? 0, record.remindedAt ?? 0, record.finishedAt);
+        if (now - nudgedAt < C.NUDGE_GRACE_MS || !place) return;
+        const language = (await this.deps.ownerLanguage?.(record.origin, place).catch(() => null)) ?? detectOwnerLanguage(null);
+        const posted = await this.deps.postFallback(place, record.responsible, this.fallbackText(record, chain?.items ?? [], language)).catch(() => false);
+        this.log.info('Posted the finished owner work line for the agent', { key: record.key, agent: record.responsible, language, posted });
         record.postedAt = now;
         this.end(record, 'posted', now);
         return;
@@ -550,39 +555,42 @@ export class OwnerCompletionReportService {
   }
 
   /**
-   * The message asking the responsible agent for the report.
+   * The one nudge asking the responsible agent for the report (crewly#1357:
+   * one nudge, then the harness posts a line itself).
    *
    * @param record - Chain record
    * @param place - Where the owner asked
-   * @param reminder - The second (last) ask
+   * @param now - Clock (epoch ms)
    * @returns English harness text
    */
-  askText(record: ChainReportRecord, place: ReportPlace, reminder: boolean, now: number = Date.now()): string {
+  askText(record: ChainReportRecord, place: ReportPlace, now: number = Date.now()): string {
     const cmd =
       place.kind === 'app-comment'
-        ? `${this.deps.appCommentsCmd ?? 'app-comments'} --app ${place.appId} --reply ${place.commentId} --text "<summary + where the files are>"`
-        : `reply --work-item ${record.replyWorkItemId} "<summary + where the files are>"`;
-    const head = reminder ? '[OWNER REPORT DUE — reminder]' : '[OWNER REPORT DUE]';
-    const tail = reminder
-      ? ` The owner has still not been told. If nothing is posted there within ${Math.round(C.REPORT_WAIT_MS / 60_000)} minutes, Crewly posts a short summary there for you.`
-      : ' Write it for the owner: what was done, the result, and where the files are. One message; the owner only reads it.';
+        ? `${this.deps.appCommentsCmd ?? 'app-comments'} --app ${place.appId} --reply ${place.commentId} --text "<what the owner got>"`
+        : `reply --work-item ${record.replyWorkItemId} "<what the owner got>"`;
     return (
-      `${head} The work the owner asked for in ${place.label} is finished (${record.titles}). Report the result to the owner there now: ${cmd}.${tail}` +
-      reminderFooter(reminder ? 2 : 1, record.finishedAt, now)
+      `[OWNER REPORT DUE] The work the owner asked for in ${place.label} is finished (${record.titles}). ` +
+      `Tell the owner there yourself, now: one short message in the owner's language saying what they got and where it is, in plain words — ` +
+      `no work item ids, no internal links, file paths, codecs, sizes or logs. Run: ${cmd}. ` +
+      `If nothing is posted there within ${Math.round(C.NUDGE_GRACE_MS / 60_000)} minutes, Crewly posts one line there for you.` +
+      reminderFooter(1, record.finishedAt, now)
     );
   }
 
   /**
-   * The harness's own summary, posted when the agent never reported.
+   * The one line the harness posts when the agent never reported: the
+   * deliverable in plain words, in the owner's language, and the short
+   * "sent by Crewly" marker. No ids, links, files, sizes or result dumps.
    *
    * @param record - Chain record
-   * @param items - The chain's items (for evidence), when still in the pool
-   * @returns English harness text
+   * @param items - The chain's items, when still in the pool (their summaries are preferred)
+   * @param language - The owner's language
+   * @returns The line
    */
-  fallbackText(record: ChainReportRecord, items: readonly WorkItem[]): string {
-    const evidence = evidenceLines(items);
-    const results = evidence.length ? `\nResults:\n${evidence.map((l) => `• ${l}`).join('\n')}` : '\nResults: see the work items in Crewly.';
-    return `${this.name(record.responsible)} finished: ${record.titles}.${results}\n— sent by Crewly because no report was posted.`;
+  fallbackText(record: ChainReportRecord, items: readonly WorkItem[], language: OwnerLanguage = 'en'): string {
+    const fromPool = deliverableTexts(items);
+    const deliverables = fromPool.length ? fromPool : record.deliverables?.length ? record.deliverables : titlesOf(record.titles);
+    return fallbackLine({ agentName: this.name(record.responsible), deliverables, language });
   }
 
   private end(record: ChainReportRecord, stage: ChainReportRecord['stage'], now: number): void {

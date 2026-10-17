@@ -7,7 +7,7 @@ import {
   OwnerCompletionReportService,
   answerKeysOf,
   collectOwnerChains,
-  evidenceLines,
+  deliverableTexts,
   ownerPlaceKey,
   titlesLine,
   type OwnerCompletionReportDeps,
@@ -95,13 +95,20 @@ describe('owner chain helpers', () => {
     expect(collectOwnerChains([item('old', { at: T0 })], { 'app:upb7se5pfj/QMSjXIhFanDw': T0 })).toHaveLength(0);
   });
 
-  it('titles and evidence', () => {
+  it('titles and deliverables (summary preferred over title; verify items and failures left out)', () => {
     const items = [
       item('a', { title: 'Evidence pack', result: { summary: 'Done', files: ['ops/x.md'] } }),
       item('a:v', { title: 'Verify', metadata: { verifyOf: 'a' } }),
+      item('b', { title: 'Card copy' }),
+      item('c', { title: 'Nope', status: 'failed' }),
     ];
-    expect(titlesLine(items)).toBe('"Evidence pack"');
-    expect(evidenceLines(items)).toEqual(['Evidence pack: Done — ops/x.md']);
+    expect(titlesLine(items)).toBe('"Evidence pack", "Card copy"');
+    expect(deliverableTexts(items)).toEqual(['Done', 'Card copy']);
+  });
+
+  it('work an agent delegated on its own initiative (agent origin) never forms a chain (crewly#1357)', () => {
+    const items = [item('x', { origin: null, metadata: { origin: { kind: 'agent', sessionName: 'ella' }, delegatedBy: 'ella' } })];
+    expect(collectOwnerChains(items, {})).toHaveLength(0);
   });
 });
 
@@ -150,7 +157,7 @@ describe('OwnerCompletionReportService', () => {
     ];
   }
 
-  it('delegate → verify chain: asks the receiver once after SETTLE_MS, reminds after REPORT_WAIT_MS, then posts the summary itself', async () => {
+  it('delegate → verify chain: nudges the receiver once after SETTLE_MS, then after NUDGE_GRACE_MS posts one plain line itself', async () => {
     const svc = make();
     items = incidentChain('done_by_worker');
     now = T0 + 20 * MIN;
@@ -169,46 +176,107 @@ describe('OwnerCompletionReportService', () => {
     expect(to).toBe('lyra');
     expect(text).toContain('The work the owner asked for in the owner\'s app comment is finished (');
     expect(text).toContain('"Draft for Steve"');
-    expect(text).toContain('app-comments --app upb7se5pfj --reply QMSjXIhFanDw --text "<summary + where the files are>"');
+    expect(text).toContain('in plain words');
+    expect(text).toContain('app-comments --app upb7se5pfj --reply QMSjXIhFanDw --text "<what the owner got>"');
+    expect(text).toContain(`within ${Math.round(C.NUDGE_GRACE_MS / 60_000)} minutes, Crewly posts one line`);
 
-    now += C.REPORT_WAIT_MS - 1;
+    // One nudge only: no reminder during the grace period.
+    now += C.NUDGE_GRACE_MS - 1;
     await svc.tick();
     expect(deliver).toHaveBeenCalledTimes(1);
+    expect(postFallback).not.toHaveBeenCalled();
     now += 1;
     await svc.tick();
-    expect(deliver).toHaveBeenCalledTimes(2);
-    expect(deliver.mock.calls[1][1]).toContain('reminder');
-
-    now += C.REPORT_WAIT_MS;
-    await svc.tick();
+    expect(deliver).toHaveBeenCalledTimes(1);
     expect(postFallback).toHaveBeenCalledTimes(1);
-    const [where, agent, summary] = postFallback.mock.calls[0];
+    const [where, agent, line] = postFallback.mock.calls[0];
     expect(where).toMatchObject({ kind: 'app-comment', commentId: 'QMSjXIhFanDw' });
     expect(agent).toBe('lyra');
-    expect(summary).toMatch(/^Lyra finished: /);
-    expect(summary).toContain('ops/marketing/drafts/zengming.md');
-    expect(summary).toContain('— sent by Crewly because no report was posted.');
+    expect(line).toBe('Lyra finished Evidence for the three-stage map, Case against and Draft ready; the details will follow here.\n— sent by Crewly');
+    expect(line).not.toContain('ops/marketing/drafts/zengming.md');
+    expect(line).not.toContain('Results:');
     expect(svc.activeRecords).toHaveLength(0);
 
     // Never again for this chain.
-    now += 10 * C.REPORT_WAIT_MS;
+    now += 10 * C.NUDGE_GRACE_MS;
     await svc.tick();
-    expect(deliver).toHaveBeenCalledTimes(2);
+    expect(deliver).toHaveBeenCalledTimes(1);
     expect(postFallback).toHaveBeenCalledTimes(1);
   });
 
-  it('the asks carry attempt and age, and never ask the agent to re-post what the owner has', async () => {
+  it('the nudge carries attempt and age, and never asks the agent to re-post what the owner has', async () => {
     const svc = make();
     items = incidentChain('verified');
     now = T0 + 20 * MIN;
     await svc.tick();
     now += C.SETTLE_MS;
     await svc.tick();
-    now += C.REPORT_WAIT_MS;
-    await svc.tick();
+    expect(deliver).toHaveBeenCalledTimes(1);
     expect(deliver.mock.calls[0][1]).toContain('Automatic reminder 1 of 2');
-    expect(deliver.mock.calls[1][1]).toContain('Automatic reminder 2 of 2');
-    expect(deliver.mock.calls[1][1]).toContain('send NOTHING to the owner');
+    expect(deliver.mock.calls[0][1]).toContain('send NOTHING to the owner');
+    expect(deliver.mock.calls[0][1]).toContain('no work item ids, no internal links, file paths, codecs, sizes or logs');
+  });
+
+  it('the fallback line is written in the owner\'s language, names the deliverable in plain words and carries nothing internal (incident 15:47Z)', async () => {
+    const ownerLanguage = jest.fn(async () => 'zh' as const);
+    const svc = make({ ownerLanguage, displayNameOf: (s) => (s === 'ella' ? 'Ella' : s) });
+    items = [
+      item('cards', { origin: SLACK_ORIGIN, target: 'lyra', title: '排期里 5 张卡的文案（见 ops/marketing/cards.md）', at: T0, doneAt: T0 + 10 * MIN }),
+      item('rec', {
+        origin: SLACK_ORIGIN,
+        target: 'kai',
+        title: 'Two-accounts screen recording',
+        at: T0 + MIN,
+        doneAt: T0 + 12 * MIN,
+        result: { summary: '教程页的录屏 — https://github.com/x/y/pull/12 (h264, 1920x1080, 42 MB) /Users/me/Movies/two-accounts.mp4', files: ['/Users/me/Movies/two-accounts.mp4'] },
+      }),
+    ];
+    now = T0 + 13 * MIN;
+    await svc.tick();
+    now += C.SETTLE_MS;
+    await svc.tick();
+    now += C.NUDGE_GRACE_MS;
+    await svc.tick();
+    expect(ownerLanguage).toHaveBeenCalledWith(expect.objectContaining({ kind: 'owner', slackChannelId: 'C0MKT' }), expect.objectContaining({ kind: 'slack' }));
+    const line = postFallback.mock.calls[0][2];
+    expect(line).toBe('Ella 做完了排期里 5 张卡的文案和教程页的录屏，细节稍后补在这里。\n— 由 Crewly 代发');
+    expect(line).not.toMatch(/https?:|\.md|\.mp4|MB|h264|Results:|cards|rec\b/);
+  });
+
+  it('a language lookup that fails or knows nothing → English', async () => {
+    const svc = make({ ownerLanguage: async () => Promise.reject(new Error('no chat')) });
+    items = [item('s1', { origin: SLACK_ORIGIN, target: 'atlas', title: 'Weekly numbers', at: now, doneAt: now + MIN })];
+    now += 2 * MIN;
+    await svc.tick();
+    now += C.SETTLE_MS;
+    await svc.tick();
+    now += C.NUDGE_GRACE_MS;
+    await svc.tick();
+    expect(postFallback.mock.calls[0][2]).toBe('ella finished Weekly numbers; the details will follow here.\n— sent by Crewly');
+  });
+
+  it('a record written before crewly#1357 at stage "reminded" still ends with the one plain line', async () => {
+    const svc = make();
+    items = incidentChain('verified');
+    now = T0 + 20 * MIN;
+    await svc.tick();
+    now += C.SETTLE_MS;
+    await svc.tick();
+    svc.stop();
+    const file = path.join(dir, C.STORE_FILE);
+    const raw = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    const [key, record] = Object.entries(raw.active)[0] as [string, Record<string, unknown>];
+    raw.active[key] = { ...record, stage: 'reminded', remindedAt: now, deliverables: undefined };
+    fs.writeFileSync(file, JSON.stringify(raw));
+    const second = make();
+    now += C.NUDGE_GRACE_MS - 1;
+    await second.tick();
+    expect(postFallback).not.toHaveBeenCalled();
+    now += 1;
+    await second.tick();
+    expect(postFallback).toHaveBeenCalledTimes(1);
+    expect(postFallback.mock.calls[0][2]).toMatch(/^Lyra finished .*; the details will follow here\.\n— sent by Crewly$/);
+    expect(deliver).toHaveBeenCalledTimes(1);
   });
 
   it('finished work discovered past the cutoff (outage): no ask, no cover post; the team lead is told once', async () => {
@@ -236,7 +304,7 @@ describe('OwnerCompletionReportService', () => {
     await svc.tick();
     expect(deliver).toHaveBeenCalledTimes(1);
     expect(svc.noteWorkItemReply('s1')).toBe(1); // posted elsewhere: no answer key matched
-    now += 3 * C.REPORT_WAIT_MS;
+    now += 3 * C.NUDGE_GRACE_MS;
     await svc.tick();
     await svc.tick();
     expect(deliver).toHaveBeenCalledTimes(1);
@@ -277,7 +345,7 @@ describe('OwnerCompletionReportService', () => {
     expect(deliver.mock.calls[0][1]).toContain('reply --work-item s1 ');
     now += MIN;
     svc.noteChatAnswer('room-mkt');
-    now += 2 * C.REPORT_WAIT_MS;
+    now += 2 * C.NUDGE_GRACE_MS;
     await svc.tick();
     await svc.tick();
     expect(deliver).toHaveBeenCalledTimes(1);
@@ -309,7 +377,7 @@ describe('OwnerCompletionReportService', () => {
     await svc.tick();
     now += C.SETTLE_MS;
     await svc.tick();
-    now += 3 * C.REPORT_WAIT_MS;
+    now += 3 * C.NUDGE_GRACE_MS;
     await svc.tick();
     await svc.tick();
     expect(deliver).not.toHaveBeenCalled();
@@ -358,7 +426,7 @@ describe('OwnerCompletionReportService', () => {
     await svc.tick();
     now += C.SETTLE_MS;
     await svc.tick();
-    now += 3 * C.REPORT_WAIT_MS;
+    now += 3 * C.NUDGE_GRACE_MS;
     await svc.tick();
     expect(deliver).not.toHaveBeenCalled();
     expect(postFallback).not.toHaveBeenCalled();
@@ -370,7 +438,7 @@ describe('OwnerCompletionReportService', () => {
     const svc = make();
     items = incidentChain();
     await svc.tick();
-    now += 3 * C.REPORT_WAIT_MS;
+    now += 3 * C.NUDGE_GRACE_MS;
     await svc.tick();
     expect(deliver).not.toHaveBeenCalled();
   });
@@ -412,17 +480,15 @@ describe('OwnerCompletionReportService', () => {
     expect(second.activeRecords[0]?.stage).toBe('asked');
     await second.tick();
     expect(deliver).toHaveBeenCalledTimes(1);
-    now += C.REPORT_WAIT_MS;
+    now += C.NUDGE_GRACE_MS;
     await second.tick();
-    expect(deliver).toHaveBeenCalledTimes(2);
-    now += C.REPORT_WAIT_MS;
-    await second.tick();
+    expect(deliver).toHaveBeenCalledTimes(1);
     expect(postFallback).toHaveBeenCalledTimes(1);
 
     const third = make();
-    now += 5 * C.REPORT_WAIT_MS;
+    now += 5 * C.NUDGE_GRACE_MS;
     await third.tick();
-    expect(deliver).toHaveBeenCalledTimes(2);
+    expect(deliver).toHaveBeenCalledTimes(1);
     expect(postFallback).toHaveBeenCalledTimes(1);
     expect(JSON.parse(fs.readFileSync(path.join(dir, C.STORE_FILE), 'utf-8')).ended).toEqual({ [`app:upb7se5pfj/QMSjXIhFanDw#${T0}`]: expect.any(Number) });
   });

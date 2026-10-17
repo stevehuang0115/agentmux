@@ -11,6 +11,7 @@
  * @module services/orc/work-item-destination.wiring
  */
 
+import { WORK_ITEM_DESTINATION_CONSTANTS } from '../../constants.js';
 import type { WorkItem } from '../../types/v2/work-item.types.js';
 import type { TurnOrigin } from './orc-reply-route.service.js';
 import { parseSlackThreadKey } from '../slack/slack-thread-key.js';
@@ -55,16 +56,55 @@ export interface WorkDestinationDeps {
   findChannelId?(name: string): Promise<string | null>;
   /** The Slack DM a chat-v2 conversation is bridged to (optional) */
   dmOfConversation?(conversationId: string): { slackChannelId: string; threadTs?: string } | null;
+  /**
+   * Deliver an internal message to an agent (the delegator of work with an
+   * agent origin, crewly#1357); true when it was taken. Optional: without it
+   * such a result has nowhere to go and the reply reports that.
+   */
+  messageAgent?(toSession: string, text: string): Promise<boolean>;
 }
 
 /** Where an answer landed. */
 export interface WorkDestinationDelivery {
   kind: WorkDestination['kind'];
-  slackChannelId: string;
-  messageTs: string;
+  /** Slack channel (absent for an internal message to an agent) */
+  slackChannelId?: string;
+  /** Slack message ts (absent for an internal message to an agent) */
+  messageTs?: string;
   /** Thread the answer is in (undefined = top level) */
   threadTs?: string;
+  /** The agent an internal message went to */
+  agentSession?: string;
   reason: string;
+}
+
+/** Sends an internal message to an agent; true when taken. */
+export type AgentMessenger = (toSession: string, text: string) => Promise<boolean>;
+
+let agentMessenger: AgentMessenger | null = null;
+
+/**
+ * Wire how results of agent-delegated work reach the delegating agent (boot:
+ * the agent registration service's `sendMessageToAgent`).
+ *
+ * @param messenger - Messenger, or null to unwire
+ */
+export function setAgentMessenger(messenger: AgentMessenger | null): void {
+  agentMessenger = messenger;
+}
+
+/**
+ * The text a delegating agent gets with a result for work it handed out:
+ * tagged, naming the sender and the work item, so it knows what it answers.
+ *
+ * @param fromSession - The agent reporting
+ * @param text - Its message
+ * @param workItem - The work item, when known
+ * @returns Message text
+ */
+export function agentResultText(fromSession: string, text: string, workItem?: Pick<WorkItem, 'id' | 'title'> | null): string {
+  const about = workItem ? ` about WorkItem ${workItem.id} "${shortTopic(workItem.title)}"` : '';
+  return `${WORK_ITEM_DESTINATION_CONSTANTS.AGENT_RESULT_TAG} From ${fromSession}${about} (work you delegated; the owner did not ask for it in a thread — decide yourself what, if anything, the owner hears):\n${text}`;
 }
 
 /**
@@ -124,6 +164,14 @@ export async function deliverToWorkDestination(
       }
       const posted = await deps.post({ agentSession: session, target: thread.slackChannelId, text, threadTs: thread.threadTs });
       return { kind: 'ticket-thread', slackChannelId: posted.channelId, messageTs: posted.messageTs, threadTs: thread.threadTs, reason: destination.reason };
+    }
+    case 'agent': {
+      if (!deps.messageAgent) return null;
+      const items = await deps.poolItems().catch(() => [] as WorkItem[]);
+      const workItem = currentWorkItemOf(items, session);
+      const taken = await deps.messageAgent(destination.sessionName, agentResultText(session, text, workItem));
+      if (!taken) return null;
+      return { kind: 'agent', agentSession: destination.sessionName, reason: destination.reason };
     }
   }
 }
@@ -215,6 +263,9 @@ export async function resolveAgentSlackDestination(
       const channel = await d.teamChannelOf(session, destination.teamId ?? null);
       return channel ? { ...channel, ...(destination.topic ? { topic: destination.topic } : {}) } : null;
     }
+    case 'agent':
+      // An internal message to the delegating agent is not a Slack place.
+      return null;
   }
 }
 
@@ -275,5 +326,6 @@ export async function defaultWorkDestinationDeps(): Promise<WorkDestinationDeps>
       const link = getSlackAgentDmService()?.findByChatChannelId(conversationId);
       return link ? { slackChannelId: link.slackChannelId, ...(link.replyThreadTs ? { threadTs: link.replyThreadTs } : {}) } : null;
     },
+    ...(agentMessenger ? { messageAgent: agentMessenger } : {}),
   };
 }

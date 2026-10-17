@@ -60,6 +60,61 @@ The lead prompt says: when you delegate an owner request, pass `--thread`
 and let the member answer in the thread; do not keep work to keep the owner
 informed.
 
+### 1a. A delegation is the owner's only when the lead says so (crewly#1357)
+
+**Incidents, 2026-10-17.** 12:54Z: Ella delegated "Refresh today's X reply
+prep" to Lyra on her own initiative; the item inherited an owner DM from
+2026-10-08 (her running item's origin) and Lyra's internal completion report
+went to the owner, footed "Triggered by your request". 15:47Z: Ella delegated
+two items while answering the owner in the #awesome-videos 「什么是投资」
+thread; both inherited that thread, and when they finished with no report the
+harness posted "Ella finished: <WorkItem titles> Results: <PR link, codec,
+file sizes> — sent by Crewly because no report was posted" into the video
+thread.
+
+**Rule.** For a delegation (an agent adds an item whose target is not
+itself — `X-Agent-Session` or `metadata.delegatedBy`):
+
+- It takes an owner origin only when the delegator names the place:
+  `--thread <key>` (`metadata.ownerThread`, Slack key, tag or chat message id)
+  or `--conversation <id>` (`metadata.ownerConversation`, chat conversation;
+  the delegator's turn there supplies the thread and Slack place). Or when it
+  continues a parent item (verify / retry / subtask) that has one.
+- A named place is not taken when the owner last wrote there more than
+  `WORK_ITEM_DESTINATION_CONSTANTS.ORIGIN_INHERIT_MAX_AGE_MS` (2 h) ago. The
+  age is the delegator's own turn there, else the newest owner message in the
+  place (`TaskPoolService.setOwnerAskedAtLookup`, chat-v2); unknown ages are
+  taken as given. A verbatim `metadata.origin` in the body is kept as it is.
+- Otherwise the origin is the delegator: `{ kind: 'agent', sessionName }`.
+  The delegator's fresh owner turn, owner request context (app comment /
+  hand-over) and running work are never consulted for a delegation. A
+  ticket-linked delegation keeps the ticket as origin.
+- The member's `reply --work-item <id>` for an agent origin reaches the
+  delegator as an internal `[RESULT] From <member> about WorkItem …` message
+  (`setAgentMessenger`, `deliverToWorkDestination` kind `agent`); it is not a
+  Slack place. `POST /api/task-pool/add` answers `data.resultRoute = {to,
+  note}`, which `delegate-task` appends to the brief ("Report your result to
+  <lead>… Do not post it to the owner.").
+- Items an agent creates for itself keep the existing inheritance (fresh turn
+  → context → running work), except that an owner origin read off running
+  work older than 2 h is dropped.
+- Harness-created items (dispatcher auto-route, scheduled owner follow-ups,
+  ticket auto-route, verify / retry items) are unchanged.
+
+**Completion report.** `OwnerCompletionReportService` only ever reports
+chains of genuine owner origins, so agent-origin work is never reported to
+the owner. For a genuine chain: ONE nudge to the responsible agent (plain
+words, in the owner's language, no ids / links / paths / sizes), then after
+`OWNER_COMPLETION_REPORT_CONSTANTS.NUDGE_GRACE_MS` (30 min) with nothing
+posted, one line for it: the deliverable in plain words (first clause of the
+item's summary or title; URLs, uuids, 8+-hex ids, ticket ids, paths, file
+names, code spans and parentheses holding digits removed —
+`owner-completion-report.text.ts`), in the owner's language (read off the
+owner's own messages in that thread, else their recent messages; default
+English), plus a short marker: "Ella 做完了排期里 5 张卡的文案和教程页的录屏，
+细节稍后补在这里。 — 由 Crewly 代发" / "Ella finished …; the details will
+follow here. — sent by Crewly". No second reminder, no "Results:" dump.
+
 ## 2. Execution nudge
 
 Signal: the Claude Code agent-status hook (already installed per session,

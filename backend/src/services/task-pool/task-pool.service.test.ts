@@ -5,6 +5,7 @@
  */
 
 import { TaskPoolService, WorkItemClaimedError } from './task-pool.service.js';
+import { originOfWorkItem } from '../orc/work-item-destination.js';
 import { setOwnerThreadSentinel, type OwnerThreadSentinelService } from '../messaging/owner-thread-sentinel.service.js';
 import { TeamBudgetExceededError } from '../budget/team-budget-gate.service.js';
 import { PoolStorage } from './pool-storage.js';
@@ -160,9 +161,11 @@ describe('TaskPoolService', () => {
     describe('origin chain (specs/2026-10-01-orc-status-wakes.md §2)', () => {
       const ownerTurn = { conversationId: 'room-brief', slackChannelId: 'C0BRIEF', slackThreadKey: 'C0BRIEF:1790856242.596149', receivedAt: Date.now() };
 
-      it('a delegate created by an agent answering the owner gets the owner origin; its verify item inherits it', async () => {
+      beforeEach(() => service.setOwnerAskedAtLookup(null));
+
+      it('a delegate that names the owner thread gets the owner origin; its verify item inherits it', async () => {
         service.setTurnOriginLookup((s) => (s === 'atlas' ? ownerTurn : undefined));
-        const delegate = makeWorkItem({ target: 'sage', metadata: { delegatedBy: 'atlas' } });
+        const delegate = makeWorkItem({ target: 'sage', metadata: { delegatedBy: 'atlas', ownerThread: 'C0BRIEF:1790856242.596149' } });
         await service.addToPool(delegate, { creatorSession: 'atlas' });
         const stored = (await service.getAllItems()).find((w) => w.id === delegate.id)!;
         expect(stored.metadata?.origin).toEqual({ kind: 'owner', conversationId: 'room-brief', slackChannelId: 'C0BRIEF', threadTs: '1790856242.596149', receivedBy: 'atlas' });
@@ -177,7 +180,7 @@ describe('TaskPoolService', () => {
 
       it('a retry / give-up review linked by sourceWorkItemId inherits too', async () => {
         service.setTurnOriginLookup(() => ownerTurn);
-        const source = makeWorkItem({ target: 'sage' });
+        const source = makeWorkItem({ target: 'atlas' });
         await service.addToPool(source, { creatorSession: 'atlas' });
         service.setTurnOriginLookup(() => undefined);
         const review = makeWorkItem({ type: 'review', target: 'atlas', metadata: { sourceWorkItemId: source.id } });
@@ -185,9 +188,9 @@ describe('TaskPoolService', () => {
         expect((await service.getAllItems()).find((w) => w.id === review.id)!.metadata?.origin).toMatchObject({ kind: 'owner', conversationId: 'room-brief' });
       });
 
-      it('no owner turn and no current work → no origin stamped; an explicit origin is never replaced', async () => {
+      it('no owner turn and no current work → self work gets no origin; an explicit origin is never replaced', async () => {
         service.setTurnOriginLookup(() => undefined);
-        const plain = makeWorkItem({ target: 'sage' });
+        const plain = makeWorkItem({ target: 'atlas' });
         await service.addToPool(plain, { creatorSession: 'atlas' });
         expect((await service.getAllItems())[0].metadata?.origin).toBeUndefined();
 
@@ -227,12 +230,106 @@ describe('TaskPoolService', () => {
         expect((await service.getAllItems())[0].metadata?.origin).toEqual({ kind: 'owner', conversationId: 'room-ce', slackChannelId: 'C0PROCE', threadTs: '1791379103.320929', receivedBy: 'owen' });
       });
 
-      it('an unreadable explicit thread falls back to normal inheritance', async () => {
+      it('an unreadable explicit thread falls back to normal inheritance (a delegation: the delegator)', async () => {
         service.setTurnOriginLookup(() => ownerTurn);
         service.setSlackThreadConversationLookup(null);
         const delegate = makeWorkItem({ target: 'sage', metadata: { ownerThread: 'garbage' } });
         await service.addToPool(delegate, { creatorSession: 'atlas' });
-        expect((await service.getAllItems())[0].metadata?.origin).toMatchObject({ kind: 'owner', conversationId: 'room-brief' });
+        expect((await service.getAllItems())[0].metadata?.origin).toEqual({ kind: 'agent', sessionName: 'atlas' });
+      });
+
+      // crewly#1357: Ella delegated on her own initiative while an owner thread was fresh.
+      describe('agent-initiated delegations (crewly#1357)', () => {
+        const videoTurn = { conversationId: 'room-video', slackChannelId: 'C0VIDEO', slackThreadKey: 'C0VIDEO:1792000000.000100', receivedAt: Date.now() - 60_000 };
+
+        it('a delegation without --thread / --conversation gets the delegator as origin, even while the delegator answers the owner', async () => {
+          service.setTurnOriginLookup((s) => (s === 'ella' ? videoTurn : undefined));
+          service.setOwnerContextLookup(async () => ({ origin: { kind: 'owner', receivedBy: 'lyra', appComment: { appId: 'a', commentId: 'c' } }, at: Date.now(), via: 'hand-over' }));
+          const delegate = makeWorkItem({ target: 'lyra', metadata: { delegatedBy: 'ella' } });
+          await service.addToPool(delegate, { creatorSession: 'ella' });
+          expect((await service.getAllItems())[0].metadata?.origin).toEqual({ kind: 'agent', sessionName: 'ella' });
+          service.setOwnerContextLookup(null);
+        });
+
+        it('metadata.delegatedBy alone (no header) identifies the delegator', async () => {
+          service.setTurnOriginLookup(() => videoTurn);
+          const delegate = makeWorkItem({ target: 'lyra', metadata: { delegatedBy: 'ella' } });
+          await service.addToPool(delegate);
+          expect((await service.getAllItems())[0].metadata?.origin).toEqual({ kind: 'agent', sessionName: 'ella' });
+        });
+
+        it('a delegation never inherits the delegator\'s running work\'s owner origin (the 2026-10-08 DM)', async () => {
+          service.setTurnOriginLookup(() => undefined);
+          const standing = makeWorkItem({ target: 'ella', metadata: { origin: { kind: 'owner', conversationId: 'slack-D0AC7NF5N7L-1791472064', slackChannelId: 'D0AC7NF5N7L', receivedBy: 'ella' } } });
+          await service.addToPool(standing);
+          await storage.updateWorkItem(standing.id, (w) => { w.status = 'running'; w.startedAt = new Date().toISOString(); });
+          const delegate = makeWorkItem({ target: 'lyra', title: 'Refresh today\'s X reply prep', metadata: { delegatedBy: 'ella' } });
+          await service.addToPool(delegate, { creatorSession: 'ella' });
+          expect((await service.getAllItems()).find((w) => w.id === delegate.id)!.metadata?.origin).toEqual({ kind: 'agent', sessionName: 'ella' });
+        });
+
+        it('--conversation names the owner chat conversation; the delegator\'s turn there supplies the thread', async () => {
+          service.setTurnOriginLookup((s) => (s === 'ella' ? { ...videoTurn, chatThreadId: 'root-9' } : undefined));
+          const delegate = makeWorkItem({ target: 'lyra', metadata: { delegatedBy: 'ella', ownerConversation: 'room-video' } });
+          await service.addToPool(delegate, { creatorSession: 'ella' });
+          expect((await service.getAllItems())[0].metadata?.origin).toEqual({
+            kind: 'owner',
+            conversationId: 'room-video',
+            slackChannelId: 'C0VIDEO',
+            threadTs: '1792000000.000100',
+            chatThreadId: 'root-9',
+            receivedBy: 'ella',
+          });
+          const other = makeWorkItem({ target: 'kai', metadata: { delegatedBy: 'ella', ownerConversation: 'room-other' } });
+          await service.addToPool(other, { creatorSession: 'ella' });
+          expect((await service.getAllItems()).find((w) => w.id === other.id)!.metadata?.origin).toEqual({ kind: 'owner', conversationId: 'room-other', receivedBy: 'ella' });
+        });
+
+        it('an explicit owner place where the owner last asked more than ORIGIN_INHERIT_MAX_AGE_MS ago is not taken', async () => {
+          service.setTurnOriginLookup(() => undefined);
+          service.setSlackThreadConversationLookup(async () => 'slack-D0AC7NF5N7L-1791472064');
+          service.setOwnerAskedAtLookup(async () => Date.now() - 9 * 24 * 60 * 60_000);
+          const delegate = makeWorkItem({ target: 'lyra', metadata: { delegatedBy: 'ella', ownerThread: 'D0AC7NF5N7L:1791472064.000100' } });
+          await service.addToPool(delegate, { creatorSession: 'ella' });
+          expect((await service.getAllItems())[0].metadata?.origin).toEqual({ kind: 'agent', sessionName: 'ella' });
+
+          // Fresh: taken. Unknown age: taken as given.
+          service.setOwnerAskedAtLookup(async () => Date.now() - 60_000);
+          const fresh = makeWorkItem({ target: 'lyra', metadata: { delegatedBy: 'ella', ownerThread: 'D0AC7NF5N7L:1791472064.000100' } });
+          await service.addToPool(fresh, { creatorSession: 'ella' });
+          expect((await service.getAllItems()).find((w) => w.id === fresh.id)!.metadata?.origin).toMatchObject({ kind: 'owner', slackChannelId: 'D0AC7NF5N7L' });
+          service.setOwnerAskedAtLookup(async () => null);
+          const unknown = makeWorkItem({ target: 'lyra', metadata: { delegatedBy: 'ella', ownerConversation: 'room-x' } });
+          await service.addToPool(unknown, { creatorSession: 'ella' });
+          expect((await service.getAllItems()).find((w) => w.id === unknown.id)!.metadata?.origin).toMatchObject({ kind: 'owner', conversationId: 'room-x' });
+        });
+
+        it('the delegator\'s own fresh turn in the named place is its age (no store read)', async () => {
+          service.setTurnOriginLookup(() => videoTurn);
+          const lookup = jest.fn(async () => Date.now() - 9 * 24 * 60 * 60_000);
+          service.setOwnerAskedAtLookup(lookup);
+          const delegate = makeWorkItem({ target: 'lyra', metadata: { delegatedBy: 'ella', ownerThread: 'C0VIDEO:1792000000.000100' } });
+          await service.addToPool(delegate, { creatorSession: 'ella' });
+          expect((await service.getAllItems())[0].metadata?.origin).toMatchObject({ kind: 'owner', conversationId: 'room-video' });
+          expect(lookup).not.toHaveBeenCalled();
+        });
+
+        it('a verbatim metadata.origin in the body is kept as given, however old', async () => {
+          service.setTurnOriginLookup(() => videoTurn);
+          const origin = { kind: 'owner', conversationId: 'dm-old', slackChannelId: 'D0OLD', threadTs: '1791000000.000100', receivedBy: 'ella' };
+          const delegate = makeWorkItem({ target: 'lyra', metadata: { delegatedBy: 'ella', origin } });
+          await service.addToPool(delegate, { creatorSession: 'ella' });
+          expect((await service.getAllItems())[0].metadata?.origin).toEqual(origin);
+        });
+
+        it('ticket-linked delegations keep the ticket as origin (the delegator is not stamped over it)', async () => {
+          service.setTurnOriginLookup(() => undefined);
+          const delegate = makeWorkItem({ target: 'sage', metadata: { delegatedBy: 'ella', projectTicket: { projectPath: '/p', id: 'CREW-401' } } });
+          await service.addToPool(delegate, { creatorSession: 'ella' });
+          const stored = (await service.getAllItems())[0];
+          expect(stored.metadata?.origin).toBeUndefined();
+          expect(originOfWorkItem(stored)).toMatchObject({ kind: 'ticket', ticketId: 'CREW-401' });
+        });
       });
 
       // 2026-10-07: the schedule-app comment reached Lyra (no chat turn).
@@ -245,11 +342,11 @@ describe('TaskPoolService', () => {
         });
         afterEach(() => service.setOwnerContextLookup(null));
 
-        it('work created while handling an app comment carries an owner origin pointing at the comment and its Slack thread', async () => {
+        it('own work created while handling an app comment carries an owner origin pointing at the comment and its Slack thread', async () => {
           service.setTurnOriginLookup(() => undefined);
           service.setOwnerContextLookup(async (s) => (s === 'lyra' ? appCtx(Date.now()) : null));
-          const delegate = makeWorkItem({ target: 'luna', metadata: { delegatedBy: 'lyra' } });
-          await service.addToPool(delegate, { creatorSession: 'lyra' });
+          const own = makeWorkItem({ target: 'lyra' });
+          await service.addToPool(own, { creatorSession: 'lyra' });
           expect((await service.getAllItems())[0].metadata?.origin).toEqual({
             kind: 'owner',
             receivedBy: 'lyra',
@@ -259,27 +356,28 @@ describe('TaskPoolService', () => {
           });
         });
 
-        it('a hand-over keeps who received the request; a ticket link does not erase the owner origin', async () => {
+        it('a delegation made from a hand-over does not inherit it (crewly#1357); the receiver answers the comment itself', async () => {
           service.setTurnOriginLookup(() => undefined);
           service.setOwnerContextLookup(async (s) => (s === 'ella' ? { ...appCtx(Date.now()), via: 'hand-over' as const } : null));
-          const linked = makeWorkItem({
-            target: 'sage',
-            metadata: { delegatedBy: 'ella', projectTicket: { projectPath: '/p/crewly-marketing', id: 'CREW-309' } },
-          });
-          await service.addToPool(linked, { creatorSession: 'ella' });
-          const stored = (await service.getAllItems())[0];
-          expect(stored.metadata?.origin).toMatchObject({ kind: 'owner', receivedBy: 'lyra', appComment });
+          const delegate = makeWorkItem({ target: 'sage', metadata: { delegatedBy: 'ella' } });
+          await service.addToPool(delegate, { creatorSession: 'ella' });
+          expect((await service.getAllItems())[0].metadata?.origin).toEqual({ kind: 'agent', sessionName: 'ella' });
+          // Naming the comment's Slack thread hands it over explicitly.
+          service.setSlackThreadConversationLookup(async () => 'room-app');
+          const named = makeWorkItem({ target: 'sage', metadata: { delegatedBy: 'ella', ownerThread: 'C0C2WMFB9EF:1791380650.784969' } });
+          await service.addToPool(named, { creatorSession: 'ella' });
+          expect((await service.getAllItems()).find((w) => w.id === named.id)!.metadata?.origin).toMatchObject({ kind: 'owner', slackChannelId: 'C0C2WMFB9EF', receivedBy: 'ella' });
         });
 
-        it('a context older than the creator\'s current work item is not used', async () => {
+        it('a context older than the creator\'s current work item is not used for its own work', async () => {
           service.setTurnOriginLookup(() => undefined);
           const running = makeWorkItem({ target: 'ella', status: 'queued' });
           await service.addToPool(running);
           await storage.updateWorkItem(running.id, (w) => { w.status = 'running'; w.startedAt = new Date().toISOString(); });
           service.setOwnerContextLookup(async () => appCtx(Date.now() - 60_000));
-          const delegate = makeWorkItem({ target: 'sage' });
-          await service.addToPool(delegate, { creatorSession: 'ella' });
-          expect((await service.getAllItems()).find((w) => w.id === delegate.id)!.metadata?.origin).toBeUndefined();
+          const own = makeWorkItem({ target: 'ella' });
+          await service.addToPool(own, { creatorSession: 'ella' });
+          expect((await service.getAllItems()).find((w) => w.id === own.id)!.metadata?.origin).toBeUndefined();
         });
 
         it('ownerOriginOnly (a ticket assignment) takes the owner origin, never the creator\'s ticket origin', async () => {
@@ -292,10 +390,16 @@ describe('TaskPoolService', () => {
           await service.addToPool(assigned, { creatorSession: 'ella', ownerOriginOnly: true });
           expect((await service.getAllItems()).find((w) => w.id === assigned.id)!.metadata?.origin).toBeUndefined();
 
+          // The lead's own app-comment context is not handed over by itself (crewly#1357)…
           service.setOwnerContextLookup(async () => appCtx(Date.now() + 1000));
           const assigned2 = makeWorkItem({ target: 'kai', metadata: { projectTicket: { projectPath: '/p/m', id: 'CREW-311' } } });
           await service.addToPool(assigned2, { creatorSession: 'ella', ownerOriginOnly: true });
-          expect((await service.getAllItems()).find((w) => w.id === assigned2.id)!.metadata?.origin).toMatchObject({ kind: 'owner', receivedBy: 'lyra' });
+          expect((await service.getAllItems()).find((w) => w.id === assigned2.id)!.metadata?.origin).toBeUndefined();
+          // …the named owner thread is.
+          service.setSlackThreadConversationLookup(async () => 'room-app');
+          const assigned3 = makeWorkItem({ target: 'kai', metadata: { ownerThread: 'C0C2WMFB9EF:1791380650.784969', projectTicket: { projectPath: '/p/m', id: 'CREW-312' } } });
+          await service.addToPool(assigned3, { creatorSession: 'ella', ownerOriginOnly: true });
+          expect((await service.getAllItems()).find((w) => w.id === assigned3.id)!.metadata?.origin).toMatchObject({ kind: 'owner', slackChannelId: 'C0C2WMFB9EF', receivedBy: 'ella' });
         });
       });
     });

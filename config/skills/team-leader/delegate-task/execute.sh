@@ -19,6 +19,7 @@ FROM_SESSION=""
 REQUEST_ID=""
 PROJECT_TICKET=""
 OWNER_THREAD=""
+OWNER_CONVERSATION=""
 NO_MEMBER_FITS=""
 KEPT_WORK_ITEM=""
 PROGRESS_CHECK_ARG=""
@@ -43,6 +44,7 @@ while [[ $# -gt 0 ]]; do
     --request-id|-R) REQUEST_ID="$2";   shift 2 ;;
     --ticket)      PROJECT_TICKET="$2"; shift 2 ;;
     --thread)      OWNER_THREAD="$2";   shift 2 ;;
+    --conversation) OWNER_CONVERSATION="$2"; shift 2 ;;
     --no-member-fits) NO_MEMBER_FITS="$2"; shift 2 ;;
     --work-item)   KEPT_WORK_ITEM="$2"; shift 2 ;;
     --progress-check) PROGRESS_CHECK_ARG="$2"; shift 2 ;;
@@ -51,6 +53,7 @@ while [[ $# -gt 0 ]]; do
       echo "Usage: execute.sh --to worker-session --task 'implement feature' --priority high --project /path [--team teamId] [--tl-member memberId] [--request-id <ticket id from the [TICKET:TKT-123 <id>] line>] [--ticket <project ticket id, e.g. APP-12>]"
       echo "Work for a teammate on a project always runs through a project ticket: --ticket uses that backlog/ready ticket, otherwise one is created for you."
       echo "Owner request from Slack: add --thread <key> (from [SLACK-THREAD:<key>]) — the member answers the owner in that thread itself."
+      echo "Owner request from the Crewly chat: add --conversation <id> (from [CHAT:<id>]). Without --thread/--conversation the result comes back to YOU, never to the owner."
       echo "Optional recurring progress check (off by default; the idle notification already wakes you): --progress-check <minutes, min 30>"
       echo "Keeping work yourself because no member fits: execute.sh --no-member-fits '<what is missing: access / tool / permission / everyone busy>' --task '<the work>' [--work-item <id>] [--ticket <ID>]"
       exit 0
@@ -91,6 +94,7 @@ if [ -n "$INPUT_JSON" ]; then
   [ -z "$REQUEST_ID" ] && REQUEST_ID=$(printf '%s' "$INPUT" | jq -r '.requestId // empty')
   [ -z "$PROJECT_TICKET" ] && PROJECT_TICKET=$(printf '%s' "$INPUT" | jq -r '.ticket // .projectTicketId // empty')
   [ -z "$OWNER_THREAD" ] && OWNER_THREAD=$(printf '%s' "$INPUT" | jq -r '.thread // .ownerThread // empty')
+  [ -z "$OWNER_CONVERSATION" ] && OWNER_CONVERSATION=$(printf '%s' "$INPUT" | jq -r '.conversation // .ownerConversation // empty')
   [ -z "$NO_MEMBER_FITS" ] && NO_MEMBER_FITS=$(printf '%s' "$INPUT" | jq -r '.noMemberFits // empty')
   [ -z "$KEPT_WORK_ITEM" ] && KEPT_WORK_ITEM=$(printf '%s' "$INPUT" | jq -r '.workItemId // empty')
 fi
@@ -291,7 +295,8 @@ POOL_BODY=$(jq -n \
   --arg projectTicketId "${PROJECT_TICKET:-}" \
   --arg delegatedBy "${CREWLY_SESSION_NAME:-${FROM_SESSION:-}}" \
   --arg ownerThread "${OWNER_THREAD:-}" \
-  '{type: $type, owner: $owner, target: $target, title: $title, description: $description, briefMarkdown: $briefMarkdown, metadata: ({priority: $priority, directDelivery: true} + (if $projectPath != "" then {projectPath: $projectPath} else {} end) + (if $delegatedBy != "" then {delegatedBy: $delegatedBy} else {} end) + (if $ownerThread != "" then {ownerThread: $ownerThread} else {} end))} + (if $requestId != "" then {requestId: $requestId} else {} end) + (if $projectTicketId != "" then {projectTicketId: $projectTicketId} else {} end)')
+  --arg ownerConversation "${OWNER_CONVERSATION:-}" \
+  '{type: $type, owner: $owner, target: $target, title: $title, description: $description, briefMarkdown: $briefMarkdown, metadata: ({priority: $priority, directDelivery: true} + (if $projectPath != "" then {projectPath: $projectPath} else {} end) + (if $delegatedBy != "" then {delegatedBy: $delegatedBy} else {} end) + (if $ownerThread != "" then {ownerThread: $ownerThread} else {} end) + (if $ownerConversation != "" then {ownerConversation: $ownerConversation} else {} end))} + (if $requestId != "" then {requestId: $requestId} else {} end) + (if $projectTicketId != "" then {projectTicketId: $projectTicketId} else {} end)')
 # metadata.directDelivery: this script delivers the brief itself (below), so
 # the backend's workitem:queued push holds off and only fires if that
 # delivery never lands — the task reaches the worker once.
@@ -336,6 +341,12 @@ fi
 OWNER_THREAD_NOTE=$(echo "$POOL_RESULT" | jq -r '.data.ownerThread.note // empty' 2>/dev/null || true)
 if [ -n "$OWNER_THREAD_NOTE" ]; then
   DELIVER_MESSAGE="${DELIVER_MESSAGE}\n\n${OWNER_THREAD_NOTE}"
+fi
+# No owner place named (crewly#1357): the result comes back to the delegator;
+# the member is told not to post it to the owner.
+RESULT_ROUTE_NOTE=$(echo "$POOL_RESULT" | jq -r '.data.resultRoute.note // empty' 2>/dev/null || true)
+if [ -n "$RESULT_ROUTE_NOTE" ]; then
+  DELIVER_MESSAGE="${DELIVER_MESSAGE}\n\n${RESULT_ROUTE_NOTE}"
 fi
 
 if [ "$POOL_OK" != "true" ]; then

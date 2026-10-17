@@ -59,8 +59,13 @@ file path resolved its thread separately from `reply`.
 **Rule.**
 - `TaskPoolService.addToPool` stamps `metadata.origin` when none is set: the
   parent's origin (`parentWorkItemId`, `verifyOf`, `sourceWorkItemId`), else
-  the creating agent's current owner request (fresh turn origin → owner
-  origin), else its current work item's origin. Give-up retries copy it.
+  — for work the agent creates for itself — the creating agent's current owner
+  request (fresh turn origin → owner origin), else its current work item's
+  origin (not an owner origin older than 2 h). Give-up retries copy it. A
+  DELEGATION (target ≠ creator) inherits none of the creator's turn / context
+  / running work: it is the owner's only when the delegator names the place
+  (`--thread` / `--conversation`), else its origin is the delegator
+  (`{kind:'agent'}`) — specs/2026-10-04-tl-delegation.md §1a (crewly#1357).
 - `reply` uses an owner origin carried by the work item as the turn origin;
   when that conversation does not take the reply, it posts a new top-level
   message (topic line) in the team channel — never the last owner thread.

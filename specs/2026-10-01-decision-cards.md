@@ -151,6 +151,7 @@ someone talked to me in".
 | Owner asked (Slack DM, room thread, chat) | That conversation / thread (the turn origin) |
 | Ticket work (`metadata.projectTicket`) | The ticket's Slack thread, created on first post |
 | Trigger / cron / auto work | The trigger's `destination` (new optional field: `#channel`, `C…`, or `C…:ts`). With none set, a **new top-level post** in the target's team channel, opened with a short topic line (`*<work title>*`). Never an existing unrelated thread. |
+| Work an agent delegated on its own initiative (`metadata.origin = {kind:'agent', sessionName}`, crewly#1357) | That agent, as an internal `[RESULT]` message. Never the owner. See `specs/2026-10-04-tl-delegation.md` §1a. |
 | Agent-initiated new topic | `reply --new-thread "<title>"` |
 
 `reply` with no explicit ids continues **only the current work item's** origin. With no
@@ -173,7 +174,9 @@ Origins are recorded on the work item as `metadata.origin`:
 
 - trigger work items: `{ kind: 'trigger', triggerId, destination?, teamId?, topic }`;
 - cron work items: `{ kind: 'trigger', cronTaskId, teamId?, topic }`;
-- ticket work items carry `metadata.projectTicket`, which is read as a ticket origin.
+- ticket work items carry `metadata.projectTicket`, which is read as a ticket origin;
+- work an agent delegated without naming the owner's place: `{ kind: 'agent', sessionName }`
+  (crewly#1357).
 
 ## 7. English harness text
 

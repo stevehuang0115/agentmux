@@ -14,6 +14,7 @@
  * | owner asked (newest, < 2 h) | that conversation / thread (turn origin) |
  * | ticket work | the ticket's Slack thread (created on first post) |
  * | trigger / cron / auto work | the trigger's `destination`, else a NEW top-level post in the team channel |
+ * | work an agent delegated on its own initiative | that agent, as an internal message (crewly#1357) |
  * | no current work | a NEW top-level post in the team channel |
  *
  * Pure functions only; the effects live in `work-item-destination.wiring.ts`.
@@ -45,7 +46,12 @@ export type WorkItemOrigin =
   /** Work on a project ticket */
   | { kind: 'ticket'; projectPath: string; ticketId: string; title?: string; teamId?: string }
   /** Fired by a trigger or a cron task */
-  | { kind: 'trigger'; triggerId?: string; cronTaskId?: string; destination?: string; teamId?: string; topic: string };
+  | { kind: 'trigger'; triggerId?: string; cronTaskId?: string; destination?: string; teamId?: string; topic: string }
+  /**
+   * Delegated by an agent on its own initiative (no owner conversation named,
+   * crewly#1357): the result goes back to that agent, never to the owner.
+   */
+  | { kind: 'agent'; sessionName: string };
 
 /** Where the answer goes. */
 export type WorkDestination =
@@ -56,7 +62,9 @@ export type WorkDestination =
   /** An explicit Slack place (a trigger's destination): channel name/id, optional thread */
   | { kind: 'slack'; target: string; threadTs?: string; topic?: string; reason: string }
   /** A new top-level post in the agent's (or the work's) team channel */
-  | { kind: 'new-top-level'; teamId?: string; topic?: string; reason: string };
+  | { kind: 'new-top-level'; teamId?: string; topic?: string; reason: string }
+  /** An internal message to the agent that delegated the work */
+  | { kind: 'agent'; sessionName: string; reason: string };
 
 /** Statuses in which a work item is the agent's current work. */
 const CURRENT_STATUSES: ReadonlySet<WorkItemStatus> = new Set<WorkItemStatus>(['running', 'accepted']);
@@ -82,6 +90,18 @@ export function buildTriggerOrigin(input: {
     ...(input.teamId ? { teamId: input.teamId } : {}),
     topic: shortTopic(input.topic),
   };
+}
+
+/**
+ * The origin of work an agent delegated on its own initiative: the delegating
+ * agent itself (crewly#1357). Its result is reported to that agent, which
+ * decides what, if anything, the owner hears.
+ *
+ * @param sessionName - The delegating agent's session
+ * @returns An agent origin
+ */
+export function buildAgentOrigin(sessionName: string): WorkItemOrigin {
+  return { kind: 'agent', sessionName };
 }
 
 /**
@@ -198,6 +218,15 @@ export interface InheritOriginInput {
    * (see `owner-request-context.ts`). `at` = when it reached the creator.
    */
   creatorOwnerContext?: { origin: WorkItemOrigin; at: number } | null;
+  /**
+   * True when an agent hands the item to someone else (target is not the
+   * creator). Such a delegation never inherits the creator's owner turn,
+   * owner context or current work: without an owner conversation named
+   * explicitly its origin is the creator itself (crewly#1357).
+   */
+  delegation?: boolean;
+  /** Clock (epoch ms); defaults to Date.now() */
+  now?: number;
 }
 
 /**
@@ -216,6 +245,18 @@ export interface InheritOriginInput {
  * Lyra handed it to Ella by message, and Ella's tickets carried no owner
  * origin, so nothing linked their completion back to the owner.
  *
+ * Incident 2026-10-17 (crewly#1357): Ella delegated work of her own to Lyra
+ * and the item took an owner DM from nine days earlier (her running item's
+ * origin); later two delegations made while she answered the owner in a
+ * video thread took that thread. Lyra's internal report and the harness's
+ * "finished" summary both went to the owner. So an agent's DELEGATION
+ * (`delegation: true`) inherits nothing from the creator's turn, context or
+ * current work: its origin is the creator (an agent origin), unless the
+ * caller named the owner conversation (handled before this, by the task
+ * pool) or the item continues a parent. An owner origin read off the
+ * creator's current work item is also dropped once that work is older than
+ * {@link WORK_ITEM_DESTINATION_CONSTANTS.ORIGIN_INHERIT_MAX_AGE_MS}.
+ *
  * @param input - New item, its parent, the creator's current work
  * @returns The origin to stamp, or null (nothing to inherit / already stamped)
  */
@@ -227,15 +268,21 @@ export function inheritedOrigin(input: InheritOriginInput): WorkItemOrigin | nul
     if (fromParent) return fromParent;
   }
   const { creatorWorkItem, creatorSession } = input;
+  if (input.delegation) return creatorSession ? buildAgentOrigin(creatorSession) : null;
+  const now = input.now ?? Date.now();
   const wiStart = creatorWorkItem ? startOf(creatorWorkItem) : -Infinity;
-  const wiOrigin = creatorWorkItem ? originOfWorkItem(creatorWorkItem) : null;
+  const rawWiOrigin = creatorWorkItem ? originOfWorkItem(creatorWorkItem) : null;
+  // An owner request behind work older than the cap is not current any more.
+  const wiOwnerStale = rawWiOrigin?.kind === 'owner' && now - wiStart > WORK_ITEM_DESTINATION_CONSTANTS.ORIGIN_INHERIT_MAX_AGE_MS;
+  const wiOrigin = wiOwnerStale ? null : rawWiOrigin;
   let fromTurn: { origin: WorkItemOrigin; at: number } | null = null;
   const dest = input.creatorDestination;
   if (dest?.kind === 'owner-origin') {
     // planWorkDestination also answers owner-origin for a work item that was
     // itself asked by the owner (receivedAt = its start): keep that item's
-    // own origin then, which knows who received the request.
-    const isTheWorkItem = !!creatorWorkItem && wiOrigin?.kind === 'owner' && dest.origin.receivedAt <= wiStart;
+    // own origin then, which knows who received the request (or nothing,
+    // when that request is stale).
+    const isTheWorkItem = !!creatorWorkItem && rawWiOrigin?.kind === 'owner' && dest.origin.receivedAt <= wiStart;
     if (!isTheWorkItem) fromTurn = { origin: ownerOriginFromTurn(dest.origin, creatorSession), at: dest.origin.receivedAt };
   }
   const ctx = input.creatorOwnerContext && input.creatorOwnerContext.at >= wiStart ? input.creatorOwnerContext : null;
@@ -256,7 +303,20 @@ export function isWorkItemOrigin(value: unknown): value is WorkItemOrigin {
   if (v.kind === 'owner') return true;
   if (v.kind === 'ticket') return typeof v.projectPath === 'string' && typeof v.ticketId === 'string';
   if (v.kind === 'trigger') return typeof v.topic === 'string';
+  if (v.kind === 'agent') return typeof v.sessionName === 'string' && v.sessionName.length > 0;
   return false;
+}
+
+/**
+ * Whether an owner request is too old for new work to inherit its origin
+ * (crewly#1357). An unknown age (`null`) is not too old: nothing says so.
+ *
+ * @param askedAt - When the owner last asked there (epoch ms), or null when unknown
+ * @param now - Clock (epoch ms)
+ * @returns True when older than {@link WORK_ITEM_DESTINATION_CONSTANTS.ORIGIN_INHERIT_MAX_AGE_MS}
+ */
+export function isOwnerRequestTooOld(askedAt: number | null | undefined, now: number): boolean {
+  return typeof askedAt === 'number' && Number.isFinite(askedAt) && now - askedAt > WORK_ITEM_DESTINATION_CONSTANTS.ORIGIN_INHERIT_MAX_AGE_MS;
 }
 
 /**
@@ -355,6 +415,8 @@ export function planWorkDestination(input: WorkDestinationInput): WorkDestinatio
         reason: `scheduled work item ${workItem.id}: new top-level post`,
       };
     }
+    case 'agent':
+      return { kind: 'agent', sessionName: origin.sessionName, reason: `work item ${workItem.id} was delegated by ${origin.sessionName} on its own initiative` };
   }
 }
 
@@ -390,6 +452,40 @@ export function ownerOriginFromThreadKey(rawKey: unknown, conversationId?: strin
     slackChannelId: key.slackChannelId,
     threadTs: key.threadTs,
   };
+}
+
+/**
+ * The owner origin a delegation names by chat conversation (`delegate-task
+ * --conversation <id>`, crewly#1357).
+ *
+ * @param rawId - Conversation id
+ * @param chatThreadId - Thread root message id in that conversation, when the owner asked in a thread
+ * @returns The origin, or null when the id is unusable
+ */
+export function ownerOriginFromConversation(rawId: unknown, chatThreadId?: string | null): WorkItemOrigin | null {
+  if (typeof rawId !== 'string') return null;
+  const conversationId = rawId.trim();
+  if (!conversationId || /\s/.test(conversationId)) return null;
+  return { kind: 'owner', conversationId, ...(chatThreadId ? { chatThreadId } : {}) };
+}
+
+/**
+ * The line a delegated member gets when its work came from the delegating
+ * agent itself, not from the owner (crewly#1357): the result goes to that
+ * agent, nothing to the owner.
+ *
+ * @param wi - The stored work item
+ * @param delegatorName - Who delegated it (name or session)
+ * @returns Who gets the result + the note, or null when the item has no agent origin
+ */
+export function delegatorResultNote(wi: WorkItem, delegatorName?: string): { to: string; note: string } | null {
+  const origin = originOfWorkItem(wi);
+  if (origin?.kind !== 'agent') return null;
+  const who = delegatorName ?? origin.sessionName;
+  const note =
+    `${who} delegated this on their own initiative; the owner did not ask for it in any thread. ` +
+    `Report your result to ${who}: reply --work-item ${wi.id} "<message>". Do not post it to the owner.`;
+  return { to: origin.sessionName, note };
 }
 
 /** Statuses in which a work item still owns its owner thread. */

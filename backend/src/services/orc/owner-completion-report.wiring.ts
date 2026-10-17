@@ -6,10 +6,62 @@
  * @module services/orc/owner-completion-report.wiring
  */
 
-import { SLACK_THREAD_KEY_CONSTANTS, SLACK_TYPING_CONSTANTS } from '../../constants.js';
+import { OWNER_COMPLETION_REPORT_CONSTANTS as C, SLACK_THREAD_KEY_CONSTANTS, SLACK_TYPING_CONSTANTS } from '../../constants.js';
 import type { ChatMessageDTO } from '../chat-v2/types.js';
 import { parseSlackThreadKey, slackThreadTag } from '../slack/slack-thread-key.js';
 import type { OwnerCompletionReportService, OwnerOrigin, ReportPlace } from './owner-completion-report.service.js';
+import { detectOwnerLanguage, type OwnerLanguage } from './owner-completion-report.text.js';
+
+/** The chat-v2 reads the owner-language lookup needs (server-side, no principal). */
+export interface OwnerLanguageChatReads {
+  /** The thread root a Slack thread is mirrored as, in a chat conversation */
+  findSlackThreadRoot(conversationId: string, slackThreadTs: string): Pick<ChatMessageDTO, 'id'> | null;
+  /** Every message of a chat thread (root + replies) */
+  listThreadForBridge(conversationId: string, rootId: string): Pick<ChatMessageDTO, 'senderType' | 'content' | 'createdAt'>[];
+  /** The owner's recent messages anywhere, newest first */
+  getRecentOwnerMessageContents(sinceMs: number, limit: number): string[];
+}
+
+/**
+ * The language the owner writes in at a place (crewly#1357): read off the
+ * owner's own messages in that Slack / chat thread; when the thread has none
+ * on this machine, off the owner's recent messages anywhere; null when the
+ * owner wrote nothing readable (the caller falls back to English).
+ *
+ * @param origin - Owner origin
+ * @param place - Its resolved place, when known
+ * @param chat - chat-v2 reads
+ * @param conversationOfSlackChannel - The chat conversation a Slack channel maps to
+ * @param now - Clock (epoch ms)
+ * @returns `zh` / `en`, or null
+ */
+export function ownerLanguageOf(
+  origin: OwnerOrigin,
+  place: ReportPlace | null,
+  chat: OwnerLanguageChatReads,
+  conversationOfSlackChannel: (slackChannelId: string) => string | null,
+  now: number = Date.now(),
+): OwnerLanguage | null {
+  try {
+    const slackChannelId = (place && place.kind !== 'chat' ? place.slackChannelId : undefined) ?? origin.slackChannelId;
+    const threadTs = (place && place.kind !== 'chat' ? place.threadTs : undefined) ?? origin.threadTs;
+    const conversationId = origin.conversationId ?? (slackChannelId ? conversationOfSlackChannel(slackChannelId) : null);
+    if (conversationId) {
+      const rootId = threadTs ? chat.findSlackThreadRoot(conversationId, threadTs)?.id ?? null : origin.chatThreadId ?? null;
+      if (rootId) {
+        const ownerText = chat
+          .listThreadForBridge(conversationId, rootId)
+          .filter((m) => m.senderType === 'user' && m.content.trim())
+          .map((m) => m.content);
+        if (ownerText.length) return detectOwnerLanguage(ownerText);
+      }
+    }
+    const recent = chat.getRecentOwnerMessageContents(now - C.OWNER_LANGUAGE_LOOKBACK_MS, C.OWNER_LANGUAGE_SAMPLE).filter((t) => t.trim());
+    return recent.length ? detectOwnerLanguage(recent) : null;
+  } catch {
+    return null;
+  }
+}
 
 /** An app comment's Slack thread, when it is mirrored. */
 export type CommentLinkLookup = (appId: string, commentId: string) => Promise<{ slackChannelId: string; threadTs: string } | null>;

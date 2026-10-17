@@ -95,6 +95,8 @@ export type ReplyDelivery =
       slackChannelId?: string;
       threadTs?: string;
       messageTs?: string;
+      /** The agent an internal message went to (work with an agent origin, crewly#1357) */
+      agentSession?: string;
     }
   | { ok: false; error: string; destination: ReplyDestination; held?: boolean };
 
@@ -581,15 +583,17 @@ async function attempt(
     const wd = await d.workDestination();
     const posted = await deliverToWorkDestination(input.session, dest.destination, input.content, wd);
     if (!posted) {
-      return { ok: false, destination: dest, error: notDelivered(`${dest.reason}: there is no Slack channel to post in`, fixCommand(prompt)) };
+      const why = dest.destination.kind === 'agent' ? `${dest.reason}: ${dest.destination.sessionName} could not be reached` : `${dest.reason}: there is no Slack channel to post in`;
+      return { ok: false, destination: dest, error: notDelivered(why, fixCommand(prompt)) };
     }
     if (answeredReference && input.interim !== true) AgentPromptReferenceService.getInstance().clear(input.session);
     return {
       ok: true,
       destination: dest,
-      slackChannelId: posted.slackChannelId,
-      messageTs: posted.messageTs,
+      ...(posted.slackChannelId ? { slackChannelId: posted.slackChannelId } : {}),
+      ...(posted.messageTs ? { messageTs: posted.messageTs } : {}),
       ...(posted.threadTs ? { threadTs: posted.threadTs } : {}),
+      ...(posted.agentSession ? { agentSession: posted.agentSession } : {}),
     };
   } catch (err) {
     return { ok: false, destination: dest, error: notDelivered(`posting to Slack failed (${err instanceof Error ? err.message : String(err)})`, fixCommand(prompt)) };
@@ -648,6 +652,9 @@ export async function resolveSlackPlace(
       const channel = await wd.teamChannelOf(input.session, w.teamId ?? null);
       return channel ? { slackChannelId: channel.slackChannelId, ...(w.topic ? { topic: w.topic } : {}), destination: dest } : null;
     }
+    case 'agent':
+      // An internal message to the delegating agent is not a Slack place.
+      return null;
   }
 }
 

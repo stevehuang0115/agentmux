@@ -38,6 +38,17 @@ export function getChatV2Service(overrides?: Partial<ChatV2ServiceOptions>): Cha
 }
 
 /**
+ * The process-wide `ChatV2Service` when one has been constructed, without
+ * constructing it (background readers that must not open the store on their
+ * own, e.g. the task pool's owner-request age lookup).
+ *
+ * @returns The shared instance, or null before the first `getChatV2Service()`
+ */
+export function peekChatV2Service(): ChatV2Service | null {
+  return _instance;
+}
+
+/**
  * Replace the process-wide instance. Intended for tests and graceful
  * shutdown paths; do not call from request handlers.
  *

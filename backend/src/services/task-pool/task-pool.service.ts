@@ -56,7 +56,17 @@ import type { EventBusService } from '../event-bus/event-bus.service.js';
 import { orderForAgent, type ClaimTicketLookup } from './ticket-claim-policy.js';
 import { SUPERSEDED_BY_METADATA_KEY } from '../v3/request-completion.js';
 import { OrcReplyRouteService, type TurnOrigin } from '../orc/orc-reply-route.service.js';
-import { currentWorkItemOf, inheritedOrigin, isWorkItemOrigin, originOfWorkItem, ownerOriginFromThreadKey, planWorkDestination } from '../orc/work-item-destination.js';
+import {
+  currentWorkItemOf,
+  inheritedOrigin,
+  isOwnerRequestTooOld,
+  isWorkItemOrigin,
+  originOfWorkItem,
+  ownerOriginFromConversation,
+  ownerOriginFromThreadKey,
+  planWorkDestination,
+  type WorkItemOrigin,
+} from '../orc/work-item-destination.js';
 import { reportOwnerThreadBlocking } from '../messaging/owner-thread-sentinel.service.js';
 import { getOwnerRequestContext, type OwnerRequestContext } from '../orc/owner-request-context.js';
 import { formatSlackThreadKey, parseSlackThreadKey } from '../slack/slack-thread-key.js';
@@ -399,6 +409,14 @@ export class TaskPoolService {
     getOwnerRequestContext().resolve(session);
 
   /**
+   * When the owner last wrote in a place a delegation names explicitly
+   * (crewly#1357: an explicit owner origin older than
+   * `ORIGIN_INHERIT_MAX_AGE_MS` is not taken). null = unknown (taken as given).
+   * Default: the chat-v2 store.
+   */
+  private ownerAskedAtLookup: ((origin: Extract<WorkItemOrigin, { kind: 'owner' }>) => Promise<number | null>) | null = defaultOwnerAskedAt;
+
+  /**
    * Serializes claim operations to prevent the race where two concurrent
    * claimFromPool / claimSpecificItem calls both select the same queued
    * WorkItem between their read and write phases. In-process only — does
@@ -569,6 +587,16 @@ export class TaskPoolService {
    */
   setChatMessageThreadLookup(lookup: ((messageId: string) => Promise<{ slackChannelId: string; threadTs: string; conversationId: string } | null>) | null): void {
     this.chatMessageThreadLookup = lookup;
+  }
+
+  /**
+   * Wire (or disable) the lookup of when the owner last wrote in an
+   * explicitly named place (crewly#1357).
+   *
+   * @param lookup - Lookup, or null (ages unknown: explicit origins are taken as given)
+   */
+  setOwnerAskedAtLookup(lookup: ((origin: Extract<WorkItemOrigin, { kind: 'owner' }>) => Promise<number | null>) | null): void {
+    this.ownerAskedAtLookup = lookup;
   }
 
   /**
@@ -839,6 +867,13 @@ export class TaskPoolService {
    * answer goes where the request came from (specs/2026-10-01-orc-status-wakes.md §2).
    * Mutates the item before it is stored; failures are logged and ignored.
    *
+   * A DELEGATION (an agent handing the item to someone else) takes an owner
+   * origin only when the delegator named the owner conversation (`--thread`,
+   * `--conversation`) and the owner asked there within
+   * `ORIGIN_INHERIT_MAX_AGE_MS`; otherwise its origin is the delegator itself
+   * (specs/2026-10-04-tl-delegation.md §1a, crewly#1357). A verbatim
+   * `metadata.origin` in the body is kept as given.
+   *
    * @param workItem - The item about to be stored
    * @param creatorSession - The agent creating it, when known
    * @param ownerOnly - Stamp only an owner origin
@@ -852,27 +887,39 @@ export class TaskPoolService {
       const parent = (parentId ? await this.storage.findWorkItem(parentId) : null) ?? null;
       const delegatedBy = typeof meta.delegatedBy === 'string' ? meta.delegatedBy : undefined;
       const creator = creatorSession ?? delegatedBy;
-      // An owner thread the delegator named (`delegate-task --thread <key>`)
-      // wins over its last owner turn, which may be a newer, different
-      // thread (specs/2026-10-04-tl-delegation.md §1).
+      const delegation = !!creator && workItem.target !== creator;
+      const now = Date.now();
+      // An owner place the delegator named (`delegate-task --thread <key>` /
+      // `--conversation <id>`) wins over its last owner turn, which may be a
+      // newer, different thread (specs/2026-10-04-tl-delegation.md §1).
       const explicit = !isWorkItemOrigin(meta[WORK_ITEM_DESTINATION_CONSTANTS.METADATA_KEY])
-        ? await this.explicitOwnerOrigin(meta[TL_DELEGATION_CONSTANTS.OWNER_THREAD_FIELD], creator)
+        ? (await this.explicitOwnerOrigin(meta[TL_DELEGATION_CONSTANTS.OWNER_THREAD_FIELD], creator)) ??
+          this.explicitOwnerConversation(meta[TL_DELEGATION_CONSTANTS.OWNER_CONVERSATION_FIELD], creator)
         : null;
-      if (explicit) {
-        if (explicit.kind === 'owner' && creator && !explicit.receivedBy) explicit.receivedBy = creator;
-        workItem.metadata = { ...meta, [WORK_ITEM_DESTINATION_CONSTANTS.METADATA_KEY]: explicit };
-        this.logger.info('WorkItem took the owner thread its delegator named', { workItemId: workItem.id, creator });
-        return;
+      if (explicit?.kind === 'owner') {
+        const askedAt = await this.ownerAskedAt(explicit, creator, now);
+        if (isOwnerRequestTooOld(askedAt, now)) {
+          this.logger.info('WorkItem did not take the owner place its delegator named: the owner last asked there too long ago', {
+            workItemId: workItem.id,
+            creator,
+            askedAt: askedAt ? new Date(askedAt).toISOString() : null,
+          });
+        } else {
+          if (creator && !explicit.receivedBy) explicit.receivedBy = creator;
+          workItem.metadata = { ...meta, [WORK_ITEM_DESTINATION_CONSTANTS.METADATA_KEY]: explicit };
+          this.logger.info('WorkItem took the owner place its delegator named', { workItemId: workItem.id, creator });
+          return;
+        }
       }
       let creatorWorkItem: WorkItem | null = null;
       let creatorDestination = null;
       let creatorOwnerContext: OwnerRequestContext | null = null;
-      if (!parent && creator) {
+      if (!parent && creator && !delegation) {
         creatorWorkItem = currentWorkItemOf(await this.storage.getWorkItems(), creator);
         creatorDestination = planWorkDestination({
           workItem: creatorWorkItem,
           ownerOrigin: this.turnOriginLookup?.(creator),
-          now: Date.now(),
+          now,
         });
         creatorOwnerContext = this.ownerContextLookup ? await this.ownerContextLookup(creator).catch(() => null) : null;
       }
@@ -883,14 +930,19 @@ export class TaskPoolService {
         creatorWorkItem,
         ...(creator ? { creatorSession: creator } : {}),
         creatorOwnerContext,
+        delegation,
+        now,
       });
       if (!origin) return;
       if (ownerOnly && origin.kind !== 'owner') return;
+      // Ticket work delegated by an agent answers in the ticket's thread (its
+      // link is read as the origin); the delegator is not stamped over it.
+      if (origin.kind === 'agent' && meta.projectTicket) return;
       workItem.metadata = { ...meta, [WORK_ITEM_DESTINATION_CONSTANTS.METADATA_KEY]: origin };
       this.logger.info('WorkItem inherited its origin', {
         workItemId: workItem.id,
         origin: origin.kind,
-        from: parent ? `parent ${parent.id}` : `creator ${creator}`,
+        from: parent ? `parent ${parent.id}` : delegation ? `delegator ${creator}` : `creator ${creator}`,
       });
     } catch (err) {
       this.logger.warn('Origin inheritance failed — WorkItem keeps no origin', {
@@ -918,12 +970,55 @@ export class TaskPoolService {
     }
     const turn = creator ? this.turnOriginLookup?.(creator) : undefined;
     const keyText = formatSlackThreadKey(key.slackChannelId, key.threadTs);
-    const turnKey = turn?.slackThreadKey ?? (turn?.slackChannelId && turn.slackThreadTs ? formatSlackThreadKey(turn.slackChannelId, turn.slackThreadTs) : undefined);
+    const turnKey = turnThreadKey(turn);
     let conversationId: string | null = turn && turnKey === keyText ? turn.conversationId : null;
     if (!conversationId && this.slackThreadConversationLookup) {
       conversationId = await this.slackThreadConversationLookup(key.slackChannelId, key.threadTs).catch(() => null);
     }
     return ownerOriginFromThreadKey(keyText, conversationId);
+  }
+
+  /**
+   * The owner origin of an explicitly named chat conversation
+   * (`delegate-task --conversation <id>`, crewly#1357). When it is the
+   * creator's own turn, the turn's thread and Slack place come along.
+   *
+   * @param rawId - `metadata.ownerConversation`
+   * @param creator - The delegating agent, when known
+   * @returns The origin, or null when the id is unusable
+   */
+  private explicitOwnerConversation(rawId: unknown, creator?: string): WorkItemOrigin | null {
+    const base = ownerOriginFromConversation(rawId);
+    if (!base || base.kind !== 'owner') return null;
+    const turn = creator ? this.turnOriginLookup?.(creator) : undefined;
+    if (!turn || turn.conversationId !== base.conversationId) return base;
+    const key = parseSlackThreadKey(turn.slackThreadKey);
+    return {
+      ...base,
+      ...(key ? { slackChannelId: key.slackChannelId, threadTs: key.threadTs } : turn.slackChannelId ? { slackChannelId: turn.slackChannelId, ...(turn.slackThreadTs ? { threadTs: turn.slackThreadTs } : {}) } : {}),
+      ...(turn.chatThreadId ? { chatThreadId: turn.chatThreadId } : {}),
+    };
+  }
+
+  /**
+   * When the owner last asked in an explicitly named place: the creator's own
+   * turn when it is that place, else the store. null when nothing says.
+   *
+   * @param origin - The explicit owner origin
+   * @param creator - The delegating agent, when known
+   * @param now - Clock (epoch ms)
+   * @returns Epoch ms, or null
+   */
+  private async ownerAskedAt(origin: Extract<WorkItemOrigin, { kind: 'owner' }>, creator: string | undefined, now: number): Promise<number | null> {
+    const turn = creator ? this.turnOriginLookup?.(creator) : undefined;
+    if (turn && turn.receivedAt <= now) {
+      const samePlace =
+        (origin.slackChannelId && origin.threadTs && turnThreadKey(turn) === formatSlackThreadKey(origin.slackChannelId, origin.threadTs)) ||
+        (!origin.slackChannelId && origin.conversationId && turn.conversationId === origin.conversationId);
+      if (samePlace) return turn.receivedAt;
+    }
+    if (!this.ownerAskedAtLookup) return null;
+    return this.ownerAskedAtLookup(origin).catch(() => null);
   }
 
   /**
@@ -3905,6 +4000,44 @@ async function defaultChatMessageThread(messageId: string): Promise<{ slackChann
     const threadTs = [meta.slackThreadTs, meta.slackTs].find((v): v is string => typeof v === 'string' && v.length > 0) ?? null;
     if (!msg || !slackChannelId || !threadTs) return null;
     return { slackChannelId, threadTs, conversationId: msg.channelId };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The Slack thread key of a turn origin, when it has one.
+ *
+ * @param turn - Turn origin
+ * @returns `<channel>:<ts>`, or undefined
+ */
+function turnThreadKey(turn: TurnOrigin | undefined): string | undefined {
+  if (!turn) return undefined;
+  return turn.slackThreadKey ?? (turn.slackChannelId && turn.slackThreadTs ? formatSlackThreadKey(turn.slackChannelId, turn.slackThreadTs) : undefined);
+}
+
+/**
+ * Default {@link TaskPoolService.ownerAskedAtLookup}: the newest owner message
+ * in the place (its Slack thread's chat rows, else the conversation's rows).
+ * null when the place is not in the chat store.
+ *
+ * @param origin - Explicit owner origin
+ * @returns Epoch ms, or null
+ */
+async function defaultOwnerAskedAt(origin: Extract<WorkItemOrigin, { kind: 'owner' }>): Promise<number | null> {
+  try {
+    const { peekChatV2Service } = await import('../chat-v2/chat-v2.singleton.js');
+    const chat = peekChatV2Service();
+    if (!chat) return null;
+    const conversationId = origin.conversationId ?? (origin.slackChannelId ? await defaultSlackThreadConversation(origin.slackChannelId, origin.threadTs ?? '') : null);
+    if (!conversationId) return null;
+    const rootId = origin.threadTs ? chat.findSlackThreadRoot(conversationId, origin.threadTs)?.id ?? null : origin.chatThreadId ?? null;
+    if (rootId) {
+      const owner = chat.listThreadForBridge(conversationId, rootId).filter((m) => m.senderType === 'user');
+      if (owner.length) return Math.max(...owner.map((m) => m.createdAt));
+      return null;
+    }
+    return chat.getChannelActivity(conversationId)?.lastOwnerMessageAt ?? null;
   } catch {
     return null;
   }
