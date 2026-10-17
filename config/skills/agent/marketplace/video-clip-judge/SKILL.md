@@ -1,7 +1,13 @@
 ---
 name: video-clip-judge
-description: Decide whether an AI-generated video clip (Veo, Flow and similar) is usable before it goes into a film. Runs automatic checks for ghost/dissolve, jump cuts, freezes, keyframe mismatch, look drift and audio, then a fixed visual checklist against the prompt. Use after every generated clip and before stitching. Generation is a lottery; this is the gate.
+description: "Decide whether an AI-generated video clip (Veo, Flow and similar) is usable before it goes into a film. Runs automatic checks for ghost/dissolve, jump cuts, freezes, keyframe mismatch, look drift and audio, then a fixed visual checklist against the prompt. Use after every generated clip and before stitching. Generation is a lottery; this is the gate."
 category: video
+skillType: claude-skill
+triggers:
+  - judge generated clip
+  - check AI video clip
+  - Veo clip quality
+  - ghost or dissolve in clip
 assignableRoles:
   - "*"
 version: "1.0.0"
@@ -17,7 +23,7 @@ tags:
 Tool: `clipkit.py` in this folder (ffmpeg + python3 + numpy only, no network).
 
 ```bash
-python3 config/skills/agent/video-clip-judge/clipkit.py judge --clip clip.mp4 [--start start.jpg] [--end end.jpg] --out OUT_DIR
+python3 <video-clip-judge skill folder>/clipkit.py judge --clip clip.mp4 [--start start.jpg] [--end end.jpg] --out OUT_DIR
 ```
 
 Writes `OUT_DIR/report.json`, `sheet.jpg` (12 frames across the clip) and `first.jpg` / `last.jpg` (the first and last 1.5 s at 8 fps). The verdict is `REVIEW` if anything is flagged, otherwise `PASS_AUTOMATIC`. `PASS_AUTOMATIC` is NOT a pass: step 2 below is always required.

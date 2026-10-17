@@ -1,7 +1,13 @@
 ---
 name: video-seamless-stitch
-description: Join generated video clips so the seams are invisible. Picks, by pixel comparison, the last frame of clip A and the first frame of clip B that are the same picture and move at the same speed, trims both there, hard-cuts, and crossfades audio for 80 ms. Use instead of a plain ffmpeg concat for clips generated from first/last frames.
+description: "Join generated video clips so the seams are invisible. Picks, by pixel comparison, the last frame of clip A and the first frame of clip B that are the same picture and move at the same speed, trims both there, hard-cuts, and crossfades audio for 80 ms. Use instead of a plain ffmpeg concat for clips generated from first/last frames."
 category: video
+skillType: claude-skill
+triggers:
+  - stitch generated clips
+  - seamless join clips
+  - join Veo clips
+  - concat without jump
 assignableRoles:
   - "*"
 version: "1.0.0"
@@ -17,7 +23,7 @@ tags:
 Problem: with first/last-frame generation a clip does not end exactly on its end image, while the next clip starts exactly on it. A plain concat therefore jumps (typical measurement: frame-to-frame change of 11 to 16 at each seam against about 4 elsewhere), and the end of a clip often slows or settles.
 
 ```bash
-python3 config/skills/agent/video-clip-judge/clipkit.py seams --clips c1.mp4 c2.mp4 c3.mp4 --out film.mp4 --report seams.json [--window 36]
+python3 <video-clip-judge skill folder>/clipkit.py seams --clips c1.mp4 c2.mp4 c3.mp4 --out film.mp4 --report seams.json [--window 36]
 ```
 
 Needs ffmpeg, python3 and numpy. Re-encode the clips to the same size, fps and audio first, for example 1280x720, 24 fps, 48 kHz AAC, normalising loudness to about -20 LUFS in the same ffmpeg call (Veo clips are quiet).

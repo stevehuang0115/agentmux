@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "lastUpdated": "2026-10-16T16:52:24.796Z",
+  "lastUpdated": "2026-10-17T12:37:31.553Z",
   "cdnBaseUrl": "https://raw.githubusercontent.com/stevehuang0115/crewly/main",
   "source": "github",
   "items": [
@@ -636,6 +636,47 @@
         ],
         "files": [
           "execute.sh",
+          "SKILL.md"
+        ]
+      }
+    },
+    {
+      "id": "flow-generate-video",
+      "type": "skill",
+      "name": "flow-generate-video",
+      "description": "Make a short film from AI-generated clips in Google Flow (Veo) through Crewly in Chrome. Keyframe images first, then one clip per pair of neighbouring keyframes, a judge step per clip with re-draws, and a pixel-matched stitch. Use when asked to generate video with Veo/Flow. Costs credits: agree the budget with the user first.",
+      "author": "Crewly Team",
+      "version": "1.0.0",
+      "category": "development",
+      "tags": [
+        "video",
+        "veo",
+        "flow",
+        "browser"
+      ],
+      "license": "MIT",
+      "downloads": 0,
+      "rating": 0,
+      "createdAt": "2026-10-17T12:34:09.391Z",
+      "updatedAt": "2026-10-17T12:37:31.553Z",
+      "source": "config/skills/agent/marketplace/flow-generate-video",
+      "assets": {
+        "archive": "config/skills/agent/marketplace/flow-generate-video",
+        "checksum": "",
+        "sizeBytes": 7276
+      },
+      "metadata": {
+        "skillType": "claude-skill",
+        "assignableRoles": [
+          "*"
+        ],
+        "triggers": [
+          "generate video with Veo",
+          "make a video in Flow",
+          "AI video clips",
+          "keyframe video"
+        ],
+        "files": [
           "SKILL.md"
         ]
       }
@@ -1702,6 +1743,89 @@
             }
           ]
         }
+      }
+    },
+    {
+      "id": "video-clip-judge",
+      "type": "skill",
+      "name": "video-clip-judge",
+      "description": "Decide whether an AI-generated video clip (Veo, Flow and similar) is usable before it goes into a film. Runs automatic checks for ghost/dissolve, jump cuts, freezes, keyframe mismatch, look drift and audio, then a fixed visual checklist against the prompt. Use after every generated clip and before stitching. Generation is a lottery; this is the gate.",
+      "author": "Crewly Team",
+      "version": "1.0.0",
+      "category": "development",
+      "tags": [
+        "video",
+        "qa",
+        "veo",
+        "generated-video"
+      ],
+      "license": "MIT",
+      "downloads": 0,
+      "rating": 0,
+      "createdAt": "2026-10-17T12:34:09.391Z",
+      "updatedAt": "2026-10-17T12:37:31.553Z",
+      "source": "config/skills/agent/marketplace/video-clip-judge",
+      "assets": {
+        "archive": "config/skills/agent/marketplace/video-clip-judge",
+        "checksum": "",
+        "sizeBytes": 14250
+      },
+      "metadata": {
+        "skillType": "claude-skill",
+        "assignableRoles": [
+          "*"
+        ],
+        "triggers": [
+          "judge generated clip",
+          "check AI video clip",
+          "Veo clip quality",
+          "ghost or dissolve in clip"
+        ],
+        "files": [
+          "clipkit.py",
+          "SKILL.md"
+        ]
+      }
+    },
+    {
+      "id": "video-seamless-stitch",
+      "type": "skill",
+      "name": "video-seamless-stitch",
+      "description": "Join generated video clips so the seams are invisible. Picks, by pixel comparison, the last frame of clip A and the first frame of clip B that are the same picture and move at the same speed, trims both there, hard-cuts, and crossfades audio for 80 ms. Use instead of a plain ffmpeg concat for clips generated from first/last frames.",
+      "author": "Crewly Team",
+      "version": "1.0.0",
+      "category": "development",
+      "tags": [
+        "video",
+        "ffmpeg",
+        "stitch",
+        "generated-video"
+      ],
+      "license": "MIT",
+      "downloads": 0,
+      "rating": 0,
+      "createdAt": "2026-10-17T12:34:09.391Z",
+      "updatedAt": "2026-10-17T12:37:31.553Z",
+      "source": "config/skills/agent/marketplace/video-seamless-stitch",
+      "assets": {
+        "archive": "config/skills/agent/marketplace/video-seamless-stitch",
+        "checksum": "",
+        "sizeBytes": 2536
+      },
+      "metadata": {
+        "skillType": "claude-skill",
+        "assignableRoles": [
+          "*"
+        ],
+        "triggers": [
+          "stitch generated clips",
+          "seamless join clips",
+          "join Veo clips",
+          "concat without jump"
+        ],
+        "files": [
+          "SKILL.md"
+        ]
       }
     },
     {

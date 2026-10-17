@@ -1,7 +1,13 @@
 ---
 name: flow-generate-video
-description: Make a short film from AI-generated clips in Google Flow (Veo) through Crewly in Chrome. Keyframe images first, then one clip per pair of neighbouring keyframes, a judge step per clip with re-draws, and a pixel-matched stitch. Use when asked to generate video with Veo/Flow. Costs credits: agree the budget with the user first.
+description: "Make a short film from AI-generated clips in Google Flow (Veo) through Crewly in Chrome. Keyframe images first, then one clip per pair of neighbouring keyframes, a judge step per clip with re-draws, and a pixel-matched stitch. Use when asked to generate video with Veo/Flow. Costs credits: agree the budget with the user first."
 category: video
+skillType: claude-skill
+triggers:
+  - generate video with Veo
+  - make a video in Flow
+  - AI video clips
+  - keyframe video
 assignableRoles:
   - "*"
 version: "1.0.0"
