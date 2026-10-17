@@ -44,6 +44,39 @@ describe('SlackTypingPlaceholderService', () => {
     expect(svc.pendingCount).toBe(0);
   });
 
+  it('remembers a channel the agent\'s bot cannot post in and stops trying there for a while', async () => {
+    let calls = 0;
+    const { slack } = makeSlack({ sendMessage: async () => { calls++; throw new Error('An API error occurred: channel_not_found'); } });
+    const svc = new SlackTypingPlaceholderService({ slack, setTimer: () => 0 as unknown as ReturnType<typeof setTimeout>, clearTimer: () => undefined });
+    const room = { agentSession: 'pt-sam', slackChannelId: 'C0PRIV' };
+    expect(await svc.begin({ ...room, threadTs: '1.1' }, ella)).toBeNull();
+    expect(await svc.begin({ ...room, threadTs: '2.2' }, ella)).toBeNull();
+    expect(await svc.begin({ ...room, threadTs: '3.3' }, ella)).toBeNull();
+    expect(calls).toBe(1);
+    // Other agents / channels are unaffected.
+    await svc.begin({ agentSession: 'pt-max', slackChannelId: 'C0PRIV', threadTs: '1.1' }, ella);
+    await svc.begin({ ...room, slackChannelId: 'C0OTHER' }, ella);
+    expect(calls).toBe(3);
+    // After the window it is tried again.
+    const realNow = Date.now;
+    try {
+      Date.now = () => realNow() + 61 * 60 * 1000;
+      await svc.begin({ ...room, threadTs: '4.4' }, ella);
+      expect(calls).toBe(4);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  it('a transient post failure is not remembered', async () => {
+    let calls = 0;
+    const { slack } = makeSlack({ sendMessage: async () => { calls++; throw new Error('ratelimited'); } });
+    const svc = new SlackTypingPlaceholderService({ slack, setTimer: () => 0 as unknown as ReturnType<typeof setTimeout>, clearTimer: () => undefined });
+    await svc.begin({ ...key, threadTs: '1.1' }, ella);
+    await svc.begin({ ...key, threadTs: '2.2' }, ella);
+    expect(calls).toBe(2);
+  });
+
   it('keeps the reply when the placeholder cannot be removed', async () => {
     const { slack, sent } = makeSlack({ deleteMessage: async () => { throw new Error('message_not_found'); } });
     const svc = new SlackTypingPlaceholderService({ slack, setTimer: () => 0 as unknown as ReturnType<typeof setTimeout>, clearTimer: () => undefined, replaceByEdit: false });

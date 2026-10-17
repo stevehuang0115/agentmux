@@ -1926,6 +1926,10 @@ export const SLACK_TYPING_CONSTANTS = {
 	TIMEOUT_TEXT: '⏱ {name} is still working on this — the reply will follow.',
 	/** How long a placeholder waits for the reply before it is edited to TIMEOUT_TEXT */
 	TIMEOUT_MS: 5 * 60 * 1000,
+	/** Slack errors meaning the agent's bot cannot post in that channel at all (not a member of a private channel, or gone) */
+	UNREACHABLE_CHANNEL_ERROR: /\b(channel_not_found|not_in_channel|is_archived)\b/,
+	/** After such an error, no placeholder is tried for that agent in that channel for this long (ms) */
+	UNREACHABLE_CHANNEL_MS: 60 * 60 * 1000,
 	/** A timed-out placeholder is still removed by a reply arriving within this long (ms) */
 	EXPIRED_KEEP_MS: 24 * 60 * 60 * 1000,
 	/**
