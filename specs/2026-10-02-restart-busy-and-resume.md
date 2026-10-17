@@ -110,6 +110,7 @@ All of these keep the PTY-activity fallback when their verdict is `unknown`.
   - Not-yet-due promises are left alone; the sweep acts when they come due.
   - Overdue / already-nudged promises belong to the sweep.
   - Owed owner replies are left to the owner-message watchdog, which wakes the agent itself.
+- **Owed agents that were idle at shutdown (crewly#1348, 2026-10-16/17, Pia).** The restore targets (interrupted turns, queued messages, owed promises, owner-thread sessions) used to only *filter* the sessions persisted as running at shutdown. An agent that had been idle-stopped earlier was not in that state, so it was dropped although the log said it would be restored. Now `selectAutoRestoreSessions` also returns `fromTargets`: targets with no persisted entry (under their bound or stale name) that a live team member is bound to. They join the restore plan from the team config (member role and runtime, the team's first project as working directory), under the same tiers and concurrency, with the plan reason suffixed `(<why>; was idle at shutdown)` where `<why>` is `owner thread waits on it`, `owed promise`, `queued messages` or `interrupted turn`. Held back and logged as dropped: the orchestrator, owner-stopped members, members of a paused team, members of a team that moved to another machine (`liveAgentSessions` / `movedAwayTeamIds`), and names no member is bound to. When the running-agent cap defers a restore (`RESOURCE_PRESSURE_CAP`), the agent is not dropped: it goes through the deferred-start retry (crewly#1337) until a slot frees, with the retry's queue check replaced by "not owner-stopped", because an owner thread or a promise is not a queued message. `wakeQueuedAgentsAfterBoot` skips agents the restore queue holds or is starting, so a queued-message target is not started twice.
 - **Resume note.** Each restored agent gets one English message per interruption, through the usual paths: re-enqueue with the original source for queue messages, `sendMessageToAgent` otherwise. The note reads:
 
   > Crewly restarted while you were working on TKT-194. Continue where you left off and deliver.
@@ -148,6 +149,7 @@ All of these keep the PTY-activity fallback when their verdict is `unknown`.
   - an interrupted agent is restored and gets the resume note with its ticket;
   - commitment holders get one note.
 - `restore-filter.test.ts`: commitment and owed-reply sessions are restored.
+- `session-binding.test.ts` (owed targets that were idle at shutdown): a target with no persisted session but bound to a team member is relaunched from its binding; an unbound or held-back one is dropped; a session the persisted state covers under its bound or stale name is never doubled; unreadable teams or pool relaunch nothing from a binding.
 - `activity-monitor.service.test.ts`: no `agent:idle` while the runtime reports a turn.
 - `open-items.service.test.ts`: Eve's interim `reply-channel` message creates a commitment due at +30 min.
 - `agent-hooks.controller.test.ts`, `control-plane-guard.service.test.ts`, `report.test.ts`: the new events and identifiers.

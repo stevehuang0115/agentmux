@@ -147,6 +147,12 @@ export function resolvePersistedSessions(
 	return { launchable, unbound, rebound };
 }
 
+/** A restore target resolved to the member bound to its name. */
+export interface TargetBinding extends SessionBinding {
+	/** The bound session name */
+	name: string;
+}
+
 /** Which persisted sessions startup auto-restore relaunches, and why the rest are skipped. */
 export interface AutoRestoreSelection {
 	/** Sessions to relaunch, each under a bound name (or claiming no team). */
@@ -157,6 +163,14 @@ export interface AutoRestoreSelection {
 	rebound: Array<{ from: string; to: string }>;
 	/** Bound sessions skipped because no pending WorkItem targets them. */
 	skippedNoWork: string[];
+	/**
+	 * Targets that were not running at shutdown (absent from the persisted
+	 * state) but are bound team members: they are owed something and come
+	 * back from their binding (crewly#1348).
+	 */
+	fromTargets: TargetBinding[];
+	/** Targets absent from the persisted state that are not launchable: unbound, or held back. */
+	droppedTargets: string[];
 }
 
 /**
@@ -170,15 +184,25 @@ export interface AutoRestoreSelection {
  *    A rebound session also counts work that still targets its old name. If
  *    the pool could not be read (`targets === null`), the gate is skipped
  *    (the pre-existing safety valve: better to over-restore than strand work).
+ * 3. Owed but idle: a target that is not in the persisted state at all (the
+ *    agent had been idle-stopped before the shutdown) is still relaunched
+ *    when a team member is bound to that name and `heldBack` does not refuse
+ *    it (owner-stopped, paused or moved-away team). Pia promised the owner a
+ *    follow-up, was idle-stopped, and the next restart only filtered the
+ *    persisted sessions, so she never came back (2026-10-16, crewly#1348).
  *
  * @param input - Persisted sessions (orchestrator/auditor already removed),
- *   the teams (or null), and the names targeted by pending WorkItems (or null).
- * @returns The sessions to relaunch and the reasons others were dropped.
+ *   the teams (or null), the names targeted by pending WorkItems, interrupted
+ *   turns, queued messages, owed promises and owner threads (or null), and an
+ *   optional predicate for targets that must stay down.
+ * @returns The sessions to relaunch, the targets to relaunch from their
+ *   binding, and the reasons others were dropped.
  */
 export function selectAutoRestoreSessions(input: {
 	sessions: ReadonlyArray<PersistedSessionInfo>;
 	teams: ReadonlyArray<BindingTeam> | null;
 	targets: ReadonlySet<string> | null;
+	heldBack?: (sessionName: string) => boolean;
 }): AutoRestoreSelection {
 	let bound: PersistedSessionInfo[];
 	let unbound: string[];
@@ -192,16 +216,36 @@ export function selectAutoRestoreSessions(input: {
 	}
 
 	if (input.targets === null) {
-		return { sessions: bound, unbound, rebound, skippedNoWork: [] };
+		return { sessions: bound, unbound, rebound, skippedNoWork: [], fromTargets: [], droppedTargets: [] };
 	}
 	const targets = input.targets;
 	const oldName = new Map(rebound.map((r) => [r.to, r.from]));
 	const hasWork = (s: PersistedSessionInfo) => targets.has(s.name) || targets.has(oldName.get(s.name) ?? '');
+	const sessions = bound.filter(hasWork);
+
+	// Targets no persisted entry covers (under the bound name, the stale name
+	// or at all): relaunch the bound ones from the team config.
+	const persisted = new Set<string>([...input.sessions.map((s) => s.name), ...sessions.map((s) => s.name)]);
+	const bindings = input.teams === null ? new Map<string, SessionBinding>() : collectSessionBindings(input.teams);
+	const fromTargets: TargetBinding[] = [];
+	const droppedTargets: string[] = [];
+	for (const name of targets) {
+		if (persisted.has(name)) continue;
+		const binding = bindings.get(name);
+		if (!binding || input.heldBack?.(name)) {
+			droppedTargets.push(name);
+			continue;
+		}
+		fromTargets.push({ name, ...binding });
+	}
+
 	return {
-		sessions: bound.filter(hasWork),
+		sessions,
 		unbound,
 		rebound,
 		skippedNoWork: bound.filter((s) => !hasWork(s)).map((s) => s.name),
+		fromTargets,
+		droppedTargets,
 	};
 }
 
