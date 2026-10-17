@@ -57,16 +57,36 @@
  * no submodules, it is retried once with `--force`. Then the local branch is
  * deleted (never a protected name), and `git worktree prune` runs per repo.
  *
- * ## Low disk: kept worktrees
- * Under low disk, a worktree kept as `dirty` or `not-merged` and idle for
- * 24 h+ still loses its `node_modules` / `.next` directories (reversible:
- * reinstall / rebuild); the verdict carries `reclaimed` and the summary
- * `reclaimedBytes`.
+ * ## Age tiers for kept worktrees (crewly#1354)
+ * A worktree kept as `dirty` or `not-merged` is not kept as it is forever.
+ * Untouched (shallow tree mtime, git dir, newest commit) for 3 days — 1 day
+ * under low disk or once its WorkItem finished — it loses its regenerable dirs
+ * (`node_modules`, `.next`, `dist`, `.turbo`, `.cache`; never a dir git
+ * tracks anything under); the verdict carries `reclaimed` / `tier`, the lead
+ * is told once. Untouched for 14 days it is saved as a patch under
+ * `<CREWLY_HOME>/worktree-archive/<repo>/<name>-<date>.patch` (tracked diff +
+ * untracked files, size-capped), its branch is kept, the worktree is removed
+ * and the lead is told once. See worktree-tiers.ts.
  *
  * ## Work completion
- * A WorkItem reaching done / verified calls `requestTidy()`: one debounced pass
- * (2 min) with a 10 min idle threshold, so a finished worktree is removed as
- * soon as its change has landed, not at the next 30-minute tick.
+ * A WorkItem reaching a terminal state calls `requestTidy(workItemId)`: one
+ * debounced pass (2 min) with a 10 min idle threshold, so a finished worktree
+ * is removed as soon as its change has landed, not at the next 30-minute
+ * tick; the worktree recorded on the WorkItem (`metadata.worktree`) is noted
+ * as finished, which drops its strip tier to 1 day.
+ *
+ * ## Transcripts, tmp and logs (crewly#1354)
+ * Once a day the pass prunes Claude Code transcripts of conversations Crewly
+ * launched that are untouched for 14 days (transcript-janitor.ts; the owner's
+ * own conversations are never touched). Every 6 hours it removes stale entries
+ * of `<CREWLY_HOME>/tmp` and caps `logs/archive` (300 MB) and `logs/sessions`
+ * (100 MB) (tmp-janitor.ts).
+ *
+ * ## Arming
+ * Every delete added in crewly#1354 (strip — low disk included — archive,
+ * transcripts, tmp, logs) is dry-run only until one day after the first real
+ * pass that ran this code: that pass logs what it would do; the next day it
+ * does it. State: `retentionArmedAt` in disk-janitor-state.json.
  *
  * ## Scratch sweep
  * After the worktrees, stale Claude Code session dirs
@@ -76,12 +96,13 @@
  *
  * ## Low-disk guard
  * Every 10 minutes the free space of the volume holding CREWLY_HOME is read.
- * Below 15 GB a pass runs at once (at most one per 30 minutes) with every
- * idle threshold halved (never below 2 h); every pass started while space is
- * low uses the halved thresholds. If space is still below 15 GB the owner is
- * told, at most once per 24 h, with the free space and the 5 biggest items
- * the janitor left and why; below 5 GB the notice is urgent and repeats at
- * most every 6 h.
+ * Below max(15 GB, 8 % of the disk) a pass runs at once (at most one per 30
+ * minutes) with every idle threshold halved (never below 2 h); every pass
+ * started while space is low uses the halved thresholds. If space is still
+ * low the owner is told, at most once per 24 h, with the free space, what was
+ * freed by kind, the 5 biggest items the janitor left and why, and that the
+ * owner's own files are never touched; below max(5 GB, 3 %) the notice is
+ * urgent and repeats at most every 6 h.
  *
  * ## Unmerged work
  * A worktree kept as `not-merged` whose newest commit is older than 24 h is
@@ -110,17 +131,22 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { ORCHESTRATOR_SESSION_NAME, WORKTREE_JANITOR_CONSTANTS } from '../../constants.js';
+import { LOG_ROTATION_CONSTANTS, ORCHESTRATOR_SESSION_NAME, WORKTREE_JANITOR_CONSTANTS } from '../../constants.js';
 import { LoggerService } from '../core/logger.service.js';
 import { getCrewlyHomePath } from '../core/crewly-home.utils.js';
 import { safeReadJson, modifyJsonFile } from '../../utils/file-io.utils.js';
 import {
 	buildLowDiskNotice,
+	criticalDiskThresholdBytes,
 	diskLevel,
 	idleThreshold,
+	lowDiskThresholdBytes,
 	noticeToSend,
+	readDiskSpace,
 	readFreeBytes,
 	recordNotice,
+	retentionArmed,
+	type FreedBreakdown,
 	type KeptItem,
 	type LowDiskNoticeState,
 	type StatFsFn,
@@ -136,6 +162,7 @@ import {
 	formatBytes,
 	isJanitorDisabled,
 	isPathInside,
+	latestTreeMtimeMs,
 	latestWorktreeMtimeMs,
 	listProcessCwds,
 	parsePorcelainWorktrees,
@@ -154,6 +181,28 @@ import {
 } from './worktree-unmerged-notice.js';
 import { contentLandedSignal, isNonGithubRemote, type LandedRepoState } from './worktree-landed.js';
 import { dirtyStatusLines, reclaimRegenerableDirs } from './worktree-dirty.js';
+import {
+	archiveKeepRef,
+	archivePatchPath,
+	buildArchiveNotice,
+	buildStripNotice,
+	emptyTierState,
+	normalizeTierState,
+	pruneTierState,
+	tierFor,
+	tierIdleMs,
+	writeArchivePatch,
+	type TierState,
+	type WorktreeTier,
+} from './worktree-tiers.js';
+import {
+	defaultClaudeHomes,
+	readCrewlyRecords,
+	sweepTranscripts,
+	type TranscriptSourceSets,
+	type TranscriptSweepSummary,
+} from './transcript-janitor.js';
+import { capDirectoryBytes, sweepTmp, type DirCapSummary, type TmpSweepSummary } from './tmp-janitor.js';
 
 /** Milliseconds per minute (for the `recent` detail text). */
 const MS_PER_MINUTE = 60 * 1000;
@@ -177,7 +226,26 @@ export type WorktreeReason =
 	| 'not-merged'
 	| 'merged'
 	| 'pr-merged'
-	| 'content-landed';
+	| 'content-landed'
+	| 'archived';
+
+/** What the age tier did (or would do) to a kept worktree. */
+export interface WorktreeTierOutcome {
+	/** The tier reached */
+	tier: WorktreeTier;
+	/** Untouched for this long (ms) */
+	idleMs: number;
+	/** `done` (acted), `would` (dry run or not yet armed), `failed` (error below) */
+	action: 'done' | 'would' | 'failed';
+	/** Strip: dirs removed (or that would be) */
+	dirs?: string[];
+	/** Bytes freed (or that would be) */
+	freedBytes: number;
+	/** Archive: the patch file */
+	patch?: string;
+	/** Error text when the action failed */
+	error?: string;
+}
 
 /** Verdict for one worktree (the dry-run output). */
 export interface WorktreeVerdict {
@@ -197,8 +265,10 @@ export interface WorktreeVerdict {
 	detail?: string;
 	/** Ms since last touched, when computed */
 	idleMs?: number;
-	/** Low disk only: regenerable dirs (node_modules, .next) of a kept worktree that were (or, in a dry run, would be) deleted */
+	/** Regenerable dirs (node_modules, .next, dist, …) of a kept worktree that were (or, in a dry run, would be) deleted */
 	reclaimed?: { dirs: string[]; freedBytes: number };
+	/** Age tier reached by a kept worktree and what was done */
+	tier?: WorktreeTierOutcome;
 }
 
 /** Outcome of acting on one verdict. */
@@ -231,8 +301,24 @@ export interface JanitorRunSummary {
 	wouldRemove: number;
 	/** Worktrees kept */
 	kept: number;
-	/** Bytes freed by deleting regenerable dirs (node_modules, .next) from kept worktrees under low disk */
+	/** Bytes freed by deleting regenerable dirs (node_modules, .next, dist, …) from kept worktrees (strip tier) */
 	reclaimedBytes: number;
+	/** Worktrees archived as a patch and removed (archive tier) */
+	archived: number;
+	/** Bytes those archived worktrees occupied */
+	archivedBytes: number;
+	/** True when the crewly#1354 deletes were armed for this pass (else they only report) */
+	retentionArmed: boolean;
+	/** Total bytes of the watched volume, or null when unknown */
+	totalBytes: number | null;
+	/** Transcript sweep result (null when it was not due) */
+	transcripts: TranscriptSweepSummary | null;
+	/** CREWLY_HOME/tmp sweep result (null when it was not due) */
+	tmp: TmpSweepSummary | null;
+	/** Log caps result (null when not due) */
+	logs: { archive: DirCapSummary; sessions: DirCapSummary } | null;
+	/** Bytes freed this pass by kind (real passes; a dry run reports what would be) */
+	freed: FreedBreakdown;
 	/** Kept worktrees by reason (removal failures under `remove-failed`) */
 	keptReasons: Record<string, number>;
 	/** Per-worktree results */
@@ -320,6 +406,26 @@ export interface WorktreeJanitorOptions {
 	env?: NodeJS.ProcessEnv;
 	/** Logger (default: component logger `WorktreeJanitor`) */
 	logger?: JanitorLogger;
+	/** Tier state file (default `<CREWLY_HOME>/worktree-tiers.json`); null = in memory */
+	tierStatePath?: string | null;
+	/** Where archive patches go (default `<CREWLY_HOME>/worktree-archive`) */
+	archiveRoot?: string;
+	/** Claude homes whose transcripts are swept (default `~/.claude` + account dirs); [] = never */
+	claudeHomes?: string[];
+	/** What identifies Crewly's conversations (default: CREWLY_HOME records + live sessions + teams) */
+	transcriptSources?: () => Promise<TranscriptSourceSets>;
+	/** `<CREWLY_HOME>/tmp` (default); null = never swept */
+	tmpRoot?: string | null;
+	/** `<CREWLY_HOME>/logs` (default); null = never capped */
+	logsDir?: string | null;
+	/** Names of live sessions, whose logs are never deleted (default: session backend + persistence) */
+	liveSessionNames?: () => Promise<string[]>;
+	/** Tests: run the transcript / tmp sweeps on every pass regardless of their interval */
+	forceSweeps?: boolean;
+	/** Tests: force the arming state (default: from disk-janitor-state.json) */
+	armed?: boolean;
+	/** WorkItem lookup for the task-end hook (default: task pool) */
+	findWorkItemWorktree?: (workItemId: string) => Promise<string | null>;
 }
 
 /** Per-repo context built lazily during a pass. */
@@ -367,6 +473,7 @@ export class WorktreeJanitorService {
 	private runawayWatcher: RunawayFileWatcher | null = null;
 	private runawayInFlight = false;
 	private memoryUnmergedState: UnmergedNoticeState = {};
+	private memoryTierState: TierState = emptyTierState();
 
 	/**
 	 * @param options - Injectable dependencies; defaults use the live backend
@@ -513,10 +620,25 @@ export class WorktreeJanitorService {
 	 *
 	 * @returns Watched path, free bytes (null when unknown) and level
 	 */
-	async diskStatus(): Promise<{ path: string; freeBytes: number | null; level: 'ok' | 'low' | 'critical' | 'unknown' }> {
+	async diskStatus(): Promise<{
+		path: string;
+		freeBytes: number | null;
+		totalBytes: number | null;
+		lowBytes: number;
+		criticalBytes: number;
+		level: 'ok' | 'low' | 'critical' | 'unknown';
+	}> {
 		const p = this.diskPath();
-		const freeBytes = await readFreeBytes(p, this.opts.statfs);
-		return { path: p, freeBytes, level: freeBytes === null ? 'unknown' : diskLevel(freeBytes) };
+		const space = await readDiskSpace(p, this.opts.statfs);
+		const total = space?.totalBytes ?? null;
+		return {
+			path: p,
+			freeBytes: space?.freeBytes ?? null,
+			totalBytes: total,
+			lowBytes: lowDiskThresholdBytes(total),
+			criticalBytes: criticalDiskThresholdBytes(total),
+			level: space === null ? 'unknown' : diskLevel(space.freeBytes, total),
+		};
 	}
 
 	/**
@@ -562,8 +684,10 @@ export class WorktreeJanitorService {
 	 * Only worktrees that pass every safety rule are removed (landed, clean, nobody
 	 * inside) — unmerged work stays for the next pass. No-op when disabled. Never throws.
 	 */
-	requestTidy(): void {
-		if (this.isDisabled() || this.tidyTimer) return;
+	requestTidy(workItemId?: string): void {
+		if (this.isDisabled()) return;
+		if (workItemId) void this.noteFinishedWorkItem(workItemId);
+		if (this.tidyTimer) return;
 		this.tidyTimer = setTimeout(() => {
 			this.tidyTimer = null;
 			void (async () => {
@@ -584,6 +708,34 @@ export class WorktreeJanitorService {
 			})();
 		}, this.opts.tidyDelayMs ?? WORKTREE_JANITOR_CONSTANTS.COMPLETION_TIDY_DELAY_MS);
 		this.tidyTimer.unref?.();
+	}
+
+	/**
+	 * Task-end hook: remember that the WorkItem working in `worktreePath`
+	 * finished, so its strip tier needs 1 day untouched instead of 3. Never
+	 * throws.
+	 *
+	 * @param worktreePath - The worktree (any path form; canonicalised)
+	 */
+	async noteFinishedWorktree(worktreePath: string): Promise<void> {
+		try {
+			const state = await this.readTierState();
+			state.finished[canonicalPath(worktreePath)] = this.now();
+			await this.writeTierState(state);
+		} catch (err) {
+			this.logger.warn('Could not record finished worktree (non-fatal)', { error: err instanceof Error ? err.message : String(err) });
+		}
+	}
+
+	/** Resolve a WorkItem's worktree (`metadata.worktree.path`) and note it as finished. */
+	private async noteFinishedWorkItem(workItemId: string): Promise<void> {
+		try {
+			const find = this.opts.findWorkItemWorktree ?? defaultFindWorkItemWorktree;
+			const p = await find(workItemId);
+			if (p) await this.noteFinishedWorktree(p);
+		} catch {
+			// no task pool — nothing to note
+		}
 	}
 
 	/**
@@ -642,7 +794,15 @@ export class WorktreeJanitorService {
 		// Memory wins when a save failed (full disk), so the owner is not re-told every check.
 		const latest = (a?: number, b?: number): number | undefined =>
 			a === undefined ? b : b === undefined ? a : Math.max(a, b);
-		return { lastNoticeAt: latest(file.lastNoticeAt, mem.lastNoticeAt), lastUrgentAt: latest(file.lastUrgentAt, mem.lastUrgentAt) };
+		const earliest = (a?: number, b?: number): number | undefined =>
+			a === undefined ? b : b === undefined ? a : Math.min(a, b);
+		return {
+			lastNoticeAt: latest(file.lastNoticeAt, mem.lastNoticeAt),
+			lastUrgentAt: latest(file.lastUrgentAt, mem.lastUrgentAt),
+			retentionArmedAt: earliest(file.retentionArmedAt, mem.retentionArmedAt),
+			lastTranscriptSweepAt: latest(file.lastTranscriptSweepAt, mem.lastTranscriptSweepAt),
+			lastTmpSweepAt: latest(file.lastTmpSweepAt, mem.lastTmpSweepAt),
+		};
 	}
 
 	private async writeNoticeState(state: LowDiskNoticeState): Promise<void> {
@@ -657,14 +817,44 @@ export class WorktreeJanitorService {
 		}
 	}
 
+	private tierStatePath(): string | null {
+		if (this.opts.tierStatePath !== undefined) return this.opts.tierStatePath;
+		return path.join(getCrewlyHomePath(), WORKTREE_JANITOR_CONSTANTS.TIER_STATE_FILENAME);
+	}
+
+	private async readTierState(): Promise<TierState> {
+		const p = this.tierStatePath();
+		if (!p) return this.memoryTierState;
+		const file = normalizeTierState(await safeReadJson<unknown>(p, null));
+		// Memory wins when a save failed (full disk).
+		const mem = this.memoryTierState;
+		for (const key of ['stripped', 'archived', 'finished'] as const) {
+			for (const [k, v] of Object.entries(mem[key])) file[key][k] = Math.max(file[key][k] ?? 0, v);
+		}
+		return file;
+	}
+
+	private async writeTierState(state: TierState): Promise<void> {
+		this.memoryTierState = state;
+		const p = this.tierStatePath();
+		if (!p) return;
+		try {
+			await modifyJsonFile<TierState | null, TierState>(p, null, () => state);
+		} catch (err) {
+			this.logger.warn('Could not save worktree tier state', { error: err instanceof Error ? err.message : String(err) });
+		}
+	}
+
 	private async doCheckDisk(): Promise<LowDiskCheckResult> {
 		const result: LowDiskCheckResult = { freeBytesBefore: null, freeBytesAfter: null, ranPass: false, notified: null };
 		try {
 			if (this.isDisabled()) return result;
-			const before = await readFreeBytes(this.diskPath(), this.opts.statfs);
+			const space = await readDiskSpace(this.diskPath(), this.opts.statfs);
+			const before = space?.freeBytes ?? null;
+			const total = space?.totalBytes ?? null;
 			result.freeBytesBefore = before;
 			result.freeBytesAfter = before;
-			if (before === null || diskLevel(before) === 'ok') return result;
+			if (before === null || diskLevel(before, total) === 'ok') return result;
 
 			let summary = this.lastSummary;
 			const gapOk = this.lastPassAt === null || this.now() - this.lastPassAt >= WORKTREE_JANITOR_CONSTANTS.LOW_DISK_PASS_GAP_MS;
@@ -677,12 +867,13 @@ export class WorktreeJanitorService {
 			const after = result.freeBytesAfter;
 			if (after === null || !this.notifier) return result;
 			const state = await this.readNoticeState();
-			const kind = noticeToSend(diskLevel(after), state, this.now());
+			const kind = noticeToSend(diskLevel(after, total), state, this.now());
 			if (!kind) return result;
 			const items = summary ? await this.keptItems(summary) : [];
 			// What the volume actually gained covers worktrees and scratch alike.
 			const freed = result.ranPass ? Math.max(0, after - before) : 0;
-			const notice = buildLowDiskNotice({ freeBytes: after, urgent: kind === 'urgent', freedBytes: freed, items });
+			const breakdown = result.ranPass && summary ? summary.freed : undefined;
+			const notice = buildLowDiskNotice({ freeBytes: after, urgent: kind === 'urgent', freedBytes: freed, items, freed: breakdown, totalBytes: total });
 			const delivered = await this.notifier({ ...notice, urgent: kind === 'urgent' }).catch(() => false);
 			if (delivered) {
 				await this.writeNoticeState(recordNotice(state, kind, this.now()));
@@ -752,12 +943,20 @@ export class WorktreeJanitorService {
 			wouldRemove: 0,
 			kept: 0,
 			reclaimedBytes: 0,
+			archived: 0,
+			archivedBytes: 0,
+			retentionArmed: false,
+			totalBytes: null,
 			keptReasons: {},
 			worktrees: [],
 			lowDisk: false,
 			freeBytes: null,
 			scratch: null,
 			traces: null,
+			transcripts: null,
+			tmp: null,
+			logs: null,
+			freed: { worktrees: 0, stripped: 0, archived: 0, transcripts: 0, tmp: 0 },
 		};
 		if (!dryRun && this.isDisabled()) {
 			summary.disabled = true;
@@ -765,30 +964,40 @@ export class WorktreeJanitorService {
 		}
 		try {
 			this.ghUsable = undefined;
-			summary.freeBytes = await readFreeBytes(this.diskPath(), this.opts.statfs);
-			summary.lowDisk = summary.freeBytes !== null && diskLevel(summary.freeBytes) !== 'ok';
+			const space = await readDiskSpace(this.diskPath(), this.opts.statfs);
+			summary.freeBytes = space?.freeBytes ?? null;
+			summary.totalBytes = space?.totalBytes ?? null;
+			summary.lowDisk = summary.freeBytes !== null && diskLevel(summary.freeBytes, summary.totalBytes) !== 'ok';
+			// Arming: the first real pass with the crewly#1354 deletes only reports them.
+			let noticeState = await this.readNoticeState();
+			if (!dryRun && noticeState.retentionArmedAt === undefined) {
+				noticeState = { ...noticeState, retentionArmedAt: this.now() };
+				await this.writeNoticeState(noticeState);
+				this.logger.info('Disk janitor: first pass with worktree tiers and transcript/tmp/log retention — reporting only today, deleting from tomorrow');
+			}
+			summary.retentionArmed = this.opts.armed ?? retentionArmed(noticeState, this.now());
 			const repos = await this.resolveRepos();
 			summary.repos = repos.map((r) => r.main);
 			const busy = await this.safeBusyCwds();
+			let tierState = await this.readTierState();
+			const existing = new Set<string>();
 			for (const repo of repos) {
 				let removedHere = 0;
 				const unmerged: WorktreeOutcome[] = [];
 				for (const entry of repo.entries) {
+					existing.add(canonicalPath(entry.path));
 					const verdict = await this.evaluate(repo, entry, busy, summary.lowDisk, idleOverrideMs);
-					if (summary.lowDisk && verdict.decision === 'keep' && (verdict.reason === 'dirty' || verdict.reason === 'not-merged')) {
-						const rec = await this.reclaimKept(entry.path, verdict.idleMs, dryRun);
-						if (rec) {
-							verdict.reclaimed = rec;
-							summary.reclaimedBytes += rec.freedBytes;
-						}
-					}
 					const outcome: WorktreeOutcome = { ...verdict, removed: false, forced: false, branchDeleted: false };
+					if (verdict.decision === 'keep') {
+						tierState = await this.applyTier(repo, entry, outcome, busy, tierState, summary, dryRun);
+						if (outcome.removed) removedHere++;
+					}
 					if (verdict.decision === 'remove' && !dryRun) {
 						await this.remove(repo, outcome);
 						if (outcome.removed) removedHere++;
 					}
 					summary.worktrees.push(outcome);
-					if (!dryRun && verdict.decision === 'keep' && verdict.reason === 'not-merged') unmerged.push(outcome);
+					if (!dryRun && !outcome.removed && verdict.decision === 'keep' && verdict.reason === 'not-merged') unmerged.push(outcome);
 					if (outcome.removed) summary.removed++;
 					else if (dryRun && verdict.decision === 'remove') summary.wouldRemove++;
 					else {
@@ -814,7 +1023,10 @@ export class WorktreeJanitorService {
 				git: (args) => this.git(args),
 				sizeOf: this.opts.sizeOf,
 			});
+			summary.freed.worktrees += summary.scratch?.freedBytes ?? 0;
+			if (!dryRun) await this.writeTierState(pruneTierState(tierState, this.now(), existing));
 			summary.traces = await getTraceStore().enforceTotalCap({ dryRun });
+			await this.sweepRetention(summary, busy, noticeState, dryRun);
 		} catch (err) {
 			this.logger.warn('Worktree janitor pass failed', { error: err instanceof Error ? err.message : String(err) });
 		}
@@ -824,9 +1036,15 @@ export class WorktreeJanitorService {
 				.sort((a, b) => b[1] - a[1])
 				.map(([k, v]) => `${k}: ${v}`)
 				.join(', ');
+			const would = summary.worktrees.filter((w) => w.tier?.action === 'would');
+			const wouldStrip = would.filter((w) => w.tier?.tier === 'strip');
+			const wouldText =
+				would.length > 0
+					? `; not yet armed: would strip ${wouldStrip.length} (${formatBytes(wouldStrip.reduce((n, w) => n + (w.tier?.freedBytes ?? 0), 0))}), archive ${would.length - wouldStrip.length}`
+					: '';
 			this.logger.info(
-				`Worktree janitor: removed ${summary.removed}, kept ${summary.kept}${reasons ? ` (${reasons})` : ''}${summary.reclaimedBytes > 0 ? `, reclaimed ${formatBytes(summary.reclaimedBytes)} of node_modules/.next from kept worktrees` : ''} across ${summary.repos.length} repo(s) in ${summary.durationMs}ms`,
-				{ removed: summary.worktrees.filter((w) => w.removed).map((w) => w.path), lowDisk: summary.lowDisk },
+				`Worktree janitor: removed ${summary.removed}${summary.archived > 0 ? ` (${summary.archived} archived as patches, ${formatBytes(summary.archivedBytes)})` : ''}, kept ${summary.kept}${reasons ? ` (${reasons})` : ''}${summary.reclaimedBytes > 0 ? `, stripped ${formatBytes(summary.reclaimedBytes)} of node_modules/build output from idle kept worktrees` : ''}${wouldText} across ${summary.repos.length} repo(s) in ${summary.durationMs}ms`,
+				{ removed: summary.worktrees.filter((w) => w.removed).map((w) => w.path), lowDisk: summary.lowDisk, retentionArmed: summary.retentionArmed },
 			);
 			const sc = summary.scratch;
 			if (sc) {
@@ -846,8 +1064,245 @@ export class WorktreeJanitorService {
 					{ ...tr },
 				);
 			}
+			this.logRetention(summary);
 		}
 		return summary;
+	}
+
+	/** One log line each for the transcript, tmp and log sweeps of a real pass. */
+	private logRetention(summary: JanitorRunSummary): void {
+		const days = Math.round(WORKTREE_JANITOR_CONSTANTS.TRANSCRIPT_MAX_AGE_MS / 86_400_000);
+		const armed = summary.retentionArmed;
+		const ts = summary.transcripts;
+		if (ts) {
+			const kept = Object.entries(ts.keptReasons).map(([k, v]) => `${k}: ${v}`).join(', ') || 'none';
+			this.logger.info(
+				armed
+					? `Transcript janitor: pruned ${ts.pruned} agent transcript(s) older than ${days} days, freed ${formatBytes(ts.freedBytes)}; scanned ${ts.scanned} in ${ts.homes.length} home(s), kept ${kept}`
+					: `Transcript janitor (dry run, not yet armed): would prune ${ts.wouldPrune} agent transcript(s) older than ${days} days, ${formatBytes(ts.wouldFreeBytes)}; scanned ${ts.scanned} in ${ts.homes.length} home(s), kept ${kept}`,
+				{ homes: ts.homes, pruned: ts.transcripts.filter((t) => t.removed).map((t) => t.path) },
+			);
+		}
+		const tm = summary.tmp;
+		if (tm) {
+			const kept = Object.entries(tm.keptReasons).map(([k, v]) => `${k}: ${v}`).join(', ');
+			this.logger.info(
+				armed
+					? `Tmp janitor: removed ${tm.removed} entr${tm.removed === 1 ? 'y' : 'ies'} of ${tm.root}, freed ${formatBytes(tm.freedBytes)}, kept ${tm.kept}${kept ? ` (${kept})` : ''}`
+					: `Tmp janitor (dry run, not yet armed): would remove ${tm.wouldRemove} entr${tm.wouldRemove === 1 ? 'y' : 'ies'} of ${tm.root}, ${formatBytes(tm.wouldFreeBytes)}, kept ${tm.kept}${kept ? ` (${kept})` : ''}`,
+				{ removed: tm.entries.filter((e) => e.removed).map((e) => e.path) },
+			);
+		}
+		const lg = summary.logs;
+		if (lg) {
+			for (const c of [lg.archive, lg.sessions]) {
+				if (c.deleted.length === 0 && c.wouldDelete.length === 0 && c.overCapBytes === 0) continue;
+				this.logger.info(
+					armed
+						? `Log janitor: ${c.dir} was ${formatBytes(c.totalBytes)} (cap ${formatBytes(c.capBytes)}), deleted ${c.deleted.length} oldest file(s), freed ${formatBytes(c.freedBytes)}${c.overCapBytes > 0 ? `, still ${formatBytes(c.overCapBytes)} over the cap (live or fresh logs)` : ''}`
+						: `Log janitor (dry run, not yet armed): ${c.dir} is ${formatBytes(c.totalBytes)} (cap ${formatBytes(c.capBytes)}), would delete ${c.wouldDelete.length} oldest file(s), ${formatBytes(c.wouldFreeBytes)}`,
+				);
+			}
+		}
+	}
+
+	/**
+	 * Age tiers for a kept worktree (crewly#1354): strip its regenerable dirs
+	 * after 3 days untouched (1 day under low disk / after a finished WorkItem),
+	 * archive it as a patch and remove it after 14 days. Managed per-WorkItem
+	 * worktrees are only stripped (keeping their shared symlinks), never
+	 * archived — their own service owns them. Never throws.
+	 *
+	 * @returns The (possibly updated) tier state
+	 */
+	private async applyTier(
+		repo: RepoContext,
+		entry: PorcelainWorktree,
+		outcome: WorktreeOutcome,
+		busy: BusyCwd[] | null,
+		state: TierState,
+		summary: JanitorRunSummary,
+		dryRun: boolean,
+	): Promise<TierState> {
+		const managed = outcome.reason === 'managed-by-workitem-worktrees';
+		if (!managed && outcome.reason !== 'dirty' && outcome.reason !== 'not-merged') return state;
+		try {
+			const key = canonicalPath(entry.path);
+			const finishedAt = state.finished[key];
+			if (managed) {
+				// Only a finished WorkItem's managed worktree is touched, and only to strip it.
+				if (finishedAt === undefined) return state;
+				if (busy === null || busy.some((b) => isPathInside(b.cwd, entry.path))) return state;
+			}
+			const gitDirR = await this.git(['-C', entry.path, 'rev-parse', '--absolute-git-dir']);
+			const gitDir = gitDirR.code === 0 ? gitDirR.stdout.trim() : null;
+			const log = await this.git(['-C', entry.path, 'log', '-1', '--format=%ct', 'HEAD']);
+			const newestCommitMs = log.code === 0 && /^\d+$/.test(log.stdout.trim()) ? Number(log.stdout.trim()) * 1000 : null;
+			const idleMs = tierIdleMs({
+				now: this.now(),
+				treeMtimeMs: await latestTreeMtimeMs(entry.path, WORKTREE_JANITOR_CONSTANTS.TIER_MTIME_DEPTH),
+				gitMtimeMs: latestWorktreeMtimeMs(entry.path, gitDir),
+				newestCommitMs,
+			});
+			let tier = tierFor({ idleMs, lowDisk: summary.lowDisk, finishedAt });
+			if (tier === null) return state;
+			if (managed && tier === 'archive') tier = 'strip';
+			const idle = idleMs ?? 0;
+			if (tier === 'strip') {
+				const act = !dryRun && summary.retentionArmed;
+				const rec = await reclaimRegenerableDirs(entry.path, this.opts.sizeOf ?? diskUsageBytes, !act, {
+					isTracked: (dir) => this.isTracked(entry.path, dir),
+					keepSymlinks: managed,
+				});
+				if (rec.dirs.length === 0) return state;
+				// `reclaimed` keeps its pre-#1354 meaning (low-disk reclaim, done or planned); the tier carries the rest.
+				if (act || (summary.lowDisk && dryRun)) outcome.reclaimed = rec;
+				outcome.tier = { tier, idleMs: idle, action: act ? 'done' : 'would', dirs: rec.dirs, freedBytes: rec.freedBytes };
+				if (act) {
+					summary.reclaimedBytes += rec.freedBytes;
+					summary.freed.stripped += rec.freedBytes;
+					if (state.stripped[key] === undefined) {
+						state = { ...state, stripped: { ...state.stripped, [key]: this.now() } };
+						await this.tellLead(repo, entry.path, buildStripNotice({ path: entry.path, reason: outcome.reason, idleMs: idle, dirs: rec.dirs, freedBytes: rec.freedBytes }));
+					}
+				}
+				return state;
+			}
+			const act = !dryRun && summary.retentionArmed;
+			const bytes = (await (this.opts.sizeOf ?? diskUsageBytes)(entry.path)) ?? 0;
+			if (!act) {
+				outcome.tier = { tier, idleMs: idle, action: 'would', freedBytes: bytes };
+				return state;
+			}
+			const defaultRef = await this.defaultRef(repo);
+			let commits: number | null = null;
+			if (entry.head && defaultRef) {
+				const c = await this.git(['-C', repo.main, 'rev-list', '--count', entry.head, `^${defaultRef}`]);
+				commits = c.code === 0 && /^\d+$/.test(c.stdout.trim()) ? Number(c.stdout.trim()) : null;
+			}
+			let keepRef: string | null = null;
+			if (!entry.branch && entry.head && (commits ?? 1) > 0) {
+				keepRef = archiveKeepRef(entry.path, this.now());
+				const u = await this.git(['-C', repo.main, 'update-ref', keepRef, entry.head]);
+				if (u.code !== 0) keepRef = null;
+			}
+			const file = archivePatchPath(this.opts.archiveRoot ?? path.join(getCrewlyHomePath(), WORKTREE_JANITOR_CONSTANTS.ARCHIVE_DIR), repo.main, entry.path, this.now());
+			let patch;
+			try {
+				patch = await writeArchivePatch(
+					(args, options) => this.git(args, options),
+					{ repoMain: repo.main, worktreePath: entry.path, branch: entry.branch, head: entry.head, defaultRef, commitsNotOnDefault: commits, keepRef },
+					file,
+					this.now(),
+				);
+			} catch (err) {
+				outcome.tier = { tier, idleMs: idle, action: 'failed', freedBytes: 0, error: err instanceof Error ? err.message : String(err) };
+				this.logger.warn('Worktree archive failed; worktree kept', { path: entry.path, error: outcome.tier.error });
+				return state;
+			}
+			const r = await this.git(['-C', repo.main, 'worktree', 'remove', '--force', entry.path]);
+			if (r.code !== 0) {
+				outcome.tier = { tier, idleMs: idle, action: 'failed', freedBytes: 0, patch: file, error: (r.stderr || 'git worktree remove failed').trim().slice(0, 300) };
+				this.logger.warn('Worktree archive: patch saved but removal failed; worktree kept', { path: entry.path, patch: file, error: outcome.tier.error });
+				return state;
+			}
+			outcome.removed = true;
+			outcome.forced = true;
+			outcome.decision = 'remove';
+			outcome.reason = 'archived';
+			outcome.detail = `untouched ${Math.floor(idle / 86_400_000)} days; patch ${file}`;
+			outcome.tier = { tier, idleMs: idle, action: 'done', freedBytes: bytes, patch: file };
+			summary.archived += 1;
+			summary.archivedBytes += bytes;
+			summary.freed.archived += bytes;
+			state = { ...state, archived: { ...state.archived, [key]: this.now() } };
+			await this.tellLead(repo, entry.path, buildArchiveNotice({ path: entry.path, branch: entry.branch, patch, idleMs: idle, commitsNotOnDefault: commits, keepRef }));
+			this.logger.info('Archived and removed an untouched worktree', { path: entry.path, patch: file, bytes, branch: entry.branch });
+		} catch (err) {
+			this.logger.warn('Worktree tier failed (non-fatal)', { path: entry.path, error: err instanceof Error ? err.message : String(err) });
+		}
+		return state;
+	}
+
+	/** Whether git tracks anything under `dir` of the worktree (null = could not tell). */
+	private async isTracked(worktreePath: string, dir: string): Promise<boolean | null> {
+		const rel = path.relative(worktreePath, dir);
+		const r = await this.git(['-C', worktreePath, 'ls-files', '--', rel]);
+		if (r.code !== 0) return null;
+		return r.stdout.trim() !== '';
+	}
+
+	/** Tell the owning team's lead (else the orchestrator) one message. Never throws. */
+	private async tellLead(repo: RepoContext, worktreePath: string, message: string): Promise<void> {
+		const notifier = this.agentNotifier;
+		if (!notifier) return;
+		try {
+			const leads = await (this.opts.resolveLeadSessions ?? defaultResolveLeadSessions)(repo.main, worktreePath).catch(() => [] as string[]);
+			for (const session of leads.length > 0 ? leads : [ORCHESTRATOR_SESSION_NAME]) await notifier(session, message).catch(() => false);
+		} catch {
+			// best effort
+		}
+	}
+
+	/**
+	 * Transcript, tmp and log retention (crewly#1354), each on its own
+	 * cadence; all dry-run until armed. Never throws.
+	 */
+	private async sweepRetention(summary: JanitorRunSummary, busy: BusyCwd[] | null, noticeState: LowDiskNoticeState, dryRun: boolean): Promise<void> {
+		const now = this.now();
+		const effectiveDry = dryRun || !summary.retentionArmed;
+		const due = (last: number | undefined, interval: number): boolean => this.opts.forceSweeps === true || last === undefined || now - last >= interval;
+		let stateChanged = false;
+		try {
+			// Under jest the real ~/.claude is never scanned unless a test asks for it.
+			const homes = this.opts.claudeHomes ?? ((this.opts.env ?? process.env).JEST_WORKER_ID ? [] : defaultClaudeHomes(getCrewlyHomePath()));
+			if (homes.length > 0 && due(noticeState.lastTranscriptSweepAt, WORKTREE_JANITOR_CONSTANTS.TRANSCRIPT_SWEEP_INTERVAL_MS)) {
+				const sources = await (this.opts.transcriptSources ?? (() => defaultTranscriptSources(now)))();
+				summary.transcripts = await sweepTranscripts({ claudeHomes: homes, sources, now, dryRun: effectiveDry, sizeOf: this.opts.sizeOf });
+				summary.freed.transcripts += summary.transcripts.freedBytes;
+				if (!effectiveDry) {
+					noticeState.lastTranscriptSweepAt = now;
+					stateChanged = true;
+				}
+			}
+		} catch (err) {
+			this.logger.warn('Transcript sweep failed (non-fatal)', { error: err instanceof Error ? err.message : String(err) });
+		}
+		try {
+			const tmpRoot = this.opts.tmpRoot === undefined ? path.join(getCrewlyHomePath(), WORKTREE_JANITOR_CONSTANTS.TMP_DIR) : this.opts.tmpRoot;
+			const logsDir = this.opts.logsDir === undefined ? path.join(getCrewlyHomePath(), LOG_ROTATION_CONSTANTS.LOGS_DIR) : this.opts.logsDir;
+			if ((tmpRoot || logsDir) && due(noticeState.lastTmpSweepAt, WORKTREE_JANITOR_CONSTANTS.TMP_SWEEP_INTERVAL_MS)) {
+				if (tmpRoot) {
+					summary.tmp = await sweepTmp({ root: tmpRoot, busy, now, dryRun: effectiveDry, sizeOf: this.opts.sizeOf });
+					summary.freed.tmp += summary.tmp.freedBytes;
+				}
+				if (logsDir) {
+					const live = new Set(await (this.opts.liveSessionNames ?? defaultLiveSessionNames)().catch(() => [] as string[]));
+					const archive = await capDirectoryBytes({
+						dir: path.join(logsDir, LOG_ROTATION_CONSTANTS.ARCHIVE_DIR),
+						capBytes: WORKTREE_JANITOR_CONSTANTS.LOG_ARCHIVE_CAP_BYTES,
+						now,
+						dryRun: effectiveDry,
+					});
+					const sessions = await capDirectoryBytes({
+						dir: path.join(logsDir, LOG_ROTATION_CONSTANTS.SESSIONS_LOG_DIR),
+						capBytes: WORKTREE_JANITOR_CONSTANTS.LOG_SESSIONS_CAP_BYTES,
+						now,
+						dryRun: effectiveDry,
+						protect: (name) => live.has(name.replace(/\.log$/, '')),
+					});
+					summary.logs = { archive, sessions };
+					summary.freed.tmp += archive.freedBytes + sessions.freedBytes;
+				}
+				if (!effectiveDry) {
+					noticeState.lastTmpSweepAt = now;
+					stateChanged = true;
+				}
+			}
+		} catch (err) {
+			this.logger.warn('Tmp/log sweep failed (non-fatal)', { error: err instanceof Error ? err.message : String(err) });
+		}
+		if (stateChanged) await this.writeNoticeState(noticeState);
 	}
 
 	/**
@@ -931,7 +1386,9 @@ export class WorktreeJanitorService {
 		const registered = await (this.opts.listRepoPaths ?? defaultListRepoPaths)().catch(() => [] as string[]);
 		let discovered: string[] = [];
 		try {
-			discovered = await discoverLinkedWorktreeRepos([...this.tmpRoots(), ...this.scratchRoots()]);
+			// CREWLY_HOME/tmp too: agents put worktrees there, and the tmp sweep leaves git checkouts to these rules.
+			const crewlyTmp = this.opts.tmpRoot === undefined ? path.join(getCrewlyHomePath(), WORKTREE_JANITOR_CONSTANTS.TMP_DIR) : this.opts.tmpRoot;
+			discovered = await discoverLinkedWorktreeRepos([...this.tmpRoots(), ...this.scratchRoots(), ...(crewlyTmp ? [crewlyTmp] : [])]);
 		} catch {
 			// discovery is best effort
 		}
@@ -1037,22 +1494,6 @@ export class WorktreeJanitorService {
 			if (signal) return { ...base, decision: 'remove', reason: 'content-landed', detail: `${signal} in ${defaultRef}`, idleMs };
 		}
 		return keep('not-merged', defaultRef ? `not in ${defaultRef} (history or content), no merged PR` : 'no origin default branch, no merged PR', idleMs);
-	}
-
-	/**
-	 * Low disk: delete the regenerable dirs (node_modules, .next) of a kept
-	 * worktree that has been idle for a day. Reversible; never touches
-	 * tracked or source files. Never throws.
-	 */
-	private async reclaimKept(worktreePath: string, idleMs: number | undefined, dryRun: boolean): Promise<{ dirs: string[]; freedBytes: number } | null> {
-		if (idleMs === undefined || idleMs < WORKTREE_JANITOR_CONSTANTS.RECLAIM_MIN_IDLE_MS) return null;
-		try {
-			const r = await reclaimRegenerableDirs(worktreePath, this.opts.sizeOf ?? diskUsageBytes, dryRun);
-			return r.dirs.length > 0 ? r : null;
-		} catch (err) {
-			this.logger.warn('Reclaiming regenerable dirs failed (non-fatal)', { path: worktreePath, error: err instanceof Error ? err.message : String(err) });
-			return null;
-		}
 	}
 
 	/** `origin/<default>` after one quiet fetch per repo per pass; null when there is no origin. */
@@ -1183,6 +1624,89 @@ export async function defaultListRepoPaths(): Promise<string[]> {
 		// not resolvable — fine
 	}
 	return out;
+}
+
+/**
+ * Default WorkItem -> worktree lookup for the task-end hook: the worktree the
+ * per-WorkItem worktree feature recorded on the item (`metadata.worktree.path`).
+ *
+ * @param workItemId - WorkItem id
+ * @returns Worktree path, or null when the item has none
+ */
+export async function defaultFindWorkItemWorktree(workItemId: string): Promise<string | null> {
+	try {
+		const { TaskPoolService } = await import('../task-pool/task-pool.service.js');
+		const item = (await TaskPoolService.getInstance().getAllItems()).find((i) => i.id === workItemId);
+		const wt = item?.metadata?.worktree as { path?: unknown } | undefined;
+		return typeof wt?.path === 'string' ? wt.path : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Default transcript sources: Crewly's records under CREWLY_HOME
+ * (session-state, last-conversations, handover files), the live session
+ * backend (names) and persistence (names + current conversation ids, kept),
+ * and every team member's session name.
+ *
+ * @param now - Current time (ms)
+ * @returns Known session names, recorded ids, ids to keep
+ */
+export async function defaultTranscriptSources(now: number): Promise<TranscriptSourceSets> {
+	const sets = await readCrewlyRecords(getCrewlyHomePath(), now);
+	try {
+		const { getSessionBackendSync } = await import('../session/session-backend.factory.js');
+		for (const name of getSessionBackendSync()?.listSessions() ?? []) sets.knownSessionNames.add(name);
+	} catch {
+		// no session backend
+	}
+	try {
+		const { getSessionStatePersistence } = await import('../session/session-state-persistence.js');
+		const persistence = getSessionStatePersistence();
+		for (const name of persistence.getRegisteredSessions()) {
+			sets.knownSessionNames.add(name);
+			const id = persistence.getSessionId(name);
+			if (id) {
+				sets.keepIds.add(id.toLowerCase());
+				sets.recordedIds.add(id.toLowerCase());
+			}
+		}
+	} catch {
+		// no persistence
+	}
+	try {
+		const { StorageService } = await import('../core/storage.service.js');
+		for (const team of await StorageService.getInstance().getTeams()) {
+			for (const m of team.members ?? []) if (m.sessionName) sets.knownSessionNames.add(m.sessionName);
+		}
+	} catch {
+		// no teams store
+	}
+	return sets;
+}
+
+/**
+ * Default live-session names (their logs are never deleted by the cap): the
+ * session backend's sessions plus every persisted session.
+ *
+ * @returns Session names
+ */
+export async function defaultLiveSessionNames(): Promise<string[]> {
+	const out = new Set<string>();
+	try {
+		const { getSessionBackendSync } = await import('../session/session-backend.factory.js');
+		for (const name of getSessionBackendSync()?.listSessions() ?? []) out.add(name);
+	} catch {
+		// no session backend
+	}
+	try {
+		const { getSessionStatePersistence } = await import('../session/session-state-persistence.js');
+		for (const name of getSessionStatePersistence().getRegisteredSessions()) out.add(name);
+	} catch {
+		// no persistence
+	}
+	return [...out];
 }
 
 /**

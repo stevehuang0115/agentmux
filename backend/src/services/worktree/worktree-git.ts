@@ -329,6 +329,59 @@ export async function applySharedPaths(repo: string, worktree: string, sharedDir
 }
 
 /**
+ * Workspace-level install dirs to share with a new worktree: every
+ * `<pkg>/node_modules` up to NESTED_INSTALL_DEPTH levels below the repo root
+ * (never inside `node_modules`, `.git`, `.crewly`, `.claude`), but only when
+ * the lock file is identical in repo and worktree — a branch that changed the
+ * lock needs its own install. The root `node_modules` is covered by
+ * DEFAULT_SHARED_DIRS. {@link applySharedPaths} still skips tracked dirs.
+ *
+ * @param repo - Repo root
+ * @param worktree - New worktree (already checked out)
+ * @returns Repo-relative directories, empty when the lock differs or is absent
+ *
+ * @example
+ * ```typescript
+ * await nestedInstallDirs('/repo', '/repo/.crewly/worktrees/wi-1'); // ['backend/node_modules', 'packages/ui/node_modules']
+ * ```
+ */
+export async function nestedInstallDirs(repo: string, worktree: string): Promise<string[]> {
+	let lock: string | null = null;
+	for (const name of WORKTREE_CONSTANTS.LOCK_FILES) {
+		try {
+			await fs.access(path.join(repo, name));
+			lock = name;
+			break;
+		} catch {
+			// next
+		}
+	}
+	if (!lock) return [];
+	const [a, b] = await Promise.all([hashFile(path.join(repo, lock)), hashFile(path.join(worktree, lock))]);
+	if (!a || !b || a !== b) return [];
+	const out: string[] = [];
+	const walk = async (rel: string, depth: number): Promise<void> => {
+		let entries;
+		try {
+			entries = await fs.readdir(path.join(repo, rel), { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const e of entries) {
+			if (!e.isDirectory()) continue;
+			if (e.name === 'node_modules') {
+				if (rel) out.push(path.posix.join(rel.replace(/\\/g, '/'), 'node_modules'));
+				continue;
+			}
+			if (WORKTREE_CONSTANTS.NESTED_INSTALL_SKIP_DIRS.includes(e.name) || e.name.startsWith('.')) continue;
+			if (depth < WORKTREE_CONSTANTS.NESTED_INSTALL_DEPTH) await walk(path.join(rel, e.name), depth + 1);
+		}
+	};
+	await walk('', 0);
+	return out.sort();
+}
+
+/**
  * Add rooted patterns (`/node_modules`, no trailing slash, so a symlink
  * matches too) to the repo's shared `info/exclude` under a marker line.
  * Idempotent. Exclude rules never affect tracked files.

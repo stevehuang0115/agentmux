@@ -98,6 +98,12 @@ function janitor(fx: Fixture, overrides: WorktreeJanitorOptions = {}): WorktreeJ
 		scratchRoots: [],
 		statfs: statfsWith(() => 100),
 		statePath: null,
+		tierStatePath: null,
+		// crewly#1354 deletes are armed in tests unless a test checks the arming itself.
+		armed: true,
+		claudeHomes: [],
+		tmpRoot: null,
+		logsDir: null,
 		sizeOf: async () => GB,
 		env: {},
 		logger: { info: jest.fn(), warn: jest.fn() },
@@ -493,11 +499,11 @@ describe('WorktreeJanitorService', () => {
 			expect(fs.existsSync(path.join(wt, 'node_modules'))).toBe(true);
 		});
 
-		it('does nothing when disk is fine, and a dry run only lists', async () => {
+		it('does nothing when disk is fine (before the 3-day strip tier), and a dry run only lists', async () => {
 			const wt = addWorktree(fx, agentPath(fx, 'ok'), 'feat/ok');
 			fs.mkdirSync(path.join(wt, 'node_modules'));
 			fs.writeFileSync(path.join(wt, 'wip.ts'), 'x');
-			const ok = await janitor(fx, { now: () => Date.now() + 3 * 24 * HOUR }).run();
+			const ok = await janitor(fx, { now: () => Date.now() + 2 * 24 * HOUR }).run();
 			expect(verdictFor(ok, wt)?.reclaimed).toBeUndefined();
 			const plan = await lowDiskJanitor().plan();
 			expect(verdictFor(plan, wt)?.reclaimed?.dirs.length).toBe(1);
@@ -546,14 +552,21 @@ describe('WorktreeJanitorService', () => {
 			expect(fs.existsSync(wt)).toBe(true);
 		});
 
-		it('keeps a dirty or unlanded worktree at an arbitrary path however old', async () => {
+		it('keeps a dirty or unlanded worktree at an arbitrary path however old (until the 14-day archive tier, crewly#1354)', async () => {
 			const dirty = addWorktree(fx, path.join(fx.root, 'wt-dirty'), 'fix/dirty');
 			landOnOrigin(dirty);
 			fs.writeFileSync(path.join(dirty, 'scratch.txt'), 'x\n');
 			const open = addWorktree(fx, path.join(fx.root, 'wt-open'), 'fix/open');
-			const summary = await janitor(fx, { now: () => Date.now() + 30 * 24 * HOUR }).run();
+			const summary = await janitor(fx, { now: () => Date.now() + 10 * 24 * HOUR }).run();
 			expect(verdictFor(summary, dirty)).toMatchObject({ decision: 'keep', reason: 'dirty' });
 			expect(verdictFor(summary, open)).toMatchObject({ decision: 'keep', reason: 'not-merged' });
+			// Nothing regenerable inside, so the strip tier has nothing to do either.
+			expect(verdictFor(summary, dirty)?.tier).toBeUndefined();
+			expect(fs.existsSync(dirty) && fs.existsSync(open)).toBe(true);
+			// Not armed: even at 30 days the archive is only reported.
+			const unarmed = await janitor(fx, { now: () => Date.now() + 30 * 24 * HOUR, armed: false }).run();
+			expect(verdictFor(unarmed, open)).toMatchObject({ decision: 'keep', reason: 'not-merged' });
+			expect(verdictFor(unarmed, open)?.tier).toMatchObject({ tier: 'archive', action: 'would' });
 			expect(fs.existsSync(dirty) && fs.existsSync(open)).toBe(true);
 		});
 
@@ -777,10 +790,11 @@ describe('WorktreeJanitorService', () => {
 			});
 			const summary = await j.run();
 			expect(summary.repos).toHaveLength(1);
-			// One line for the worktrees, one for the scratch sweep.
-			expect(logger.info).toHaveBeenCalledTimes(2);
-			expect(logger.info.mock.calls[0][0]).toMatch(/^Worktree janitor: removed 0, kept 2 \(.*not-merged: 1.*\)/);
-			expect(logger.info.mock.calls[1][0]).toMatch(/^Scratch janitor: removed 0 session dir\(s\), freed 0 KB, kept 0/);
+			// One line for the worktrees, one for the scratch sweep (plus the one-time arming line, crewly#1354).
+			const lines = logger.info.mock.calls.map((c) => String(c[0])).filter((l) => !l.startsWith('Disk janitor: first pass'));
+			expect(lines).toHaveLength(2);
+			expect(lines[0]).toMatch(/^Worktree janitor: removed 0, kept 2 \(.*not-merged: 1.*\)/);
+			expect(lines[1]).toMatch(/^Scratch janitor: removed 0 session dir\(s\), freed 0 KB, kept 0/);
 			expect(j.getLastSummary()).toBe(summary);
 
 			const failing = janitor(fx, { listRepoPaths: async () => { throw new Error('boom'); } });
@@ -901,6 +915,184 @@ describe('WorktreeJanitorService', () => {
 			const notify = jest.fn().mockResolvedValue(true);
 			await make(notify, { resolveLeadSessions: async () => ['tl'] }).plan();
 			expect(notify).not.toHaveBeenCalled();
+		});
+	});
+	describe('age tiers and retention (crewly#1354)', () => {
+		const DAY = 24 * HOUR;
+		const UUID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+		function tiered(overrides: WorktreeJanitorOptions = {}): WorktreeJanitorService {
+			return janitor(fx, { now: () => Date.now() + 4 * DAY, unmergedNoticePath: null, armed: true, ...overrides });
+		}
+		const stripNotices = (notify: jest.Mock) => notify.mock.calls.filter((c) => String(c[1]).includes('re-installable output'));
+
+		it('strips node_modules and build output of a dirty worktree untouched for 3 days, tells the lead once, never a tracked dir', async () => {
+			const wt = addWorktree(fx, agentPath(fx, 'stale'), 'feat/stale');
+			fs.mkdirSync(path.join(wt, 'dist'));
+			fs.writeFileSync(path.join(wt, 'dist', 'keep.js'), 'k');
+			git(wt, 'add', '-f', 'dist');
+			git(wt, 'commit', '--quiet', '-m', 'tracked dist');
+			fs.mkdirSync(path.join(wt, 'node_modules', 'p'), { recursive: true });
+			fs.mkdirSync(path.join(wt, 'web', '.next'), { recursive: true });
+			fs.writeFileSync(path.join(wt, 'wip.ts'), 'x');
+			const notify = jest.fn().mockResolvedValue(true);
+			const j = tiered({ resolveLeadSessions: async () => ['lead'] });
+			j.setAgentNotifier(notify);
+			const summary = await j.run();
+			const v = verdictFor(summary, wt)!;
+			expect(v).toMatchObject({ decision: 'keep', reason: 'dirty' });
+			expect(v.tier).toMatchObject({ tier: 'strip', action: 'done', freedBytes: 2 * GB });
+			expect(v.tier!.dirs!.map((d) => path.relative(v.path, d)).sort()).toEqual(['node_modules', 'web/.next']);
+			expect(v.reclaimed?.dirs).toHaveLength(2);
+			expect(summary.reclaimedBytes).toBe(2 * GB);
+			expect(summary.freed.stripped).toBe(2 * GB);
+			expect(fs.existsSync(path.join(wt, 'node_modules'))).toBe(false);
+			expect(fs.existsSync(path.join(wt, 'web', '.next'))).toBe(false);
+			expect(fs.existsSync(path.join(wt, 'dist', 'keep.js'))).toBe(true);
+			expect(fs.existsSync(path.join(wt, 'wip.ts'))).toBe(true);
+			expect(stripNotices(notify)).toHaveLength(1);
+			expect(stripNotices(notify)[0][0]).toBe('lead');
+			expect(stripNotices(notify)[0][1]).toContain('4 days');
+			// A later pass strips a re-created node_modules again but does not repeat the notice.
+			fs.mkdirSync(path.join(wt, 'node_modules'));
+			await j.run();
+			expect(fs.existsSync(path.join(wt, 'node_modules'))).toBe(false);
+			expect(stripNotices(notify)).toHaveLength(1);
+		});
+
+		it('does nothing before 3 days; when not armed it only reports what it would strip', async () => {
+			const wt = addWorktree(fx, agentPath(fx, 'young'), 'feat/young');
+			fs.mkdirSync(path.join(wt, 'node_modules'));
+			fs.writeFileSync(path.join(wt, 'wip.ts'), 'x');
+			const young = await tiered({ now: () => Date.now() + 2 * DAY }).run();
+			expect(verdictFor(young, wt)?.tier).toBeUndefined();
+			const unarmed = await tiered({ armed: false }).run();
+			const v = verdictFor(unarmed, wt)!;
+			expect(v.tier).toMatchObject({ tier: 'strip', action: 'would', freedBytes: GB });
+			expect(v.reclaimed).toBeUndefined();
+			expect(unarmed.reclaimedBytes).toBe(0);
+			expect(fs.existsSync(path.join(wt, 'node_modules'))).toBe(true);
+		});
+
+		it('a finished WorkItem (task-end hook) drops the strip tier to one day', async () => {
+			const wt = addWorktree(fx, agentPath(fx, 'finished'), 'feat/finished');
+			fs.mkdirSync(path.join(wt, 'node_modules'));
+			fs.writeFileSync(path.join(wt, 'wip.ts'), 'x');
+			const j = tiered({ now: () => Date.now() + 30 * HOUR, findWorkItemWorktree: async (id) => (id === 'wi-1' ? wt : null) });
+			expect(verdictFor(await j.run(), wt)?.tier).toBeUndefined();
+			j.requestTidy('wi-1');
+			j.stop();
+			await new Promise((r) => setTimeout(r, 50));
+			const v = verdictFor(await j.run(), wt)!;
+			expect(v.tier).toMatchObject({ tier: 'strip', action: 'done' });
+			expect(fs.existsSync(path.join(wt, 'node_modules'))).toBe(false);
+			expect(fs.existsSync(path.join(wt, 'wip.ts'))).toBe(true);
+		});
+
+		it('archives a worktree untouched for 14 days as a patch, keeps its branch, removes it and tells the lead', async () => {
+			const wt = addWorktree(fx, agentPath(fx, 'ancient'), 'feat/ancient');
+			fs.writeFileSync(path.join(wt, 'README.md'), 'hello\nmore\n');
+			fs.writeFileSync(path.join(wt, 'notes.md'), 'n');
+			fs.mkdirSync(path.join(wt, 'node_modules', 'p'), { recursive: true });
+			const notify = jest.fn().mockResolvedValue(true);
+			const archiveRoot = path.join(fx.root, 'archive');
+			const j = tiered({ now: () => Date.now() + 15 * DAY, archiveRoot, resolveLeadSessions: async () => ['lead'], sizeOf: async () => 3 * GB });
+			j.setAgentNotifier(notify);
+			const summary = await j.run();
+			const v = verdictFor(summary, wt)!;
+			expect(v).toMatchObject({ decision: 'remove', reason: 'archived', removed: true });
+			expect(v.tier).toMatchObject({ tier: 'archive', action: 'done', freedBytes: 3 * GB });
+			expect(summary).toMatchObject({ archived: 1, removed: 1, archivedBytes: 3 * GB });
+			expect(summary.freed.archived).toBe(3 * GB);
+			expect(fs.existsSync(wt)).toBe(false);
+			expect(branchExists(fx.repo, 'feat/ancient')).toBe(true);
+			expect(git(fx.repo, 'worktree', 'list', '--porcelain')).not.toContain('ancient');
+			const patch = v.tier!.patch!;
+			expect(path.dirname(patch)).toBe(path.join(archiveRoot, 'repo'));
+			const text = fs.readFileSync(patch, 'utf-8');
+			expect(text).toContain('+more');
+			expect(text).toContain('notes.md');
+			expect(text).not.toContain('node_modules');
+			expect(text).toContain('1 commit(s) of this worktree are not on it; the branch was kept');
+			expect(notify).toHaveBeenCalledTimes(1);
+			expect(notify.mock.calls[0][0]).toBe('lead');
+			expect(notify.mock.calls[0][1]).toContain(patch);
+			expect(notify.mock.calls[0][1]).toContain('still on branch feat/ancient');
+		});
+
+		it('an unarmed pass only reports the archive; the first real pass arms the deletes for the next day', async () => {
+			const statePath = path.join(fx.root, 'state.json');
+			const wt = addWorktree(fx, agentPath(fx, 'ancient2'), 'feat/ancient2');
+			fs.writeFileSync(path.join(wt, 'notes.md'), 'n');
+			const clock = { t: Date.now() + 15 * DAY };
+			const j = tiered({ now: () => clock.t, statePath, armed: undefined });
+			const first = await j.run();
+			expect(first.retentionArmed).toBe(false);
+			expect(verdictFor(first, wt)?.tier).toMatchObject({ tier: 'archive', action: 'would' });
+			expect(fs.existsSync(wt)).toBe(true);
+			expect(JSON.parse(fs.readFileSync(statePath, 'utf-8')).retentionArmedAt).toBe(clock.t);
+			clock.t += 25 * HOUR;
+			const second = await j.run();
+			expect(second.retentionArmed).toBe(true);
+			expect(verdictFor(second, wt)).toMatchObject({ reason: 'archived', removed: true });
+			expect(fs.existsSync(wt)).toBe(false);
+		});
+
+		it('runs the transcript, tmp and log sweeps inside the pass (armed deletes; unarmed only plans)', async () => {
+			const tmpRoot = path.join(fx.root, 'tmp');
+			const logsDir = path.join(fx.root, 'logs');
+			const home = path.join(fx.root, '.claude');
+			const past = new Date(Date.now() - 20 * DAY);
+			const oldDir = path.join(tmpRoot, 'old-preview');
+			fs.mkdirSync(oldDir, { recursive: true });
+			fs.writeFileSync(path.join(oldDir, 'index.html'), 'x');
+			fs.utimesSync(path.join(oldDir, 'index.html'), past, past);
+			fs.utimesSync(oldDir, past, past);
+			fs.mkdirSync(path.join(logsDir, 'archive'), { recursive: true });
+			fs.writeFileSync(path.join(logsDir, 'archive', 'a.gz'), 'a');
+			fs.mkdirSync(path.join(logsDir, 'sessions'));
+			fs.writeFileSync(path.join(logsDir, 'sessions', 'live.log'), 'l');
+			const slug = path.join(home, 'projects', '-x');
+			fs.mkdirSync(slug, { recursive: true });
+			const transcript = path.join(slug, `${UUID}.jsonl`);
+			fs.writeFileSync(transcript, '{"type":"agent-setting","agentSetting":"crewly-orc","sessionId":"x"}\n');
+			fs.utimesSync(transcript, past, past);
+			const make = (armed: boolean) =>
+				tiered({
+					now: () => Date.now(),
+					armed,
+					tmpRoot,
+					logsDir,
+					claudeHomes: [home],
+					forceSweeps: true,
+					transcriptSources: async () => ({ knownSessionNames: new Set(['crewly-orc']), recordedIds: new Set(), keepIds: new Set() }),
+					liveSessionNames: async () => ['live'],
+				});
+			const plan = await make(false).run();
+			expect(plan.tmp).toMatchObject({ removed: 0, wouldRemove: 1 });
+			expect(plan.transcripts).toMatchObject({ pruned: 0, wouldPrune: 1 });
+			expect(fs.existsSync(oldDir)).toBe(true);
+			expect(fs.existsSync(transcript)).toBe(true);
+			const real = await make(true).run();
+			expect(real.tmp).toMatchObject({ removed: 1 });
+			expect(real.transcripts).toMatchObject({ pruned: 1 });
+			expect(real.logs?.archive.totalBytes).toBe(1);
+			expect(real.logs?.sessions.deleted).toEqual([]);
+			expect(real.freed.transcripts).toBeGreaterThan(0);
+			expect(real.freed.tmp).toBeGreaterThan(0);
+			expect(fs.existsSync(oldDir)).toBe(false);
+			expect(fs.existsSync(transcript)).toBe(false);
+			expect(fs.existsSync(path.join(logsDir, 'sessions', 'live.log'))).toBe(true);
+		});
+
+		it('reports the disk size and treats less than 8 % free as low (crewly#1354)', async () => {
+			const statfs = async () => ({ bavail: (50 * GB) / 4096, bsize: 4096, blocks: (926 * GB) / 4096 });
+			const j = tiered({ statfs });
+			const status = await j.diskStatus();
+			expect(status).toMatchObject({ freeBytes: 50 * GB, totalBytes: 926 * GB, level: 'low' });
+			expect(status.lowBytes).toBe(Math.round(926 * GB * 0.08));
+			const summary = await j.plan();
+			expect(summary.lowDisk).toBe(true);
+			expect(summary.totalBytes).toBe(926 * GB);
 		});
 	});
 });

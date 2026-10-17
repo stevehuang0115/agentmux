@@ -4778,10 +4778,11 @@ void (async () => {
 					return r.success;
 				});
 				// Finished work cleans up after itself: a WorkItem / ticket reaching
-				// done or verified schedules one debounced janitor pass (safe rules
-				// unchanged — only landed, clean, unattended worktrees go).
-				this.eventBusService.onInProcess(['task:done', 'task:verified'], () => {
-					WorktreeJanitorService.getInstance().requestTidy();
+				// a terminal state schedules one debounced janitor pass (safe rules
+				// unchanged — only landed, clean, unattended worktrees go) and notes
+				// the item's worktree as finished (its node_modules go after 1 day).
+				this.eventBusService.onInProcess(['task:done', 'task:verified', 'task:cancelled', 'task:failed'], (event) => {
+					WorktreeJanitorService.getInstance().requestTidy(event.workItemId);
 				});
 				if (WorktreeJanitorService.getInstance().start()) {
 					this.logger.info('WorktreeJanitorService scheduled');

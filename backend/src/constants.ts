@@ -2046,6 +2046,16 @@ export const WORKTREE_CONSTANTS = {
 	INCLUDE_MAX_ENTRIES: 50,
 	/** Heavy directories symlinked (not copied) from the repo root when present and untracked. */
 	DEFAULT_SHARED_DIRS: ['node_modules'] as readonly string[],
+	/**
+	 * Workspace packages' install dirs (`backend/node_modules`,
+	 * `packages/ui/node_modules`) are symlinked too when the lock file is
+	 * identical in repo and worktree (crewly#1354): searched this deep.
+	 */
+	NESTED_INSTALL_DEPTH: 2,
+	/** Lock files compared (first one present in the repo decides). */
+	LOCK_FILES: ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock'] as readonly string[],
+	/** Directories never descended into while looking for nested install dirs. */
+	NESTED_INSTALL_SKIP_DIRS: ['node_modules', '.git', '.crewly', '.claude', 'dist', '.next'] as readonly string[],
 	/** Marker line for the entries this feature adds to `.git/info/exclude`. */
 	EXCLUDE_MARKER: '# crewly worktree shared paths (#814) — never commit these',
 	/** Timeout for local git commands (checkout of a large repo can take minutes under load). */
@@ -2948,7 +2958,7 @@ export const WORKTREE_JANITOR_CONSTANTS = {
 	RUNAWAY_LSOF_TIMEOUT_MS: 10_000,
 	/** One line added to every agent's start prompt. */
 	PROMPT_HINT:
-		'Disk hygiene: never let a command or script write an unbounded file. When you redirect or concatenate output (`> file`, `>> file`, `cat a b > all.md`), cap it (`| head -c 50M`, `| head -n 100000`) and never build a file from its own output. A file in your scratch dir or worktree that grows past a few GB is stopped by Crewly and the owner is alerted. Worktree hygiene: deploy only from a commit that is on main (merge first, never from a side branch); remove your worktree once its ticket is done.',
+		'Disk hygiene: never let a command or script write an unbounded file. When you redirect or concatenate output (`> file`, `>> file`, `cat a b > all.md`), cap it (`| head -c 50M`, `| head -n 100000`) and never build a file from its own output. A file in your scratch dir or worktree that grows past a few GB is stopped by Crewly and the owner is alerted. Worktree hygiene: deploy only from a commit that is on main (merge first, never from a side branch); remove your worktree once its ticket is done. In a new worktree, do not run `npm install` when package-lock.json is unchanged: symlink `node_modules` (root and per-package) from the main checkout instead (`ln -s <main>/node_modules node_modules`). Crewly strips node_modules from worktrees untouched for 3 days and archives untouched ones as a patch after 14 days.',
 	/** State file under CREWLY_HOME remembering when the owner was last told about low disk. */
 	STATE_FILENAME: 'disk-janitor-state.json',
 	/** File (in CREWLY_HOME) remembering which unmerged worktrees their lead was already told about. */
@@ -2987,8 +2997,12 @@ export const WORKTREE_JANITOR_CONSTANTS = {
 	REGENERABLE_DIRS: ['node_modules', '.next', 'dist', 'build', '.turbo', 'coverage', '.cache', 'logs'] as readonly string[],
 	/** File suffixes treated as regenerable output (logs). */
 	REGENERABLE_FILE_SUFFIXES: ['.log'] as readonly string[],
-	/** Directories deleted from kept (dirty / not-merged) worktrees under low disk — reinstalled by `npm install` / rebuilt by `next build`. */
-	RECLAIM_DIRS: ['node_modules', '.next'] as readonly string[],
+	/**
+	 * Directories deleted from kept (dirty / not-merged) worktrees by the strip
+	 * tier — reinstalled by `npm install` / rebuilt by the build. A directory
+	 * git tracks anything under is never deleted (a repo that commits `dist`).
+	 */
+	RECLAIM_DIRS: ['node_modules', '.next', 'dist', '.turbo', '.cache'] as readonly string[],
 	/** A kept worktree must be idle this long before its regenerable dirs are reclaimed under low disk (24 hours). */
 	RECLAIM_MIN_IDLE_MS: 24 * 60 * 60 * 1000,
 	/** How deep under a worktree reclaimable dirs are searched for (root = 0; `web/node_modules` = 1). */
@@ -3013,6 +3027,78 @@ export const WORKTREE_JANITOR_CONSTANTS = {
 	GH_PR_LIMIT: 20,
 	/** Max bytes of command output kept (stdout/stderr each). */
 	MAX_OUTPUT_BYTES: 16 * 1024 * 1024,
+
+	// --- Age tiers for kept (unmerged / dirty) worktrees (crewly#1354) ---
+	/** A kept worktree untouched (no file, index or commit newer) for this long loses its regenerable dirs (3 days). */
+	STRIP_MIN_IDLE_MS: 3 * 24 * 60 * 60 * 1000,
+	/** Under low disk, or once its WorkItem finished, the strip tier needs only this much idle (1 day). */
+	STRIP_MIN_IDLE_LOW_DISK_MS: 24 * 60 * 60 * 1000,
+	/** A kept worktree untouched for this long is archived as a patch and removed (14 days). */
+	ARCHIVE_MIN_IDLE_MS: 14 * 24 * 60 * 60 * 1000,
+	/** Directory under CREWLY_HOME holding archived worktree patches (`<repo>/<name>-<date>.patch`). */
+	ARCHIVE_DIR: 'worktree-archive',
+	/** Cap on one archive patch; untracked files that would push it past the cap are listed in the header instead (64 MB). */
+	ARCHIVE_PATCH_MAX_BYTES: 64 * 1024 ** 2,
+	/** Cap on untracked files written into one archive patch. */
+	ARCHIVE_MAX_UNTRACKED_FILES: 2000,
+	/** Ref namespace that keeps the commits of an archived detached worktree alive (`refs/crewly-archive/<name>-<date>`). */
+	ARCHIVE_REF_PREFIX: 'refs/crewly-archive/',
+	/** How many levels below a worktree root count for its "last touched" time in the tier decision. */
+	TIER_MTIME_DEPTH: 2,
+	/** State file under CREWLY_HOME: per-worktree strip / archive / finished-work timestamps. */
+	TIER_STATE_FILENAME: 'worktree-tiers.json',
+	/** Finished-work records (task-end hook) older than this are dropped from the state file (30 days). */
+	TIER_STATE_MAX_AGE_MS: 30 * 24 * 60 * 60 * 1000,
+	/**
+	 * Every delete added in crewly#1354 (strip, archive, transcripts, tmp, logs)
+	 * is dry-run only until this long after the first real pass that saw it
+	 * (one day): the first pass logs what it would do, the next day it does it.
+	 */
+	RETENTION_ARM_DELAY_MS: 24 * 60 * 60 * 1000,
+
+	// --- Transcript retention (Claude Code conversations Crewly launched) ---
+	/** An agent transcript (and its sibling tool-results dir) untouched for this long is pruned (14 days). */
+	TRANSCRIPT_MAX_AGE_MS: 14 * 24 * 60 * 60 * 1000,
+	/** The transcript sweep runs at most this often (24 hours). */
+	TRANSCRIPT_SWEEP_INTERVAL_MS: 24 * 60 * 60 * 1000,
+	/** Bytes read from the head of a transcript to find Claude Code's `agentSetting` entry. */
+	TRANSCRIPT_HEAD_BYTES: 256 * 1024,
+	/** Handover files newer than this are scanned for conversation ids (30 days). */
+	TRANSCRIPT_HANDOVER_SCAN_MAX_AGE_MS: 30 * 24 * 60 * 60 * 1000,
+	/** Sub-directory of a Claude home that holds per-cwd transcript folders. */
+	TRANSCRIPT_PROJECTS_DIR: 'projects',
+	/** Transcript file extension. */
+	TRANSCRIPT_EXT: '.jsonl',
+
+	// --- CREWLY_HOME/tmp and logs retention ---
+	/** Directory under CREWLY_HOME that agents and skills use as scratch space. */
+	TMP_DIR: 'tmp',
+	/** A top-level entry of CREWLY_HOME/tmp untouched for this long is removed (7 days). */
+	TMP_MAX_AGE_MS: 7 * 24 * 60 * 60 * 1000,
+	/** Sub-directories of CREWLY_HOME/tmp swept per child with their own age (ms); the directory itself stays. */
+	TMP_CHILD_POLICIES: {
+		'slack-files': 30 * 24 * 60 * 60 * 1000,
+		'slack-images': 30 * 24 * 60 * 60 * 1000,
+		'slack-pdfs': 30 * 24 * 60 * 60 * 1000,
+		'crewly-web-release': 2 * 24 * 60 * 60 * 1000,
+		'skill-output': 7 * 24 * 60 * 60 * 1000,
+	} as Readonly<Record<string, number>>,
+	/** How many levels below a tmp entry count for its "last touched" time. */
+	TMP_MTIME_DEPTH: 2,
+	/** The tmp / logs sweep runs at most this often (6 hours). */
+	TMP_SWEEP_INTERVAL_MS: 6 * 60 * 60 * 1000,
+	/** Cap on CREWLY_HOME/logs/archive; the oldest archives go first (300 MB). */
+	LOG_ARCHIVE_CAP_BYTES: 300 * 1024 ** 2,
+	/** Cap on CREWLY_HOME/logs/sessions; the oldest logs of sessions that are not live go first (100 MB). */
+	LOG_SESSIONS_CAP_BYTES: 100 * 1024 ** 2,
+	/** A log written within this long is never deleted by the cap (1 hour). */
+	LOG_CAP_MIN_AGE_MS: 60 * 60 * 1000,
+
+	// --- Low-disk thresholds relative to the disk size (crewly#1354) ---
+	/** Low disk is free < max(LOW_DISK_BYTES, this fraction of the disk) (8 %). */
+	LOW_DISK_FRACTION: 0.08,
+	/** Critical is free < max(CRITICAL_DISK_BYTES, this fraction of the disk) (3 %). */
+	CRITICAL_DISK_FRACTION: 0.03,
 } as const;
 
 /**

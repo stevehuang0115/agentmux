@@ -4,12 +4,17 @@
 
 import {
 	buildLowDiskNotice,
+	criticalDiskThresholdBytes,
+	describeFreed,
 	describeReason,
 	diskLevel,
 	idleThreshold,
+	lowDiskThresholdBytes,
 	noticeToSend,
+	readDiskSpace,
 	readFreeBytes,
 	recordNotice,
+	retentionArmed,
 } from './low-disk-guard.js';
 import { WORKTREE_JANITOR_CONSTANTS as C } from '../../constants.js';
 
@@ -28,12 +33,48 @@ describe('low-disk guard helpers', () => {
 		expect(typeof free).toBe('number');
 	});
 
-	it('diskLevel uses the 15 GB / 5 GB thresholds', () => {
+	it('diskLevel uses the 15 GB / 5 GB floors when the disk size is unknown', () => {
 		expect(diskLevel(C.LOW_DISK_BYTES)).toBe('ok');
 		expect(diskLevel(C.LOW_DISK_BYTES - 1)).toBe('low');
 		expect(diskLevel(C.CRITICAL_DISK_BYTES - 1)).toBe('critical');
 		expect(C.LOW_DISK_BYTES).toBe(15 * GB);
 		expect(C.CRITICAL_DISK_BYTES).toBe(5 * GB);
+	});
+
+	it('on a big disk the marks are 8 % / 3 % of its size (crewly#1354)', () => {
+		const disk = 926 * GB;
+		expect(lowDiskThresholdBytes(disk)).toBe(Math.round(disk * 0.08));
+		expect(criticalDiskThresholdBytes(disk)).toBe(Math.round(disk * 0.03));
+		expect(lowDiskThresholdBytes(100 * GB)).toBe(15 * GB);
+		expect(criticalDiskThresholdBytes(100 * GB)).toBe(5 * GB);
+		expect(lowDiskThresholdBytes(null)).toBe(15 * GB);
+		expect(diskLevel(52 * GB, disk)).toBe('low');
+		expect(diskLevel(80 * GB, disk)).toBe('ok');
+		expect(diskLevel(20 * GB, disk)).toBe('critical');
+		expect(diskLevel(52 * GB, 100 * GB)).toBe('ok');
+	});
+
+	it('readDiskSpace reports the total when the probe has it', async () => {
+		expect(await readDiskSpace('/x', async () => ({ bavail: 10, bsize: 4096, blocks: 100 }))).toEqual({ freeBytes: 40_960, totalBytes: 409_600 });
+		expect(await readDiskSpace('/x', async () => ({ bavail: 10, bsize: 4096 }))).toEqual({ freeBytes: 40_960, totalBytes: null });
+		expect(await readDiskSpace('/x', async () => { throw new Error('x'); })).toBeNull();
+		const real = await readDiskSpace(process.cwd());
+		expect(real?.totalBytes).toBeGreaterThan(0);
+	});
+
+	it('retentionArmed: deletes start one day after the first pass that recorded the arming time', () => {
+		const t0 = 1_000_000_000_000;
+		expect(retentionArmed({}, t0)).toBe(false);
+		expect(retentionArmed({ retentionArmedAt: t0 }, t0 + 23 * HOUR)).toBe(false);
+		expect(retentionArmed({ retentionArmedAt: t0 }, t0 + 24 * HOUR)).toBe(true);
+		expect(C.RETENTION_ARM_DELAY_MS).toBe(24 * HOUR);
+	});
+
+	it('describeFreed lists only the kinds that freed something', () => {
+		expect(describeFreed({ worktrees: 0, stripped: 0, archived: 0, transcripts: 0, tmp: 0 })).toBe('');
+		expect(describeFreed({ worktrees: 2 * GB, stripped: GB, archived: 0, transcripts: 512 * 1024 ** 2, tmp: 0 })).toBe(
+			'freed 3.5 GB (finished worktrees 2.0 GB, node_modules of idle worktrees 1.0 GB, old agent transcripts 512 MB)',
+		);
 	});
 
 	it('idleThreshold halves in low-disk mode but never below 2h', () => {
@@ -74,6 +115,20 @@ describe('low-disk guard helpers', () => {
 		expect(bullets[0]).toBe('• /tmp/item-6 (7.0 GB) — has commits that were never pushed');
 		expect(bullets[1]).toBe('• /tmp/item-5 (6.0 GB) — has changes that were never committed');
 		expect(message).not.toContain('item-1 ');
+		expect(message).toContain('your own files, downloads and app caches I never touch');
+	});
+
+	it('buildLowDiskNotice can say what was freed by kind and the disk size', () => {
+		const { message } = buildLowDiskNotice({
+			freeBytes: 50 * GB,
+			totalBytes: 926 * GB,
+			urgent: false,
+			freedBytes: 3 * GB,
+			items: [],
+			freed: { worktrees: 0, stripped: 2 * GB, archived: GB, transcripts: 0, tmp: 0 },
+		});
+		expect(message).toContain('50.0 GB of 926.0 GB free');
+		expect(message).toContain('Today I freed 3.0 GB (node_modules of idle worktrees 2.0 GB, archived worktrees 1.0 GB), but it is not enough.');
 	});
 
 	it('buildLowDiskNotice marks urgent notices and handles nothing left to list', () => {

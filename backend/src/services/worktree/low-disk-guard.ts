@@ -2,10 +2,13 @@
  * Low-disk guard — pure helpers for the disk janitor's free-space check.
  *
  * The janitor checks free space on the volume holding CREWLY_HOME every
- * 10 minutes. Below 15 GB it cleans up at once with shorter idle thresholds;
- * if space is still short it tells the owner (at most once per 24 h, or once
- * per 6 h and marked urgent below 5 GB) what it could not remove and why.
- * This file holds the decisions and the wording; the service does the I/O.
+ * 10 minutes. Below the low mark — max(15 GB, 8 % of the disk), because a
+ * ~1 TB Mac already misbehaves at 5–8 % free — it cleans up at once with
+ * shorter idle thresholds; if space is still short it tells the owner (at most
+ * once per 24 h, or once per 6 h and marked urgent below max(5 GB, 3 %)) what
+ * it freed, what it could not remove and why, and that it never touches the
+ * owner's own files. This file holds the decisions and the wording; the
+ * service does the I/O.
  *
  * @module services/worktree/low-disk-guard
  */
@@ -20,6 +23,16 @@ export interface StatFsLike {
 	bavail: number | bigint;
 	/** Block size in bytes */
 	bsize: number | bigint;
+	/** Total blocks on the volume (optional: an older probe may not report it) */
+	blocks?: number | bigint;
+}
+
+/** Free and total bytes of a volume. */
+export interface DiskSpace {
+	/** Free bytes for unprivileged users */
+	freeBytes: number;
+	/** Total bytes, or null when the probe did not report the size */
+	totalBytes: number | null;
 }
 
 /** `fs.promises.statfs`-compatible probe. */
@@ -28,12 +41,21 @@ export type StatFsFn = (p: string) => Promise<StatFsLike>;
 /** Disk level relative to the thresholds. */
 export type DiskLevel = 'ok' | 'low' | 'critical';
 
-/** When the owner was last told about low disk (persisted). */
+/** Janitor state persisted under CREWLY_HOME (notice cadence, sweep cadence, arming). */
 export interface LowDiskNoticeState {
 	/** Last notice of any kind (ms epoch) */
 	lastNoticeAt?: number;
 	/** Last urgent notice (ms epoch) */
 	lastUrgentAt?: number;
+	/**
+	 * First real pass that ran with the crewly#1354 retention code (ms epoch).
+	 * Its deletes stay dry-run until RETENTION_ARM_DELAY_MS after this.
+	 */
+	retentionArmedAt?: number;
+	/** Last transcript sweep (ms epoch) */
+	lastTranscriptSweepAt?: number;
+	/** Last tmp / logs sweep (ms epoch) */
+	lastTmpSweepAt?: number;
 }
 
 /** Something the janitor looked at and left on disk. */
@@ -54,12 +76,48 @@ export interface KeptItem {
  * @returns Free bytes for unprivileged users, or null when the probe failed
  */
 export async function readFreeBytes(p: string, statfs: StatFsFn = defaultStatFs): Promise<number | null> {
+	return (await readDiskSpace(p, statfs))?.freeBytes ?? null;
+}
+
+/**
+ * Free and total bytes of the volume holding `p`.
+ *
+ * @param p - Any path on the volume
+ * @param statfs - Probe (default `fs.promises.statfs`)
+ * @returns Free and total bytes, or null when the probe failed
+ */
+export async function readDiskSpace(p: string, statfs: StatFsFn = defaultStatFs): Promise<DiskSpace | null> {
 	try {
 		const s = await statfs(p);
-		return Number(s.bavail) * Number(s.bsize);
+		const bsize = Number(s.bsize);
+		const total = s.blocks === undefined ? null : Number(s.blocks) * bsize;
+		return { freeBytes: Number(s.bavail) * bsize, totalBytes: total !== null && Number.isFinite(total) && total > 0 ? total : null };
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * The low-disk mark for a volume: the absolute floor or a fraction of the
+ * disk, whichever is larger. A 926 GB disk gets ~74 GB, a 100 GB disk 15 GB.
+ *
+ * @param totalBytes - Disk size, or null when unknown (the floor is used)
+ * @returns Bytes below which free space counts as low
+ */
+export function lowDiskThresholdBytes(totalBytes: number | null): number {
+	const floor = WORKTREE_JANITOR_CONSTANTS.LOW_DISK_BYTES;
+	return totalBytes ? Math.max(floor, Math.round(totalBytes * WORKTREE_JANITOR_CONSTANTS.LOW_DISK_FRACTION)) : floor;
+}
+
+/**
+ * The critical mark for a volume: max(5 GB, 3 % of the disk).
+ *
+ * @param totalBytes - Disk size, or null when unknown (the floor is used)
+ * @returns Bytes below which free space counts as critical
+ */
+export function criticalDiskThresholdBytes(totalBytes: number | null): number {
+	const floor = WORKTREE_JANITOR_CONSTANTS.CRITICAL_DISK_BYTES;
+	return totalBytes ? Math.max(floor, Math.round(totalBytes * WORKTREE_JANITOR_CONSTANTS.CRITICAL_DISK_FRACTION)) : floor;
 }
 
 async function defaultStatFs(p: string): Promise<StatFsLike> {
@@ -67,15 +125,34 @@ async function defaultStatFs(p: string): Promise<StatFsLike> {
 }
 
 /**
- * Classify free space.
+ * Classify free space against the volume's marks.
  *
  * @param freeBytes - Free bytes
- * @returns `critical` below CRITICAL_DISK_BYTES, `low` below LOW_DISK_BYTES, else `ok`
+ * @param totalBytes - Disk size (null / omitted: the absolute floors apply)
+ * @returns `critical` below the critical mark, `low` below the low mark, else `ok`
+ *
+ * @example
+ * ```typescript
+ * diskLevel(50 * GB, 926 * GB); // 'low' (mark is 8 % = 74 GB)
+ * diskLevel(50 * GB);           // 'ok'  (no size: 15 GB floor)
+ * ```
  */
-export function diskLevel(freeBytes: number): DiskLevel {
-	if (freeBytes < WORKTREE_JANITOR_CONSTANTS.CRITICAL_DISK_BYTES) return 'critical';
-	if (freeBytes < WORKTREE_JANITOR_CONSTANTS.LOW_DISK_BYTES) return 'low';
+export function diskLevel(freeBytes: number, totalBytes: number | null = null): DiskLevel {
+	if (freeBytes < criticalDiskThresholdBytes(totalBytes)) return 'critical';
+	if (freeBytes < lowDiskThresholdBytes(totalBytes)) return 'low';
 	return 'ok';
+}
+
+/**
+ * Whether the crewly#1354 retention deletes are armed: the first real pass
+ * records the time and only logs; deletes start RETENTION_ARM_DELAY_MS later.
+ *
+ * @param state - Janitor state
+ * @param now - Current time (ms)
+ * @returns True when deletes may run
+ */
+export function retentionArmed(state: LowDiskNoticeState, now: number): boolean {
+	return state.retentionArmedAt !== undefined && now - state.retentionArmedAt >= WORKTREE_JANITOR_CONSTANTS.RETENTION_ARM_DELAY_MS;
 }
 
 /**
@@ -127,6 +204,37 @@ export function recordNotice(state: LowDiskNoticeState, kind: 'urgent' | 'normal
 	return { ...state, lastNoticeAt: now, ...(kind === 'urgent' ? { lastUrgentAt: now } : {}) };
 }
 
+/** What one pass freed, by kind (bytes), for the owner line. */
+export interface FreedBreakdown {
+	/** Finished worktrees and scratch dirs removed */
+	worktrees: number;
+	/** node_modules / build output stripped from kept worktrees */
+	stripped: number;
+	/** Worktrees archived as a patch and removed */
+	archived: number;
+	/** Agent transcripts pruned */
+	transcripts: number;
+	/** CREWLY_HOME/tmp and logs */
+	tmp: number;
+}
+
+/**
+ * One short line of what a pass freed, by kind; empty when nothing was.
+ *
+ * @param freed - Bytes freed per kind
+ * @returns `"freed 3.2 GB (worktrees 2.1 GB, node_modules 1.1 GB)"` or ''
+ */
+export function describeFreed(freed: FreedBreakdown): string {
+	const parts: string[] = [];
+	if (freed.worktrees > 0) parts.push(`finished worktrees ${formatBytes(freed.worktrees)}`);
+	if (freed.stripped > 0) parts.push(`node_modules of idle worktrees ${formatBytes(freed.stripped)}`);
+	if (freed.archived > 0) parts.push(`archived worktrees ${formatBytes(freed.archived)}`);
+	if (freed.transcripts > 0) parts.push(`old agent transcripts ${formatBytes(freed.transcripts)}`);
+	if (freed.tmp > 0) parts.push(`temp files and logs ${formatBytes(freed.tmp)}`);
+	const total = freed.worktrees + freed.stripped + freed.archived + freed.transcripts + freed.tmp;
+	return total > 0 ? `freed ${formatBytes(total)} (${parts.join(', ')})` : '';
+}
+
 const REASON_TEXT: Record<string, string> = {
 	dirty: 'has changes that were never committed',
 	'not-merged': 'has work that is not merged yet',
@@ -144,6 +252,10 @@ const REASON_TEXT: Record<string, string> = {
 	'status-failed': 'git could not read it',
 	'git-failed': 'git could not read it',
 	'remove-failed': 'deleting it failed',
+	'archive-failed': 'saving its changes as a patch failed, so it stays',
+	'contains-git': 'holds a git checkout, which only the worktree rules may remove',
+	'live-session': 'is the conversation of a running agent',
+	foreign: 'is not an agent conversation',
 };
 
 /**
@@ -168,14 +280,22 @@ export function buildLowDiskNotice(input: {
 	urgent: boolean;
 	freedBytes: number;
 	items: KeptItem[];
+	/** Optional breakdown of what was freed (replaces the plain "cleaned up X" line) */
+	freed?: FreedBreakdown;
+	/** Optional: total disk size, so the owner sees the mark that was crossed */
+	totalBytes?: number | null;
 }): { title: string; message: string } {
 	const title = input.urgent ? 'URGENT: disk almost full' : 'Disk space is running low';
 	const lines: string[] = [];
-	lines.push(`Only ${formatBytes(input.freeBytes)} free on this machine.${input.urgent ? ' Crewly and the agents may stop working soon.' : ''}`);
+	const ofDisk = input.totalBytes ? ` of ${formatBytes(input.totalBytes)}` : '';
+	lines.push(`Only ${formatBytes(input.freeBytes)}${ofDisk} free on this machine.${input.urgent ? ' Crewly and the agents may stop working soon.' : ''}`);
+	const breakdown = input.freed ? describeFreed(input.freed) : '';
 	lines.push(
-		input.freedBytes > 0
-			? `I cleaned up ${formatBytes(input.freedBytes)} of finished work, but it is not enough.`
-			: 'I found nothing more that is safe to delete on my own.',
+		breakdown
+			? `Today I ${breakdown}, but it is not enough.`
+			: input.freedBytes > 0
+				? `I cleaned up ${formatBytes(input.freedBytes)} of finished work, but it is not enough.`
+				: 'I found nothing more that is safe to delete on my own.',
 	);
 	const top = [...input.items].sort((a, b) => b.bytes - a.bytes).slice(0, WORKTREE_JANITOR_CONSTANTS.LOW_DISK_REPORT_ITEMS);
 	if (top.length > 0) {
@@ -185,5 +305,6 @@ export function buildLowDiskNotice(input: {
 	} else {
 		lines.push('Please free up some space.');
 	}
+	lines.push('I only clean what agents left behind (worktrees, scratch dirs, agent transcripts, Crewly temp files and logs); your own files, downloads and app caches I never touch.');
 	return { title, message: lines.join('\n') };
 }
