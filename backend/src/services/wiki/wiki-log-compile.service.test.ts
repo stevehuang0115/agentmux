@@ -137,4 +137,31 @@ describe('WikiLogCompileService', () => {
       await fs.rm(broken, { recursive: true, force: true });
     }
   });
+
+  it('gives work records their own sections and renders task titles, never ticket ids (#1349)', async () => {
+    const record = (title: string, asked: string, done: string, outcome: string, extra: string, meta: string): string =>
+      [`(record) **${title}** — ${outcome}`, `asked by: ${asked} — "please"`, `done by: ${done}`, 'did: the work', extra, `outcome: ${outcome}, 12 min`, `meta: ${meta}`].filter(Boolean).join('\n');
+    await writeLog(
+      serializeLogEntry({ timestamp: new Date(NOW - 2 * DAY).toISOString(), sourceType: 'work_record', caller: 'nova', ref: 'work-record:a#final', body: record('Update the news section', 'Owen (team lead)', 'Nova', 'verified by Owen', 'outputs: https://example.com/pr/1; 2 checks passed\nerrors: Bash `npm test` exit 1 (fixed)\nhelpers: delegated to Leo: "check claims" → done; reviewed by Owen', 'wi=a phase=final status=verified ticket=CE-376 done_by=nova') }) +
+        serializeLogEntry({ timestamp: new Date(NOW - DAY).toISOString(), sourceType: 'work_record', caller: 'leo', ref: 'work-record:b#final', body: record('Check the legal claims', 'Nova', 'Leo', 'done (no review)', 'helpers: asked Ella → answered', 'wi=b phase=final status=done ticket=CE-377 done_by=leo') }) +
+        serializeLogEntry({ timestamp: new Date(NOW - DAY).toISOString(), sourceType: 'work_record', caller: 'nova', ref: 'work-record:c#final', body: record('Translate the note', 'Owen (team lead)', 'Nova', 'rejected by Owen', '', 'wi=c phase=final status=rejected ticket=CE-378 done_by=nova') }) +
+        entry(1, '(gotcha) complete-task rejects queued→done; accept-task first.', 'leo'),
+    );
+    const r = await service.compile(vault, { now: NOW });
+    expect(r).toMatchObject({ compiled: true, entriesCompiled: 4, groups: 1 });
+    const page = parsePage(await fs.readFile(path.join(vault, r.pagePath!), 'utf8'));
+    expect(page.frontmatter.summary).toContain('3 work records and 1 learnings');
+    expect(page.body).toContain('### Work done (3)');
+    expect(page.body).toContain('**Update the news section** — asked by Owen (team lead) → done by Nova → the work → outputs: https://example.com/pr/1; 2 checks passed → verified by Owen, 12 min');
+    expect(page.body).toContain('### Errors and fixes (1)');
+    expect(page.body).toContain('Update the news section (Nova): Bash `npm test` exit 1 (fixed)');
+    expect(page.body).toContain('### Collaboration (3 pairs)');
+    expect(page.body).toContain('- Owen → Nova: 2 delegations, 1 review');
+    expect(page.body).toContain('- Nova → Leo: 2 delegations');
+    expect(page.body).toContain('- Leo → Ella: 1 ask answered');
+    expect(page.body).toContain('### gotcha (1)');
+    expect(page.body.indexOf('### Work done')).toBeLessThan(page.body.indexOf('### gotcha'));
+    expect(page.body).not.toContain('CE-37');
+    expect(page.body).not.toContain('meta:');
+  });
 });

@@ -48,7 +48,9 @@ export type WikiSourceType =
   /** An experiment result (backend only; specs/experiment-cards.md) */
   | 'experiment'
   /** A daily ticket-autopilot retro (backend only; specs/2026-10-03-autopilot-experiments.md) */
-  | 'autopilot_retro';
+  | 'autopilot_retro'
+  /** An automatic per-task work record (backend only; specs/2026-10-17-work-records.md) */
+  | 'work_record';
 
 export interface WikiIngestInput {
   /** Absolute path to the vault root (containing SCHEMA.md). */

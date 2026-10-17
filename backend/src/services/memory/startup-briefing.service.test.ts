@@ -104,6 +104,32 @@ describe('StartupBriefingService', () => {
     expect(md.length).toBeLessThanOrEqual(STARTUP_BRIEFING_CONSTANTS.MAX_CHARS);
   });
 
+  it("lists the agent's recent work records in their own section and keeps them out of the lessons (#1349)", async () => {
+    await seedVault();
+    const record = (id: string, title: string, age: number): string => serializeLogEntry({
+      timestamp: new Date(NOW - age * 3_600_000).toISOString(),
+      sourceType: 'work_record',
+      caller: AGENT,
+      ref: `work-record:${id}#final`,
+      body: `(record) **${title}** — verified by Owen\nasked by: Owen (team lead) — "please"\ndone by: Leo\ndid: the work\noutputs: https://example.com/pr/${id}\noutcome: verified by Owen, 10 min\nmeta: wi=${id} phase=final status=verified ticket=CREW-${id} done_by=${AGENT}`,
+    });
+    const records = Array.from({ length: 7 }, (_, i) => record(`w${i}`, `Task number ${i}`, i + 1)).join('');
+    await fs.appendFile(path.join(vault, 'llm-curated/log.md'), records + serializeLogEntry({ timestamp: new Date(NOW - DAY).toISOString(), sourceType: 'work_record', caller: 'someone-else', ref: 'work-record:x#final', body: '(record) **Not mine** — done (no review)\nasked by: Owen\ndone by: Someone\noutcome: done (no review)\nmeta: wi=x' }), 'utf8');
+
+    const md = await build().build({ sessionName: AGENT, role: 'developer', projectPath: project });
+    expect(md).toContain('### Your recent work (last 7 days)');
+    const work = md.slice(md.indexOf('### Your recent work'), md.indexOf('### Your lessons'));
+    expect(work.match(/^- /gm)).toHaveLength(5);
+    expect(work).toContain('**Task number 0** — asked by Owen (team lead) — done by Leo — outputs: https://example.com/pr/w0 → verified by Owen, 10 min');
+    expect(work).not.toContain('Task number 5');
+    expect(work).not.toContain('Not mine');
+    expect(work).not.toContain('CREW-');
+    const lessons = md.slice(md.indexOf('### Your lessons'), md.indexOf('### Recently changed pages'));
+    expect(lessons).not.toContain('(record)');
+    expect(lessons).toContain('(gotcha) rebase before pushing');
+    expect(md.indexOf('### Your recent work')).toBeLessThan(md.indexOf('### Your lessons'));
+  });
+
   it('stays under the cap by trimming the index first', async () => {
     await seedVault();
     const lines = Array.from({ length: 400 }, (_, i) => `- [Page ${i}](llm-curated/decisions/p${i}.md) — ${'summary words '.repeat(12)}`).join('\n');

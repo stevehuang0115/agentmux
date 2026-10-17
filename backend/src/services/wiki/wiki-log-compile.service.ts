@@ -13,6 +13,9 @@
  * not compile them again. No LLM; an agent can still rewrite a digest into
  * a proper topic page.
  *
+ * Work records (#1349, `work_record` entries) get their own sections ahead
+ * of the learning groups: "Work done", "Errors and fixes", "Collaboration".
+ *
  * @module services/wiki/wiki-log-compile.service
  */
 
@@ -30,6 +33,13 @@ import {
   recentContentEntries,
   type WikiLogEntryRecord,
 } from './wiki-log-entries.js';
+import { isWorkRecordEntry, parseWorkRecordBody, type ParsedWorkRecord } from './work-record.js';
+
+/** A work record entry with its parsed fields. */
+interface DigestRecord {
+  entry: WikiLogEntryRecord;
+  parsed: ParsedWorkRecord;
+}
 
 /** Persisted per-vault compile bookkeeping. */
 interface CompileState {
@@ -145,16 +155,20 @@ export class WikiLogCompileService {
 
     const week = isoWeekLabel(now);
     const pagePath = `${WIKI_LOG_CONSTANTS.COMPILE_DIR}/${week}.md`;
-    const groups = this.group(candidates);
-    const body = this.renderBody(groups, candidates, now);
+    const { records, others } = this.splitRecords(candidates);
+    const groups = this.group(others);
+    const body = this.renderBody(groups, candidates, now, records);
     const result: WikiLogCompileResult = { ...base, compiled: true, entriesCompiled: candidates.length, pagePath, groups: groups.length };
 
     if (dryRun) {
-      this.logger.info('WikiLogCompile dry run — would write digest', { vaultPath, pagePath, entries: candidates.length, groups: groups.length });
+      this.logger.info('WikiLogCompile dry run — would write digest', { vaultPath, pagePath, entries: candidates.length, groups: groups.length, records: records.length });
       return result;
     }
 
-    const counts = this.categoryCounts(candidates);
+    const counts = this.categoryCounts(others);
+    const summaryLead = records.length > 0
+      ? `${records.length} work record${records.length === 1 ? '' : 's'}${others.length > 0 ? ` and ${others.length} learnings (${counts})` : ''} from the vault log`
+      : `${candidates.length} learnings from the vault log (${counts})`;
     const outcome = await this.ingest.ingest({
       vaultPath,
       sourceType: 'record_learning',
@@ -163,7 +177,7 @@ export class WikiLogCompileService {
       callerSession: 'system:wiki-log-compile',
       targetRelativePath: pagePath,
       title: `Digest ${week}`,
-      summary: `${candidates.length} learnings from the vault log (${counts}) compiled ${new Date(now).toISOString().slice(0, 10)} — read before working on these topics; promote what still matters to its own page.`,
+      summary: `${summaryLead} compiled ${new Date(now).toISOString().slice(0, 10)} — read before working on these topics; promote what still matters to its own page.`,
       keepBecause: 'reusable_method',
       tags: ['digest', week],
     });
@@ -243,18 +257,41 @@ export class WikiLogCompileService {
   }
 
   /**
-   * Markdown body of one compile run: a dated heading, then one `###` per
+   * Separate work records (#1349) from learnings. A record whose body does
+   * not parse is kept as a learning so nothing is dropped.
+   *
+   * @param entries - Candidate entries
+   * @returns Records with parsed fields, and the rest
+   */
+  private splitRecords(entries: readonly WikiLogEntryRecord[]): { records: DigestRecord[]; others: WikiLogEntryRecord[] } {
+    const records: DigestRecord[] = [];
+    const others: WikiLogEntryRecord[] = [];
+    for (const e of entries) {
+      const parsed = isWorkRecordEntry(e) ? parseWorkRecordBody(e.body) : null;
+      if (parsed) records.push({ entry: e, parsed });
+      else others.push(e);
+    }
+    return { records, others };
+  }
+
+  /**
+   * Markdown body of one compile run: a dated heading; when the run holds
+   * work records, `### Work done`, `### Errors and fixes` and
+   * `### Collaboration` (the digest renders task titles, never ticket ids —
+   * those stay on each record's `meta:` line); then one `###` per learning
    * group with one bullet per entry (author, date, body clipped).
    *
-   * @param groups - Grouped entries
+   * @param groups - Grouped learning entries
    * @param all - All entries in the run (for the date range)
    * @param now - Epoch ms of the run
+   * @param records - Work records in the run
    * @returns Markdown
    */
-  private renderBody(groups: ReadonlyArray<{ label: string; members: WikiLogEntryRecord[] }>, all: readonly WikiLogEntryRecord[], now: number): string {
+  private renderBody(groups: ReadonlyArray<{ label: string; members: WikiLogEntryRecord[] }>, all: readonly WikiLogEntryRecord[], now: number, records: readonly DigestRecord[] = []): string {
     const first = all[0]?.timestamp.slice(0, 10) ?? '';
     const last = all[all.length - 1]?.timestamp.slice(0, 10) ?? '';
     const lines: string[] = [`## Compiled ${new Date(now).toISOString().slice(0, 10)} — ${all.length} entries from ${first} to ${last}`, ''];
+    if (records.length > 0) lines.push(...this.renderRecordSections(records));
     for (const g of groups) {
       lines.push(`### ${g.label} (${g.members.length})`, '');
       for (const e of g.members) {
@@ -265,6 +302,66 @@ export class WikiLogCompileService {
       lines.push('');
     }
     return lines.join('\n').trim();
+  }
+
+  /**
+   * The three record sections. "Work done" lists every record (asked by →
+   * done by → outputs → outcome); "Errors and fixes" the records that met
+   * errors; "Collaboration" counts, per pair, delegations, asks and reviews.
+   *
+   * @param records - Records of the run, oldest first
+   * @returns Markdown lines (each section followed by a blank line)
+   */
+  private renderRecordSections(records: readonly DigestRecord[]): string[] {
+    const lines: string[] = [`### Work done (${records.length})`, ''];
+    for (const { entry, parsed } of records) {
+      const parts = [`asked by ${parsed.askedBy || 'unknown'}`, `done by ${parsed.doneBy || 'unknown'}`];
+      if (parsed.did) parts.push(this.clipText(parsed.did, WIKI_LOG_CONSTANTS.COMPILE_ENTRY_MAX_CHARS / 2));
+      if (parsed.outputs.length) parts.push(`outputs: ${parsed.outputs.slice(0, 3).join('; ')}`);
+      lines.push(`- ${entry.timestamp.slice(0, 10)} · **${parsed.title}** — ${parts.join(' → ')} → ${parsed.outcome || 'unknown'}`);
+    }
+    lines.push('');
+
+    const withErrors = records.filter((r) => r.parsed.errors.length > 0);
+    if (withErrors.length > 0) {
+      lines.push(`### Errors and fixes (${withErrors.length})`, '');
+      for (const { entry, parsed } of withErrors) {
+        lines.push(`- ${entry.timestamp.slice(0, 10)} · ${parsed.title} (${parsed.doneBy || 'unknown'}): ${this.clipText(parsed.errors.join('; '), WIKI_LOG_CONSTANTS.COMPILE_ENTRY_MAX_CHARS)}`);
+      }
+      lines.push('');
+    }
+
+    const pairs = new Map<string, Map<string, number>>();
+    const count = (from: string, to: string, how: string): void => {
+      if (!from || !to || from === to) return;
+      const key = `${from} → ${to}`;
+      const byHow = pairs.get(key) ?? new Map<string, number>();
+      byHow.set(how, (byHow.get(how) ?? 0) + 1);
+      pairs.set(key, byHow);
+    };
+    for (const { parsed } of records) {
+      const asker = parsed.askedBy.replace(/\s*\((?:team lead|orchestrator)\)/, '').replace(/\s+for the owner.*$/, '').replace(/\s*\([^)]*\)$/, '').trim();
+      if (asker && !asker.startsWith('schedule') && asker !== 'Crewly (system)') count(asker, parsed.doneBy, 'delegation');
+      for (const h of parsed.helpers) {
+        if (h.how === 'delegated') count(parsed.doneBy, h.name, 'delegation');
+        else if (h.how === 'asked') count(parsed.doneBy, h.name, h.rest.includes('answered') ? 'ask answered' : 'ask unanswered');
+        else count(h.name, parsed.doneBy, 'review');
+      }
+    }
+    if (pairs.size > 0) {
+      lines.push(`### Collaboration (${pairs.size} pair${pairs.size === 1 ? '' : 's'})`, '');
+      const rows = [...pairs.entries()]
+        .map(([pair, byHow]) => ({ pair, total: [...byHow.values()].reduce((a, b) => a + b, 0), detail: [...byHow.entries()].sort((a, b) => b[1] - a[1]).map(([how, n]) => `${n} ${how}${n === 1 || how.endsWith('answered') ? '' : 's'}`).join(', ') }))
+        .sort((a, b) => b.total - a.total || a.pair.localeCompare(b.pair));
+      for (const r of rows) lines.push(`- ${r.pair}: ${r.detail}`);
+      lines.push('');
+    }
+    return lines;
+  }
+
+  private clipText(text: string, max: number): string {
+    const flat = text.replace(/\s+/g, ' ').trim();
+    return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
   }
 
   private statePath(vaultPath: string): string {
