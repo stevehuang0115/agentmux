@@ -60,6 +60,8 @@ export interface ExtractOptions {
   colleagueNames?: readonly string[];
   /** The owner's Slack user id: an @-mention of anyone else makes a sentence not for the owner */
   ownerSlackUserId?: string;
+  /** Due time of a commitment that names none (ms after `now`); default {@link OPEN_ITEMS_CONSTANTS.DEFAULT_DUE_MS} */
+  defaultDueMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -426,19 +428,99 @@ function explicitDate(s: string, now: Date): Date | null {
   return due;
 }
 
+/** Chinese numerals a duration is written with ("两小时", "三十分钟"). */
+const ZH_DIGITS: Record<string, number> = { 零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+
+/**
+ * The number a numeral token names: ASCII digits ("1.5"), Chinese numerals up
+ * to 99 ("两", "十五", "二十", "三十五"), "半" (0.5), or an approximate pair of
+ * consecutive numerals ("一两", "两三", "三四" → the upper one).
+ *
+ * @param token - Numeral token
+ * @returns The number, or null when it is not one
+ */
+export function numeralValue(token: string): number | null {
+  const n = token.trim();
+  if (!n) return null;
+  if (/^\d+(?:\.\d+)?$/.test(n)) return Number(n);
+  if (n === '半') return 0.5;
+  if (n.includes('十')) {
+    const [tens, ones = ''] = n.split('十');
+    const t = tens === '' ? 1 : ZH_DIGITS[tens];
+    const o = ones === '' ? 0 : ZH_DIGITS[ones];
+    return t === undefined || o === undefined || n.split('十').length > 2 ? null : t * 10 + o;
+  }
+  const chars = [...n];
+  if (chars.length === 1) return ZH_DIGITS[chars[0]] ?? null;
+  if (chars.length === 2) {
+    const [a, b] = chars.map((c) => ZH_DIGITS[c]);
+    // "一两个小时", "两三天": a range said as two numerals — the upper bound.
+    if (a !== undefined && b !== undefined && b === a + 1) return b;
+  }
+  return null;
+}
+
+/** A numeral token: digits, Chinese numerals, or 半. */
+const NUMERAL = '(?:\\d+(?:\\.\\d+)?|[零一二两三四五六七八九十]{1,3}|半)';
+/** A duration unit. */
+const UNIT = '(小时|hours?|hrs?|分钟|minutes?|mins?|天|days?)';
+/**
+ * A relative duration, possibly a range ("1.5 到 2 小时", "40–60 分钟",
+ * "一两个小时", "2 to 3 hours"), optionally "N 个半小时" (N.5 hours).
+ */
+const DURATION = new RegExp(`(${NUMERAL})(?:\\s*(?:到|至|[–—~-]|\\s+to\\s+)\\s*(${NUMERAL}))?\\s*(?:个\\s*(半)?)?\\s*${UNIT}`, 'iu');
+
+/**
+ * Milliseconds of a duration named in the text: "2 小时", "两小时", "三十分钟",
+ * "一个半小时", "半天", "一天", "1.5 到 2 小时" (a range → its upper bound),
+ * "an hour", "a couple of hours", "half a day". "左右", "大约", "约", "大概"
+ * do not change the number.
+ *
+ * @param s - Sentence (any case)
+ * @returns Milliseconds, or null when no duration is named
+ *
+ * @example
+ * durationMs('预计一小时左右') // → 3600000
+ * durationMs('40 到 60 分钟')  // → 3600000
+ */
+export function durationMs(s: string): number | null {
+  const t = s.toLowerCase();
+  const m = DURATION.exec(t);
+  if (m) {
+    const lower = numeralValue(m[1]);
+    const upper = m[2] ? numeralValue(m[2]) : null;
+    let n = upper ?? lower;
+    if (n === null) return null;
+    if (m[3]) n += 0.5;
+    const unit = m[4];
+    const per = /小时|hour|hr/.test(unit) ? 3600_000 : /天|day/.test(unit) ? 24 * 3600_000 : 60_000;
+    const ms = n * per;
+    return ms > 0 ? ms : null;
+  }
+  if (/半小时|half an hour/.test(t)) return 1800_000;
+  if (/半天|half a day/.test(t)) return 12 * 3600_000;
+  if (/\ba couple of hours\b/.test(t)) return 2 * 3600_000;
+  if (/\ban? (?:hour|hr)\b/.test(t)) return 3600_000;
+  if (/\ba day\b/.test(t)) return 24 * 3600_000;
+  return null;
+}
+
 /**
  * When a commitment is due.
  *
  * Rules (local time): an explicit date (10/7, 10月7日, 2026-10-07) wins over everything; an explicit day/part of day wins ("明天中午" → tomorrow
  * 12:00, "tonight" → today 21:00, "by Friday" → Friday 12:00); "tomorrow"
  * alone → tomorrow {@link OPEN_ITEMS_CONSTANTS.DEFAULT_DUE_HOUR_LOCAL}:00;
- * "in 2 hours" → +2 h; nothing → +{@link OPEN_ITEMS_CONSTANTS.DEFAULT_DUE_MS}.
+ * "in 2 hours" / "两小时" / "一两个小时" / "40 到 60 分钟" → + that long (the
+ * upper bound of a range, see {@link durationMs}); nothing → +`defaultMs`
+ * ({@link OPEN_ITEMS_CONSTANTS.DEFAULT_DUE_MS} unless the caller says otherwise).
  *
  * @param s - Sentence
  * @param now - When it was said
+ * @param defaultMs - Due this long after `now` when the text names no time
  * @returns Due time and whether the text named it
  */
-export function parseDue(s: string, now: Date): { due: Date; source: 'text' | 'default' } {
+export function parseDue(s: string, now: Date, defaultMs: number = OPEN_ITEMS_CONSTANTS.DEFAULT_DUE_MS): { due: Date; source: 'text' | 'default' } {
   const t = s.toLowerCase();
   const defaultHour = OPEN_ITEMS_CONSTANTS.DEFAULT_DUE_HOUR_LOCAL;
   const text = (due: Date): { due: Date; source: 'text' } => ({ due, source: 'text' });
@@ -447,13 +529,8 @@ export function parseDue(s: string, now: Date): { due: Date; source: 'text' | 'd
   const dated = explicitDate(s, now);
   if (dated) return text(dated);
 
-  const rel = /(\d+(?:\.\d+)?)\s*(?:个)?\s*(小时|hours?|hrs?|分钟|minutes?|mins?)/.exec(t);
-  if (rel) {
-    const n = Number(rel[1]);
-    const ms = /小时|hour|hr/.test(rel[2]) ? n * 3600_000 : n * 60_000;
-    if (ms > 0) return text(new Date(now.getTime() + ms));
-  }
-  if (/半小时|half an hour/.test(t)) return text(new Date(now.getTime() + 1800_000));
+  const rel = durationMs(s);
+  if (rel !== null) return text(new Date(now.getTime() + rel));
 
   // "晚点" / "早点" mean later / sooner, not evening / morning.
   const part = partOfDayHour(t.replace(/晚点|早点|晚些|早些/g, ''));
@@ -491,7 +568,29 @@ export function parseDue(s: string, now: Date): { due: Date; source: 'text' | 'd
   if (/稍后|待会|一会儿|晚点|马上|soon|shortly|in a bit|later/.test(t)) {
     return text(new Date(now.getTime() + 2 * 3600_000));
   }
-  return { due: new Date(now.getTime() + OPEN_ITEMS_CONSTANTS.DEFAULT_DUE_MS), source: 'default' };
+  return { due: new Date(now.getTime() + defaultMs), source: 'default' };
+}
+
+/** Words that frame a time as an estimate ("预计明天中午能好", "应该今晚能好", "should be done by tonight", "ETA tonight"). */
+const ESTIMATE_CUE = /预计|预估|估计|大约|大概|左右|应该|\beta\b|estimat|about|around|roughly|approx|should\b|within/iu;
+
+/**
+ * The due time an estimate sentence states, for a commitment sentence that
+ * names none: a duration ("预计一小时左右", "大约 2 小时", "ETA 30 min") or a
+ * time framed as an estimate ({@link ESTIMATE_CUE}: "预计明天中午能好"), in a
+ * sentence that is not itself a commitment or a question — "预计一小时左右。"
+ * after "改完发你。" dates the promise; "明天中午给你另一份。" is its own
+ * promise and leaves it alone.
+ *
+ * @param s - The neighbouring sentence (undefined when there is none)
+ * @param now - When it was said
+ * @returns The due time, or null
+ */
+export function estimateDue(s: string | undefined, now: Date): Date | null {
+  if (!s || isCommitment(s) || /[?？]\s*[)）]?$/.test(s.trim())) return null;
+  if (durationMs(s) === null && !ESTIMATE_CUE.test(s)) return null;
+  const parsed = parseDue(s, now);
+  return parsed.source === 'text' ? parsed.due : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -670,7 +769,13 @@ export function extractOpenItems(text: string, opts: ExtractOptions): ExtractedO
     // Any other question is not a promise either.
     if (/[?？]\s*[)）]?$/.test(s.trim())) continue;
     if (out.commitments.length < max && !addressedToColleague(s, opts) && isCommitment(s)) {
-      const { due, source } = parseDue(s, opts.now);
+      let { due, source } = parseDue(s, opts.now, opts.defaultDueMs);
+      // The estimate often sits in the sentence after (or before) the promise:
+      // "改完后我起全新评审 Agent 跑 2 轮，再发你。预计一小时左右。" (crewly#1360).
+      if (source === 'default') {
+        const estimated = estimateDue(next, opts.now) ?? estimateDue(sentence.line[sentence.index - 1], opts.now);
+        if (estimated) [due, source] = [estimated, 'text'];
+      }
       out.commitments.push({ type: 'commitment', text: clip(s, OPEN_ITEMS_CONSTANTS.TEXT_MAX_CHARS), due, dueSource: source, ...(waitsOnOwner(s) ? { waitsOnOwner: true } : {}) });
     }
   }

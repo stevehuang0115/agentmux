@@ -3632,6 +3632,36 @@ export const HANDOVER_POINTERS_CONSTANTS = {
 } as const;
 
 /**
+ * Work a restart cut off inside an agent's conversation (crewly#1361): a
+ * Claude Code transcript whose `tool_use` never received its `tool_result`
+ * before the cutoff. Sub-agents (Task / Agent tool) and background or
+ * long-running shell commands die with the process; the handover says so
+ * instead of carrying the agent's last "still in progress" narration.
+ */
+export const HANDOVER_CONSTANTS = {
+	/** Heading of the section listing the interrupted work */
+	INTERRUPTED_HEADING: '## Interrupted by the restart',
+	/** At most this many interrupted calls are listed */
+	INTERRUPTED_MAX_ITEMS: 5,
+	/** Characters kept of a sub-agent's prompt / a command */
+	INTERRUPTED_TEXT_MAX_CHARS: 200,
+	/** Tool names that start a sub-agent inside the conversation */
+	SUBAGENT_TOOLS: ['Task', 'Agent'] as readonly string[],
+	/** Tool names that run shell commands */
+	SHELL_TOOLS: ['Bash'] as readonly string[],
+	/**
+	 * A shell command that looks long-running (a render, encode, build or a
+	 * command sent to the background) even without `run_in_background`
+	 */
+	LONG_COMMAND_PATTERN: /\b(?:ffmpeg|remotion|render|encode|transcode|whisper|nohup|caffeinate|npm run build|npx tsc)\b|&\s*$|\bsleep\s+\d{3,}/i,
+	/** Bullet prefixes of the section (also how the pointers header reads it back) */
+	SUBAGENT_LINE_PREFIX: '- A sub-agent was running: ',
+	COMMAND_LINE_PREFIX: '- A background command was running: ',
+	SUBAGENT_LINE_SUFFIX: '. It did not finish and is not running now. Restart it or report that it was lost.',
+	COMMAND_LINE_SUFFIX: '. It is not running now.',
+} as const;
+
+/**
  * Fresh conversation per new task for Claude Code team members (never the
  * orchestrator): before a work item with a different root than the last one
  * is delivered, the old conversation is saved (handover file + memory) and
@@ -7534,6 +7564,18 @@ export const OPEN_ITEMS_CONSTANTS = {
 	DEFAULT_DUE_HOUR_LOCAL: 12,
 	/** A commitment with no time is due this long after it was made (ms) */
 	DEFAULT_DUE_MS: 24 * 60 * 60 * 1000,
+	/**
+	 * A commitment with no time made live in the owner's conversation (the
+	 * owner is waiting for the reply) is due this long after it was made (ms).
+	 * Backfilled and gate-opened promises keep DEFAULT_DUE_MS (crewly#1360).
+	 */
+	CHAT_PROMISE_DEFAULT_DUE_MS: 4 * 60 * 60 * 1000,
+	/**
+	 * An estimate the same agent states in the same thread this long after an
+	 * undated promise ("预计一小时左右" a minute after "改完发你") dates that
+	 * promise (ms) (crewly#1360)
+	 */
+	ESTIMATE_WINDOW_MS: 10 * 60 * 1000,
 	/** The same words by the same agent this close together are one item (a reply recorded twice) (ms) */
 	DUPLICATE_WINDOW_MS: 10 * 60 * 1000,
 	/** The same agent's two promises this close together, about the same deliverable, are one (the newer stands) (ms) */

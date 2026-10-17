@@ -13,7 +13,7 @@ import type { OwnerDecision } from '../../types/decision.types.js';
 import type { ComponentLogger } from '../core/logger.service.js';
 import { OpenItemsService, isConcreteInterimPromise, markRestartReminded, owedCommitments, plausiblyFulfils, supersededReason, type OpenItemsDeps, type OpenItemsChatMessage, type QuestionCardInput, type FollowUpInput } from './open-items.service.js';
 import { planCommitmentNotes } from '../restart/interrupted-turns.js';
-import { buildFollowUpWorkItem } from './open-items.wiring.js';
+import { buildFollowUpWorkItem, followUpBlockedReason } from './open-items.wiring.js';
 import { AgentPromptReferenceService } from '../orc/agent-prompt-reference.service.js';
 import { backfillOpenItems, formatBackfillReport, isHarnessFlowQuestion, reportsSettled } from './open-items-backfill.js';
 import { DecisionService, type DecisionSlackApi } from '../decisions/decision.service.js';
@@ -228,6 +228,74 @@ describe('OpenItemsService — the ticket stays open', () => {
     const h = harness();
     await ticket(h);
     expect(await h.service.onAgentMessage(msg(h, '第 11、12 章改好了，PDF 附在下面。'))).toBeNull();
+  });
+});
+
+describe('OpenItemsService — the due time of an undated promise (crewly#1360, Pia, W41)', () => {
+  it('a promise made live in the owner\'s conversation with no time is due in 4 h, not 24 h', async () => {
+    const h = harness();
+    const t = await ticket(h);
+    await h.service.onAgentMessage(msg(h, '改好以后发你。'));
+    const item = (await h.requests.getById(t.id))!.openItems![0];
+    expect(item.dueSource).toBe('default');
+    expect(Date.parse(item.due!) - h.clock.now.getTime()).toBe(4 * HOUR);
+    expect(h.followUps[0].item.due).toBe(item.due);
+  });
+
+  it('the backfill\'s view of the same message keeps the 24 h default', async () => {
+    const h = harness();
+    const t = await ticket(h);
+    const planned = await h.service.plan(t, msg(h, '改好以后发你。'), h.clock.now);
+    expect(Date.parse(planned[0].item.due!) - h.clock.now.getTime()).toBe(24 * HOUR);
+  });
+
+  it('a Chinese-numeral estimate in the promise dates it', async () => {
+    const h = harness();
+    const t = await ticket(h);
+    await h.service.onAgentMessage(msg(h, '改完后我起全新评审 Agent 跑 2 轮，再发你。预计一小时左右。'));
+    const item = (await h.requests.getById(t.id))!.openItems![0];
+    expect(item.dueSource).toBe('text');
+    expect(Date.parse(item.due!) - h.clock.now.getTime()).toBe(1 * HOUR);
+  });
+
+  it('an estimate the agent posts a minute later dates the promise and moves its follow-up', async () => {
+    const moved: Array<{ id: string; due: string }> = [];
+    const h = harness({ updateFollowUpDue: async (id, due) => { moved.push({ id, due: due.toISOString() }); } });
+    const t = await ticket(h);
+    await h.service.onAgentMessage(msg(h, '改完后我起全新评审 Agent 跑 2 轮，再发你。'));
+    h.clock.now = new Date(h.clock.now.getTime() + MIN);
+    const r = await h.service.onAgentMessage(msg(h, '预计一小时左右。'));
+    const item = r!.openItems![0];
+    expect(r!.openItems).toHaveLength(1);
+    expect(item.dueSource).toBe('text');
+    expect(item.due).toBe(new Date(h.clock.now.getTime() + HOUR).toISOString());
+    expect(moved).toEqual([{ id: 'fu-1', due: item.due }]);
+    expect(h.followUps).toHaveLength(1);
+  });
+
+  it('an estimate outside the window, by another agent, or beside a new promise leaves it alone', async () => {
+    const h = harness();
+    const t = await ticket(h);
+    await h.service.onAgentMessage(msg(h, '改完后我起全新评审 Agent 跑 2 轮，再发你。'));
+    const before = (await h.requests.getById(t.id))!.openItems![0].due;
+    h.clock.now = new Date(h.clock.now.getTime() + MIN);
+    expect(await h.service.onAgentMessage(msg(h, '预计一小时左右。', KAI))).toBeNull();
+    h.clock.now = new Date(h.clock.now.getTime() + 15 * MIN);
+    expect(await h.service.onAgentMessage(msg(h, '预计一小时左右。'))).toBeNull();
+    // A new promise with its own time is its own item, not an estimate for the first.
+    const r = await h.service.onAgentMessage(msg(h, '播客素材两小时后整理好一起给你。'));
+    expect(r!.openItems![0].due).toBe(before);
+    expect(r!.openItems!).toHaveLength(2);
+  });
+
+  it('a later estimate never re-dates a promise whose text named its time', async () => {
+    const h = harness();
+    const t = await ticket(h);
+    await h.service.onAgentMessage(msg(h, '明天中午整理好发你。'));
+    const before = (await h.requests.getById(t.id))!.openItems![0].due;
+    h.clock.now = new Date(h.clock.now.getTime() + MIN);
+    expect(await h.service.onAgentMessage(msg(h, '预计一小时左右。'))).toBeNull();
+    expect((await h.requests.getById(t.id))!.openItems![0].due).toBe(before);
   });
 });
 
@@ -1309,6 +1377,16 @@ describe('stale commitments are re-checked before they are resurfaced (TKT-334, 
     expect(wi.description).toContain('Before contacting the owner, verify it is still needed');
     const fresh = buildFollowUpWorkItem({ request, item: { ...item, createdAt: new Date(2026, 9, 12, 11, 0, 0).toISOString() }, place: null }, new Date(2026, 9, 12, 12, 0, 0));
     expect(fresh.description).not.toContain('verify it is still needed');
+  });
+
+  it('the follow-up is held by its due time, and the same words are used when the due time moves (crewly#1360)', () => {
+    const due = new Date('2026-10-17T00:15:00.000Z');
+    const item: RequestOpenItem = { id: 'c', type: 'commitment', text: 'Send v4.', agent: ATLAS, sourceMessageId: 'm', createdAt: due.toISOString(), status: 'open', due: due.toISOString() };
+    const wi = buildFollowUpWorkItem({ request: { id: 'r', ticketNumber: 1 } as unknown as Request, item, place: null }, due);
+    expect(wi.blockedReason).toBe(followUpBlockedReason(due));
+    expect(wi.blockedReason).toBe('Waiting for the promised work (due 2026-10-17T00:15:00.000Z)');
+    expect(wi.metadata?.dueAt).toBe(due.toISOString());
+    expect(followUpBlockedReason(null)).toBe('Waiting for the promised work');
   });
 });
 

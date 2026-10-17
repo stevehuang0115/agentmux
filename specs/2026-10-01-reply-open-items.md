@@ -159,7 +159,7 @@ It runs as a **dry run by default**:
 
 `OPEN_ITEMS_CONSTANTS` in `backend/src/constants.ts` holds:
 
-- due defaults;
+- due defaults (`DEFAULT_DUE_MS` 24 h, `CHAT_PROMISE_DEFAULT_DUE_MS` 4 h, `ESTIMATE_WINDOW_MS` 10 min);
 - the child window;
 - the delivery gap;
 - the owner-note delay;
@@ -178,3 +178,12 @@ It runs as a **dry run by default**:
 - **Delivery that restates the promise** still delivers it and opens nothing new.
 - **One promise, said twice** (same agent, within 30 min, same words or same person + same deliverable): the newer stands, the earlier is `superseded` and its follow-up cancelled.
 - `adopt` (backfill apply) logs the caller session and the item count.
+
+## Addendum (crewly#1360): the agent's estimate dates the promise
+
+The W41 follow-up (2026-10-16 23:14Z) was due 24 h later although Pia had said "预计一小时左右" a minute after promising; nobody noticed the silence for 16 hours.
+
+- **Numerals and ranges.** `durationMs` / `parseDue` read Chinese numerals (零一二两三四五六七八九十, 半, 十五 / 二十 / 三十五 forms) and ranges ("A 到 B", "A–B", "A-B", "A to B", "一两个", "两三个"), using the upper bound of a range: "两小时" → +2 h, "三十分钟" → +30 min, "一个半小时" → +1.5 h, "半天" → +12 h, "一天" → +24 h, "一两个小时" → +2 h, "1.5 到 2 小时" → +2 h, "40 到 60 分钟" → +60 min, "an hour", "a couple of hours", "half a day". "左右 / 大约 / 约 / 大概" do not change the number.
+- **The neighbouring sentence.** A commitment sentence that names no time takes the estimate stated in the sentence right after (or before) it on the same line (`estimateDue`): a duration, or a time framed as an estimate ("预计 / 大约 / 应该 / ETA / about / should …"), in a sentence that is not itself a commitment or a question. "改完后我起全新评审 Agent 跑 2 轮，再发你。预计一小时左右。" is due in an hour.
+- **The next post.** When the same agent, in the same thread, within `ESTIMATE_WINDOW_MS` (10 min) of an undated promise (`dueSource: default`), posts an estimate and promises nothing new in that post, the promise takes that due time (`dueSource: text`) and the follow-up WorkItem's `metadata.dueAt` and `blockedReason` move with it (`updateFollowUpDue` → `TaskPoolService.mergeItemMetadata` + `setBlockedReason`). A later post that makes its own promise, a post by another agent, a promise whose text named its time, and anything outside the window leave it alone.
+- **Live default.** A promise with no time at all made live in the owner's conversation (`onAgentMessage` → `plan(…, { live: true })`, the request has a `chatRef`) is due in `CHAT_PROMISE_DEFAULT_DUE_MS` (4 h): the owner is waiting. The backfill's reading of old history and gate-opened conditional promises keep `DEFAULT_DUE_MS` (24 h).

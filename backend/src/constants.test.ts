@@ -7,6 +7,8 @@
  * critically the OAuth scope set used to issue new Google credentials.
  */
 import {
+  HANDOVER_CONSTANTS,
+  OPEN_ITEMS_CONSTANTS,
 	ORC_WAKE_CONSTANTS,
 	CONVERSATION_LOG_CONSTANTS,
 	CONVERSATION_SYNC_CONSTANTS,
@@ -574,4 +576,29 @@ describe('CREWLY_CHANNEL_CONSTANTS', () => {
 		expect(CREWLY_CHANNEL_CONSTANTS.MAX_PURPOSE_LENGTH).toBe(250);
 		expect(CREWLY_CHANNEL_CONSTANTS.SLACK_REFRESH_MIN_INTERVAL_MS).toBeGreaterThan(0);
 	});
+});
+
+describe('HANDOVER_CONSTANTS (interrupted work, crewly#1361)', () => {
+  it('lists sub-agent and shell tools, with bounded output', () => {
+    expect(HANDOVER_CONSTANTS.SUBAGENT_TOOLS).toEqual(['Task', 'Agent']);
+    expect(HANDOVER_CONSTANTS.SHELL_TOOLS).toEqual(['Bash']);
+    expect(HANDOVER_CONSTANTS.INTERRUPTED_MAX_ITEMS).toBe(5);
+    expect(HANDOVER_CONSTANTS.INTERRUPTED_TEXT_MAX_CHARS).toBe(200);
+    expect(HANDOVER_CONSTANTS.INTERRUPTED_HEADING).toBe('## Interrupted by the restart');
+  });
+
+  it('recognises long-running commands and ignores short ones', () => {
+    expect(HANDOVER_CONSTANTS.LONG_COMMAND_PATTERN.test('npx remotion render src/index.ts W41 out.mp4')).toBe(true);
+    expect(HANDOVER_CONSTANTS.LONG_COMMAND_PATTERN.test('ffmpeg -i a.mov b.mp4')).toBe(true);
+    expect(HANDOVER_CONSTANTS.LONG_COMMAND_PATTERN.test('node server.js &')).toBe(true);
+    expect(HANDOVER_CONSTANTS.LONG_COMMAND_PATTERN.test('cat README.md')).toBe(false);
+  });
+});
+
+describe('OPEN_ITEMS_CONSTANTS due defaults (crewly#1360)', () => {
+  it('a live chat promise is due sooner than the general default, and an estimate counts for 10 minutes', () => {
+    expect(OPEN_ITEMS_CONSTANTS.CHAT_PROMISE_DEFAULT_DUE_MS).toBe(4 * 60 * 60 * 1000);
+    expect(OPEN_ITEMS_CONSTANTS.CHAT_PROMISE_DEFAULT_DUE_MS).toBeLessThan(OPEN_ITEMS_CONSTANTS.DEFAULT_DUE_MS);
+    expect(OPEN_ITEMS_CONSTANTS.ESTIMATE_WINDOW_MS).toBe(10 * 60 * 1000);
+  });
 });

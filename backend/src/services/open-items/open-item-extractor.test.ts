@@ -3,7 +3,7 @@
  * commitments and owner questions in Chinese and English, the TKT-185 reply,
  * and the negatives that must NOT become items.
  */
-import { extractOpenItems, isCommitment, isOwnerQuestion, parseDue, splitSentences } from './open-item-extractor.js';
+import { durationMs, estimateDue, extractOpenItems, isCommitment, isOwnerQuestion, numeralValue, parseDue, splitSentences } from './open-item-extractor.js';
 
 /** Thu 2026-10-01 18:00:29 local — when Atlas replied in TKT-185. */
 const NOW = new Date(2026, 9, 1, 18, 0, 29);
@@ -149,6 +149,98 @@ describe('parseDue', () => {
     const r = parseDue('整理好一起给你', NOW);
     expect(r.source).toBe('default');
     expect(r.due.getTime() - NOW.getTime()).toBe(24 * 3600_000);
+  });
+});
+
+describe('parseDue — Chinese numerals and ranges (crewly#1360)', () => {
+  const HOUR = 3600_000;
+  const MINUTE = 60_000;
+  const after = (text: string): number => parseDue(text, NOW).due.getTime() - NOW.getTime();
+
+  it.each([
+    ['预计一小时左右。', 1 * HOUR],
+    ['两小时后发你。', 2 * HOUR],
+    ['大约两个小时。', 2 * HOUR],
+    ['三十分钟内给你。', 30 * MINUTE],
+    ['十五分钟。', 15 * MINUTE],
+    ['二十分钟左右。', 20 * MINUTE],
+    ['半天就好。', 12 * HOUR],
+    ['一天内发你。', 24 * HOUR],
+    ['一个半小时。', 1.5 * HOUR],
+    ['两个半小时。', 2.5 * HOUR],
+    ['半小时后发你。', 0.5 * HOUR],
+    ['大概一两个小时。', 2 * HOUR],
+    ['两三个小时。', 3 * HOUR],
+    ['1.5 到 2 小时。', 2 * HOUR],
+    ['40 到 60 分钟。', 60 * MINUTE],
+    ['大约 2–3 小时。', 3 * HOUR],
+    ['2-3 hours.', 3 * HOUR],
+    ['2 to 3 hours.', 3 * HOUR],
+    ['about an hour.', 1 * HOUR],
+    ['a couple of hours.', 2 * HOUR],
+    ['half a day.', 12 * HOUR],
+    ['in 3 days.', 72 * HOUR],
+  ])('%s → +%i ms, named by the text', (text, ms) => {
+    expect(parseDue(text, NOW).source).toBe('text');
+    expect(after(text)).toBe(ms);
+  });
+
+  it('"左右 / 大约 / 约 / 大概" do not change the number', () => {
+    expect(after('约一小时。')).toBe(after('一小时。'));
+    expect(after('大概 40 分钟左右。')).toBe(40 * MINUTE);
+  });
+
+  it('reads the numerals it knows and refuses the rest', () => {
+    expect(numeralValue('两')).toBe(2);
+    expect(numeralValue('十')).toBe(10);
+    expect(numeralValue('三十五')).toBe(35);
+    expect(numeralValue('半')).toBe(0.5);
+    expect(numeralValue('一两')).toBe(2);
+    expect(numeralValue('1.5')).toBe(1.5);
+    expect(numeralValue('一三')).toBeNull();
+    expect(numeralValue('')).toBeNull();
+    expect(durationMs('跑 2 轮再发你')).toBeNull();
+  });
+
+  it('uses the default the caller names when the text has no time', () => {
+    const r = parseDue('整理好一起给你', NOW, 4 * HOUR);
+    expect(r.source).toBe('default');
+    expect(r.due.getTime() - NOW.getTime()).toBe(4 * HOUR);
+    expect(parseDue('整理好一起给你', NOW).due.getTime() - NOW.getTime()).toBe(24 * HOUR);
+  });
+});
+
+describe('a promise takes the estimate stated in the sentence next to it (crewly#1360, Pia, W41)', () => {
+  const HOUR = 3600_000;
+
+  it('"…再发你。预计一小时左右。" is due in an hour', () => {
+    const found = extractOpenItems('改完后我起全新评审 Agent 跑 2 轮，再发你。预计一小时左右。', opts);
+    expect(found.commitments).toHaveLength(1);
+    expect(found.commitments[0].dueSource).toBe('text');
+    expect(found.commitments[0].due.getTime() - NOW.getTime()).toBe(1 * HOUR);
+  });
+
+  it('the estimate may come first', () => {
+    const found = extractOpenItems('大约四十分钟。改好以后发你。', opts);
+    expect(found.commitments[0].due.getTime() - NOW.getTime()).toBe(40 * 60_000);
+  });
+
+  it('a neighbouring promise with its own time is not an estimate for this one', () => {
+    const found = extractOpenItems('改好以后发你。播客素材明天中午整理好一起给你。', opts);
+    expect(found.commitments.map((c) => c.dueSource)).toEqual(['default', 'text']);
+  });
+
+  it('a question or a plain sentence next to it changes nothing', () => {
+    expect(estimateDue('两小时够吗？', NOW)).toBeNull();
+    expect(estimateDue('这段是我写的。', NOW)).toBeNull();
+    expect(estimateDue(undefined, NOW)).toBeNull();
+    expect(estimateDue('应该今晚能好。', NOW)?.getHours()).toBe(21);
+  });
+
+  it('a live chat promise with no estimate gets the shorter default the caller asks for', () => {
+    const found = extractOpenItems('改好以后发你。', { ...opts, defaultDueMs: 4 * HOUR });
+    expect(found.commitments[0].dueSource).toBe('default');
+    expect(found.commitments[0].due.getTime() - NOW.getTime()).toBe(4 * HOUR);
   });
 });
 

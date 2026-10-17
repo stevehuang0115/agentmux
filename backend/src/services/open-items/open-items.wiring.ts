@@ -74,8 +74,19 @@ export function buildFollowUpWorkItem(input: FollowUpInput, now: Date = new Date
   });
   wi.status = 'blocked';
   wi.blockSource = WORK_ITEM_BLOCK_SOURCES.EXPLICIT;
-  wi.blockedReason = due ? `Waiting for the promised work (due ${due.toISOString()})` : 'Waiting for the promised work';
+  wi.blockedReason = followUpBlockedReason(due);
   return wi;
+}
+
+/**
+ * Why a follow-up WorkItem is held: it waits for the promised work, by its due
+ * time when there is one.
+ *
+ * @param due - Due time, or null
+ * @returns The `blockedReason` text
+ */
+export function followUpBlockedReason(due: Date | null): string {
+  return due ? `Waiting for the promised work (due ${due.toISOString()})` : 'Waiting for the promised work';
 }
 
 /**
@@ -111,6 +122,12 @@ export function createOpenItemsService(input: OpenItemsWiringInput): OpenItemsSe
       const wi = buildFollowUpWorkItem(fu);
       await pool().addToPool(wi);
       return wi.id;
+    },
+    updateFollowUpDue: async (id, due) => {
+      const wi = await pool().findWorkItem(id);
+      if (!wi || ['done', 'verified', 'cancelled'].includes(wi.status)) return;
+      await pool().mergeItemMetadata(id, { dueAt: due.toISOString() });
+      if (wi.status === 'blocked') await pool().setBlockedReason(id, followUpBlockedReason(due));
     },
     closeFollowUp: async (id, outcome, reason) => {
       const wi = await pool().findWorkItem(id);

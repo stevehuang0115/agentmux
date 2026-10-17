@@ -72,6 +72,21 @@ describe('handover pointers', () => {
 	});
 
 	describe('withHandoverPointers', () => {
+		it('repeats the work the restart interrupted under Open work (crewly#1361)', () => {
+			const body = [
+				'## Interrupted by the restart',
+				'',
+				'- A sub-agent was running: Make W41 v4: Cut v4 and review it. It did not finish and is not running now. Restart it or report that it was lost.',
+				'',
+				'### You — t',
+				'v4 is still being cut.',
+			].join('\n');
+			const out = withHandoverPointers(body, { sessionName: 'ann', crewlyHome: home });
+			const header = out.slice(0, out.indexOf('<!-- /handover-pointers -->'));
+			expect(header).toContain('- Interrupted by the restart (sub-agent, not running now): Make W41 v4: Cut v4 and review it');
+			expect(header).not.toContain('None open for you');
+		});
+
 		it('starts with open work (ids + titles), links and suggested skills', () => {
 			writePool([{ id: 'w1', title: 'Fix login', status: 'running', target: 'ann' }]);
 			const out = withHandoverPointers('### You — t\nSee https://github.com/o/r/pull/12 and TKT-7', { sessionName: 'ann', crewlyHome: home });

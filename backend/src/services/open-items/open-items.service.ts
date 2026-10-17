@@ -41,7 +41,7 @@ import { ACTIVE_OPEN_ITEM_STATUSES, type RequestOpenItem } from '../../types/v2/
 import type { DecisionSource, OwnerDecision } from '../../types/decision.types.js';
 import { formatTicketNumber } from '../../types/v2/ticket.types.js';
 import { readProjectTicketLink } from '../../types/project-ticket.types.js';
-import { extractOpenItems, parseDue, type ExtractedQuestion } from './open-item-extractor.js';
+import { estimateDue, extractOpenItems, parseDue, type ExtractedQuestion } from './open-item-extractor.js';
 import { deriveEitherOrCard, deriveQuestionCard, groupEitherOr, isTooVague, questionContextBlocks, questionSimilarity, type DerivedQuestionCard } from './open-item-card.js';
 import { formatWhen } from '../decisions/decision-card.js';
 import { AgentPromptReferenceService, type ReplyReference } from '../orc/agent-prompt-reference.service.js';
@@ -107,6 +107,8 @@ export interface OpenItemsDeps {
   createFollowUp?: (input: FollowUpInput) => Promise<string | null>;
   /** Close the follow-up WorkItem: `delivered` → done, else cancelled */
   closeFollowUp?: (workItemId: string, outcome: 'delivered' | 'cancelled', reason: string) => Promise<void>;
+  /** The agent stated an estimate after the promise: move the follow-up WorkItem's due time (crewly#1360) */
+  updateFollowUpDue?: (workItemId: string, due: Date) => Promise<void>;
   /** Decisions the agent asked recently (for the ask-owner dedupe) */
   recentDecisionsBy?: (agent: string, sinceMs: number) => Promise<OwnerDecision[]>;
   /** Post a card for a question; returns the decision */
@@ -776,7 +778,7 @@ export class OpenItemsService {
       const driveRecap = drive && message.metadata?.driveRecap === true;
       const recapNextStep = driveRecap && message.metadata?.driveNextStep === true;
       // From an interim note: only timed promises of a concrete deliverable.
-      const planned = (drive && !recapNextStep ? [] : await this.plan(request, message, at))
+      const planned = (drive && !recapNextStep ? [] : await this.plan(request, message, at, { live: true }))
         .filter((p) => !interim || (p.item.type === 'commitment' && isConcreteInterimPromise(p.item)))
         .map((p) => (interim ? { ...p, item: { ...p.item, fromInterim: true } } : p));
       let items = [...(request.openItems ?? [])];
@@ -795,6 +797,14 @@ export class OpenItemsService {
         changed = true;
         if (d.workItemId) await this.closeFollowUp(d.workItemId, 'delivered', `Delivered to the owner (message ${message.id})`);
         this.logger.info('Commitment delivered', { tkt: ticketLabel(request), item: d.id, by: message.senderId });
+      }
+
+      // "预计一小时左右" a minute after an undated promise: the estimate dates it.
+      for (const e of this.estimates(items, message, at, planned)) {
+        items = items.map((i) => (i.id === e.id ? e : i));
+        changed = true;
+        if (e.workItemId) await this.deps.updateFollowUpDue?.(e.workItemId, new Date(e.due!)).catch((err) => this.logger.warn('Follow-up due not moved', { tkt: ticketLabel(request), error: errText(err) }));
+        this.logger.info('Commitment dated by a later estimate', { tkt: ticketLabel(request), item: e.id, due: e.due, message: message.id });
       }
 
       // The same words twice (a reply recorded both from the reply path and the
@@ -881,18 +891,26 @@ export class OpenItemsService {
   /**
    * What a message would add, without side effects (also the backfill's view).
    *
+   * A promise that names no time is due in
+   * {@link OPEN_ITEMS_CONSTANTS.CHAT_PROMISE_DEFAULT_DUE_MS} when it was made
+   * live in the owner's conversation (`opts.live`: the owner is waiting for
+   * the reply), else in {@link OPEN_ITEMS_CONSTANTS.DEFAULT_DUE_MS} (the
+   * backfill reading old history) (crewly#1360).
+   *
    * @param request - Its request
    * @param message - The agent message
    * @param at - When it was posted
+   * @param opts - `live`: the message was just posted in the owner's conversation
    * @returns Planned items
    */
-  async plan(request: Request, message: OpenItemsChatMessage, at: Date): Promise<PlannedOpenItem[]> {
+  async plan(request: Request, message: OpenItemsChatMessage, at: Date, opts: { live?: boolean } = {}): Promise<PlannedOpenItem[]> {
     const names = await this.deps.colleagueNames?.(message.senderId).catch(() => [] as string[]);
     const owner = this.deps.ownerSlackUserId?.() ?? (request.origin?.author?.startsWith('U') ? request.origin.author : null);
     const found = extractOpenItems(message.content, {
       now: at,
       ...(names ? { colleagueNames: names } : {}),
       ...(owner ? { ownerSlackUserId: owner } : {}),
+      ...(opts.live && request.chatRef ? { defaultDueMs: OPEN_ITEMS_CONSTANTS.CHAT_PROMISE_DEFAULT_DUE_MS } : {}),
     });
     const base = (type: RequestOpenItem['type'], n: number): Pick<RequestOpenItem, 'id' | 'agent' | 'sourceMessageId' | 'createdAt' | 'status'> => ({
       id: `${type === 'commitment' ? 'c' : 'q'}-${message.id.slice(0, 8)}-${n}`,
@@ -1112,6 +1130,35 @@ export class OpenItemsService {
     }
     this.logger.info('Question tracked', { tkt: ticketLabel(request), item: item.id, agent: item.agent, decisionId: item.decisionId });
     return item;
+  }
+
+  /**
+   * Undated promises this message dates: the same agent, in the same thread,
+   * within {@link OPEN_ITEMS_CONSTANTS.ESTIMATE_WINDOW_MS} of a promise whose
+   * due time was the default, states an estimate ("预计一小时左右", "大约 40
+   * 分钟", "应该今晚能好") in a post that promises nothing new of its own
+   * (crewly#1360: the promise at 23:14, the estimate at 23:15, the follow-up
+   * waited 24 h).
+   *
+   * @param items - Current items
+   * @param message - The post
+   * @param at - Its time
+   * @param planned - What the post itself would add (a new promise in it leaves older ones alone)
+   * @returns The items with their new due time (empty when none)
+   */
+  private estimates(items: readonly RequestOpenItem[], message: OpenItemsChatMessage, at: Date, planned: readonly PlannedOpenItem[]): RequestOpenItem[] {
+    if (planned.some((p) => p.item.type === 'commitment')) return [];
+    const due = estimateDue(message.content.replace(/\s+/g, ' ').trim(), at);
+    if (!due) return [];
+    const out: RequestOpenItem[] = [];
+    for (const item of items) {
+      if (item.type !== 'commitment' || item.agent !== message.senderId || item.dueSource !== 'default') continue;
+      if (!ACTIVE_OPEN_ITEM_STATUSES.has(item.status) || item.status === 'waiting_owner' || item.sourceMessageId === message.id) continue;
+      const since = at.getTime() - Date.parse(item.createdAt);
+      if (since < 0 || since > OPEN_ITEMS_CONSTANTS.ESTIMATE_WINDOW_MS) continue;
+      out.push({ ...item, due: due.toISOString(), dueSource: 'text' });
+    }
+    return out;
   }
 
   /**
