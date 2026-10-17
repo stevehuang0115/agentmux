@@ -42,6 +42,7 @@ import {
 	listWorktrees,
 	readIncludeFile,
 	applySharedPaths,
+	nestedInstallDirs,
 	ensureExcluded,
 	checkDirty,
 	checkLanded,
@@ -331,7 +332,11 @@ export class WorkItemWorktreeService {
 		if (!added.ok) return this.fail(record, `git worktree add failed: ${added.stderr.trim()}`);
 
 		const includes = await readIncludeFile(repo);
-		const shared = await applySharedPaths(repo, wtPath, project.worktreeSharedDirs ?? WORKTREE_CONSTANTS.DEFAULT_SHARED_DIRS, includes.entries);
+		// Share the workspace packages' node_modules too when the lock file matches
+		// (crewly#1354) — a fresh install per worktree cost 2–3 GB each.
+		const sharedDirs = [...(project.worktreeSharedDirs ?? WORKTREE_CONSTANTS.DEFAULT_SHARED_DIRS)];
+		if (sharedDirs.includes('node_modules')) sharedDirs.push(...(await nestedInstallDirs(repo, wtPath)));
+		const shared = await applySharedPaths(repo, wtPath, sharedDirs, includes.entries);
 		record.symlinks = shared.symlinks;
 		record.copies = shared.copies;
 		record.copyHashes = shared.copyHashes;

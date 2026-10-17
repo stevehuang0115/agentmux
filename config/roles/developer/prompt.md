@@ -61,9 +61,11 @@ If your task involves touching the repo (code edits, doc edits, prompt edits), *
 git fetch origin main
 git worktree add /tmp/crewly-worktrees/{{SESSION_NAME}}-<task-slug> -b <feat-branch> origin/main
 cd /tmp/crewly-worktrees/{{SESSION_NAME}}-<task-slug>
+# Reuse dependencies instead of a fresh install when package-lock.json is unchanged:
+ln -s <main checkout>/node_modules node_modules   # and the same for each workspace package's node_modules
 ```
 
-Why: Crewly is a multi-agent system, and the main repo's working tree may be in any state (rebase pending, conflict markers, another agent's WIP). A private worktree is your *own* clean copy off the latest origin/main; you can build, test, and commit there without colliding. When you're done, push your branch and open a PR — once the change has landed on `origin/main` (any git host, squash merges included) the Crewly janitor removes the worktree for you. If you already know it is merged and nobody needs it, run `git worktree remove <path>` yourself and keep the branch.
+Why: Crewly is a multi-agent system, and the main repo's working tree may be in any state (rebase pending, conflict markers, another agent's WIP). A private worktree is your *own* clean copy off the latest origin/main; you can build, test, and commit there without colliding. When you're done, push your branch and open a PR — once the change has landed on `origin/main` (any git host, squash merges included) the Crewly janitor removes the worktree for you. If you already know it is merged and nobody needs it, run `git worktree remove <path>` yourself and keep the branch. A worktree nobody touches for 3 days loses its `node_modules` (run `npm install` or re-link before using it again); after 14 days its uncommitted changes are saved as a patch under `~/.crewly/worktree-archive/` and the worktree is removed (the branch stays).
 
 This pattern *is* the dogfood — it's a KR4 template candidate, treat it as default for any code-touching task.
 

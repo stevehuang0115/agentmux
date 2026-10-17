@@ -51,6 +51,29 @@ describe('WORKTREE_JANITOR_CONSTANTS', () => {
     expect(WORKTREE_JANITOR_CONSTANTS.AGENT_WORKTREE_DIR).toBe('.claude/worktrees');
     expect(WORKTREE_JANITOR_CONSTANTS.AGENT_BRANCH_PREFIXES).toEqual(['worktree-agent-']);
   });
+
+  it('tiers and retention (crewly#1354): 3 d strip / 14 d archive, 14 d transcripts, 7 d tmp, 300/100 MB logs, 8 % low disk', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    expect(WORKTREE_JANITOR_CONSTANTS.STRIP_MIN_IDLE_MS).toBe(3 * DAY);
+    expect(WORKTREE_JANITOR_CONSTANTS.STRIP_MIN_IDLE_LOW_DISK_MS).toBe(DAY);
+    expect(WORKTREE_JANITOR_CONSTANTS.ARCHIVE_MIN_IDLE_MS).toBe(14 * DAY);
+    expect(WORKTREE_JANITOR_CONSTANTS.ARCHIVE_DIR).toBe('worktree-archive');
+    expect(WORKTREE_JANITOR_CONSTANTS.RECLAIM_DIRS).toEqual(['node_modules', '.next', 'dist', '.turbo', '.cache']);
+    expect(WORKTREE_JANITOR_CONSTANTS.TRANSCRIPT_MAX_AGE_MS).toBe(14 * DAY);
+    expect(WORKTREE_JANITOR_CONSTANTS.TMP_MAX_AGE_MS).toBe(7 * DAY);
+    expect(WORKTREE_JANITOR_CONSTANTS.TMP_CHILD_POLICIES).toEqual({
+      'slack-files': 30 * DAY,
+      'slack-images': 30 * DAY,
+      'slack-pdfs': 30 * DAY,
+      'crewly-web-release': 2 * DAY,
+      'skill-output': 7 * DAY,
+    });
+    expect(WORKTREE_JANITOR_CONSTANTS.LOG_ARCHIVE_CAP_BYTES).toBe(300 * 1024 ** 2);
+    expect(WORKTREE_JANITOR_CONSTANTS.LOG_SESSIONS_CAP_BYTES).toBe(100 * 1024 ** 2);
+    expect(WORKTREE_JANITOR_CONSTANTS.LOW_DISK_FRACTION).toBe(0.08);
+    expect(WORKTREE_JANITOR_CONSTANTS.RETENTION_ARM_DELAY_MS).toBe(DAY);
+    expect(WORKTREE_JANITOR_CONSTANTS.PROMPT_HINT).toContain('symlink `node_modules`');
+  });
 });
 
 describe('GOOGLE_OAUTH_CONSTANTS', () => {

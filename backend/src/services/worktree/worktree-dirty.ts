@@ -56,7 +56,7 @@ export function dirtyStatusLines(porcelain: string): string[] {
 }
 
 /**
- * Reclaimable directories (`node_modules`, `.next`) inside a worktree, found
+ * Reclaimable directories (`node_modules`, `.next`, `dist`, …) inside a worktree, found
  * without following symlinks and without descending into a found directory
  * or `.git`. Bounded by depth.
  *
@@ -97,29 +97,55 @@ export interface ReclaimResult {
 	freedBytes: number;
 }
 
+/** Options of {@link reclaimRegenerableDirs}. */
+export interface ReclaimOptions {
+	/**
+	 * Whether git tracks anything under a directory (true), nothing (false)
+	 * or could not tell (null). A tracked directory is never deleted — some
+	 * repos commit `dist`. Unknown counts as tracked. Default: untracked.
+	 */
+	isTracked?: (dir: string) => Promise<boolean | null>;
+	/** Leave symlinks alone (a managed worktree shares `node_modules` by symlink; removing it only breaks the manifest check). */
+	keepSymlinks?: boolean;
+}
+
 /**
  * Delete the reclaimable directories of a kept worktree. Reversible
  * (`npm install`, rebuild) — never touches tracked or source files.
  *
  * @param root - Worktree root
  * @param sizeOf - Size probe (bytes or null)
- * @param dryRun - List only
- * @returns Directories handled and bytes freed
+ * @param dryRun - List only (sizes are still probed so a dry run can report MB)
+ * @param options - Tracked-dir check and symlink handling
+ * @returns Directories handled and bytes freed (in a dry run: bytes that would be)
  */
 export async function reclaimRegenerableDirs(
 	root: string,
 	sizeOf: (p: string) => Promise<number | null>,
 	dryRun: boolean,
+	options: ReclaimOptions = {},
 ): Promise<ReclaimResult> {
 	const dirs = await findReclaimableDirs(root);
 	const done: string[] = [];
 	let freed = 0;
 	for (const d of dirs) {
-		if (dryRun) {
-			done.push(d);
-			continue;
+		if (options.keepSymlinks) {
+			try {
+				if ((await fs.promises.lstat(d)).isSymbolicLink()) continue;
+			} catch {
+				continue;
+			}
+		}
+		if (options.isTracked) {
+			const tracked = await options.isTracked(d).catch(() => null);
+			if (tracked !== false) continue;
 		}
 		const size = (await sizeOf(d)) ?? 0;
+		if (dryRun) {
+			done.push(d);
+			freed += size;
+			continue;
+		}
 		try {
 			await fs.promises.rm(d, { recursive: true, force: true });
 			done.push(d);

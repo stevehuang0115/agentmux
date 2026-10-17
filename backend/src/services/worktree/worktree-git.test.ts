@@ -10,6 +10,7 @@ import {
 	listWorktrees,
 	readIncludeFile,
 	applySharedPaths,
+	nestedInstallDirs,
 	ensureExcluded,
 	checkDirty,
 	checkLanded,
@@ -117,6 +118,25 @@ describe('worktree-git', () => {
 
 		it('a missing file is an empty list', async () => {
 			expect(await readIncludeFile(repo)).toEqual({ entries: [], rejected: [], truncated: 0 });
+		});
+	});
+
+	describe('nestedInstallDirs (crewly#1354)', () => {
+		it('lists workspace node_modules when the lock file matches, nothing when it differs or is absent', async () => {
+			await fs.mkdir(path.join(repo, 'node_modules', 'pkg'), { recursive: true });
+			await fs.mkdir(path.join(repo, 'backend', 'node_modules', 'x'), { recursive: true });
+			await fs.mkdir(path.join(repo, 'packages', 'ui', 'node_modules'), { recursive: true });
+			await fs.mkdir(path.join(repo, 'node_modules', 'deep', 'node_modules'), { recursive: true });
+			await fs.mkdir(path.join(repo, 'dist', 'node_modules'), { recursive: true });
+			await fs.writeFile(path.join(repo, 'package-lock.json'), '{"lockfileVersion":3}\n');
+			await git(repo, 'add', 'package-lock.json');
+			await git(repo, 'commit', '-q', '-m', 'lock');
+			const wt = await addWt(repo, 'wi-nested');
+			expect(await nestedInstallDirs(repo, wt)).toEqual(['backend/node_modules', 'packages/ui/node_modules']);
+			await fs.writeFile(path.join(wt, 'package-lock.json'), '{"lockfileVersion":3,"changed":true}\n');
+			expect(await nestedInstallDirs(repo, wt)).toEqual([]);
+			await fs.rm(path.join(repo, 'package-lock.json'));
+			expect(await nestedInstallDirs(repo, wt)).toEqual([]);
 		});
 	});
 
