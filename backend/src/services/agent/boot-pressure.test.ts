@@ -15,6 +15,7 @@ import {
 	BootLaunchPacer,
 	bootLaunchHoldReason,
 	bootPressureReason,
+	effectiveMinFreeMB,
 	bootPressureThresholds,
 	joinNames,
 	scheduleHeldBackNotice,
@@ -51,15 +52,31 @@ describe('bootPressureReason', () => {
 	it('names every tight signal of the 2026-10-17 reading', () => {
 		const reason = bootPressureReason(incident, t) ?? '';
 		expect(reason).toContain('pressure mode');
-		expect(reason).toContain('swap 95.2% >= 80%');
+		expect(reason).toContain('OS memory pressure');
 		expect(reason).toContain('free 2552MB < 3072MB');
 		expect(reason).toContain('osPressure=true');
 	});
 
-	it('swap alone or free memory alone is enough, before pressure mode has engaged', () => {
-		expect(bootPressureReason({ ...calm, swapUsedPercent: 80 }, t)).toMatch(/^swap 80% >= 80%/);
+	it('free memory alone is enough, before pressure mode has engaged', () => {
 		expect(bootPressureReason({ ...calm, freeMB: 3000 }, t)).toMatch(/^free 3000MB < 3072MB/);
 		expect(bootPressureReason({ ...calm, swapUsedPercent: 79, freeMB: 3072 }, t)).toBeNull();
+	});
+
+	it('swap fill alone does not hold a boot back; it counts with little headroom', () => {
+		expect(bootPressureReason({ ...calm, swapUsedPercent: 95, freeMB: 6144 }, t)).toBeNull();
+		expect(bootPressureReason({ ...calm, swapUsedPercent: 80, freeMB: 5000 }, t)).toMatch(/^swap 80% >= 80% with free 5000MB < 6144MB/);
+	});
+
+	it('the OS pressure flag alone is enough', () => {
+		expect(bootPressureReason({ ...calm, osPressure: true }, t)).toMatch(/^OS memory pressure/);
+	});
+
+	it('scales the free floor to small machines (8 GB Air)', () => {
+		const air: BootPressureSnapshot = { ...calm, totalMB: 8192, freeMB: 2000, swapUsedPercent: 60 };
+		expect(effectiveMinFreeMB(air, t)).toBe(1638);
+		expect(bootPressureReason(air, t)).toBeNull();
+		expect(bootPressureReason({ ...air, freeMB: 1500 }, t)).toMatch(/^free 1500MB < 1638MB/);
+		expect(effectiveMinFreeMB({ ...calm, totalMB: 16384 }, t)).toBe(3072);
 	});
 });
 

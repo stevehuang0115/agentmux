@@ -173,7 +173,7 @@ describe('restore queue under memory pressure (crewly#1353)', () => {
 		expect(lead.started).toEqual([]); expect(dev.started).toEqual([]);
 		expect(deferred.map(([n]) => n)).toEqual(['owen', 'max']);
 		expect(deferred[0][1]).toEqual(TIGHT);
-		expect(deferred[0][2]).toMatch(/swap 95.2% >= 80%, free 2552MB < 3072MB/);
+		expect(deferred[0][2]).toMatch(/OS memory pressure, free 2552MB < 3072MB/);
 		expect(q.stats()).toMatchObject({ ready: 1, deferred: 2, failed: 0, pending: 0 });
 	});
 

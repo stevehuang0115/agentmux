@@ -184,3 +184,6 @@ Every launch notes the process-wide `BootLaunchPacer`.
   - `supervisor-stop-budget.test.ts`: systemd timespan / cgroup parsing and the drain cap.
   - `service.test.ts`: the unit is refreshed on upgrade.
   - `open-items.service.test.ts`: interim false commitments, interim delivery, `owedCommitments` / `markRestartReminded` (one reminder, no double nudge).
+
+### 5.x Tight-memory rule, revised (2026-10-17)
+A boot launch is held when any of these holds: ResourceModeService is in pressure mode; the OS pressure flag is up; free memory is under the floor; or swap is at or above 80% while free memory is under twice the floor. The floor is `min(MIN_FREE_MB, MIN_FREE_FRACTION × physical memory)`, so an 8 GB machine uses about 1.6 GB, not 3 GB. Swap fill alone does not count, because macOS grows its swap file on demand and a small swap file sits near full on a healthy machine. This came from the Air holding Fern back while its own health check said memory was fine.

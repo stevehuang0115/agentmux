@@ -5654,7 +5654,10 @@ void (async () => {
 			stillHeld: async () => {
 				const out: string[] = [];
 				for (const name of this.heldBackAtBoot) {
-					if (!(await this.apiController.agentRegistrationService.isSessionLiveOrLaunching(name))) out.push(name);
+					if (await this.apiController.agentRegistrationService.isSessionLiveOrLaunching(name)) continue;
+					// The owner reads agent names, not session ids.
+					const member = (await this.storageService.findMemberBySessionName(name).catch(() => null))?.member;
+					out.push(member?.name || name);
 				}
 				return out;
 			},
