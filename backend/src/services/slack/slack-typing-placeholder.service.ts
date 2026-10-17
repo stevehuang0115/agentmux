@@ -202,6 +202,13 @@ export class SlackTypingPlaceholderService {
    * settle, until the answer is posted or the agent runs again.
    */
   private readonly heldForRestart = new Set<string>();
+  /**
+   * `<agent>:<channel>` → until (epoch ms): Slack said this agent's bot cannot
+   * post there (channel_not_found / not_in_channel — e.g. its bot was never
+   * invited to a private channel). No placeholder is tried there until then,
+   * so every new message does not repeat the same failing call and warning.
+   */
+  private readonly unreachable = new Map<string, number>();
   /** Told when a thread gets a placeholder or an answer (see {@link onThreadActivity}). */
   private readonly threadListeners = new Set<(slackChannelId: string, threadTs?: string) => void>();
   /** Told when a thread got its answer (see {@link onThreadAnswered}). */
@@ -454,6 +461,12 @@ export class SlackTypingPlaceholderService {
     phase: TypingPhase,
     sourceTs?: string,
   ): Promise<TypingPlaceholder | null> {
+    const reach = `${key.agentSession}:${key.slackChannelId}`;
+    const blockedUntil = this.unreachable.get(reach);
+    if (blockedUntil !== undefined) {
+      if (Date.now() < blockedUntil) return null;
+      this.unreachable.delete(reach);
+    }
     try {
       const ts = await this.deps.slack.sendMessage({
         channelId: key.slackChannelId,
@@ -496,10 +509,17 @@ export class SlackTypingPlaceholderService {
       // At debug this was invisible — the running log level emits none, so a
       // channel where the placeholder never posts looks identical to one
       // where the agent never answered (2026-09-21).
-      this.logger.warn('Typing placeholder not posted — no "working on it" will show', {
-        key: k,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      const error = err instanceof Error ? err.message : String(err);
+      if (SLACK_TYPING_CONSTANTS.UNREACHABLE_CHANNEL_ERROR.test(error)) {
+        this.unreachable.set(reach, Date.now() + SLACK_TYPING_CONSTANTS.UNREACHABLE_CHANNEL_MS);
+        this.logger.warn('Typing placeholder not posted: this agent\'s bot cannot post in the channel (not a member?); no placeholder is tried there for a while', {
+          key: k,
+          error,
+          retryAfterMin: Math.round(SLACK_TYPING_CONSTANTS.UNREACHABLE_CHANNEL_MS / 60_000),
+        });
+        return null;
+      }
+      this.logger.warn('Typing placeholder not posted — no "working on it" will show', { key: k, error });
       return null;
     }
   }

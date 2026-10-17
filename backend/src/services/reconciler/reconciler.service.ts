@@ -252,6 +252,14 @@ export class ReconcilerService {
   private readonly recoveredAt = new Map<string, number>();
   /** Sessions the last hybrid-wake pass already tried (recovery does not repeat them) */
   private wokenThisPass = new Set<string>();
+  /**
+   * When each stale-queued WorkItem was last named in the stale-queued
+   * warning (epoch ms). The pass runs every minute; an item stuck for hours
+   * was logged on every pass. Now it is named when it first goes stale and
+   * then at most once per {@link STALE_QUEUED_LOG_REPEAT_MS}.
+   */
+  private readonly staleQueuedLoggedAt = new Map<string, number>();
+  private static readonly STALE_QUEUED_LOG_REPEAT_MS = 60 * 60 * 1000;
   private totalPasses = 0;
   private totalCorrections = 0;
 
@@ -404,20 +412,33 @@ export class ReconcilerService {
       // is observable without destroying the work; the wake / eviction-
       // under-pressure path (PR #585) is responsible for actually
       // making progress on them.
+      const staleNow = new Set(pruning.staleQueuedIds);
+      for (const id of [...this.staleQueuedLoggedAt.keys()]) {
+        if (!staleNow.has(id)) this.staleQueuedLoggedAt.delete(id);
+      }
       if (pruning.staleQueuedCount > 0) {
+        const logNow = Date.now();
+        const due = pruning.staleQueuedIds.filter(
+          (id) => logNow - (this.staleQueuedLoggedAt.get(id) ?? 0) >= ReconcilerService.STALE_QUEUED_LOG_REPEAT_MS,
+        );
         // ReconcilerService has no injected logger field (the rest of
         // the service surfaces failures via result.errors); use the
         // shared LoggerService directly. Stale-queued isn't a failure
         // — it's an observability signal, so it lives in the log
         // stream rather than the result envelope.
-        LoggerService.getInstance()
-          .createComponentLogger('ReconcilerService')
-          .warn('WorkItems queued past staleness threshold (NOT cancelling — eviction path will retry wake)', {
-            staleQueuedCount: pruning.staleQueuedCount,
-            // Cap the id list to avoid huge log lines if dozens accumulate.
-            staleIds: pruning.staleQueuedIds.slice(0, 20),
-            truncated: pruning.staleQueuedIds.length > 20,
-          });
+        if (due.length > 0) {
+          for (const id of due) this.staleQueuedLoggedAt.set(id, logNow);
+          LoggerService.getInstance()
+            .createComponentLogger('ReconcilerService')
+            .warn('WorkItems queued past staleness threshold (NOT cancelling — eviction path will retry wake)', {
+              staleQueuedCount: pruning.staleQueuedCount,
+              // Only the items not named in the last hour; cap the list to
+              // avoid huge log lines if dozens accumulate.
+              staleIds: due.slice(0, 20),
+              truncated: due.length > 20,
+              repeatEveryMin: ReconcilerService.STALE_QUEUED_LOG_REPEAT_MS / 60_000,
+            });
+        }
 
         // Self-heal fix #2 (2026-05-20): emit an actionable
         // `task:queued_too_long` event so the owner (typically ORC)

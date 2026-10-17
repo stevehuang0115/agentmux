@@ -7,6 +7,7 @@
 import { inputCircuitStats, noteInputRefused, resetInputCircuitsForTesting } from '../session/input-circuit-breaker.js';
 import { ReconcilerService, DEFAULT_WAKE_TUNING } from './reconciler.service.js';
 import { RestartDrainService } from '../restart/restart-drain.service.js';
+import { LoggerService } from '../core/logger.service.js';
 import type { ReconcilerDataProvider } from './reconciler.service.js';
 import { createWorkItem, createRequest, createTaskClaim, isValidWorkItemTransition } from '../../types/v2/index.js';
 import type { WorkItem, WorkItemStatus, Request, TaskClaim, ReconcileCorrection, WakeAction } from '../../types/v2/index.js';
@@ -1397,6 +1398,47 @@ describe('ReconcilerService', () => {
       const stale1Entry = broadcastArg.find((w) => w.id === 'wi-stale-1');
       expect(stale1Entry?.target).toBe('crewly-product-ella');
       expect(stale1Entry?.owner).toBe('orchestrator');
+    });
+
+    it('names a stale-queued WI in the warning once, then at most hourly — not on every pass', async () => {
+      const warn = jest.fn();
+      const realCreate = LoggerService.getInstance().createComponentLogger.bind(LoggerService.getInstance());
+      const spy = jest.spyOn(LoggerService.getInstance(), 'createComponentLogger').mockImplementation((name: string) => {
+        const real = realCreate(name);
+        return name === 'ReconcilerService' ? (Object.assign(Object.create(real), { warn }) as typeof real) : real;
+      });
+      try {
+        const stale = makeWorkItem({ id: 'wi-stuck', status: 'queued', target: 'a', createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() });
+        const items = [stale];
+        provider = createMockProvider({ getActiveWorkItems: jest.fn().mockImplementation(async () => items) });
+        service = new ReconcilerService(provider);
+        const staleWarnings = (): unknown[][] => warn.mock.calls.filter((c) => String(c[0]).startsWith('WorkItems queued past staleness threshold'));
+
+        await service.runFull();
+        await service.runFull();
+        await service.runFull();
+        expect(staleWarnings()).toHaveLength(1);
+        expect(staleWarnings()[0]![1]).toMatchObject({ staleIds: ['wi-stuck'] });
+
+        // A newly stale item is named on its own.
+        items.push(makeWorkItem({ id: 'wi-stuck-2', status: 'queued', target: 'b', createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() }));
+        await service.runFull();
+        expect(staleWarnings()).toHaveLength(2);
+        expect(staleWarnings()[1]![1]).toMatchObject({ staleIds: ['wi-stuck-2'], staleQueuedCount: 2 });
+
+        // An hour later both are named again.
+        const realNow = Date.now;
+        Date.now = () => realNow() + 61 * 60 * 1000;
+        try {
+          await service.runFull();
+        } finally {
+          Date.now = realNow;
+        }
+        expect(staleWarnings()).toHaveLength(3);
+        expect((staleWarnings()[2]![1] as { staleIds: string[] }).staleIds.sort()).toEqual(['wi-stuck', 'wi-stuck-2']);
+      } finally {
+        spy.mockRestore();
+      }
     });
 
     it('skips broadcast when no WIs are stale', async () => {

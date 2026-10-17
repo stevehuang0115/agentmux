@@ -296,6 +296,42 @@ describe('OwnerCompletionReportService', () => {
     expect(deliver).toHaveBeenCalledTimes(1);
   });
 
+  it('a result posted while verifying (before the item is marked verified) is the report (#1330)', async () => {
+    const svc = make();
+    // Worker hands over at T0+10 (verify item created), lead posts at T0+10.5, verifies at T0+11.
+    items = [
+      item('w', { origin: SLACK_ORIGIN, target: 'sam', at: T0, doneAt: T0 + 11 * MIN }),
+      item('w:verify', { origin: SLACK_ORIGIN, target: 'ella', type: 'review', at: T0 + 10 * MIN, doneAt: T0 + 11 * MIN, metadata: { verifyOf: 'w' } }),
+    ];
+    now = T0 + 10 * MIN + 30_000;
+    svc.noteSlackAnswer('C0MKT', '1791000000.000100');
+    now = T0 + 12 * MIN;
+    await svc.tick();
+    now += C.SETTLE_MS;
+    await svc.tick();
+    now += 3 * C.REPORT_WAIT_MS;
+    await svc.tick();
+    await svc.tick();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(postFallback).not.toHaveBeenCalled();
+    expect(svc.activeRecords).toHaveLength(0);
+  });
+
+  it('progress posted before the work was handed over still does not count (#1330 negative)', async () => {
+    const svc = make();
+    items = [
+      item('w', { origin: SLACK_ORIGIN, target: 'sam', at: T0, doneAt: T0 + 11 * MIN }),
+      item('w:verify', { origin: SLACK_ORIGIN, target: 'ella', type: 'review', at: T0 + 10 * MIN, doneAt: T0 + 11 * MIN, metadata: { verifyOf: 'w' } }),
+    ];
+    now = T0 + 5 * MIN;
+    svc.noteSlackAnswer('C0MKT', '1791000000.000100'); // "on it"
+    now = T0 + 12 * MIN;
+    await svc.tick();
+    now += C.SETTLE_MS;
+    await svc.tick();
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
   it('more work joining while settling restarts the wait; nothing is asked while work is open', async () => {
     const svc = make();
     items = [item('kai', { at: T0, doneAt: T0 + 5 * MIN })];
