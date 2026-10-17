@@ -250,6 +250,9 @@ describe('persistence', () => {
 		clock += C.MIN_WORK_MS;
 		expect(await b.onTurnEnded('ella')).toBe(0);
 		expect(await b.onTurnEnded('dex')).toBe(1);
+		// onTurnEnded saves in the background; let the write land before
+		// afterEach removes the directory (ENOTEMPTY on CI, 2026-10-17).
+		await b.flush();
 	});
 
 	it('an unreadable store starts empty', async () => {
