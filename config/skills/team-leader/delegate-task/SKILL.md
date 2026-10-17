@@ -50,6 +50,7 @@ Assigns a task to a worker within the Team Leader's subordinate scope. Validates
 | `--request-id` / `-R` | `requestId` | No | Ticket this work is for: the id (or `TKT-123`) from the `[TICKET:TKT-123 <id>]` line of the message you are acting on. Omit it and the task is still linked when your current turn has exactly one ticket |
 | `--ticket` | `ticket` | No | Project ticket this work is for (e.g. `APP-12`). Without it a ticket is created for you when the target works on a project — see Project tickets |
 | `--thread` | `thread` | No | Owner request from Slack: the key from the `[SLACK-THREAD:<key>]` of the owner's message. The member answers the owner in that thread itself — see Owner requests |
+| `--conversation` | `conversation` | No | Owner request from the Crewly chat (no Slack thread): the conversation id from the `[CHAT:<id>]` of the owner's message — see Owner requests |
 | `--no-member-fits` | `noMemberFits` | No | You keep the work: record what is missing (access, tool, permission, everyone busy). Needs `--task`; nothing is delegated — see No member fits |
 | `--work-item` | `workItemId` | No | With `--no-member-fits`: the WorkItem you keep (gets a `[NO-MEMBER-FITS]` note) |
 | `--progress-check` | `monitor.progressCheckMinutes` | No | Opt in to a recurring "TL progress check" every N minutes for this delegation. Off by default; values under 30 are raised to 30. Legacy JSON `monitor.fallbackCheckMinutes` is read the same way |
@@ -84,21 +85,35 @@ yourself. Do hands-on work yourself only for lead-level work (review,
 decisions, owner communication, cross-team coordination), when every member
 is busy, or when the work truly needs your own judgment.
 
-## Owner requests (`--thread`)
+## Owner requests (`--thread` / `--conversation`)
 
 When the owner asked in Slack, pass the thread key from the owner message's
-`[SLACK-THREAD:<key>]`:
+`[SLACK-THREAD:<key>]`; when the owner asked in the Crewly chat (no Slack
+thread), pass the conversation id from its `[CHAT:<id>]`:
 
 ```bash
 bash execute.sh --to sage-session --task "Goal: … Outcome: … Eval: …" --thread C0THINK:1790000000.000100
+bash execute.sh --to sage-session --task "Goal: … Outcome: … Eval: …" --conversation 5f1c…-room
 ```
 
-The WorkItem carries the thread and the member is told to post its progress
+The WorkItem carries that place and the member is told to post its progress
 and result there itself (`reply --work-item <id>`), under its own name. You do
 not relay its answer; the room's reply gate never holds the member's post.
-Without `--thread` the thread of your last owner message is used. (A thread
-in your DM with the owner: the member's bot cannot post there, so it answers
-in its own DM with the owner, opened with `Re: <task>`.)
+(A thread in your DM with the owner: the member's bot cannot post there, so
+it answers in its own DM with the owner, opened with `Re: <task>`.)
+
+**Without `--thread` / `--conversation` the work is yours, not the owner's.**
+The WorkItem's origin is you: the member's `reply --work-item <id>` reaches
+you as an internal `[RESULT]` message, nothing goes to the owner, and Crewly
+never posts a "finished" line to the owner for it. Pass the place only when
+the owner actually asked for this work there; a place the owner last wrote in
+more than 2 hours ago is not taken (the result then comes back to you). Work
+you start on your own initiative — a refresh, a cleanup, something you noticed
+— is delegated without a place, and you decide what, if anything, the owner
+hears. (crewly#1357: a lead's own-initiative delegation inherited an old owner
+DM, and two delegations made while the lead answered the owner in a video
+thread inherited that thread; the members' internal reports landed on the
+owner.)
 
 ## No member fits (`--no-member-fits`)
 

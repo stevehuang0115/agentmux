@@ -198,6 +198,22 @@ describe('delegate-task owner thread + no member fits (crewly#1083)', () => {
     expect((add?.body as { metadata?: Record<string, unknown> }).metadata).not.toHaveProperty('ownerThread');
   });
 
+  it('--conversation sends the owner conversation id on the WorkItem metadata (crewly#1357)', async () => {
+    await runSkill([...base, '--conversation', 'room-video']);
+    const add = captured.find((c) => c.path.includes('/task-pool/add'));
+    expect((add?.body as { metadata?: { ownerConversation?: string } }).metadata?.ownerConversation).toBe('room-video');
+    await runSkill(base);
+    const plain = captured.filter((c) => c.path.includes('/task-pool/add')).pop();
+    expect((plain?.body as { metadata?: Record<string, unknown> }).metadata).not.toHaveProperty('ownerConversation');
+  });
+
+  it('appends the backend\'s result-route note (the result goes to the delegator) to the delivered brief (crewly#1357)', async () => {
+    addExtra = { resultRoute: { to: 'tl-1', note: 'Ella delegated this on their own initiative; the owner did not ask for it in any thread. Do not post it to the owner.' } };
+    await runSkill(base);
+    const deliver = captured.find((c) => c.path.includes('/deliver'));
+    expect(String((deliver?.body as { message?: string }).message)).toContain('Do not post it to the owner.');
+  });
+
   it('appends the backend\'s owner-thread note to the delivered brief', async () => {
     addExtra = { ownerThread: { key: 'C0THINK:1790000000.000100', note: 'The owner asked for this in Slack thread [SLACK-THREAD:C0THINK:1790000000.000100]. Post your progress and your result there yourself.' } };
     await runSkill(base);

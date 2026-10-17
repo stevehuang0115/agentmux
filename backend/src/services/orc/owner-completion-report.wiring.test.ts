@@ -1,4 +1,4 @@
-import { onChatRow, onSlackInboundPost, onSlackOutboundPost, postReportFallback, resolveReportPlace } from './owner-completion-report.wiring.js';
+import { onChatRow, onSlackInboundPost, onSlackOutboundPost, ownerLanguageOf, postReportFallback, resolveReportPlace, type OwnerLanguageChatReads } from './owner-completion-report.wiring.js';
 import type { ReportPlace } from './owner-completion-report.service.js';
 
 const comment = { appId: 'upb7se5pfj', commentId: 'QMSjXIhFanDw' };
@@ -78,5 +78,41 @@ describe('answer feeds', () => {
       ['C1', '1.2'],
       ['C1', '1.5'],
     ]);
+  });
+});
+
+describe('ownerLanguageOf (crewly#1357)', () => {
+  const NOW = Date.parse('2026-10-17T15:47:00Z');
+  const chat = (over: Partial<OwnerLanguageChatReads> = {}): OwnerLanguageChatReads => ({
+    findSlackThreadRoot: (conv, ts) => (conv === 'room-video' && ts === '1792000000.000100' ? { id: 'root-1' } : null),
+    listThreadForBridge: (conv, root) =>
+      conv === 'room-video' && root === 'root-1'
+        ? [
+            { senderType: 'user', content: '什么是投资？帮我做个视频', createdAt: NOW - 60_000 },
+            { senderType: 'agent', content: 'On it — recording the English demo now.', createdAt: NOW - 30_000 },
+          ]
+        : [],
+    getRecentOwnerMessageContents: () => ['please ship it today', 'thanks'],
+    ...over,
+  });
+  const mapping = (ch: string) => (ch === 'C0VIDEO' ? 'room-video' : null);
+
+  it('reads the owner\'s own messages in the Slack thread (agents\' English does not count)', () => {
+    const origin = { kind: 'owner' as const, slackChannelId: 'C0VIDEO', threadTs: '1792000000.000100', receivedBy: 'ella' };
+    expect(ownerLanguageOf(origin, { kind: 'slack', slackChannelId: 'C0VIDEO', threadTs: '1792000000.000100', label: 't' }, chat(), mapping, NOW)).toBe('zh');
+    // The conversation id on the origin spares the channel mapping.
+    expect(ownerLanguageOf({ ...origin, conversationId: 'room-video' }, null, chat(), () => null, NOW)).toBe('zh');
+  });
+
+  it('a chat thread root is read directly; a place with no owner text falls back to the owner\'s recent messages; nothing → null', () => {
+    const c = chat({ listThreadForBridge: (conv, root) => (root === 'root-9' ? [{ senderType: 'user', content: 'Record the two accounts flow', createdAt: NOW }] : []) });
+    expect(ownerLanguageOf({ kind: 'owner', conversationId: 'conv-1', chatThreadId: 'root-9' }, null, c, () => null, NOW)).toBe('en');
+    expect(ownerLanguageOf({ kind: 'owner', slackChannelId: 'D0DM' }, null, chat({ getRecentOwnerMessageContents: () => ['今天把排期卡文案写完'] }), () => null, NOW)).toBe('zh');
+    expect(ownerLanguageOf({ kind: 'owner', slackChannelId: 'D0DM' }, null, chat({ getRecentOwnerMessageContents: () => [] }), () => null, NOW)).toBeNull();
+  });
+
+  it('never throws', () => {
+    const broken = chat({ findSlackThreadRoot: () => { throw new Error('db closed'); } });
+    expect(ownerLanguageOf({ kind: 'owner', conversationId: 'room-video', threadTs: '1792000000.000100' }, null, broken, () => null, NOW)).toBeNull();
   });
 });

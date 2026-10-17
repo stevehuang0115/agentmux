@@ -1,11 +1,17 @@
 import type { WorkItem } from '../../types/v2/work-item.types.js';
 import type { TurnOrigin } from './orc-reply-route.service.js';
+import { WORK_ITEM_DESTINATION_CONSTANTS } from '../../constants.js';
 import {
+  buildAgentOrigin,
   buildTriggerOrigin,
   currentWorkItemOf,
+  delegatorResultNote,
   inheritedOrigin,
   isDelegatedInThread,
+  isOwnerRequestTooOld,
+  isWorkItemOrigin,
   originOfWorkItem,
+  ownerOriginFromConversation,
   ownerOriginFromThreadKey,
   ownerThreadHandover,
   ownerOriginFromTurn,
@@ -14,7 +20,7 @@ import {
   shortTopic,
   withTopicLine,
 } from './work-item-destination.js';
-import { resolveAgentSlackDestination, type WorkDestinationDeps } from './work-item-destination.wiring.js';
+import { agentResultText, deliverToWorkDestination, resolveAgentSlackDestination, type WorkDestinationDeps } from './work-item-destination.wiring.js';
 
 const NOW = Date.parse('2026-10-01T15:00:00Z');
 const HOUR = 60 * 60 * 1000;
@@ -215,7 +221,7 @@ describe('origin chain: request → delegate → verify / retry / subtask', () =
     const origin = { ...ownerOriginFromTurn(ownerTurn, 'ella') };
     const creatorWorkItem = wi({ id: 'atlas-work', target: 'atlas', metadata: { origin } });
     const creatorDestination = planWorkDestination({ workItem: creatorWorkItem, now: NOW });
-    const got = inheritedOrigin({ workItem: wi({ id: 'sage-work' }), parent: null, creatorDestination, creatorWorkItem, creatorSession: 'atlas' });
+    const got = inheritedOrigin({ workItem: wi({ id: 'sage-work' }), parent: null, creatorDestination, creatorWorkItem, creatorSession: 'atlas', now: NOW });
     expect(got).toEqual(origin);
   });
 
@@ -277,5 +283,120 @@ describe('owner-thread hand-over (crewly#1083)', () => {
     expect(ownerThreadHandover(wi({ metadata: { origin: { kind: 'owner', conversationId: 'chat-1' } } }), 'Atlas')).toBeNull();
     expect(ownerThreadHandover(wi({ metadata: {} }), 'Atlas')).toBeNull();
     expect(ownerThreadHandover(wi({ target: 'Atlas', metadata: { origin: ownerOrigin } }), 'Atlas')).toBeNull();
+  });
+});
+
+describe('agent-initiated delegations (crewly#1357)', () => {
+  const ownerTurn: TurnOrigin = { conversationId: 'room-video', slackChannelId: 'C0VIDEO', slackThreadKey: 'C0VIDEO:1792000000.000100', receivedAt: NOW - 60_000 };
+
+  it('an agent origin is a valid origin; its destination is that agent', () => {
+    const origin = buildAgentOrigin('ella');
+    expect(origin).toEqual({ kind: 'agent', sessionName: 'ella' });
+    expect(isWorkItemOrigin(origin)).toBe(true);
+    expect(isWorkItemOrigin({ kind: 'agent' })).toBe(false);
+    expect(isWorkItemOrigin({ kind: 'agent', sessionName: '' })).toBe(false);
+    const item = wi({ id: 'x-prep', target: 'lyra', metadata: { origin } });
+    expect(originOfWorkItem(item)).toEqual(origin);
+    // Even a fresh owner turn of the member does not redirect the result to the owner once the item is its current work.
+    const dest = planWorkDestination({ workItem: item, ownerOrigin: owner(NOW - 3 * HOUR), now: NOW });
+    expect(dest).toEqual({ kind: 'agent', sessionName: 'ella', reason: expect.stringContaining('delegated by ella on its own initiative') });
+  });
+
+  it('a delegation made while answering the owner does NOT inherit that thread: the origin is the delegator (incident 15:47Z)', () => {
+    const creatorDestination = planWorkDestination({ workItem: null, ownerOrigin: ownerTurn, now: NOW });
+    const delegate = wi({ id: 'cards', target: 'lyra', metadata: { delegatedBy: 'ella' } });
+    expect(inheritedOrigin({ workItem: delegate, parent: null, creatorDestination, creatorWorkItem: null, creatorSession: 'ella', delegation: true, now: NOW })).toEqual(buildAgentOrigin('ella'));
+  });
+
+  it('a delegation does not inherit the delegator\'s owner context nor its running work\'s owner origin (incident 12:54Z)', () => {
+    const stale = { ...ownerOriginFromTurn({ conversationId: 'slack-D0AC7NF5N7L-1791472064', slackChannelId: 'D0AC7NF5N7L', receivedAt: NOW - 9 * 24 * HOUR }, 'ella') };
+    const running = wi({ id: 'ella-standing', target: 'ella', startedAt: new Date(NOW - 9 * 24 * HOUR).toISOString(), metadata: { origin: stale } });
+    const ctx = { origin: { kind: 'owner' as const, receivedBy: 'lyra', appComment: { appId: 'app1', commentId: 'c1' } }, at: NOW - 1000 };
+    const got = inheritedOrigin({
+      workItem: wi({ id: 'x-prep', target: 'lyra' }),
+      parent: null,
+      creatorDestination: planWorkDestination({ workItem: running, now: NOW }),
+      creatorWorkItem: running,
+      creatorOwnerContext: ctx,
+      creatorSession: 'ella',
+      delegation: true,
+      now: NOW,
+    });
+    expect(got).toEqual(buildAgentOrigin('ella'));
+  });
+
+  it('a delegation that continues a parent (verify / retry) still takes the parent\'s origin', () => {
+    const parentOrigin = ownerOriginFromTurn(ownerTurn, 'ella');
+    const parent = wi({ id: 'p', target: 'lyra', metadata: { origin: parentOrigin } });
+    expect(inheritedOrigin({ workItem: wi({ id: 'p:retry', target: 'kai' }), parent, creatorDestination: null, creatorWorkItem: null, creatorSession: 'ella', delegation: true, now: NOW })).toEqual(parentOrigin);
+  });
+
+  it('a delegation with no known delegator inherits nothing', () => {
+    expect(inheritedOrigin({ workItem: wi({ id: 'n' }), parent: null, creatorDestination: null, creatorWorkItem: null, delegation: true, now: NOW })).toBeNull();
+  });
+
+  it('self-created work still inherits the creator\'s fresh owner turn, but never an owner origin older than ORIGIN_INHERIT_MAX_AGE_MS from its running work', () => {
+    const creatorDestination = planWorkDestination({ workItem: null, ownerOrigin: ownerTurn, now: NOW });
+    expect(inheritedOrigin({ workItem: wi({ id: 'self', target: 'ella' }), parent: null, creatorDestination, creatorWorkItem: null, creatorSession: 'ella', now: NOW })).toEqual(
+      expect.objectContaining({ kind: 'owner', slackChannelId: 'C0VIDEO', receivedBy: 'ella' }),
+    );
+    const old = ownerOriginFromTurn({ conversationId: 'dm-old', slackChannelId: 'D0OLD', receivedAt: NOW - 3 * HOUR }, 'ella');
+    const running = wi({ id: 'ella-old', target: 'ella', startedAt: new Date(NOW - WORK_ITEM_DESTINATION_CONSTANTS.ORIGIN_INHERIT_MAX_AGE_MS - 60_000).toISOString(), metadata: { origin: old } });
+    expect(inheritedOrigin({ workItem: wi({ id: 'sub', target: 'ella' }), parent: null, creatorDestination: planWorkDestination({ workItem: running, now: NOW }), creatorWorkItem: running, creatorSession: 'ella', now: NOW })).toBeNull();
+    const recent = wi({ ...running, startedAt: new Date(NOW - HOUR).toISOString() });
+    expect(inheritedOrigin({ workItem: wi({ id: 'sub2', target: 'ella' }), parent: null, creatorDestination: planWorkDestination({ workItem: recent, now: NOW }), creatorWorkItem: recent, creatorSession: 'ella', now: NOW })).toEqual(old);
+  });
+
+  it('isOwnerRequestTooOld: older than the cap is too old; unknown is not', () => {
+    expect(isOwnerRequestTooOld(NOW - WORK_ITEM_DESTINATION_CONSTANTS.ORIGIN_INHERIT_MAX_AGE_MS - 1, NOW)).toBe(true);
+    expect(isOwnerRequestTooOld(NOW - HOUR, NOW)).toBe(false);
+    expect(isOwnerRequestTooOld(null, NOW)).toBe(false);
+    expect(isOwnerRequestTooOld(undefined, NOW)).toBe(false);
+  });
+
+  it('ownerOriginFromConversation reads a conversation id (optionally with its thread root)', () => {
+    expect(ownerOriginFromConversation(' room-video ')).toEqual({ kind: 'owner', conversationId: 'room-video' });
+    expect(ownerOriginFromConversation('room-video', 'root-7')).toEqual({ kind: 'owner', conversationId: 'room-video', chatThreadId: 'root-7' });
+    expect(ownerOriginFromConversation('')).toBeNull();
+    expect(ownerOriginFromConversation('two words')).toBeNull();
+    expect(ownerOriginFromConversation(42)).toBeNull();
+  });
+
+  it('delegatorResultNote tells the member the result goes to the delegator, not the owner', () => {
+    const item = wi({ id: 'wi-9', target: 'lyra', metadata: { origin: buildAgentOrigin('ella-session') } });
+    const note = delegatorResultNote(item, 'Ella');
+    expect(note?.to).toBe('ella-session');
+    expect(note?.note).toContain('Ella delegated this on their own initiative');
+    expect(note?.note).toContain('reply --work-item wi-9');
+    expect(note?.note).toContain('Do not post it to the owner.');
+    expect(delegatorResultNote(wi({ metadata: { origin: { kind: 'owner', conversationId: 'c' } } }), 'Ella')).toBeNull();
+    expect(delegatorResultNote(wi({ metadata: {} }))).toBeNull();
+  });
+
+  it('delivering to an agent destination messages the delegator with the tagged result; no Slack place is involved', async () => {
+    const messageAgent = jest.fn(async (_to: string, _text: string) => true);
+    const item = wi({ id: 'wi-9', target: 'lyra', title: 'Refresh today\'s X reply prep', metadata: { origin: buildAgentOrigin('ella') } });
+    const deps = {
+      poolItems: async () => [item],
+      ownerOrigin: () => undefined,
+      now: () => NOW,
+      teamChannelOf: async () => ({ slackChannelId: 'C0TEAM1', teamId: 'team-1' }),
+      ticketThreads: () => null,
+      ticketInfo: async () => null,
+      post: jest.fn(async () => ({ channelId: 'C0TEAM1', messageTs: '1.1' })),
+      messageAgent,
+    } as unknown as WorkDestinationDeps;
+    const dest = planWorkDestination({ workItem: item, now: NOW });
+    const delivered = await deliverToWorkDestination('lyra', dest, 'Done: 12 replies drafted.', deps);
+    expect(delivered).toEqual({ kind: 'agent', agentSession: 'ella', reason: expect.any(String) });
+    expect(messageAgent).toHaveBeenCalledWith('ella', agentResultText('lyra', 'Done: 12 replies drafted.', item));
+    expect(messageAgent.mock.calls[0][1]).toContain(`${WORK_ITEM_DESTINATION_CONSTANTS.AGENT_RESULT_TAG} From lyra about WorkItem wi-9`);
+    expect(messageAgent.mock.calls[0][1]).toContain('decide yourself what, if anything, the owner hears');
+    expect((deps.post as jest.Mock)).not.toHaveBeenCalled();
+    expect(await resolveAgentSlackDestination('lyra', deps)).toBeNull();
+    // No messenger wired → nowhere to deliver (the reply reports it).
+    expect(await deliverToWorkDestination('lyra', dest, 'x', { ...deps, messageAgent: undefined })).toBeNull();
+    // The messenger refusing → the same.
+    expect(await deliverToWorkDestination('lyra', dest, 'x', { ...deps, messageAgent: async () => false })).toBeNull();
   });
 });

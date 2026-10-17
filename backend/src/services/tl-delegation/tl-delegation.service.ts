@@ -118,7 +118,7 @@ export function buildNudgeText(edits: number, members: readonly NudgeMember[]): 
     `${TL_DELEGATION_CONSTANTS.NUDGE_TAG} You have edited files ${edits} times in the last ${minutes} minutes. ` +
     `As team lead, hand hands-on work to a member: ${named}. ` +
     'Any member can do any work that needs no special account, tool or permission — role is a preference, not a limit. ' +
-    'Delegate with delegate-task (pass --thread <key> for an owner request, so the member answers the owner in that thread). ' +
+    'Delegate with delegate-task (pass --thread <key> for an owner request, so the member answers the owner in that thread; without it the result comes back to you). ' +
     'Keep it only if the change is tiny, every member is busy, or it needs your own judgment — then record why: ' +
     'delegate-task --no-member-fits "<what is missing>" --task "<the work>".'
   );

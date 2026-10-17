@@ -2409,6 +2409,13 @@ void (async () => {
 				crewlyHome: this.config.crewlyHome,
 				sendToAgent: (session, text) => this.apiController.agentRegistrationService.sendMessageToAgent(session, text),
 			});
+			// Results of work an agent delegated on its own initiative go back to
+			// that agent as an internal message (crewly#1357).
+			const { setAgentMessenger } = await import('./services/orc/work-item-destination.wiring.js');
+			setAgentMessenger(async (session, text) => {
+				const res = await this.apiController.agentRegistrationService.sendMessageToAgent(session, text);
+				return res.success !== false;
+			});
 			// Return path of agent-to-agent messages: an answer the receiver never
 			// sent back is handed to the asker at the end of its turn (2026-10-14).
 			createAgentAskLedger({
@@ -7364,6 +7371,19 @@ void (async () => {
 					}
 				},
 				resolvePlace: (origin) => wiring.resolveReportPlace(origin, commentLink),
+				ownerLanguage: async (origin, place) => {
+					const { getSlackTeamChannelService } = await import('./services/slack/slack-team-channel.service.js');
+					const { getSlackAgentDmService } = await import('./services/slack/slack-agent-dm.service.js');
+					return wiring.ownerLanguageOf(
+						origin,
+						place,
+						chatV2,
+						(slackChannelId) =>
+							getSlackTeamChannelService()?.findBySlackChannelId(slackChannelId)?.chatChannelId ??
+							getSlackAgentDmService()?.findBySlackChannelId(slackChannelId)?.chatChannelId ??
+							null,
+					);
+				},
 				postFallback: (place, agent, text) =>
 					wiring.postReportFallback(place, agent, text, {
 						replyComment: async (appId, commentId, agentSession, body) => {

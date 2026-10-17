@@ -6,6 +6,7 @@
 
 import {
   getChatV2Service,
+  peekChatV2Service,
   resetChatV2Service,
   setChatV2ServiceForTesting,
 } from './chat-v2.singleton.js';
@@ -31,6 +32,14 @@ describe('chat-v2 singleton', () => {
     const first = getChatV2Service({ config: loadChatV2Config({}), db });
     const second = getChatV2Service();
     expect(second).toBe(first);
+  });
+
+  it('peekChatV2Service never constructs: null before the first get, the instance after', () => {
+    expect(peekChatV2Service()).toBeNull();
+    const db = openChatDatabase({ dbPath: ':memory:', inMemory: true, skipIntegrityCheck: true });
+    const inst = new ChatV2Service({ config: loadChatV2Config({}), db });
+    setChatV2ServiceForTesting(inst);
+    expect(peekChatV2Service()).toBe(inst);
   });
 
   it('resetChatV2Service closes and clears', () => {

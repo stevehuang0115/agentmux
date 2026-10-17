@@ -1399,6 +1399,33 @@ describe('TaskPoolController', () => {
         const res = mockRes();
         await addItem(mockReq({ body: { ...body(), projectTicketId: undefined, metadata: { delegatedBy: 'tl-sam' } } }), res);
         expect(res.json.mock.calls[0][0].data.ownerThread).toBeUndefined();
+        expect(res.json.mock.calls[0][0].data.resultRoute).toBeUndefined();
+      });
+
+      // crewly#1357: a delegation the owner did not ask for in any thread.
+      it('names the delegator as where the result goes when the stored item carries an agent origin', async () => {
+        routeDelegation.mockResolvedValue(null);
+        mockService.addToPool.mockImplementationOnce(async (wi: Record<string, unknown>) => {
+          wi.metadata = { ...((wi.metadata as Record<string, unknown>) ?? {}), origin: { kind: 'agent', sessionName: 'tl-sam' } };
+        });
+        const res = mockRes();
+        await addItem(mockReq({ headers: { 'x-agent-session': 'tl-sam' }, body: { ...body(), projectTicketId: undefined } }), res);
+        expect(res.status).toHaveBeenCalledWith(201);
+        const data = res.json.mock.calls[0][0].data;
+        expect(data.ownerThread).toBeUndefined();
+        expect(data.resultRoute.to).toBe('tl-sam');
+        expect(data.resultRoute.note).toContain(`reply --work-item ${data.id}`);
+        expect(data.resultRoute.note).toContain('Do not post it to the owner.');
+      });
+
+      it('a self-targeted item gets neither note', async () => {
+        routeDelegation.mockResolvedValue(null);
+        mockService.addToPool.mockImplementationOnce(async (wi: Record<string, unknown>) => {
+          wi.metadata = { ...((wi.metadata as Record<string, unknown>) ?? {}), origin: { kind: 'agent', sessionName: 'tl-sam' } };
+        });
+        const res = mockRes();
+        await addItem(mockReq({ headers: { 'x-agent-session': 'crewly-product-leo' }, body: { ...body(), projectTicketId: undefined } }), res);
+        expect(res.json.mock.calls[0][0].data.resultRoute).toBeUndefined();
       });
 
       it('refuses with project_ticket_refused and adds nothing', async () => {

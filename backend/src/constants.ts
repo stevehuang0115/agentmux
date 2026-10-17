@@ -7689,6 +7689,15 @@ export const WORK_ITEM_DESTINATION_CONSTANTS = {
 	METADATA_KEY: 'origin',
 	/** An owner turn origin newer than this (ms) still counts as the current work when no work item is running */
 	OWNER_ORIGIN_FRESH_MS: 2 * 60 * 60 * 1000,
+	/**
+	 * An owner origin whose request is older than this (ms) is never inherited by
+	 * new work, explicit or not (crewly#1357: a delegation carried an owner DM
+	 * from nine days earlier). A verbatim `metadata.origin` in the add body is
+	 * not an inheritance and is kept as given.
+	 */
+	ORIGIN_INHERIT_MAX_AGE_MS: 2 * 60 * 60 * 1000,
+	/** Tag that opens the message a delegating agent gets with a result for work it handed out */
+	AGENT_RESULT_TAG: '[RESULT]',
 	/** Max characters of the topic line of a new top-level post */
 	TOPIC_MAX_CHARS: 120,
 	/** The one line every prompt carries about where to answer */
@@ -7705,8 +7714,11 @@ export const OWNER_COMPLETION_REPORT_CONSTANTS = {
 	TICK_MS: 60_000,
 	/** A chain must stay finished this long before the report is asked for — the lead may still be handing out the next step (ms) */
 	SETTLE_MS: 5 * 60_000,
-	/** Wait for the report after asking (and again after the one reminder) (ms) */
-	REPORT_WAIT_MS: 20 * 60_000,
+	/**
+	 * After the one nudge, the agent has this long to post its own report before
+	 * the harness posts one line for it (ms) (crewly#1357)
+	 */
+	NUDGE_GRACE_MS: 30 * 60_000,
 	/** Chains whose first item is older than this are never reported (ms) */
 	MAX_CHAIN_AGE_MS: 14 * 24 * 60 * 60_000,
 	/** Finished chain records are forgotten after this long (ms) */
@@ -7717,10 +7729,14 @@ export const OWNER_COMPLETION_REPORT_CONSTANTS = {
 	MAX_TITLES: 5,
 	/** Max characters of one title in a message */
 	TITLE_MAX_CHARS: 90,
-	/** Max evidence lines in the fallback post */
-	MAX_EVIDENCE_LINES: 6,
-	/** Max characters of one evidence line */
-	EVIDENCE_LINE_MAX_CHARS: 200,
+	/** Max characters of one deliverable named in the fallback line */
+	DELIVERABLE_MAX_CHARS: 90,
+	/** Share of CJK characters in the owner's text above which the fallback line is written in Chinese */
+	OWNER_LANGUAGE_CJK_MIN_RATIO: 0.2,
+	/** How far back the owner's recent messages are read to pick the fallback line's language (ms) */
+	OWNER_LANGUAGE_LOOKBACK_MS: 7 * 24 * 60 * 60_000,
+	/** How many recent owner messages are read for that */
+	OWNER_LANGUAGE_SAMPLE: 30,
 	/** An app comment / relayed owner request stays the agent's current request this long (ms) */
 	CONTEXT_FRESH_MS: 2 * 60 * 60 * 1000,
 	/** Max sessions the owner-request context registry remembers */
@@ -7735,6 +7751,8 @@ export const OWNER_COMPLETION_REPORT_CONSTANTS = {
 export const TL_DELEGATION_CONSTANTS = {
 	/** WorkItem.metadata / add-body field: the owner's Slack thread key a delegation answers */
 	OWNER_THREAD_FIELD: 'ownerThread',
+	/** WorkItem.metadata / add-body field: the owner's chat conversation a delegation answers (crewly#1357) */
+	OWNER_CONVERSATION_FIELD: 'ownerConversation',
 	/** A done item still lets its agent post in the owner's thread this long (ms) */
 	DONE_THREAD_GRACE_MS: 60 * 60 * 1000,
 	/** Claude Code tools that count as hands-on file edits */

@@ -39,7 +39,7 @@ import { ORCHESTRATOR_SESSION_NAME, PROJECT_TICKET_CONSTANTS, OPEN_ITEMS_CONSTAN
 import { decideCompletion, decideReviewAccept, evidenceRequiredFor, resolveEvidenceEnforcementMode } from '../../services/task-pool/completion-evidence.service.js';
 import { readAgentSessionHeader, resolveTransitionActor } from '../../utils/agent-caller.utils.js';
 import { getTicketIntakeService } from '../../services/v3/ticket-intake.service.js';
-import { ownerThreadHandover } from '../../services/orc/work-item-destination.js';
+import { ownerThreadHandover, delegatorResultNote } from '../../services/orc/work-item-destination.js';
 import { TlDelegationService } from '../../services/tl-delegation/tl-delegation.service.js';
 import { isTicketNumberRef } from '../../types/v2/ticket.types.js';
 import { ProjectTicketError } from '../../services/project-tickets/project-ticket.service.js';
@@ -566,9 +566,11 @@ export async function addItem(req: Request, res: Response): Promise<void> {
     // told to answer the owner there itself; a delegation soon after an
     // execution nudge counts as following it.
     const delegator = delegatorOf(req, workItem);
-    const ownerThread = delegator && workItem.target && workItem.target !== delegator
-      ? ownerThreadHandover(workItem, await memberNameOf(delegator))
-      : null;
+    const delegatorName = delegator && workItem.target && workItem.target !== delegator ? await memberNameOf(delegator) : null;
+    const ownerThread = delegatorName ? ownerThreadHandover(workItem, delegatorName) : null;
+    // crewly#1357: a delegation the owner did not ask for in any thread — the
+    // member reports to the delegator, never to the owner.
+    const resultRoute = delegatorName ? delegatorResultNote(workItem, delegatorName) : null;
     if (workItem.type === 'delegate') TlDelegationService.getInstance().recordDelegation(delegator, workItem.target);
 
     res.status(201).json({
@@ -579,6 +581,7 @@ export async function addItem(req: Request, res: Response): Promise<void> {
         id: workItem.id,
         status: workItem.status,
         ...(ownerThread ? { ownerThread } : {}),
+        ...(resultRoute ? { resultRoute } : {}),
         ...(routed
           ? {
               projectTicket: {
