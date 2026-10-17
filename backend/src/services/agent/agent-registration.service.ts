@@ -68,6 +68,7 @@ import { appendIncompleteNotice } from '../../utils/incomplete-turn.utils.js';
 import { filterAgentTurnReply } from '../../utils/agent-reply-filter.utils.js';
 import { getSettingsService } from '../settings/settings.service.js';
 import { SessionMemoryService } from '../memory/session-memory.service.js';
+import { StartupBriefingService } from '../memory/startup-briefing.service.js';
 import { ActiveWorkBriefingService } from './active-work-briefing.service.js';
 import { RuntimeExitMonitorService } from './runtime-exit-monitor.service.js';
 import { ContextWindowMonitorService } from './context-window-monitor.service.js';
@@ -2843,6 +2844,22 @@ export class AgentRegistrationService {
 				this.logger.warn('Failed to generate startup briefing (non-critical)', {
 					sessionName,
 					error: briefingError instanceof Error ? briefingError.message : String(briefingError),
+				});
+			}
+
+			// #1345: project wiki pages, the agent's recent lessons and open owner
+			// threads. Travels with the session briefing (same module, compactable).
+			try {
+				const knowledgeMd = await StartupBriefingService.getInstance().build({ sessionName, role, projectPath });
+				if (knowledgeMd) {
+					sessionBriefingMd = sessionBriefingMd ? `${sessionBriefingMd}\n\n${knowledgeMd}` : knowledgeMd;
+					prompt += `\n\n---\n\n${knowledgeMd}`;
+					this.logger.info('Startup knowledge briefing injected into prompt', { sessionName, role, briefingLength: knowledgeMd.length });
+				}
+			} catch (knowledgeError) {
+				this.logger.warn('Failed to generate startup knowledge briefing (non-critical)', {
+					sessionName,
+					error: knowledgeError instanceof Error ? knowledgeError.message : String(knowledgeError),
 				});
 			}
 

@@ -24,7 +24,9 @@ import * as path from 'path';
 import { existsSync } from 'fs';
 import { overlayRootFor } from './wiki-overlay.resolver.js';
 import { parsePage, isVisibleTo } from './wiki-page.js';
-import { WIKI_KB_CONSTANTS } from '../../constants.js';
+import { WIKI_KB_CONSTANTS, WIKI_LOG_CONSTANTS } from '../../constants.js';
+import { isLogArchivePath, LOG_ARCHIVE_DIR_NAME } from './wiki-vault-walk.js';
+import { logEntryPath, parseLogEntries, recentContentEntries, type WikiLogEntryRecord } from './wiki-log-entries.js';
 
 /** Cap on how many .md files are inspected per search. */
 export const WIKI_SEARCH_MAX_FILES = 500;
@@ -110,11 +112,27 @@ export interface WikiMultiSearchInput extends WikiSearchFilters {
   query: string;
 }
 
-/** A candidate document: where it lives (which vault) + how to read it. */
+/**
+ * A candidate document: where it lives (which vault) + how to read it. A
+ * log entry is a virtual document: its `content` is given inline (nothing
+ * to read from `absPath`) and its score is scaled by `weight` (#1345).
+ */
 interface DocRef {
   vaultPath: string;
   relativePath: string;
   absPath: string;
+  /** Inline content for virtual documents (log entries). */
+  content?: string;
+  /** Score multiplier (default 1). */
+  weight?: number;
+}
+
+/** Vault-relative document with optional inline content (log entries). */
+export interface WikiSearchDoc {
+  relativePath: string;
+  absPath: string;
+  content?: string;
+  weight?: number;
 }
 
 /** A document gathered for scoring: where it lives + its term statistics. */
@@ -127,6 +145,10 @@ interface ScoredDoc {
   length: number;
   /** Per-query-term frequency in this doc. */
   termFreq: Map<string, number>;
+  /** Inline content (virtual documents) — snippets come from here. */
+  content?: string;
+  /** Score multiplier. */
+  weight: number;
 }
 
 /**
@@ -256,7 +278,7 @@ export class WikiSearchService {
    */
   async searchCorpus(
     vaultPath: string,
-    docs: Array<{ relativePath: string; absPath: string }>,
+    docs: WikiSearchDoc[],
     query: string,
     filters: WikiSearchFilters = {},
   ): Promise<WikiSearchHit[]> {
@@ -306,7 +328,7 @@ export class WikiSearchService {
     }
 
     const scored = docs
-      .map((d) => ({ doc: d, score: this.bm25Score(d, queryTerms, idf, avgdl) }))
+      .map((d) => ({ doc: d, score: this.bm25Score(d, queryTerms, idf, avgdl) * d.weight }))
       .filter((s) => s.score > 0);
 
     // Rank: filename/title matches first, then BM25 score, then path for stability.
@@ -322,7 +344,7 @@ export class WikiSearchService {
     // Pass 2: build snippets only for the top results (re-read those files).
     const hits: WikiSearchHit[] = [];
     for (const { doc, score } of top) {
-      const { matchCount, snippets } = await this.buildSnippets(doc.absPath, queryTerms, needleLower);
+      const { matchCount, snippets } = await this.buildSnippets(doc.absPath, queryTerms, needleLower, doc.content);
       hits.push({
         relativePath: doc.relativePath,
         filenameMatch: doc.filenameMatch,
@@ -343,9 +365,9 @@ export class WikiSearchService {
    * @param vaultPath - Absolute vault root.
    * @returns Deduped list of `{ relativePath, absPath }`, capped at the limit.
    */
-  private async collectDocs(vaultPath: string): Promise<Array<{ relativePath: string; absPath: string }>> {
+  private async collectDocs(vaultPath: string): Promise<WikiSearchDoc[]> {
     const seen = new Set<string>();
-    const out: Array<{ relativePath: string; absPath: string }> = [];
+    const out: WikiSearchDoc[] = [];
 
     const add = (relativePath: string, absPath: string): void => {
       if (seen.has(relativePath)) return;
@@ -353,9 +375,19 @@ export class WikiSearchService {
       out.push({ relativePath, absPath });
     };
 
+    // The activity log is never one document: a 19 MB append-only file
+    // would either be skipped by the size cap or drown every page. Its
+    // recent entries join the corpus one by one below (#1345).
     for (const rel of await this.walkMd(vaultPath)) {
       if (out.length >= WIKI_SEARCH_MAX_FILES) return out;
+      if (rel === WIKI_LOG_CONSTANTS.LOG_RELATIVE_PATH || isLogArchivePath(rel)) continue;
       add(rel, path.join(vaultPath, rel));
+    }
+    for (const doc of await this.collectLogEntryDocs(vaultPath)) {
+      if (out.length >= WIKI_SEARCH_MAX_FILES) return out;
+      if (seen.has(doc.relativePath)) continue;
+      seen.add(doc.relativePath);
+      out.push(doc);
     }
 
     for (const folder of ['sop', 'team-norm']) {
@@ -371,8 +403,51 @@ export class WikiSearchService {
   }
 
   /**
+   * Recent `log.md` entries of a vault as virtual documents (#1345): one per
+   * entry from the last `SEARCH_WINDOW_DAYS`, content-free templated entries
+   * and duplicate bodies dropped, newest first, capped, each weighted below
+   * a page of equal relevance.
+   *
+   * @param vaultPath - Vault root
+   * @returns Virtual documents (empty when the vault has no log)
+   */
+  async collectLogEntryDocs(vaultPath: string, now: number = Date.now()): Promise<WikiSearchDoc[]> {
+    const abs = path.join(vaultPath, WIKI_LOG_CONSTANTS.LOG_RELATIVE_PATH);
+    let raw: string;
+    try {
+      raw = await fs.readFile(abs, 'utf8');
+    } catch {
+      return [];
+    }
+    const recent = recentContentEntries(
+      parseLogEntries(raw),
+      WIKI_LOG_CONSTANTS.SEARCH_WINDOW_DAYS,
+      now,
+      WIKI_LOG_CONSTANTS.SEARCH_MAX_ENTRIES_PER_VAULT,
+    );
+    return recent.map((entry) => this.logEntryDoc(abs, entry));
+  }
+
+  /**
+   * Build the virtual document for one log entry.
+   *
+   * @param absLogPath - Absolute path of the log file (for reference only)
+   * @param entry - Parsed entry
+   * @returns Document with inline content and the log-entry weight
+   */
+  private logEntryDoc(absLogPath: string, entry: WikiLogEntryRecord): WikiSearchDoc {
+    return {
+      relativePath: logEntryPath(entry),
+      absPath: absLogPath,
+      content: `${entry.sourceType} ${entry.caller}\n${entry.body}`,
+      weight: WIKI_LOG_CONSTANTS.SEARCH_ENTRY_WEIGHT,
+    };
+  }
+
+  /**
    * Recursively collect `.md` files under `root`, returned as root-relative
-   * POSIX paths. Skips dotfile dirs (`.git`, `.queue`) and stops at the cap.
+   * POSIX paths. Skips dotfile dirs (`.git`, `.queue`), the rotated-log
+   * archive, and stops at the cap.
    */
   private async walkMd(root: string): Promise<string[]> {
     const acc: string[] = [];
@@ -389,6 +464,7 @@ export class WikiSearchService {
         if (entry.name.startsWith('.')) continue;
         const abs = path.join(dir, entry.name);
         if (entry.isDirectory()) {
+          if (entry.name === LOG_ARCHIVE_DIR_NAME && path.basename(dir) === 'llm-curated') continue;
           await walk(abs);
         } else if (entry.isFile() && entry.name.endsWith('.md')) {
           acc.push(path.relative(root, abs).replace(/\\/g, '/'));
@@ -406,10 +482,14 @@ export class WikiSearchService {
    */
   private async statDoc(ref: DocRef, queryTerms: string[], filters: WikiSearchFilters = {}): Promise<ScoredDoc | null> {
     const { vaultPath, relativePath, absPath } = ref;
-    const filenameMatch = queryTerms.some((t) => relativePath.toLowerCase().includes(t));
+    const weight = ref.weight ?? 1;
+    const isVirtual = typeof ref.content === 'string';
+    // A log entry's pseudo path (`log.md#<timestamp>`) carries no title; its
+    // tokens would match any date-like query, so it never counts as a name match.
+    const filenameMatch = !isVirtual && queryTerms.some((t) => relativePath.toLowerCase().includes(t));
 
     // Filename/title tokens, folded in with a weight.
-    const nameTokens = tokenize(path.basename(relativePath, '.md'));
+    const nameTokens = isVirtual ? [] : tokenize(path.basename(relativePath, '.md'));
     const termFreq = new Map<string, number>();
     let length = 0;
 
@@ -427,24 +507,31 @@ export class WikiSearchService {
     tally(nameTokens, FILENAME_TOKEN_WEIGHT);
 
     let content = '';
-    try {
-      const stat = await fs.stat(absPath);
-      if (stat.size <= WIKI_SEARCH_MAX_FILE_BYTES) {
-        content = await fs.readFile(absPath, 'utf8');
-        const { frontmatter } = parsePage(content);
-        if (frontmatter.superseded_by && !filters.includeSuperseded) return null;
-        if (!isVisibleTo(frontmatter, filters.viewerRole)) return null;
+    if (isVirtual) {
+      content = ref.content ?? '';
+    } else {
+      try {
+        const stat = await fs.stat(absPath);
+        if (stat.size <= WIKI_SEARCH_MAX_FILE_BYTES) {
+          content = await fs.readFile(absPath, 'utf8');
+          const { frontmatter } = parsePage(content);
+          if (frontmatter.superseded_by && !filters.includeSuperseded) return null;
+          if (!isVisibleTo(frontmatter, filters.viewerRole)) return null;
+        }
+      } catch {
+        // unreadable — fall through with filename tokens only
       }
-    } catch {
-      // unreadable — fall through with filename tokens only
     }
     if (content) tally(tokenize(content), 1);
 
+    const inline = isVirtual ? content : undefined;
     // Keep filename-only matches discoverable even with no body match.
     if (length === 0) {
-      return filenameMatch ? { vaultPath, relativePath, absPath, filenameMatch, length: 1, termFreq } : null;
+      return filenameMatch
+        ? { vaultPath, relativePath, absPath, filenameMatch, length: 1, termFreq, content: inline, weight }
+        : null;
     }
-    return { vaultPath, relativePath, absPath, filenameMatch, length, termFreq };
+    return { vaultPath, relativePath, absPath, filenameMatch, length, termFreq, content: inline, weight };
   }
 
   /**
@@ -475,12 +562,17 @@ export class WikiSearchService {
     absPath: string,
     queryTerms: string[],
     needleLower: string,
+    inline?: string,
   ): Promise<{ matchCount: number; snippets: WikiSearchSnippet[] }> {
     let content: string;
-    try {
-      content = await fs.readFile(absPath, 'utf8');
-    } catch {
-      return { matchCount: 0, snippets: [] };
+    if (typeof inline === 'string') {
+      content = inline;
+    } else {
+      try {
+        content = await fs.readFile(absPath, 'utf8');
+      } catch {
+        return { matchCount: 0, snippets: [] };
+      }
     }
     const lines = content.split(/\r?\n/);
     const snippets: WikiSearchSnippet[] = [];

@@ -14,6 +14,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { existsSync } from 'fs';
+import { LOG_ARCHIVE_DIR_NAME } from './wiki-vault-walk.js';
 
 /** Hard cap on scanned files to avoid pathological vaults. */
 export const WIKI_BACKLINKS_MAX_FILES = 500;
@@ -171,6 +172,7 @@ export class WikiBacklinksService {
       if (entry.name.startsWith('.')) continue;
       const abs = path.join(dir, entry.name);
       if (entry.isDirectory()) {
+        if (entry.name === LOG_ARCHIVE_DIR_NAME && path.basename(dir) === 'llm-curated') continue;
         await this.collectMdFiles(rootDir, abs, acc);
       } else if (entry.isFile() && entry.name.endsWith('.md')) {
         const rel = path.relative(rootDir, abs).replace(/\\/g, '/');

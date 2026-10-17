@@ -10,6 +10,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
+import { WIKI_LOG_HEADER, serializeLogEntry } from './wiki-log-entries.js';
 import {
   WikiSearchService,
   WIKI_SEARCH_MAX_QUERY_LENGTH,
@@ -403,5 +404,77 @@ describe('WikiSearchService.searchCorpus — BM25 over an explicit doc list', ()
       { relativePath: 'llm-curated/decisions/pricing.md', absPath: path.join(vault, 'llm-curated/decisions/pricing.md') },
     ];
     expect(await svc.searchCorpus(vault, docs, '   ')).toEqual([]);
+  });
+});
+
+describe('WikiSearchService — log entries as documents (#1345)', () => {
+  let vault: string;
+  let search: WikiSearchService;
+  const now = Date.now();
+  const day = 86_400_000;
+
+  const entry = (ageDays: number, body: string, caller = 'leo') =>
+    serializeLogEntry({ timestamp: new Date(now - ageDays * day).toISOString(), sourceType: 'record_learning', caller, ref: `r-${ageDays}`, body });
+
+  beforeEach(async () => {
+    vault = await fs.mkdtemp(path.join(os.tmpdir(), 'wiki-search-log-'));
+    WikiSearchService.resetInstance();
+    search = WikiSearchService.getInstance();
+    await fs.mkdir(path.join(vault, 'llm-curated/decisions'), { recursive: true });
+    await fs.mkdir(path.join(vault, 'llm-curated/log-archive'), { recursive: true });
+    await fs.writeFile(path.join(vault, 'SCHEMA.md'), 'vault_scope: project\nvault_id: t\n', 'utf8');
+    await fs.writeFile(path.join(vault, 'llm-curated/decisions/pricing.md'), '# Pricing\n\nPro is $800 per month.\n', 'utf8');
+    await fs.writeFile(
+      path.join(vault, 'llm-curated/log.md'),
+      WIKI_LOG_HEADER +
+        entry(2, '(gotcha) complete-task rejects queued→done; accept-task first. Zebrafish.') +
+        entry(1, '(learning) [pattern] [[WorkItem-x]] task:done running→done. timestamp=2026-10-17T01:59:15.178Z. Source: task:done:x. Quokka.') +
+        entry(60, 'an old lesson about wombats') +
+        entry(3, 'Pro is $800 per month.'),
+      'utf8',
+    );
+    await fs.writeFile(path.join(vault, 'llm-curated/log-archive/log-2026-09-01.md'), WIKI_LOG_HEADER + entry(5, 'archived axolotl'), 'utf8');
+  });
+
+  afterEach(async () => {
+    await fs.rm(vault, { recursive: true, force: true });
+  });
+
+  it('surfaces a recent entry as its own hit with a log.md#<timestamp> path and an inline snippet', async () => {
+    const r = await search.search({ vaultPath: vault, query: 'zebrafish' });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.hits).toHaveLength(1);
+    expect(r.hits[0].relativePath).toMatch(/^llm-curated\/log\.md#\d{4}-/);
+    expect(r.hits[0].snippets[0].text).toContain('accept-task first');
+  });
+
+  it('never returns the whole log, noise entries, old entries or the archive', async () => {
+    for (const q of ['quokka', 'wombats', 'axolotl']) {
+      const r = await search.search({ vaultPath: vault, query: q });
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.hits).toEqual([]);
+    }
+    const r = await search.search({ vaultPath: vault, query: 'accept-task' });
+    if (r.ok) expect(r.hits.some((h) => h.relativePath === 'llm-curated/log.md')).toBe(false);
+  });
+
+  it('ranks a page above a log entry of equal relevance', async () => {
+    const r = await search.search({ vaultPath: vault, query: '$800 per month' });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.hits.length).toBeGreaterThanOrEqual(2);
+    expect(r.hits[0].relativePath).toBe('llm-curated/decisions/pricing.md');
+    expect(r.hits[1].relativePath.startsWith('llm-curated/log.md#')).toBe(true);
+    expect(r.hits[1].score).toBeLessThan(r.hits[0].score);
+  });
+
+  it('collectLogEntryDocs exposes the recent non-noise entries, newest first, with the entry weight', async () => {
+    const docs = await search.collectLogEntryDocs(vault, now);
+    expect(docs.map((d) => d.content)).toEqual([
+      expect.stringContaining('accept-task first'),
+      expect.stringContaining('$800 per month'),
+    ]);
+    expect(docs.every((d) => d.weight !== undefined && d.weight < 1)).toBe(true);
   });
 });

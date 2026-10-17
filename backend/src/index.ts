@@ -1212,6 +1212,53 @@ void (async () => {
 				});
 			}
 
+			// Wiki maintenance (#1345): hourly queue drain into the vault logs
+			// (the bridge below is the LLM path and is usually switched off),
+			// daily log rotation into llm-curated/log-archive/ and a weekly
+			// digest page compiled from the log. No LLM. Non-fatal.
+			try {
+				const { WikiMaintenanceService } = await import('./services/wiki/wiki-maintenance.service.js');
+				const maintenance = new WikiMaintenanceService();
+				WikiMaintenanceService.setInstance(maintenance);
+				maintenance.start();
+			} catch (maintenanceErr) {
+				this.logger.warn('Wiki maintenance failed to start (non-fatal)', {
+					error: (maintenanceErr as Error).message,
+				});
+			}
+
+			// Agent memory refresh (#1345): once a day, each active agent's own
+			// recent vault-log entries are reflected into its memory.json and
+			// gotchas/decisions into the project's memory. No LLM. Non-fatal.
+			try {
+				const { AgentMemoryRefreshService } = await import('./services/memory/agent-memory-refresh.service.js');
+				const refresh = new AgentMemoryRefreshService({
+					listAgents: async () => {
+						const projects = await this.storageService.getProjects();
+						const pathById = new Map(projects.map((p) => [p.id, p.path] as const));
+						const agents: Array<{ sessionName: string; role: string; projectPath?: string }> = [];
+						const orc = await this.storageService.getOrchestratorStatus();
+						if (orc && orc.agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE) {
+							agents.push({ sessionName: orc.sessionName, role: ORCHESTRATOR_ROLE });
+						}
+						for (const team of await this.storageService.getTeams()) {
+							const projectPath = (team.projectIds ?? []).map((id) => pathById.get(id)).find((p): p is string => !!p);
+							for (const member of team.members ?? []) {
+								if (member.agentStatus !== CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE || !member.sessionName) continue;
+								agents.push({ sessionName: member.sessionName, role: member.role, projectPath });
+							}
+						}
+						return agents;
+					},
+				});
+				AgentMemoryRefreshService.setInstance(refresh);
+				refresh.start();
+			} catch (refreshErr) {
+				this.logger.warn('Agent memory refresh failed to start (non-fatal)', {
+					error: (refreshErr as Error).message,
+				});
+			}
+
 			// LLM-wiki → WorkItem bridge (2026-05-27): pending wiki queue
 			// items + legacy migration candidates become claimable
 			// WorkItems in the V3 pool. Replaces the bookkeep/reflect

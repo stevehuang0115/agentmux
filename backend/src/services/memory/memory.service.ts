@@ -19,6 +19,7 @@ import { getCrewlyHomePath } from '../core/crewly-home.utils.js';
 import { safeReadJson } from '../../utils/file-io.utils.js';
 import { isHiddenFromDefaultRecall } from './role-knowledge-eligibility.js';
 import { isTaskCompletionLog } from './task-log-filter.js';
+import { isNoiseLogBody } from '../wiki/wiki-log-entries.js';
 import { MEMORY_CONSTANTS } from '../../constants.js';
 import type {
   RoleKnowledgeEntry,
@@ -1204,6 +1205,16 @@ export class MemoryService implements IMemoryService {
     // A "Task completed: …" summary is a task log, not a learning (#833).
     if (isTaskCompletionLog(params.learning)) {
       this.logger.info('Skipped task-completion learning (kept on the WorkItem, not in memory)', {
+        agentId: params.agentId,
+        relatedTask: params.relatedTask,
+      });
+      return;
+    }
+    // A templated state transition ("[pattern] [[WorkItem-x]] task:done
+    // running→done. timestamp=…") carries nothing a reader could use; it
+    // filled project learnings and every vault log with noise (#1345).
+    if (isNoiseLogBody(params.learning)) {
+      this.logger.debug('Skipped content-free learning (templated record, not memory)', {
         agentId: params.agentId,
         relatedTask: params.relatedTask,
       });

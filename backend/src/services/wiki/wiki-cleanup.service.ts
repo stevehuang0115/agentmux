@@ -36,6 +36,7 @@ import { existsSync } from 'fs';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
 import { atomicWriteJson, safeReadJson, ensureDir } from '../../utils/file-io.utils.js';
 import { ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
+import { isLogArchivePath } from './wiki-vault-walk.js';
 import { redactSensitive } from './wiki-redaction.js';
 import { WikiHistoryService } from './wiki-history.service.js';
 import { WikiIndexService } from './wiki-index.service.js';
@@ -475,6 +476,8 @@ export class WikiCleanupService {
         const relParent = path.relative(vaultPath, path.join(dir, entry.name));
         const topLevel = relParent.split(path.sep)[0];
         if (FROZEN_FOLDERS.has(topLevel)) continue;
+        // Rotated logs are kept as-is, never cleanup candidates (#1345).
+        if (isLogArchivePath(relParent.split(path.sep).join('/'))) continue;
         const truncated = await this.walkPages(path.join(dir, entry.name), vaultPath, accumulator, cap);
         if (truncated) return true;
         continue;

@@ -31,7 +31,7 @@ import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { SchemaLoaderService } from './schema-loader.service.js';
 import { WikiCurationService } from './wiki-curation.service.js';
 import { WikiIndexService } from './wiki-index.service.js';
-import { walkCuratedPages, isSeedFile } from './wiki-vault-walk.js';
+import { walkCuratedPages, isSeedFile, LOG_ARCHIVE_DIR_NAME } from './wiki-vault-walk.js';
 import { parsePage } from './wiki-page.js';
 import { tokenize } from './wiki-search.service.js';
 import { WIKI_KB_CONSTANTS } from '../../constants.js';
@@ -288,6 +288,7 @@ export class WikiLintService {
       if (entry.name.startsWith('.')) continue;
       const abs = path.join(dir, entry.name);
       if (entry.isDirectory()) {
+        if (entry.name === LOG_ARCHIVE_DIR_NAME && path.basename(dir) === 'llm-curated') continue;
         await this.collectFiles(rootDir, abs, acc);
       } else if (entry.isFile() && entry.name.endsWith('.md')) {
         const rel = path.relative(rootDir, abs).replace(/\\/g, '/');

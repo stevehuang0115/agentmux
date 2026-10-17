@@ -2,13 +2,15 @@
  * AutoLearningSubscriber (LEARN-1)
  *
  * Subscribes to terminal WorkItem and mission lifecycle events on the
- * EventBus and auto-records a learning entry via the existing
- * {@link MemoryService.recordLearning} entrypoint. Closes the
- * "agents-forget-to-record" gap noted in `.crewly/tmp/autonomy-doc-review-2026-04-26.md`
- * §4 item 6 without introducing the rejected new "L-Event" type (Arch Veto V7,
- * promoted from canonical V2 per the V-numbering map of 2026-04-27) and
- * without expanding the 3-scope memory model into the rejected 5-scope shape
- * (Arch Veto V9, promoted from canonical V3).
+ * EventBus and emits one structured, deduplicated observability line per
+ * transition. It no longer records the templated transition as a learning
+ * (#1345): `[pattern] [[WorkItem-x]] task:done running→done. timestamp=…`
+ * carries nothing a reader could use, and 6k of them had filled one vault's
+ * log.md without ever being read. The event wiring, category mapping and
+ * idempotency contract are unchanged so a future recorder with real content
+ * (a rejection reason, a replan rationale) can plug in here. Still honours
+ * the rejected new "L-Event" type (Arch Veto V7) and the 3-scope memory
+ * model (Arch Veto V9).
  *
  * Subscribed events:
  *   - `task:verified`    → `pattern`     (a passed verification — what worked)
@@ -391,21 +393,20 @@ export class AutoLearningSubscriber {
     const summary = buildLearningSummary(event);
     const relatedTask = event.workItemId ?? event.taskId;
 
-    await this.memoryService.recordLearning({
-      agentId: AUTO_LEARNING_AGENT_ID,
-      agentRole: AUTO_LEARNING_AGENT_ROLE,
-      projectPath: this.projectPath,
-      // Prefix the learning with category so downstream readers (and grep
-      // audits) can filter without parsing the structured metadata.
-      learning: `[${category}] ${summary}`,
-      relatedTask,
-    });
-
-    this.logger.info('AutoLearning recorded', {
+    // Observability only (#1345). The templated summary is a state
+    // transition, not a learning: it used to be written through
+    // `recordLearning` into project learnings and every vault's log.md —
+    // 6k content-free entries in one vault, none of them ever read. The
+    // transition is kept here, in the structured log, where it is useful;
+    // `memoryService` stays injected for a future recorder that carries
+    // real content (a rejection reason, a replan rationale).
+    void this.memoryService;
+    this.logger.info('AutoLearning transition', {
       eventType,
       category,
       key,
       relatedTask,
+      summary,
     });
   };
 
