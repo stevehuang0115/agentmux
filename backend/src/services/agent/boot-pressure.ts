@@ -20,6 +20,8 @@ import { ResourceModeService } from './resource-mode.service.js';
 export interface BootPressureSnapshot {
 	usedPercent: number;
 	freeMB: number;
+	/** Physical memory; scales the free floor on small machines (0 or absent: not scaled) */
+	totalMB?: number;
 	swapUsedPercent: number;
 	osPressure: boolean;
 	/** ResourceModeService is in pressure mode */
@@ -60,10 +62,28 @@ export function bootPressureThresholds(env: NodeJS.ProcessEnv = process.env): Bo
 }
 
 /**
+ * The free-memory floor for this machine: the configured floor, capped at
+ * MIN_FREE_FRACTION of physical memory. A fixed 3 GB floor reads an 8 GB
+ * laptop as tight on every boot (2026-10-17: the Air held Fern back while
+ * its own health check said memory was fine).
+ *
+ * @param snapshot - Reading (its totalMB scales the floor)
+ * @param thresholds - Effective thresholds
+ * @returns Floor in MB
+ */
+export function effectiveMinFreeMB(snapshot: BootPressureSnapshot, thresholds: BootPressureThresholds): number {
+	if (!snapshot.totalMB || snapshot.totalMB <= 0) return thresholds.minFreeMB;
+	return Math.min(thresholds.minFreeMB, Math.round(snapshot.totalMB * BOOT_PRESSURE_CONSTANTS.MIN_FREE_FRACTION));
+}
+
+/**
  * Why the snapshot is tight for the boot, or null when it is calm. Tight:
- * pressure mode, swap at or above the threshold, or free memory under the
- * floor. An unreadable snapshot (null) is calm: a boot must not stall on a
- * reading that failed.
+ * pressure mode, the OS pressure flag, free memory under the floor, or swap
+ * at or above the threshold while free memory is also under twice the
+ * floor. Swap fill alone does not count: macOS grows its swap file on
+ * demand, so a small swap file sits near full on a healthy machine. An
+ * unreadable snapshot (null) is calm: a boot must not stall on a reading
+ * that failed.
  *
  * @param snapshot - Reading, or null when unavailable
  * @param thresholds - Effective thresholds
@@ -74,10 +94,14 @@ export function bootPressureReason(
 	thresholds: BootPressureThresholds = bootPressureThresholds(),
 ): string | null {
 	if (!snapshot) return null;
+	const floor = effectiveMinFreeMB(snapshot, thresholds);
 	const why: string[] = [];
 	if (snapshot.pressureMode) why.push('pressure mode');
-	if (snapshot.swapUsedPercent >= thresholds.swapUsedPercent) why.push(`swap ${snapshot.swapUsedPercent}% >= ${thresholds.swapUsedPercent}%`);
-	if (snapshot.freeMB < thresholds.minFreeMB) why.push(`free ${snapshot.freeMB}MB < ${thresholds.minFreeMB}MB`);
+	if (snapshot.osPressure) why.push('OS memory pressure');
+	if (snapshot.freeMB < floor) why.push(`free ${snapshot.freeMB}MB < ${floor}MB`);
+	else if (snapshot.swapUsedPercent >= thresholds.swapUsedPercent && snapshot.freeMB < floor * 2) {
+		why.push(`swap ${snapshot.swapUsedPercent}% >= ${thresholds.swapUsedPercent}% with free ${snapshot.freeMB}MB < ${floor * 2}MB`);
+	}
 	if (why.length === 0) return null;
 	return `${why.join(', ')} (used=${snapshot.usedPercent}% free=${snapshot.freeMB}MB swap=${snapshot.swapUsedPercent}% osPressure=${snapshot.osPressure})`;
 }
@@ -96,6 +120,7 @@ export function readBootPressureSnapshot(): BootPressureSnapshot | null {
 		return {
 			usedPercent: mem.usedPercent,
 			freeMB: mem.freeMB,
+			totalMB: mem.totalMB,
 			swapUsedPercent: mem.swapUsedPercent ?? 0,
 			osPressure: mem.pressureElevated === true,
 			pressureMode: rm.getMode() === 'pressure',

@@ -1955,6 +1955,8 @@ export const BOOT_PRESSURE_CONSTANTS = {
 	SWAP_USED_PERCENT: 80,
 	/** Free memory below this counts as tight for the boot (`CREWLY_BOOT_PRESSURE_MIN_FREE_MB`). */
 	MIN_FREE_MB: 3 * 1024,
+	/** The free floor is capped at this share of physical memory, so small machines are not always "tight". */
+	MIN_FREE_FRACTION: 0.2,
 	/** Minimum gap between two boot launches, pressure or not, so RSS growth is visible before the next (`CREWLY_RESTORE_LAUNCH_SPACING_MS`). */
 	MIN_LAUNCH_SPACING_MS: 15 * 1000,
 	/** Under pressure: how long after an agent registered its process counts as settled before the next launch. */
