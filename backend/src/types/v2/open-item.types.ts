@@ -86,6 +86,8 @@ export interface RequestOpenItem {
   restartRemindedAt?: string;
   /** Commitment: when the owner was told it is late (ISO) */
   ownerNotifiedAt?: string;
+  /** Commitment: when the stall watcher re-briefed the agent at 1.5× its estimate (ISO, once) (crewly#1363) */
+  stallNudgedAt?: string;
   /** Commitment waiting on the owner: the ask-owner decision whose answer opens it, if any */
   gateDecisionId?: string;
   /** Commitment waiting on the owner: the question item from the same message whose answer opens it (CREW-440) */

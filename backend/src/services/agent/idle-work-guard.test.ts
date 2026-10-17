@@ -51,6 +51,10 @@ describe('holdReasonFor', () => {
 	it('an owner promise and a stated intent hold it', async () => {
 		expect(await holdReasonFor('pia', deps({ owesOwner: () => true }))).toBe('promise');
 		expect(await holdReasonFor('pia', deps({ holdsIntent: () => true }))).toBe('stated_intent');
+		// A background run the agent announced (stall watcher, crewly#1363) holds it; checked after the intent.
+		expect(await holdReasonFor('pia', deps({ holdsBackgroundRun: () => true }))).toBe('background_run');
+		expect(await holdReasonFor('pia', deps({ holdsIntent: () => true, holdsBackgroundRun: () => true }))).toBe('stated_intent');
+		expect(await holdReasonFor('pia', deps({ holdsBackgroundRun: () => false }))).toBeNull();
 	});
 });
 

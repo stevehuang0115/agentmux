@@ -24,6 +24,7 @@ import { formatReminderAge, isPastReminderCutoff, reminderAgeMs } from '../orc/h
 import { PtyActivityTrackerService } from './pty-activity-tracker.service.js';
 import { AgentFollowThroughService, FOLLOW_THROUGH_CONSTANTS, getFollowThrough, setFollowThrough } from './follow-through.service.js';
 import { holdReasonFor, releaseHeldWork, type IdleWorkGuardDeps, type ReleaseWorkDeps } from './idle-work-guard.js';
+import { getStallWatcher } from '../stall/stall-watcher.service.js';
 
 const logger = LoggerService.getInstance().createComponentLogger('FollowThroughWiring');
 
@@ -199,6 +200,7 @@ export function idleWorkGuardDeps(): IdleWorkGuardDeps {
 		listTickets: () => RequestService.getInstance().listAll(),
 		owesOwner: (session) => getOwnerThreadSentinel()?.owesOwner(session) ?? false,
 		holdsIntent: (session) => getFollowThrough()?.holdsIntent(session) ?? false,
+		holdsBackgroundRun: (session) => getStallWatcher()?.protectedRunReason(session) !== null && getStallWatcher() !== null,
 		owedAgeMs: (session) => {
 			const ages = [getOwnerThreadSentinel()?.owedAgeMs(session) ?? null, getFollowThrough()?.intentAgeMs(session) ?? null].filter((a): a is number => a !== null);
 			return ages.length > 0 ? Math.min(...ages) : null;

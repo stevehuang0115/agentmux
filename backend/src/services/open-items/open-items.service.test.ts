@@ -562,6 +562,32 @@ describe('Open items after a restart (PR #1013 review)', () => {
     expect(h.woken).toEqual([]);
   });
 
+  it('recordStallStep stamps the watcher\'s steps so the sweep does not repeat them (crewly#1363)', async () => {
+    const h = harness();
+    const r = await withPromise(h, { status: 'overdue', nudgedAt: new Date(h.clock.now.getTime() - 3 * HOUR).toISOString() });
+    expect(await h.service.recordStallStep(r.id, 'c-1', 'agent', h.clock.now)).toBe(true);
+    expect(await h.service.recordStallStep(r.id, 'c-1', 'lead', h.clock.now)).toBe(true);
+    expect(await h.service.recordStallStep(r.id, 'c-1', 'owner', h.clock.now)).toBe(true);
+    const item = (await h.requests.getById(r.id))!.openItems![0];
+    expect(item).toMatchObject({
+      status: 'overdue',
+      stallNudgedAt: h.clock.now.toISOString(),
+      leadNotifiedAt: h.clock.now.toISOString(),
+      ownerNotifiedAt: h.clock.now.toISOString(),
+    });
+    // The owner was told by the watcher: the sweep's own owner note (due 2 h after the nudge) does not go out.
+    expect((await h.service.sweep()).ownerNotes).toBe(0);
+    expect(await h.service.recordStallStep(r.id, 'nope', 'agent', h.clock.now)).toBe(false);
+    expect(await h.service.recordStallStep('nope', 'c-1', 'agent', h.clock.now)).toBe(false);
+  });
+
+  it('recordStallStep leaves a closed item alone', async () => {
+    const h = harness();
+    const r = await withPromise(h, { status: 'delivered', closedAt: h.clock.now.toISOString() });
+    expect(await h.service.recordStallStep(r.id, 'c-1', 'agent', h.clock.now)).toBe(false);
+    expect((await h.requests.getById(r.id))!.openItems![0].stallNudgedAt).toBeUndefined();
+  });
+
   it('markRestartReminded refuses a promise the sweep already nudged', async () => {
     const h = harness();
     const r = await withPromise(h, { status: 'overdue', nudgedAt: h.clock.now.toISOString() });

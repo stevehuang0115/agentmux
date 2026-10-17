@@ -23,7 +23,7 @@ export const HELD_WORK_STATUSES: ReadonlySet<WorkItemStatus> = new Set<WorkItemS
 const OWED_TICKET_STATUSES: ReadonlySet<string> = new Set(['open', 'ready', 'running']);
 
 /** Why an agent must not be idle-stopped. */
-export type HoldReason = 'work_item' | 'ticket' | 'promise' | 'stated_intent' | 'fresh_promise';
+export type HoldReason = 'work_item' | 'ticket' | 'promise' | 'stated_intent' | 'fresh_promise' | 'background_run';
 
 /**
  * A promise or stated intent younger than this is kept even under memory
@@ -41,6 +41,8 @@ export interface IdleWorkGuardDeps {
 	owesOwner: (session: string) => boolean;
 	/** An unfulfilled "I'm doing X now" */
 	holdsIntent: (session: string) => boolean;
+	/** A background run the agent announced is still expected (stall watcher, crewly#1363) */
+	holdsBackgroundRun?: (session: string) => boolean;
 	/** Age in ms of the newest promise / stated intent / unanswered owner message, or null */
 	owedAgeMs?: (session: string) => number | null;
 	now?: () => number;
@@ -61,6 +63,7 @@ export async function holdReasonFor(session: string, deps: IdleWorkGuardDeps): P
 	if (age !== null && age !== undefined && age <= FRESH_PROMISE_MS) return 'fresh_promise';
 	if (deps.owesOwner(session)) return 'promise';
 	if (deps.holdsIntent(session)) return 'stated_intent';
+	if (deps.holdsBackgroundRun?.(session)) return 'background_run';
 	const items = await deps.listWorkItems();
 	if (items.some((wi) => wi.target === session && HELD_WORK_STATUSES.has(wi.status))) return 'work_item';
 	const now = deps.now ? deps.now() : Date.now();

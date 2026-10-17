@@ -8046,6 +8046,97 @@ export const TRACE_CONSTANTS = {
 	/** Most ticket labels kept in a trace's tags (specs/2026-10-03-autopilot-experiments.md) */
 	MAX_TAG_LABELS: 20,
 } as const;
+/**
+ * Stall watcher (crewly#1363, crewly#1362, specs/2026-10-17-stall-watcher.md):
+ * acts on in-flight work that stopped moving — promises to the owner,
+ * claimed WorkItems, and background runs an agent said it started — with
+ * one ladder: the agent once, then its lead once, then one plain line to the
+ * owner. The owner is never the retry loop.
+ */
+export const STALL_WATCHER_CONSTANTS = {
+	/** `=false` switches the watcher off entirely */
+	ENV_KILL_SWITCH: 'CREWLY_STALL_WATCHER',
+	/** `=true` / `=false` forces dry run on / off (default: dry run until armed for ARM_DELAY_MS) */
+	ENV_DRY_RUN: 'CREWLY_STALL_WATCHER_DRY_RUN',
+	/** State file under CREWLY_HOME: in-flight runs, ladder stamps, pending claim checks, the armed time */
+	STATE_FILE: 'in-flight-runs.json',
+	/** State file format version */
+	STATE_VERSION: 1,
+	/** How often the watcher looks (ms) */
+	INTERVAL_MS: 5 * 60 * 1000,
+	/** First pass this long after boot, after the boot-pressure gate (ms) */
+	BOOT_DELAY_MS: 3 * 60 * 1000,
+	/**
+	 * Like the janitor's retention deletes: the first pass records when it ran
+	 * and only logs; the watcher sends nothing until this long after that (ms).
+	 */
+	ARM_DELAY_MS: 24 * 60 * 60 * 1000,
+	/** The agent is re-briefed at this multiple of its own estimate past the promise / run start */
+	AGENT_STEP_MULTIPLIER: 1.5,
+	/** ... but never sooner than this after the promise (ms) */
+	MIN_AGENT_STEP_MS: 20 * 60 * 1000,
+	/** The lead is told at this multiple of the estimate */
+	LEAD_STEP_MULTIPLIER: 3,
+	/** The owner hears one line when the lead has not answered in the thread this long after being told (ms) */
+	LEAD_GRACE_MS: 30 * 60 * 1000,
+	/** At most one watcher nudge per agent per this long (ms) */
+	NUDGE_COOLDOWN_MS: 30 * 60 * 1000,
+	/** At most one owner line per stalled item per this long (ms) */
+	OWNER_LINE_INTERVAL_MS: 24 * 60 * 60 * 1000,
+	/** A background run with no duration in the text is expected back after this long (ms) */
+	RUN_DEFAULT_ESTIMATE_MS: 60 * 60 * 1000,
+	/** An agent with a run in flight is not idle-stopped or evicted until expectedBy + this (ms) */
+	RUN_PROTECTION_GRACE_MS: 30 * 60 * 1000,
+	/** A run record older than this is dropped whatever happened (ms) */
+	RUN_MAX_AGE_MS: 24 * 60 * 60 * 1000,
+	/** Ladder stamps of an item not seen for this long are forgotten (ms) */
+	LADDER_TTL_MS: 7 * 24 * 60 * 60 * 1000,
+	/** Most in-flight runs kept */
+	MAX_RUNS: 200,
+	/** Characters of a run's sentence kept in its record and in nudges */
+	RUN_HEAD_MAX_CHARS: 160,
+	/** Characters of the context message quoted in a promise re-brief */
+	CONTEXT_MAX_CHARS: 300,
+	/** Characters of a promise / title quoted in a nudge or an owner line */
+	QUOTE_MAX_CHARS: 120,
+	/**
+	 * A claimed WorkItem whose trace shows no progress (no tool calls, posts
+	 * or worktree changes) for this long is stalled; the same again after the
+	 * nudge releases the claim (ms). Shares the autonomy-metrics threshold.
+	 */
+	CLAIM_STALL_MS: 30 * 60 * 1000,
+	/** The claim-check window around "X is doing it": a WorkItem / ticket for X created this long before or after (ms) (crewly#1362) */
+	CLAIM_CHECK_WINDOW_MS: 10 * 60 * 1000,
+	/** Most pending claim checks kept */
+	MAX_PENDING_CLAIMS: 200,
+	/** Opens every watcher line to an agent */
+	NUDGE_TAG: '[STALL]',
+	/** Opens a claim-check line to an agent */
+	CLAIM_CHECK_TAG: '[CLAIM-CHECK]',
+	/** Title of the owner's Slack notice */
+	OWNER_ALERT_TITLE: 'Stalled work',
+	/**
+	 * An agent saying it started something that runs on its own (a render, a
+	 * background process, a sub-agent). Registered only together with a
+	 * duration the open-items parser understands ("预计 1 小时左右", "about 40 min").
+	 */
+	BACKGROUND_RUN_PATTERN:
+		/开跑|已经在跑|在跑了|跑起来了|在渲染|渲染中|正在渲染|正在生成|生成中|子任务在做|子\s*agent\s*在(?:做|跑)|后台(?:在)?跑|后台(?:在)?(?:做|生成|渲染)|已经启动|启动了(?:渲染|生成|任务|流程)|\bkicked off\b|\bstarted (?:the|a|another) (?:run|render|job|batch|build|export|background|sub-?agent)\b|\bis rendering\b|\brendering now\b|\brunning in the background\b|\brunning now\b|\blaunched (?:a|the|another) (?:run|render|job|batch|build|sub-?agent)\b|\bspun up (?:a|the) (?:sub-?agent|run|job)\b/iu,
+	/** A later post by the same agent in the thread that reports the run finished or failed */
+	RUN_FINISHED_PATTERN:
+		/跑完|渲染完|生成完|做好了|做完了|完成了|搞定|出来了|好了[，,。！!]|失败|挂了|报错|出错|中断|没跑完|跑崩|\bdone\b|\bfinished\b|\bcompleted\b|\bfailed\b|\bcrashed\b|\berrored\b|\baborted\b|\bready\b|\bhere (?:it|they) (?:is|are)\b|\battached\b/iu,
+	/** A link or a file in a post counts as a deliverable */
+	DELIVERABLE_PATTERN: /https?:\/\/\S+|\S+\.(?:mp4|mov|webm|gif|png|jpe?g|pdf|zip|md|csv|xlsx?|pptx?|docx?|wav|mp3)\b/iu,
+	/** Chinese verbs that make "<Name> …" a claim that the named teammate is doing the work (crewly#1362) */
+	CLAIM_ZH_AFTER_NAME: '(?:已经)?(?:在做|在弄|在处理|在搞|在跟|在推进|在准备|在出|在写|在剪|在录|在改|负责|去做|来做|接了|接手|正在)',
+	/** Chinese verbs that make "… <Name>" a hand-off to the named teammate */
+	CLAIM_ZH_BEFORE_NAME: '(?:交给|让|叫|由|派给|丢给|转给|安排)',
+	/** English verbs after the name: "Pia is (already) doing / on / making / working on it" */
+	CLAIM_EN_AFTER_NAME: "(?:is|'s|has been|will be|was|are|'re)\\s+(?:already\\s+)?(?:doing|on|making|working on|handling|building|taking|taking care of|writing|producing|rendering|editing|cutting|preparing|drafting|looking into|picking (?:it|this) up)",
+	/** English hand-off before the name: "handed it to Pia", "assigned this to Pia" */
+	CLAIM_EN_BEFORE_NAME: '(?:handed|gave|passed|assigned|delegated|sent|routed)\\s+(?:it|this|that|the\\s+\\w+(?:\\s+\\w+)?)\\s+(?:over\\s+)?to',
+} as const;
+
 
 /**
  * Token usage: the unit, the stats endpoint, and the Codex / Antigravity

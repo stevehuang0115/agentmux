@@ -9,9 +9,9 @@
 import {
   HANDOVER_CONSTANTS,
   OPEN_ITEMS_CONSTANTS,
-	ORC_WAKE_CONSTANTS,
-	CONVERSATION_LOG_CONSTANTS,
-	CONVERSATION_SYNC_CONSTANTS,
+  ORC_WAKE_CONSTANTS,
+  CONVERSATION_LOG_CONSTANTS,
+  CONVERSATION_SYNC_CONSTANTS,
   ANTIGRAVITY_CONSTANTS,
   ANTIGRAVITY_EFFORT_LEVELS,
   API_SECURITY_CONSTANTS,
@@ -33,6 +33,9 @@ import {
   WORKTREE_JANITOR_CONSTANTS,
   WAITING_SYNC_CONSTANTS,
   CREWLY_CHANNEL_CONSTANTS,
+  STALL_WATCHER_CONSTANTS,
+  TL_DELEGATION_CONSTANTS,
+  TRACE_CONSTANTS,
 } from './constants.js';
 
 describe('WORKTREE_JANITOR_CONSTANTS', () => {
@@ -592,6 +595,34 @@ describe('HANDOVER_CONSTANTS (interrupted work, crewly#1361)', () => {
     expect(HANDOVER_CONSTANTS.LONG_COMMAND_PATTERN.test('ffmpeg -i a.mov b.mp4')).toBe(true);
     expect(HANDOVER_CONSTANTS.LONG_COMMAND_PATTERN.test('node server.js &')).toBe(true);
     expect(HANDOVER_CONSTANTS.LONG_COMMAND_PATTERN.test('cat README.md')).toBe(false);
+  });
+});
+
+describe('STALL_WATCHER_CONSTANTS (crewly#1363, crewly#1362)', () => {
+  it('keys the ladder to the agent estimate with a floor, and never spams', () => {
+    expect(STALL_WATCHER_CONSTANTS.INTERVAL_MS).toBe(5 * 60 * 1000);
+    expect(STALL_WATCHER_CONSTANTS.AGENT_STEP_MULTIPLIER).toBe(1.5);
+    expect(STALL_WATCHER_CONSTANTS.LEAD_STEP_MULTIPLIER).toBe(3);
+    expect(STALL_WATCHER_CONSTANTS.MIN_AGENT_STEP_MS).toBe(20 * 60 * 1000);
+    expect(STALL_WATCHER_CONSTANTS.LEAD_GRACE_MS).toBe(30 * 60 * 1000);
+    expect(STALL_WATCHER_CONSTANTS.NUDGE_COOLDOWN_MS).toBe(TL_DELEGATION_CONSTANTS.NUDGE_COOLDOWN_MS);
+    expect(STALL_WATCHER_CONSTANTS.OWNER_LINE_INTERVAL_MS).toBe(24 * 60 * 60 * 1000);
+    expect(STALL_WATCHER_CONSTANTS.CLAIM_STALL_MS).toBe(TRACE_CONSTANTS.STALL_MINUTES * 60 * 1000);
+    expect(STALL_WATCHER_CONSTANTS.CLAIM_CHECK_WINDOW_MS).toBe(10 * 60 * 1000);
+    expect(STALL_WATCHER_CONSTANTS.ARM_DELAY_MS).toBe(24 * 60 * 60 * 1000);
+    expect(STALL_WATCHER_CONSTANTS.ENV_KILL_SWITCH).toBe('CREWLY_STALL_WATCHER');
+    expect(STALL_WATCHER_CONSTANTS.ENV_DRY_RUN).toBe('CREWLY_STALL_WATCHER_DRY_RUN');
+    expect(STALL_WATCHER_CONSTANTS.STATE_FILE).toBe('in-flight-runs.json');
+  });
+
+  it('recognises background runs, finished reports and deliverables in both languages', () => {
+    expect(STALL_WATCHER_CONSTANTS.BACKGROUND_RUN_PATTERN.test('已经开跑了')).toBe(true);
+    expect(STALL_WATCHER_CONSTANTS.BACKGROUND_RUN_PATTERN.test('Kicked off the render')).toBe(true);
+    expect(STALL_WATCHER_CONSTANTS.BACKGROUND_RUN_PATTERN.test('I will start tomorrow')).toBe(false);
+    expect(STALL_WATCHER_CONSTANTS.RUN_FINISHED_PATTERN.test('跑完了')).toBe(true);
+    expect(STALL_WATCHER_CONSTANTS.RUN_FINISHED_PATTERN.test('still going')).toBe(false);
+    expect(STALL_WATCHER_CONSTANTS.DELIVERABLE_PATTERN.test('see final.mp4')).toBe(true);
+    expect(STALL_WATCHER_CONSTANTS.DELIVERABLE_PATTERN.test('working on it')).toBe(false);
   });
 });
 
