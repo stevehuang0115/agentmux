@@ -144,6 +144,29 @@ describe('ChatV2DispatcherService', () => {
     });
   });
 
+  describe('defaultFormatPrompt — agent coordination rules (crewly#1340)', () => {
+    const base = { channelId: 'c-1', channelName: '#x', agentSession: 'sess', senderId: 'Ella (agent)', content: '@Sam the preview is live' };
+
+    it('tells room agents: helpers answer the asker, one consolidated update, no repeats, no polling, no ticket ids', () => {
+      const prompt = defaultFormatPrompt({ ...base, replyVia: 'reply-channel' });
+      expect(prompt).toContain('Helpers answer whoever asked them, not the room');
+      expect(prompt).toContain('one consolidated update in the original thread');
+      expect(prompt).toContain('Do not resend an answer you already gave');
+      expect(prompt).toContain('Never promise to poll or watch something periodically');
+      expect(prompt).toContain('Ticket ids (e.g. CREW-12) and ticket mechanics are internal');
+      expect(prompt).not.toContain('inside Crewly and is not in Slack');
+    });
+
+    it('says when the message never reached Slack', () => {
+      expect(defaultFormatPrompt({ ...base, replyVia: 'reply-channel', internalCoordination: true })).toContain('inside Crewly and is not in Slack');
+    });
+
+    it('is left out of DM prompts and the orchestrator’s routing turn', () => {
+      expect(defaultFormatPrompt(base)).not.toContain('Helpers answer whoever asked them');
+      expect(defaultFormatPrompt({ ...base, replyVia: 'reply-channel', wakeRole: 'orchestrator' })).not.toContain('Helpers answer whoever asked them');
+    });
+  });
+
   describe('defaultFormatPrompt — context block', () => {
     it('puts what was said before above the message being asked about', () => {
       const prompt = defaultFormatPrompt({

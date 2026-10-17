@@ -5352,3 +5352,213 @@ describe('joinRoomFromCloud (room-join request from another machine)', () => {
     expect(slack.created).toEqual([]);
   });
 });
+
+describe('agent-to-agent coordination (crewly#1340)', () => {
+  // 2026-10-16, #content-team: Ella, Max and Sam — all on one machine —
+  // posted 20+ top-level coordination messages to each other; every one was
+  // an unread for the owner.
+  let ticketPrefixes: string[] = [];
+
+  beforeEach(async () => {
+    isLocal = () => true;
+    ticketPrefixes = ['CREW'];
+    service = new SlackTeamChannelService({
+      slack,
+      chat: chat as unknown as TeamChannelChatApi,
+      storage,
+      getDispatcher: () => dispatcher,
+      identities,
+      typing,
+      isAgentAwake: (s) => awake(s),
+      isLocalAgent: (s) => isLocal(s),
+      getOwnerUserId: () => ownerUserId,
+      ticketPrefixes: async () => ticketPrefixes,
+      storePath: path.join(tmpDir, 'slack-team-channels.json'),
+      now: () => new Date('2026-09-12T00:00:00.000Z'),
+    });
+    await service.ensureTeamChannel(team());
+    await service.start();
+    slack.sent = [];
+  });
+
+  afterEach(() => {
+    isLocal = () => false;
+    setSlackDirectoryService(null);
+  });
+
+  /** An agent post recorded in the room, the way reply-channel writes it. */
+  function post(senderId: string, content: string, threadId?: string, metadata: Record<string, unknown> = { source: 'reply-tool' }): ChatMessageDTO {
+    return chat.recordTurn({ channelId: 'huddle-1', senderType: 'agent', senderId, content, ...(threadId ? { threadId } : {}), metadata }).message;
+  }
+
+  it('a post that @s only agents on this machine is delivered inside Crewly, not posted to Slack', async () => {
+    const dto = post('crewly-alpha-sam', '@Leo CREW-718 step 1 of 2 done, please verify');
+    const r = await service.mirrorOutboundDetailed(dto);
+    expect(r).toEqual({ attempted: false, delivery: null });
+    expect(slack.sent).toEqual([]);
+    expect(dispatcher!.dispatchMessage).toHaveBeenCalledTimes(1);
+    const [channel, turn, options] = dispatcher!.dispatchMessage.mock.calls[0];
+    expect(channel.id).toBe('huddle-1');
+    expect(turn).toEqual(
+      expect.objectContaining({
+        id: dto.id,
+        senderType: 'user',
+        senderId: 'Sam (agent)',
+        mentions: ['crewly-alpha-leo'],
+        metadata: expect.objectContaining({ remoteAgentSession: 'crewly-alpha-sam', agentCoordinationInternal: 'agent-to-agent-local' }),
+      }),
+    );
+    // Threaded on the real row, so the colleague's reply finds it.
+    expect(options).toEqual(expect.objectContaining({ threadId: dto.id, replyVia: 'reply-channel', excludeSessions: ['crewly-alpha-sam'] }));
+    expect(chat.getMessageForBridge(dto.id)?.metadata?.agentCoordinationInternal).toBe('agent-to-agent-local');
+  });
+
+  it('a reply in an internal thread that @s nobody stays internal and goes to the thread\'s other agent', async () => {
+    const root = post('crewly-alpha-sam', '@Leo please check the DNS');
+    await service.mirrorOutboundDetailed(root);
+    dispatcher!.dispatchMessage.mockClear();
+    const reply = post('crewly-alpha-leo', 'Checked: all three resolvers agree.', root.id);
+    await service.mirrorOutboundDetailed(reply);
+    expect(slack.sent).toEqual([]);
+    const [, turn, options] = dispatcher!.dispatchMessage.mock.calls[0];
+    expect(turn.mentions).toEqual(['crewly-alpha-sam']);
+    expect(options.threadId).toBe(root.id);
+  });
+
+  it('a post that also @s a person, or a name nobody knows, is posted to Slack as before', async () => {
+    await service.mirrorOutboundDetailed(post('crewly-alpha-sam', '@Leo and @Steve: the preview is live'));
+    expect(slack.sent).toHaveLength(1);
+    service.rememberHuman('UOWNER', ['Steve']);
+    await service.mirrorOutboundDetailed(post('crewly-alpha-sam', 'Steve, @Leo has the numbers'));
+    expect(slack.sent).toHaveLength(2);
+    await service.mirrorOutboundDetailed(post('crewly-alpha-sam', '@here the preview is live @Leo'));
+    expect(slack.sent).toHaveLength(3);
+    expect(dispatcher!.dispatchMessage).not.toHaveBeenCalled();
+  });
+
+  it('a post with no @ at all is posted to Slack as before', async () => {
+    await service.mirrorOutboundDetailed(post('crewly-alpha-sam', 'Nightly report: all green'));
+    expect(slack.sent).toHaveLength(1);
+  });
+
+  it('agents talking in a thread a person started stay visible there', async () => {
+    const owner = await service.routeInbound(inbound({ ts: '300.1', text: '@sam can you and Leo look at this?' }));
+    slack.sent = [];
+    dispatcher!.dispatchMessage.mockClear();
+    await service.mirrorOutboundDetailed(post('crewly-alpha-sam', '@Leo can you take the DNS half?', owner!.message.id));
+    expect(slack.sent).toEqual([expect.objectContaining({ threadTs: '300.1' })]);
+    expect(dispatcher!.dispatchMessage).not.toHaveBeenCalled();
+  });
+
+  it('agents on another machine are reached through Slack, in one coordination thread per room per day', async () => {
+    setSlackDirectoryService({
+      list: async () => [
+        { name: 'Rex', mention: '<@UREX>', botUserId: 'UREX', agentSession: 'rednote-rex', team: 'RedNote', machine: 'mac-air', source: 'this-account', inChannel: true, kind: 'agent' },
+      ],
+      rosterLine: async () => '',
+      invalidate: () => undefined,
+    } as unknown as SlackDirectoryService);
+    isLocal = (s) => s !== 'rednote-rex';
+    const first = post('crewly-alpha-sam', '@Rex 3d numbers please');
+    await service.mirrorOutboundDetailed(first);
+    expect(slack.sent).toHaveLength(1);
+    expect(slack.sent[0].threadTs).toBeUndefined();
+    const firstTs = chat.getMessageForBridge(first.id)?.metadata?.slackThreadTs;
+    expect(firstTs).toEqual(expect.stringMatching(/\.000$/));
+
+    await service.mirrorOutboundDetailed(post('crewly-alpha-leo', '@Rex and the 7d numbers too'));
+    expect(slack.sent).toHaveLength(2);
+    expect(slack.sent[1].threadTs).toBe(firstTs);
+    expect(dispatcher!.dispatchMessage).not.toHaveBeenCalled();
+  });
+
+  it('takes real ticket ids out of every agent post to Slack', async () => {
+    await service.mirrorOutboundDetailed(post('crewly-alpha-sam', 'Steve, the tracking fix (CREW-718) is live; UTF-8 and TKT-566 too'));
+    expect(slack.sent[0].text).toBe('Steve, the tracking fix is live; UTF-8 and too');
+  });
+
+  it('drops a near-identical repeat to the same colleague within 15 minutes', async () => {
+    await service.mirrorOutboundDetailed(post('crewly-alpha-sam', '@Leo both checks were already done, all clear.'));
+    const repeat = post('crewly-alpha-sam', '@Leo Both checks were already done — all clear!');
+    expect(await service.mirrorOutboundDetailed(repeat)).toEqual({ attempted: false, delivery: null });
+    expect(dispatcher!.dispatchMessage).toHaveBeenCalledTimes(1);
+    expect(chat.getMessageForBridge(repeat.id)?.metadata?.agentCoordinationInternal).toBe('agent-to-agent-duplicate');
+    expect(slack.sent).toEqual([]);
+  });
+
+  it('an interim "working on it" between colleagues is neither posted nor delivered', async () => {
+    await service.mirrorOutboundDetailed(post('crewly-alpha-sam', '@Leo on it', undefined, { source: 'reply-tool', interim: true }));
+    expect(slack.sent).toEqual([]);
+    expect(dispatcher!.dispatchMessage).not.toHaveBeenCalled();
+  });
+
+  it('without a dispatcher the post still goes to Slack — never lost', async () => {
+    dispatcher = null;
+    await service.mirrorOutboundDetailed(post('crewly-alpha-sam', '@Leo please verify'));
+    expect(slack.sent).toHaveLength(1);
+  });
+
+  it('through the real dispatcher: the colleague gets a prompt threaded on the real row, marked as internal', async () => {
+    const prompts: Array<{ session: string; text: string }> = [];
+    const real = new ChatV2DispatcherService({
+      agentSink: {
+        sendMessageToAgent: async (session, text) => {
+          prompts.push({ session, text });
+          return { success: true };
+        },
+      },
+      huddleMembersFor: (id) => [...(chat.members.get(id) ?? [])],
+    });
+    dispatcher = real as unknown as typeof dispatcher;
+    const dto = post('crewly-alpha-sam', '@Leo please verify the CNAME');
+    await service.mirrorOutboundDetailed(dto);
+    expect(slack.sent).toEqual([]);
+    expect(prompts.map((p) => p.session)).toEqual(['crewly-alpha-leo']);
+    expect(prompts[0].text).toContain('Sam (agent)');
+    expect(prompts[0].text).toContain(`--thread ${dto.id}`);
+    expect(prompts[0].text).toContain('inside Crewly and is not in Slack');
+  });
+
+  describe('a helper whose bot is not in the Slack channel', () => {
+    it('hands its reply to the agent that asked it instead of failing', async () => {
+      // Leo asked Sam in the room (posted to Slack: it also @'d a person).
+      const ask = post('crewly-alpha-leo', '@Sam and @Steve: can you check the release?');
+      await service.mirrorOutboundDetailed(ask);
+      dispatcher!.dispatchMessage.mockClear();
+      slack.sendError = 'An API error occurred: channel_not_found';
+      const reply = post('crewly-alpha-sam', 'Release is fine, 1.0.217 is live.', ask.id);
+      const r = await service.mirrorOutboundDetailed(reply);
+      expect(r).toEqual({ attempted: false, delivery: null });
+      const [, turn, options] = dispatcher!.dispatchMessage.mock.calls[0];
+      expect(turn.mentions).toEqual(['crewly-alpha-leo']);
+      expect(turn.content).toContain('cannot post in #');
+      expect(turn.content).toContain('Release is fine, 1.0.217 is live.');
+      expect(options.threadId).toBe(ask.id);
+    });
+
+    it('falls back to the agent that last asked it here', async () => {
+      await service.mirrorOutboundDetailed(post('crewly-alpha-leo', '@Sam can you check the release?'));
+      dispatcher!.dispatchMessage.mockClear();
+      slack.sendError = 'channel_not_found';
+      // Sam answers top level and @'s a person, so it goes to Slack — and fails.
+      expect(await service.mirrorOutboundDetailed(post('crewly-alpha-sam', '@Steve the release is fine'))).toEqual({ attempted: false, delivery: null });
+      expect(dispatcher!.dispatchMessage.mock.calls[0][1].mentions).toEqual(['crewly-alpha-leo']);
+    });
+
+    it('falls back to the room lead when who asked it is unknown', async () => {
+      slack.sendError = 'channel_not_found';
+      // Nobody known asked: the room lead (first member of a team without a TL) gets it.
+      storage.teams = [team({ members: [member('Sam', 'developer'), member('Leo', 'team-leader')] })];
+      const lone = post('crewly-alpha-sam', 'Here is the summary.');
+      expect(await service.mirrorOutboundDetailed(lone)).toEqual({ attempted: false, delivery: null });
+      expect(dispatcher!.dispatchMessage.mock.calls[0][1].mentions).toEqual(['crewly-alpha-leo']);
+    });
+
+    it('other Slack failures are reported as before', async () => {
+      slack.sendError = 'ratelimited';
+      const r = await service.mirrorOutboundDetailed(post('crewly-alpha-sam', 'Here is the summary.'));
+      expect(r.delivery).toEqual(expect.objectContaining({ delivered: false }));
+      expect(dispatcher!.dispatchMessage).not.toHaveBeenCalled();
+    });
+  });
+});

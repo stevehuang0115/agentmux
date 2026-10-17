@@ -28,7 +28,7 @@ import type {
   MentionTarget,
 } from './chat-v2.mention-resolver.js';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
-import { AGENT_REPLY_CONSTANTS, CHAT_CONTEXT_CONSTANTS, CHAT_REPLY_PACING_HINT, OWNER_EVIDENCE_METADATA, SLACK_TEAM_CHANNEL_CONSTANTS } from '../../constants.js';
+import { AGENT_COORDINATION_CONSTANTS, AGENT_REPLY_CONSTANTS, CHAT_CONTEXT_CONSTANTS, CHAT_REPLY_PACING_HINT, OWNER_EVIDENCE_METADATA, SLACK_TEAM_CHANNEL_CONSTANTS } from '../../constants.js';
 import { ticketLineOf } from '../v3/ticket-channel-hooks.js';
 import { isSlackDm, OrcReplyRouteService } from '../orc/orc-reply-route.service.js';
 import { getActingFor } from '../people/acting-for.service.js';
@@ -413,6 +413,8 @@ export interface FormatPromptArgs {
   soleResponder?: boolean;
   /** Context-only room messages queued since this agent's last prompt from the room, rendered */
   contextOnlyBlock?: string;
+  /** The message came from a colleague inside Crewly and never reached Slack (crewly#1340) */
+  internalCoordination?: boolean;
 }
 
 /**
@@ -755,6 +757,12 @@ export function defaultFormatPrompt(args: FormatPromptArgs): string {
         ? `reply-channel … --interim --content "<one or two sentences>"`
         : `reply-chat … --interim`;
     replyHint += ' ' + CHAT_REPLY_PACING_HINT.replace('{cmd}', interimCmd);
+    // Coordination stays internal, answers are not repeated, nobody polls,
+    // tickets stay out of sight (crewly#1340).
+    if (replyVia === 'reply-channel') {
+      replyHint += ' ' + AGENT_COORDINATION_CONSTANTS.PROMPT_RULES;
+      if (args.internalCoordination) replyHint += ' ' + AGENT_COORDINATION_CONSTANTS.INTERNAL_PROMPT_LINE;
+    }
   }
   const addressedTo = peopleAddressingLine(args, mode);
   const contextBlock = args.slackContext || renderChatContext(args.context ?? []);
@@ -1570,6 +1578,7 @@ export class ChatV2DispatcherService {
         ...(options.peopleAddressing ? { peopleAddressing: options.peopleAddressing } : {}),
         ...(options.oneResponder ? { soleResponder: true } : {}),
         ...(contextOnlyBlock ? { contextOnlyBlock } : {}),
+        ...(message.metadata?.[AGENT_COORDINATION_CONSTANTS.INTERNAL_METADATA_KEY] ? { internalCoordination: true } : {}),
       });
 
     /** One delivery attempt; false when the sink refused (typically: no session). */
