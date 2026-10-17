@@ -107,6 +107,13 @@ export interface OwnerChain {
   lastCreatedAt: number;
   /** When the work itself finished (latest completion of a non-verify item, epoch ms) */
   finishedAt: number;
+  /**
+   * When the last work was handed over (epoch ms, <= finishedAt): per work item,
+   * the earlier of its completion and the creation of its verify item. A lead
+   * usually posts the result in the owner's place while verifying, i.e. before
+   * the item is marked verified (#1330), so answers count from here.
+   */
+  workDoneAt: number;
 }
 
 const ms = (iso: string | undefined): number => Date.parse(iso ?? '') || 0;
@@ -138,6 +145,15 @@ export function collectOwnerChains(items: readonly WorkItem[], handledThrough: R
     const first = sorted[0];
     const firstOrigin = (originOfWorkItem(first) as OwnerOrigin | null) ?? g.origin;
     const work = sorted.filter((w) => !isVerifyItem(w));
+    const verifyCreated = new Map<string, number>();
+    for (const v of sorted) {
+      const of = (v.metadata ?? {}).verifyOf;
+      if (typeof of !== 'string') continue;
+      const at = ms(v.createdAt);
+      if (at && at < (verifyCreated.get(of) ?? Infinity)) verifyCreated.set(of, at);
+    }
+    const finishedAt = Math.max(...(work.length ? work : sorted).map(endOf));
+    const handedOver = (w: WorkItem): number => Math.min(endOf(w), verifyCreated.get(w.id) ?? Infinity);
     chains.push({
       key,
       origin: firstOrigin,
@@ -147,7 +163,8 @@ export function collectOwnerChains(items: readonly WorkItem[], handledThrough: R
       responsible: firstOrigin.receivedBy ?? first.target ?? '',
       firstCreatedAt: ms(first.createdAt),
       lastCreatedAt: Math.max(...sorted.map((w) => ms(w.createdAt))),
-      finishedAt: Math.max(...(work.length ? work : sorted).map(endOf)),
+      finishedAt,
+      workDoneAt: Math.min(finishedAt, Math.max(...(work.length ? work : sorted).map(handedOver))),
     });
   }
   return chains;
@@ -218,6 +235,8 @@ export interface ChainReportRecord {
   firstCreatedAt: number;
   lastCreatedAt: number;
   finishedAt: number;
+  /** Answers posted after this count as the report (see {@link OwnerChain.workDoneAt}); older records lack it */
+  answerFrom?: number;
   /**
    * `settling` (closed, waiting SETTLE_MS) → `asked` → `reminded` → `posted`;
    * `answered`: an agent answered in the owner's place; `skipped`: the orc's
@@ -437,6 +456,7 @@ export class OwnerCompletionReportService {
       firstCreatedAt: chain.firstCreatedAt,
       lastCreatedAt: chain.lastCreatedAt,
       finishedAt: chain.finishedAt,
+      answerFrom: chain.workDoneAt,
       stage: 'settling',
       closedSince: now,
     };
@@ -458,9 +478,10 @@ export class OwnerCompletionReportService {
         record.finishedAt = chain.finishedAt;
         record.titles = titlesLine(chain.items);
       }
+      record.answerFrom = chain.workDoneAt;
     }
     const place = await this.deps.resolvePlace(record.origin).catch(() => null);
-    if (this.answeredSince(record, place, record.finishedAt)) {
+    if (this.answeredSince(record, place, record.answerFrom ?? record.finishedAt)) {
       this.end(record, 'answered', now);
       return;
     }
