@@ -208,14 +208,14 @@ describe('ask + routing', () => {
       /merge/i.test(input.text) ? 'CREW-257 is on hold (PR #1138): "do not merge". The only allowed action is to close the PR and remove the worktree.' : null,
     );
     const h = await harness({ holdRefusal });
-    await expect(h.service.ask('dev-ann', { ...ticketAsk, question: 'Merge PR #1138?', options: ['Yes, merge', 'Not now'], default: 'Not now', context: { runtimeChanges: 'adds a Gmail poller' } })).rejects.toMatchObject({
+    await expect(h.service.ask('dev-ann', { ...ticketAsk, question: 'Merge the Gmail approve-then-send change (PR #1138)?', options: ['Yes, merge', 'Not now'], default: 'Not now', context: { runtimeChanges: 'adds a Gmail poller' } })).rejects.toMatchObject({
       status: 409,
       message: expect.stringContaining('"do not merge"'),
     });
-    expect(holdRefusal).toHaveBeenCalledWith({ text: expect.stringContaining('Merge PR #1138?'), context: 'Partner outreach email', ticketId: 'APP-12' });
+    expect(holdRefusal).toHaveBeenCalledWith({ text: expect.stringContaining('#1138'), context: 'Partner outreach email', ticketId: 'APP-12' });
     expect(h.slack.sent).toHaveLength(0);
     // A close card passes the check.
-    const close = await h.service.ask('dev-ann', { ...ticketAsk, question: 'Close PR #1138?', options: ['Yes, close it', 'Not now'], default: 'Not now' });
+    const close = await h.service.ask('dev-ann', { ...ticketAsk, question: 'Close the unused Gmail change (PR #1138)?', options: ['Yes, close it', 'Not now'], default: 'Not now' });
     expect(close.status).toBe('open');
   });
 
