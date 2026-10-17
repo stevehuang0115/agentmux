@@ -9,7 +9,9 @@
  *  - it delegated work that is still open: a WorkItem whose
  *    `metadata.delegatedBy` is the agent (stamped by delegate-task) and that
  *    has not finished, or a ticket created by it (`source: agent:<session>`)
- *    that is not done or cancelled.
+ *    that is not done or cancelled,
+ *  - it announced a background run (a render, a sub-agent) that is still
+ *    expected (the stall watcher's record, crewly#1363).
  * Delegations that carry no `delegatedBy` stamp (other skills, the owner's
  * own tasks) cannot be seen; those agents are only protected by the rules above.
  *
@@ -45,6 +47,8 @@ export interface ProtectionSources {
 	listTickets?: (sessionName: string) => Promise<ProtectionTicket[]>;
 	/** Number of messages queued for the session (sub-agent message queue); absent = not checked */
 	queuedMessageCount?: (sessionName: string) => number;
+	/** A background run the agent announced and that is still expected (stall watcher, crewly#1363); absent = not checked */
+	backgroundRunReason?: (sessionName: string) => string | null;
 }
 
 /**
@@ -57,6 +61,8 @@ export function createProtectedReason(sources: ProtectionSources): (sessionName:
 	return async (sessionName) => {
 		const messages = sources.queuedMessageCount?.(sessionName) ?? 0;
 		if (messages > 0) return `${messages} message(s) are queued for it`;
+		const run = sources.backgroundRunReason?.(sessionName);
+		if (run) return run;
 		const items = await sources.getWorkItems();
 		const queued = items.find((wi) => wi.target === sessionName && PENDING_WORK_STATUSES.has(wi.status));
 		if (queued) return `work item ${queued.id} is queued for it`;

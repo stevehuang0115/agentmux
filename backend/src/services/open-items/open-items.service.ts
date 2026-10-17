@@ -713,6 +713,31 @@ export class OpenItemsService {
     return this.serial(() => markRestartReminded(this.deps.requests, requestId, itemId, this.now()));
   }
 
+  /**
+   * The stall watcher took a step for a commitment (crewly#1363): stamp it on
+   * the item so the sweep does not repeat it — `agent` → `stallNudgedAt`,
+   * `lead` → `leadNotifiedAt`, `owner` → `ownerNotifiedAt`. An item that is
+   * no longer active is left alone. Serialized with every other change.
+   *
+   * @param requestId - Request
+   * @param itemId - Commitment
+   * @param step - Which rung of the ladder fired
+   * @param at - When
+   * @returns True when the item was stamped
+   */
+  recordStallStep(requestId: string, itemId: string, step: 'agent' | 'lead' | 'owner', at: Date = this.now()): Promise<boolean> {
+    return this.serial(async () => {
+      const r = await this.deps.requests.getById(requestId);
+      const item = r?.openItems?.find((i) => i.id === itemId);
+      if (!r || !item || !ACTIVE_OPEN_ITEM_STATUSES.has(item.status)) return false;
+      const iso = at.toISOString();
+      const patch: Partial<RequestOpenItem> =
+        step === 'agent' ? { stallNudgedAt: iso } : step === 'lead' ? { leadNotifiedAt: iso } : { ownerNotifiedAt: iso, status: 'overdue' };
+      await this.deps.requests.update(requestId, { openItems: (r.openItems ?? []).map((i) => (i.id === itemId ? { ...i, ...patch } : i)) });
+      return true;
+    });
+  }
+
   // -------------------------------------------------------------------------
   // Agent replies
   // -------------------------------------------------------------------------

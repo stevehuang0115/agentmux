@@ -126,7 +126,7 @@ import { driveCapabilities } from './services/drive/drive-agent.service.js';
 import { canvasCapabilities } from './services/board/canvas/canvas-inbound.service.js';
 import { isBoardPushDisabled } from './services/board/board-push.service.js';
 import { teamMoveCapabilities } from './services/team-move/team-move-driver.service.js';
-import { SUB_AGENT_QUEUE_CONSTANTS, CHAT_CONTEXT_CONSTANTS, SAFE_RESTART, AUTO_UPDATE_CONSTANTS, PROCESS_EXIT_CODES, CLAUDE_STARTUP_CONSTANTS, WEB_CONSTANTS, TICKET_CONSTANTS, UNASSIGNED_ROUTE_CONSTANTS, CLOUD_TALK_CONSTANTS, STANDING_ANSWERS_CONSTANTS, TICKET_AUTOPILOT_CONSTANTS, TICKET_HYGIENE_CONSTANTS, EXPERIMENT_CONSTANTS, WORK_ITEM_DESTINATION_CONSTANTS, CODEX_USAGE_SYNC_CONSTANTS, ANTIGRAVITY_USAGE_SYNC_CONSTANTS, OWNER_AUTH_CONSTANTS, CREWLY_APPS_CONSTANTS, SLACK_AGENT_DM_CONSTANTS, BRIEFING_CONSTANTS, DRIVE_CONSTANTS, POOL_PRUNE_CONSTANTS } from './constants.js';
+import { SUB_AGENT_QUEUE_CONSTANTS, CHAT_CONTEXT_CONSTANTS, SAFE_RESTART, AUTO_UPDATE_CONSTANTS, PROCESS_EXIT_CODES, CLAUDE_STARTUP_CONSTANTS, WEB_CONSTANTS, TICKET_CONSTANTS, UNASSIGNED_ROUTE_CONSTANTS, CLOUD_TALK_CONSTANTS, STANDING_ANSWERS_CONSTANTS, TICKET_AUTOPILOT_CONSTANTS, TICKET_HYGIENE_CONSTANTS, EXPERIMENT_CONSTANTS, WORK_ITEM_DESTINATION_CONSTANTS, CODEX_USAGE_SYNC_CONSTANTS, ANTIGRAVITY_USAGE_SYNC_CONSTANTS, OWNER_AUTH_CONSTANTS, CREWLY_APPS_CONSTANTS, SLACK_AGENT_DM_CONSTANTS, BRIEFING_CONSTANTS, DRIVE_CONSTANTS, POOL_PRUNE_CONSTANTS, STALL_WATCHER_CONSTANTS } from './constants.js';
 import { randomUUID } from 'crypto';
 import { PtyActivityTrackerService } from './services/agent/pty-activity-tracker.service.js';
 import { InFlightTurnTracker } from './services/restart/in-flight-turn-tracker.service.js';
@@ -269,6 +269,7 @@ import { ProjectTicketWorkflowService } from './services/project-tickets/project
 import { WorkItemWorktreeService } from './services/worktree/workitem-worktree.service.js';
 import { WorkItemWorktreeSubscriber, createTerminalNotifier } from './services/worktree/workitem-worktree.subscriber.js';
 import { ResourceModeService, RESOURCE_MODE_CONSTANTS, type RunningAgent } from './services/agent/resource-mode.service.js';
+import { getStallWatcher } from './services/stall/stall-watcher.service.js';
 import { getRestoreQueue, RESTORE_TIER, type RestoreEntry } from './services/agent/restore-queue.js';
 import {
 	bootLaunchHoldReason,
@@ -2450,6 +2451,8 @@ void (async () => {
 					return (await workflow.listForSession(name)).flatMap((p) => p.tickets);
 				},
 				queuedMessageCount: (name) => SubAgentMessageQueue.getInstance().peek(name).length,
+				// A background run the agent announced (a render, a sub-agent) is still expected (crewly#1363).
+				backgroundRunReason: (name) => getStallWatcher()?.protectedRunReason(name) ?? null,
 			};
 			resourceMode.setDeps({
 				limits: async () => {
@@ -7288,6 +7291,39 @@ void (async () => {
 			this.logger.info('Open items started');
 		} catch (error) {
 			this.logger.warn('Decision cards not started', { error: error instanceof Error ? error.message : String(error) });
+		}
+		// Stall watcher (crewly#1363, crewly#1362, specs/2026-10-17-stall-watcher.md):
+		// acts on promises, claimed work and background runs that stopped
+		// moving — agent, then lead, then one line to the owner. Dry run for
+		// the first day. Non-fatal.
+		try {
+			const { startStallWatcher, toStallMessage } = await import('./services/stall/stall-watcher.wiring.js');
+			const watcher = await startStallWatcher({
+				crewlyHome: this.config.crewlyHome,
+				getTeams: () => this.storageService.getTeams(),
+				sendToAgent: async (session, text) => {
+					let exists = false;
+					try {
+						exists = getSessionBackendSync()?.sessionExists(session) ?? false;
+					} catch {
+						exists = false;
+					}
+					if (!exists) {
+						const { activateAgentBySession } = await import('./controllers/team/team.controller.js');
+						await activateAgentBySession(this.apiController, session).catch(() => undefined);
+					}
+					const result = await this.apiController.agentRegistrationService.sendMessageToAgent(session, text);
+					return result.success;
+				},
+				notifyOwner: (line) => slackOwnerAlertNotifier({ title: STALL_WATCHER_CONSTANTS.OWNER_ALERT_TITLE, message: line, urgent: false }),
+				bootGate: this.bootQuietGate(),
+			});
+			getChatV2Service().on('chat_message', (dto: ChatMessageDTO) => {
+				void watcher.onMessage(toStallMessage(dto)).catch(() => undefined);
+			});
+			this.logger.info('Stall watcher wired');
+		} catch (error) {
+			this.logger.warn('Stall watcher not started', { error: error instanceof Error ? error.message : String(error) });
 		}
 		// Held browser actions from before the restart: re-attach or expire
 		// (after the decision service, so expired cards are updated).

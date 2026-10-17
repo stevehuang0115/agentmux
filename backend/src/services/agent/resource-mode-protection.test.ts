@@ -35,6 +35,11 @@ describe('createProtectedReason', () => {
 	it('works without ticket storage', async () => {
 		expect(await reasonFor([], undefined)).toBeNull();
 	});
+	it('protects an agent with a background run it announced that is still expected (stall watcher, crewly#1363)', async () => {
+		const check = (reason: string | null) => createProtectedReason({ getWorkItems: async () => [], backgroundRunReason: (name) => (name === 'rex' ? reason : null) })('rex');
+		expect(await check('a background run it announced ("已经开跑") is expected by 2026-10-17T15:44:00.000Z')).toMatch(/background run it announced/);
+		expect(await check(null)).toBeNull();
+	});
 	it('protects an agent with messages queued for it (2026-10-16)', async () => {
 		const check = (count: number) => createProtectedReason({ getWorkItems: async () => [], queuedMessageCount: () => count })('luna');
 		expect(await check(2)).toMatch(/2 message\(s\) are queued for it/);
