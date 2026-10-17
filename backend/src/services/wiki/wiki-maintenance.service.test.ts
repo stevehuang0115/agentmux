@@ -108,4 +108,18 @@ describe('WikiMaintenanceService', () => {
     expect(stop).toHaveBeenCalled();
     expect(WikiMaintenanceService.getInstance()).toBeNull();
   });
+
+  it('the boot tick waits at the boot gate before ticking (crewly#1353)', async () => {
+    const f = fakes();
+    const order: string[] = [];
+    const bootGate = jest.fn(async () => { order.push('gate'); return { reduced: true, waitedMs: 1_800_000, reason: 'restore queue still running' }; });
+    f.drain.drain = jest.fn(async () => { order.push('drain'); return { pending: 0, tooYoung: 0, noVault: 0, filed: 0, skipped: 0, failed: 0, deferred: 0, dryRun: false }; }) as never;
+    const svc = new WikiMaintenanceService({ statePath: null, discoverRoots: async () => vaults, now, bootGate, ...f });
+    const result = await svc.bootTick();
+    expect(order).toEqual(['gate', 'drain']);
+    expect(result.daily?.vaults).toEqual(vaults);
+    // A failing gate never blocks the tick.
+    const svc2 = new WikiMaintenanceService({ statePath: null, discoverRoots: async () => vaults, now, bootGate: async () => { throw new Error('gate broke'); }, ...fakes() });
+    expect((await svc2.bootTick()).drain).not.toBeNull();
+  });
 });

@@ -43,6 +43,17 @@ export const WIKI_LOG_HEADER =
   '# Activity log\n\nAppend-only log of ingested sources. Each entry: `## [<ISO>] <sourceType> | <caller>`.\n';
 
 const HEADER_RE = /^## \[([^\]]+)\]\s+(\S+)\s+\|\s+(.+)$/gm;
+const HEADER_LINE_RE = /^## \[([^\]]+)\]\s+(\S+)\s+\|\s+(.+)$/;
+
+/**
+ * Whether one line is an entry header (`## [<timestamp>] <sourceType> | <caller>`).
+ *
+ * @param line - One line without its newline
+ * @returns True for a header line
+ */
+export function isLogEntryHeaderLine(line: string): boolean {
+  return HEADER_LINE_RE.test(line);
+}
 
 /**
  * Templated records that carry no information for a reader:

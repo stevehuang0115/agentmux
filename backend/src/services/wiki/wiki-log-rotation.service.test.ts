@@ -8,7 +8,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs/promises';
 import { existsSync } from 'fs';
-import { WikiLogRotationService } from './wiki-log-rotation.service.js';
+import { WikiLogRotationService, countLogHeaders, readLogTail } from './wiki-log-rotation.service.js';
 import { WikiIngestService } from './wiki-ingest.service.js';
 import { WIKI_LOG_HEADER, parseLogEntries, serializeLogEntry } from './wiki-log-entries.js';
 
@@ -122,5 +122,34 @@ describe('WikiLogRotationService', () => {
     } finally {
       await fs.rm(other, { recursive: true, force: true });
     }
+  });
+
+  describe('streaming rotation of a very large log (crewly#1353)', () => {
+    it('counts entries by streaming and carries recent entries from the tail', async () => {
+      // 60 old entries then 5 recent ones; the stream threshold is tiny so this log counts as "very large".
+      let raw = WIKI_LOG_HEADER;
+      for (let i = 0; i < 60; i++) raw += entry(100 + i, `old ${i} ` + 'z'.repeat(300));
+      for (let i = 1; i <= 5; i++) raw += entry(i, `recent ${i}`);
+      await fs.writeFile(logPath(), raw, 'utf8');
+      const size = (await fs.stat(logPath())).size;
+      const r = await service.rotate(vault, { now: NOW, streamBytes: 1024, tailBytes: 2048 });
+      expect(r).toMatchObject({ rotated: true, streamed: true, bytes: size, entries: 65, carried: 5 });
+      const fresh = parseLogEntries(await fs.readFile(logPath(), 'utf8'));
+      expect(fresh.map((e) => e.body)).toEqual(['recent 5', 'recent 4', 'recent 3', 'recent 2', 'recent 1']);
+      expect(await fs.readFile(path.join(vault, r.archivePath!), 'utf8')).toBe(raw);
+    });
+
+    it('countLogHeaders matches the parser across chunk boundaries and readLogTail starts at an entry header', async () => {
+      let raw = WIKI_LOG_HEADER;
+      for (let i = 0; i < 40; i++) raw += entry(i, `body ${i} ` + 'q'.repeat(50) + '\n## not a header line\nmore');
+      await fs.writeFile(logPath(), raw, 'utf8');
+      expect(await countLogHeaders(logPath())).toBe(parseLogEntries(raw).length);
+      const size = (await fs.stat(logPath())).size;
+      const tail = await readLogTail(logPath(), size, 700);
+      expect(tail.startsWith('## [')).toBe(true);
+      expect(parseLogEntries(tail).length).toBeGreaterThan(0);
+      expect(await readLogTail(logPath(), size, size + 10)).toBe(raw);
+      expect(await readLogTail(logPath(), size, 3)).toBe('');
+    });
   });
 });

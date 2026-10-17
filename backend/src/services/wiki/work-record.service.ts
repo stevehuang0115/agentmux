@@ -35,7 +35,8 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import { existsSync } from 'fs';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
-import { ORCHESTRATOR_SESSION_NAME, WIKI_LOG_CONSTANTS, WORK_RECORD_CONSTANTS } from '../../constants.js';
+import { BOOT_PRESSURE_CONSTANTS, ORCHESTRATOR_SESSION_NAME, WIKI_LOG_CONSTANTS, WORK_RECORD_CONSTANTS } from '../../constants.js';
+import type { BootGate } from './wiki-maintenance.service.js';
 import { atomicWriteJson, ensureDir, safeReadJson } from '../../utils/file-io.utils.js';
 import { getCrewlyHomePath } from '../core/crewly-home.utils.js';
 import { isLeadRole } from '../../utils/team.utils.js';
@@ -108,6 +109,14 @@ export interface WorkRecordServiceDeps {
   now?: () => number;
   /** Secret values to mask on top of the pattern-based redaction (default: the process env). */
   secrets?: () => ReadonlyArray<{ name: string; value: string }>;
+  /**
+   * Held before the boot pass (crewly#1353): restore queue drained, memory
+   * calm. When the gate gave up waiting the boot pass writes at most
+   * `reducedMaxPerPass` records. Default: none.
+   */
+  bootGate?: BootGate;
+  /** Records per boot pass when the gate gave up waiting (default BOOT_PRESSURE_CONSTANTS.WORK_RECORD_REDUCED_BATCH). */
+  reducedMaxPerPass?: number;
 }
 
 /** Persisted state. */
@@ -148,6 +157,8 @@ export class WorkRecordService {
   private readonly teamsRoot: string;
   private readonly intervalMs: number;
   private readonly bootDelayMs: number;
+  private readonly bootGate: BootGate | null;
+  private readonly reducedMaxPerPass: number;
   private readonly eventDelayMs: number;
   private readonly nowFn: () => number;
   private timer: NodeJS.Timeout | null = null;
@@ -172,6 +183,8 @@ export class WorkRecordService {
     this.teamsRoot = deps.teamsRoot ?? path.join(getCrewlyHomePath(), 'teams');
     this.intervalMs = deps.intervalMs ?? C.TICK_MS;
     this.bootDelayMs = deps.bootDelayMs ?? C.BOOT_DELAY_MS;
+    this.bootGate = deps.bootGate ?? null;
+    this.reducedMaxPerPass = deps.reducedMaxPerPass ?? BOOT_PRESSURE_CONSTANTS.WORK_RECORD_REDUCED_BATCH;
     this.eventDelayMs = deps.eventDelayMs ?? C.EVENT_DELAY_MS;
     this.nowFn = deps.now ?? (() => Date.now());
   }
@@ -209,13 +222,34 @@ export class WorkRecordService {
     }
     this.bootTimer = setTimeout(() => {
       this.bootTimer = null;
-      void this.runOnce();
+      void this.bootPass();
     }, this.bootDelayMs);
     this.bootTimer.unref?.();
     this.timer = setInterval(() => void this.runOnce(), this.intervalMs);
     this.timer.unref?.();
-    this.logger.info('WorkRecord started', { intervalMs: this.intervalMs, bootDelayMs: this.bootDelayMs, events: !!this.deps.eventBus });
+    this.logger.info('WorkRecord started', { intervalMs: this.intervalMs, bootDelayMs: this.bootDelayMs, events: !!this.deps.eventBus, bootGate: !!this.bootGate });
     return true;
+  }
+
+  /**
+   * The boot catch-up: waits at the boot gate when one is wired; when the
+   * gate gave up waiting (the machine stayed busy) the pass is reduced to
+   * `reducedMaxPerPass` records. Public for tests.
+   *
+   * @returns Pass result
+   */
+  async bootPass(): Promise<WorkRecordPassResult> {
+    let maxPerPass: number | undefined;
+    if (this.bootGate) {
+      try {
+        const gate = await this.bootGate();
+        if (gate.reduced) maxPerPass = this.reducedMaxPerPass;
+        if (gate.waitedMs > 0) this.logger.info('WorkRecord boot pass waited for a quiet machine', { waitedMs: gate.waitedMs, reduced: gate.reduced, reason: gate.reason, maxPerPass: maxPerPass ?? C.CATCHUP_MAX_PER_PASS });
+      } catch (err) {
+        this.logger.warn('WorkRecord boot gate failed (running anyway)', { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return this.runOnce({ maxPerPass });
   }
 
   /** Stop timers and subscriptions. Safe to call more than once. */
@@ -283,9 +317,10 @@ export class WorkRecordService {
    * One pass: finished items of the window without a record (newest first,
    * capped), then long-blocked items. Public for tests and an on-demand run.
    *
+   * @param opts - `maxPerPass` caps the records written (default CATCHUP_MAX_PER_PASS)
    * @returns Counts
    */
-  async runOnce(): Promise<WorkRecordPassResult> {
+  async runOnce(opts: { maxPerPass?: number } = {}): Promise<WorkRecordPassResult> {
     const result: WorkRecordPassResult = { candidates: 0, written: 0, deferred: 0, blocked: 0, refused: 0 };
     if (this.running) return result;
     this.running = true;
@@ -306,7 +341,7 @@ export class WorkRecordService {
         .filter((wi) => now - Date.parse(wi.statusChangedAt ?? wi.createdAt) >= C.BLOCKED_AFTER_MS)
         .filter((wi) => !this.state.recorded[workRecordRef(wi.id, 'blocked')]);
       result.candidates = finals.length + blocked.length;
-      let budget = C.CATCHUP_MAX_PER_PASS;
+      let budget = opts.maxPerPass ?? C.CATCHUP_MAX_PER_PASS;
       for (const wi of finals) {
         if (budget <= 0) break;
         const a = await this.safeRecord(wi, 'final', all);

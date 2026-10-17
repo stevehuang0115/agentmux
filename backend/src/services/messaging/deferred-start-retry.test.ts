@@ -72,4 +72,20 @@ describe('scheduleDeferredStartRetry', () => {
 		await first;
 		expect(activate).toHaveBeenCalledTimes(1);
 	});
+
+	it('a held round is skipped without a start, and the start follows once the hold lifts (crewly#1353)', async () => {
+		const activate = jest.fn(async () => ({ success: true }));
+		const hold = jest.fn(() => (t < 30_000 ? 'memory tight: swap 95% >= 80%' : null));
+		await scheduleDeferredStartRetry('max', { activate, hasPending: () => true, hold, sleep, now });
+		expect(activate).toHaveBeenCalledTimes(1);
+		expect(hold.mock.calls.length).toBeGreaterThan(1);
+		expect(t).toBeGreaterThanOrEqual(30_000);
+	});
+
+	it('a hold that never lifts still ends at the total budget', async () => {
+		const activate = jest.fn(async () => ({ success: true }));
+		await scheduleDeferredStartRetry('max', { activate, hasPending: () => true, hold: () => 'held', sleep, now });
+		expect(activate).not.toHaveBeenCalled();
+		expect(t).toBeGreaterThanOrEqual(DEFERRED_START_RETRY_CONSTANTS.MAX_TOTAL_MS);
+	});
 });

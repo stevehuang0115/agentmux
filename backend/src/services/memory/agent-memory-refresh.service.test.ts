@@ -152,4 +152,17 @@ describe('AgentMemoryRefreshService', () => {
     expect(svc.start()).toBe(false);
     svc.stop();
   });
+
+  it('the boot run waits at the boot gate before refreshing (crewly#1353)', async () => {
+    await writeProjectLog(entry(2, AGENT, '(gotcha) Wait for the gate before reading logs at boot.'));
+    const order: string[] = [];
+    const bootGate = jest.fn(async () => { order.push('gate'); return { reduced: false, waitedMs: 90_000 }; });
+    const svc = new AgentMemoryRefreshService({
+      listAgents: async () => { order.push('list'); return [{ sessionName: AGENT, role: 'developer', projectPath: project }]; },
+      statePath: null, agentMemory, projectMemory, globalVaultPath: path.join(home, 'global-wiki'), now: () => clock, bootGate,
+    });
+    const [outcome] = await svc.bootRun();
+    expect(order).toEqual(['gate', 'list']);
+    expect(outcome).toMatchObject({ sessionName: AGENT, knowledge: 1 });
+  });
 });
