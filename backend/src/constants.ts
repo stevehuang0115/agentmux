@@ -3065,6 +3065,8 @@ export const WORKTREE_JANITOR_CONSTANTS = {
 	TRANSCRIPT_HEAD_BYTES: 256 * 1024,
 	/** Handover files newer than this are scanned for conversation ids (30 days). */
 	TRANSCRIPT_HANDOVER_SCAN_MAX_AGE_MS: 30 * 24 * 60 * 60 * 1000,
+	/** Kinds that handover file names carry between the session name and the timestamp (`<session>-<kind>-<ISO>.md`). */
+	HANDOVER_KINDS: ['restart', 'runtime-switch', 'runtime-revert', 'runtime-upgrade'] as readonly string[],
 	/** Sub-directory of a Claude home that holds per-cwd transcript folders. */
 	TRANSCRIPT_PROJECTS_DIR: 'projects',
 	/** Transcript file extension. */

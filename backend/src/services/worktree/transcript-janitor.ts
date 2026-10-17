@@ -33,8 +33,8 @@ import { EventLoopYielder, latestTreeMtimeMs } from './worktree-janitor.git.js';
 /** UUID as Claude Code names conversations. */
 const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 
-/** Handover file name: `<session>-<kind>-<ISO stamp>.md` or `<session>-<ISO stamp>.md`. */
-const HANDOVER_NAME_RE = /^(.+?)(?:-[a-z][a-z-]*?)?-\d{4}-\d{2}-\d{2}T[\d-]+Z\.md$/;
+/** Handover file name: `<session>[-<kind>]-<ISO stamp>.md`; group 1 is everything before the stamp. */
+const HANDOVER_NAME_RE = /^(.+)-\d{4}-\d{2}-\d{2}T[\d-]+Z\.md$/;
 
 /** What identifies Crewly's conversations. */
 export interface TranscriptSources {
@@ -149,7 +149,16 @@ export function readAgentSetting(file: string, headBytes: number = WORKTREE_JANI
  */
 export function sessionNameFromHandoverFile(fileName: string): string | null {
 	const m = HANDOVER_NAME_RE.exec(fileName);
-	return m ? m[1] : null;
+	if (!m) return null;
+	let name = m[1];
+	// Session names can contain any dash-separated words, so only known kinds are stripped.
+	for (const kind of WORKTREE_JANITOR_CONSTANTS.HANDOVER_KINDS) {
+		if (name.endsWith(`-${kind}`)) {
+			name = name.slice(0, -(kind.length + 1));
+			break;
+		}
+	}
+	return name || null;
 }
 
 /**

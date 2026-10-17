@@ -61,6 +61,9 @@ describe('transcript janitor helpers', () => {
 		expect(sessionNameFromHandoverFile('crewly-orc-restart-2026-10-10T22-44-14-888Z.md')).toBe('crewly-orc');
 		expect(sessionNameFromHandoverFile('biblestudy-ruth-2090d4cc-runtime-switch-2026-10-10T20-39-14-893Z.md')).toBe('biblestudy-ruth-2090d4cc');
 		expect(sessionNameFromHandoverFile('biblestudy-ruth-2090d4cc-2026-10-10T22-45-14-090Z.md')).toBe('biblestudy-ruth-2090d4cc');
+		expect(sessionNameFromHandoverFile('ce-nova-a2b1f759-runtime-revert-2026-10-10T22-45-14-090Z.md')).toBe('ce-nova-a2b1f759');
+		// A dash-separated session name is never cut at an unknown word.
+		expect(sessionNameFromHandoverFile('crewly-orc-pr-sweep-2026-10-10T22-45-14-090Z.md')).toBe('crewly-orc-pr-sweep');
 		expect(sessionNameFromHandoverFile('notes.md')).toBeNull();
 	});
 
