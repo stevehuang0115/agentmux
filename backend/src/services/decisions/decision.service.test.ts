@@ -208,7 +208,7 @@ describe('ask + routing', () => {
       /merge/i.test(input.text) ? 'CREW-257 is on hold (PR #1138): "do not merge". The only allowed action is to close the PR and remove the worktree.' : null,
     );
     const h = await harness({ holdRefusal });
-    await expect(h.service.ask('dev-ann', { ...ticketAsk, question: 'Merge PR #1138?', options: ['Yes, merge', 'Not now'], default: 'Not now' })).rejects.toMatchObject({
+    await expect(h.service.ask('dev-ann', { ...ticketAsk, question: 'Merge PR #1138?', options: ['Yes, merge', 'Not now'], default: 'Not now', context: { runtimeChanges: 'adds a Gmail poller' } })).rejects.toMatchObject({
       status: 409,
       message: expect.stringContaining('"do not merge"'),
     });
