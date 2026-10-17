@@ -179,6 +179,8 @@ import {
 	type UnmergedNoticeState,
 	type UnmergedWorktreeFacts,
 } from './worktree-unmerged-notice.js';
+import { findWorktreeHold } from '../project-tickets/ticket-hold-registry.js';
+import type { HeldTicketMatch } from '../project-tickets/ticket-hold.js';
 import { contentLandedSignal, isNonGithubRemote, type LandedRepoState } from './worktree-landed.js';
 import { dirtyStatusLines, reclaimRegenerableDirs } from './worktree-dirty.js';
 import {
@@ -400,6 +402,8 @@ export interface WorktreeJanitorOptions {
 	resolveLeadSessions?: (repoMain: string, worktreePath: string) => Promise<string[]>;
 	/** Unmerged-worktree notice state file (default `<CREWLY_HOME>/unmerged-worktree-notices.json`); null = in memory */
 	unmergedNoticePath?: string | null;
+	/** The held ticket naming a worktree's branch / folder, if any (default: every project's tickets, none under jest; crewly#1369) */
+	findHold?: (branch: string | null, worktreePath: string) => Promise<HeldTicketMatch | null>;
 	/** Debounce before a completion-triggered pass (default COMPLETION_TIDY_DELAY_MS) */
 	tidyDelayMs?: number;
 	/** Environment for the kill switch (default process.env) */
@@ -1341,7 +1345,9 @@ export class WorktreeJanitorService {
 				};
 				const leads = await (this.opts.resolveLeadSessions ?? defaultResolveLeadSessions)(repo.main, w.path).catch(() => [] as string[]);
 				const targets = leads.length > 0 ? leads : [ORCHESTRATOR_SESSION_NAME];
-				const message = buildUnmergedNotice(facts);
+				const findHold = this.opts.findHold ?? ((this.opts.env ?? process.env).JEST_WORKER_ID ? null : findWorktreeHold);
+				const hold = findHold ? await findHold(w.branch, w.path).catch(() => null) : null;
+				const message = buildUnmergedNotice(facts, hold);
 				let delivered = false;
 				for (const session of targets) {
 					if (await notifier(session, message).catch(() => false)) delivered = true;
@@ -1349,7 +1355,7 @@ export class WorktreeJanitorService {
 				if (delivered) {
 					state = { ...state, [w.path]: now };
 					changed = true;
-					this.logger.info('Told lead about unmerged worktree', { path: w.path, to: targets, commits });
+					this.logger.info('Told lead about unmerged worktree', { path: w.path, to: targets, commits, ...(hold ? { heldBy: hold.hold.heldBy ?? hold.ticketId } : {}) });
 				}
 			}
 			if (changed) await this.writeUnmergedState(pruneUnmergedState(state, now));

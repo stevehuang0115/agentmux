@@ -781,3 +781,84 @@ export function extractOpenItems(text: string, opts: ExtractOptions): ExtractedO
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Owner decisions asked in prose (crewly#1369 gap 2)
+// ---------------------------------------------------------------------------
+
+/** A yes/no decision asked of the owner in prose. */
+export interface ExtractedOwnerQuestion {
+  type: 'owner_question';
+  /** The question sentence (clipped, one line) */
+  text: string;
+  /** When an answer is expected ({@link OPEN_ITEMS_CONSTANTS.OWNER_QUESTION_DUE_MS} after it was asked) */
+  due: Date;
+}
+
+/** English yes/no ask shapes: the agent asks leave to act. */
+const EN_DECISION_ASK =
+  /^(?:so,?\s+|and\s+|ok,?\s+|okay,?\s+)?(?:should|shall|can|may) (?:i|we)\b|\b(?:do you want|would you like|want) me to\b|\bshould (?:i|we)\b|\bshall (?:i|we)\b|\b(?:ok|okay|fine|alright) (?:if|to|for me to)\b|\bare you (?:ok|okay|fine|happy) (?:with|if)\b|\bany objections? to\b|\bdo (?:you|we) (?:still )?want (?:to|me to)\b/i;
+
+/** English verbs of a decision about the work. */
+const EN_DECISION_VERB =
+  /\b(?:merge|close|delete|remove|drop|publish|post|send|deploy|ship|release|cancel|archive|revert|roll ?back|approve|keep|continue|proceed|go ahead|launch|push|reply|pay|buy|sign|book|discard|abandon|reopen|restart|stop|pause|merging|closing|deleting|removing|publishing|posting|sending|deploying|shipping|releasing|cancell?ing|reverting|approving|keeping|continuing|proceeding|launching|pushing|replying)\b/i;
+
+/** Chinese yes/no ask shapes. */
+const ZH_DECISION_ASK = /要不要|需不需要|是否|可不可以|能不能|行不行|好不好|可以吗|行吗|好吗|吗\s*[?？]\s*[)）]?$/u;
+
+/** Chinese verbs of a decision about the work. */
+const ZH_DECISION_VERB = /合并|合进|关闭|关掉|删除|删掉|发布|上线|发出去|发送|发给|部署|取消|保留|继续|回滚|归档|推送|回复|付款|购买|签约|预订|放弃|停掉|暂停|重启/u;
+
+/** Open information questions: a card or a yes cannot answer them. */
+const INFO_QUESTION = /怎么|如何|为什么|为何|什么|哪|几|多少|多久|谁|^(?:how|what|why|where|when|which|who|whose)\b/iu;
+
+/**
+ * Whether a sentence asks the owner a yes/no decision about the work
+ * ("Should I close PR #1138?", "要不要合并？"). Conservative on purpose: a
+ * question mark, a yes/no ask shape AND a decision verb, not quoted, not
+ * rhetorical, not answered by the next sentence, not for a colleague.
+ *
+ * @param s - Sentence
+ * @param next - The sentence after it on the same line, if any
+ * @param opts - Extraction options
+ * @returns True for an owner decision
+ */
+export function isOwnerDecisionQuestion(s: string, next: string | undefined, opts: ExtractOptions): boolean {
+  const t = s.trim();
+  if (!/[?？]\s*[)）]?$/.test(t) || questionIsQuoted(t)) return false;
+  if (RHETORICAL_OPEN.test(t) || INFO_QUESTION.test(t)) return false;
+  if (next && SELF_ANSWER.test(next.trim())) return false;
+  if (addressedToColleague(t, opts)) return false;
+  if (t.replace(/[?？\s*_]/g, '').length < 6) return false;
+  if (/[一-鿿]/.test(t)) return ZH_DECISION_ASK.test(t) && ZH_DECISION_VERB.test(t) && !/已经|了吗|过吗|没有吗/u.test(t);
+  return EN_DECISION_ASK.test(t) && EN_DECISION_VERB.test(t);
+}
+
+/**
+ * Every yes/no decision an agent asked the owner in a message, anywhere in
+ * it (not only the final question {@link extractOpenItems} cards). Each goes
+ * on file with a due time so the answer — or the silence — is recorded and
+ * followed up (crewly#1369: "Ella asked Steve whether to close PR #1138" left
+ * no record, and nobody knew what he answered).
+ *
+ * @param text - The agent's message
+ * @param opts - Clock, colleague names, owner id
+ * @returns At most {@link OPEN_ITEMS_CONSTANTS.MAX_ITEMS_PER_REPLY} questions, in order
+ *
+ * @example
+ * extractOwnerDecisionQuestions('PR #1138 is still open. Should I close it? Tests pass.', { now })
+ * // → [{ type: 'owner_question', text: 'Should I close it?', due: <now + 24 h> }]
+ */
+export function extractOwnerDecisionQuestions(text: string, opts: ExtractOptions): ExtractedOwnerQuestion[] {
+  if (!text || !text.trim()) return [];
+  const out: ExtractedOwnerQuestion[] = [];
+  const due = new Date(opts.now.getTime() + OPEN_ITEMS_CONSTANTS.OWNER_QUESTION_DUE_MS);
+  for (const s of splitSentences(text)) {
+    if (out.length >= OPEN_ITEMS_CONSTANTS.MAX_ITEMS_PER_REPLY) break;
+    if (isListedOrForThirdParty(s)) continue;
+    if (!isOwnerDecisionQuestion(s.text, s.line[s.index + 1], opts)) continue;
+    const q = clip(s.text, OPEN_ITEMS_CONSTANTS.QUESTION_MAX_CHARS);
+    if (!out.some((o) => o.text === q)) out.push({ type: 'owner_question', text: q, due });
+  }
+  return out;
+}

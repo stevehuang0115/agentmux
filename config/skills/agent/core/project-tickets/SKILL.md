@@ -116,6 +116,18 @@ bash execute.sh update --project P --id APP-12 --status ready          # owner /
 bash execute.sh update --project P --id APP-12 --acceptance "new list item" --acceptance "another"
 ```
 
+**Put a ticket on hold** when the owner says to stop ("do not merge PR #12", "no further
+work", "don't ask me again"). Write his words as the reason:
+
+```bash
+bash execute.sh update --project P --id APP-12 --hold "owner 10-06: do not merge PR #12, no further work"
+bash execute.sh update --project P --id APP-12 --hold none   # the owner lifted it
+```
+
+On held work the only allowed action is to close the PR and remove the worktree. A new
+ticket that names the same PR / branch / worktree is held too (its description says so),
+and an ask-owner card about it is refused unless it only asks whether to close it.
+
 **Park or defer a ticket** so the autopilot stops offering it in triage (it still
 shows in `list`, with its label / `deferUntil`):
 

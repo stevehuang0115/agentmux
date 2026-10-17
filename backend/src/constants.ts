@@ -7610,6 +7610,13 @@ export const OPEN_ITEMS_CONSTANTS = {
 	TEXT_MAX_CHARS: 300,
 	/** Max characters of a question (the card's one line) */
 	QUESTION_MAX_CHARS: 280,
+	/**
+	 * A yes/no decision asked of the owner in prose ("should I close PR #12?",
+	 * "要不要合并？") is on file as an owner question due this long after it
+	 * was asked; with no answer by then the stall watcher follows up (ms)
+	 * (crewly#1369 gap 2).
+	 */
+	OWNER_QUESTION_DUE_MS: 24 * 60 * 60 * 1000,
 	/** Child WorkItems created this long before the promise still count as what it waits on (ms) */
 	CHILD_LOOKBACK_MS: 30 * 60 * 1000,
 	/** ...and this long after it — the agent promises, then delegates (ms). Later work is a new topic. */
@@ -9570,4 +9577,24 @@ export const BROWSER_PRIORITY_CONSTANTS = {
 			'If Crewly in Chrome is still not drivable, tell the user in one line that the site blocks automated browsers and the step needs Crewly in Chrome connected (open Chrome with the Crewly extension signed in), then continue with whatever else you can do.',
 		].join('\n');
 	},
+} as const;
+
+/**
+ * Ticket holds (crewly#1369 gap 1): a ticket the owner put on hold ("do not
+ * merge PR #1138") blocks follow-up work on the same PR / branch / worktree.
+ * Only closing the PR and removing the worktree stays allowed.
+ */
+export const TICKET_HOLD_CONSTANTS = {
+	/** Labels that put a ticket on hold */
+	LABELS: ['hold', 'on-hold', 'on_hold', 'held'] as readonly string[],
+	/** Prefix of the Log line written when a hold is set */
+	LOG_PREFIX: 'HOLD:',
+	/** Log line written when a hold is lifted */
+	LIFT_LOG_LINE: 'hold lifted',
+	/** Prefix of the hold reason of a ticket held because it references a held ticket */
+	LINKED_PREFIX: 'held by',
+	/** What may still be done about held work */
+	ALLOWED_ACTIONS: 'close the PR and remove the worktree',
+	/** Max characters of a hold reason quoted in a message */
+	REASON_MAX_CHARS: 240,
 } as const;
