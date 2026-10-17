@@ -97,7 +97,18 @@ const mockDispatchTo = jest.fn().mockResolvedValue(true);
 const mockRedispatch = jest.fn().mockResolvedValue(true);
 jest.mock('./workitem-dispatch.subscriber.js', () => ({
   SLA_TRACKER_ID_PATTERN: /^request:.+:respond_to_user$/,
-  WorkItemDispatchSubscriber: { getInstance: () => ({ dispatchTo: mockDispatchTo, redispatch: mockRedispatch }) },
+  dispatchReachedAgent: (o: { status: string }) => ['delivered', 'queued', 'waiting'].includes(o.status),
+  WorkItemDispatchSubscriber: {
+    getInstance: () => ({
+      dispatchTo: mockDispatchTo,
+      redispatch: mockRedispatch,
+      // Booleans from mockRedispatch map to delivered / failed; an outcome object passes through.
+      redispatchOutcome: async (wi: unknown) => {
+        const r = await mockRedispatch(wi);
+        return typeof r === 'object' && r !== null ? r : { status: r ? 'delivered' : 'failed', reason: '' };
+      },
+    }),
+  },
 }));
 
 jest.mock('../reconciler/reconcile-rules.js', () => ({
@@ -281,6 +292,16 @@ describe('AgentAutoClaimService', () => {
         const result = await service.tryAutoClaimForAgent('agent-1');
         expect(result).toBeNull();
         expect(mockReleaseBack).toHaveBeenCalledWith('wi-1', expect.stringContaining('could not be delivered'));
+      });
+
+      it('keeps the claim when the earlier notice still waits on the agent queue (it will be delivered)', async () => {
+        const service = AgentAutoClaimService.getInstance();
+        mockGetAvailableItems.mockResolvedValueOnce([item]);
+        mockClaimSpecificItem.mockResolvedValueOnce({ workItem: { ...item, status: 'running' }, claim: { id: 'c' } });
+        mockRedispatch.mockResolvedValueOnce({ status: 'waiting', reason: "an earlier notice still waits on the agent's queue" });
+        const result = await service.tryAutoClaimForAgent('agent-1');
+        expect(result).toMatchObject({ workItemId: 'wi-1' });
+        expect(mockReleaseBack).not.toHaveBeenCalled();
       });
 
       it('also releases when the delivery throws', async () => {

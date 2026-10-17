@@ -361,14 +361,21 @@ export class AgentAutoClaimService {
    *
    * @param workItem - The claimed WorkItem (target set)
    * @param agentSessionName - The agent it was claimed for
-   * @returns True when the brief was written; false when it was not and the
-   *   item was released back to `queued`
+   * @returns True when the brief was written or still waits on the agent's
+   *   queue; false when it was not and the item was released back to `queued`
    */
   private async deliverClaimedOrRelease(workItem: WorkItem, agentSessionName: string): Promise<boolean> {
     let delivered = false;
     try {
-      const { WorkItemDispatchSubscriber } = await import('./workitem-dispatch.subscriber.js');
-      delivered = await WorkItemDispatchSubscriber.getInstance().redispatch(workItem);
+      const { WorkItemDispatchSubscriber, dispatchReachedAgent } = await import('./workitem-dispatch.subscriber.js');
+      // `waiting` = the earlier notice for this item still sits on the agent's
+      // queue (the agent went idle for a moment but is mid-turn; queued messages
+      // go out in order). The brief will reach it, so the claim is kept —
+      // releasing it put the item back to `queued` and the next idle tick
+      // claimed and released it again (bc010dd2, 2026-10-16). A notice that
+      // never goes out is dropped as stale (CREW-526) and the idle-holder
+      // grace revokes the claim.
+      delivered = dispatchReachedAgent(await WorkItemDispatchSubscriber.getInstance().redispatchOutcome(workItem));
     } catch (err) {
       this.logger.warn('Post-claim dispatch threw', {
         workItemId: workItem.id,
