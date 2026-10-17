@@ -260,6 +260,7 @@ export interface PrebuiltAsk {
   deadline: Date;
   sensitive?: DecisionSensitiveKind;
   browser?: OwnerDecision['browser'];
+  gmail?: OwnerDecision['gmail'];
   /** What the owner would grant (kind `app_collaborator`) */
   appCollaborator?: OwnerDecision['appCollaborator'];
   /** The template the owner would list (kind `app_template`) */
@@ -692,6 +693,7 @@ export class DecisionService {
       deadline: ask.deadline.toISOString(),
       ...(ask.sensitive ? { sensitive: ask.sensitive } : {}),
       ...(ask.browser ? { browser: ask.browser } : {}),
+      ...(ask.gmail ? { gmail: ask.gmail } : {}),
       ...(ask.appCollaborator ? { appCollaborator: ask.appCollaborator } : {}),
       ...(ask.appTemplate ? { appTemplate: ask.appTemplate } : {}),
       ...(ask.tierChange ? { tierChange: ask.tierChange } : {}),
@@ -1163,7 +1165,7 @@ export class DecisionService {
    * Every asker whose card stays open is told what the owner posted, once.
    */
   private async applyThreadFiles(candidates: OwnerDecision[], files: DecisionAnswerFile[], user: string): Promise<InteractionOutcome> {
-    const plain = candidates.filter((c) => !c.system && c.kind !== 'browser_action' && !c.sensitive);
+    const plain = candidates.filter((c) => !c.system && c.kind !== 'browser_action' && c.kind !== 'gmail_send' && !c.sensitive);
     const voice = files.some((f) => isAudioOrVideo({ name: f.name, mimetype: f.mimetype ?? '' }));
     const newest = [...plain].sort((x, y) => Date.parse(y.createdAt) - Date.parse(x.createdAt) || idNumber(y.id) - idNumber(x.id))[0];
     const target = newest && (voice || plain.length === 1) ? newest : null;
@@ -1489,8 +1491,8 @@ export class DecisionService {
     if (choice.kind === 'remind' && !canRemind(decision)) {
       return { handled: false, reason: 'remind is not offered on this card', decision };
     }
-    if (choice.kind === 'text' && decision.kind === 'browser_action') {
-      // A held click is approved or not: words that are neither leave it open.
+    if (choice.kind === 'text' && (decision.kind === 'browser_action' || decision.kind === 'gmail_send')) {
+      // A held click or email is approved or not: words that are neither leave it open.
       return { handled: false, reason: 'reply is neither yes nor no', decision };
     }
     if (choice.kind === 'remind') {
