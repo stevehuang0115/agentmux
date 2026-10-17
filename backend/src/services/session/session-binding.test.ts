@@ -188,6 +188,56 @@ describe('selectAutoRestoreSessions (startup relaunch)', () => {
 		});
 		expect(sel.sessions.map((s) => s.name)).toEqual(['adhoc-1']);
 		expect(sel.unbound).toEqual([BOUND, 'crewly-marketing-luna-40e6e251', STALE]);
+		expect(sel.fromTargets).toEqual([]);
+	});
+
+	// crewly#1348: Pia was idle-stopped before the shutdown, so she was not in
+	// the persisted state; an owner thread waited on her and she never came back.
+	describe('owed targets that were idle at shutdown', () => {
+		const PIA = 'flopost-pia-50c4c954';
+		const teams: BindingTeam[] = [...TEAMS, { id: 'flopost', members: [{ id: 'pia-id', sessionName: PIA }] }];
+
+		it('relaunches a target bound to a team member even though no persisted session carries its name', () => {
+			const sel = selectAutoRestoreSessions({ sessions: baseline, teams, targets: new Set([BOUND, PIA]) });
+			expect(sel.sessions.map((s) => s.name)).toEqual([BOUND]);
+			expect(sel.fromTargets).toEqual([{ name: PIA, teamId: 'flopost', memberId: 'pia-id' }]);
+			expect(sel.droppedTargets).toEqual([]);
+		});
+
+		it('drops a target no member is bound to, and one that is held back (owner-stopped, paused, moved away)', () => {
+			const sel = selectAutoRestoreSessions({
+				sessions: baseline,
+				teams,
+				targets: new Set([PIA, 'nobody-knows-me', 'crewly-orc']),
+				heldBack: (name) => name === PIA || name === 'crewly-orc',
+			});
+			expect(sel.fromTargets).toEqual([]);
+			expect(sel.droppedTargets).toEqual(expect.arrayContaining([PIA, 'nobody-knows-me', 'crewly-orc']));
+			expect(sel.droppedTargets).toHaveLength(3);
+		});
+
+		it('never doubles a session the persisted state already covers, under its bound or its stale name', () => {
+			const sel = selectAutoRestoreSessions({
+				sessions: [entry({ name: STALE, teamId: TEAM_ID, memberId: DANA_ID })],
+				teams,
+				targets: new Set([STALE, BOUND]),
+			});
+			expect(sel.sessions.map((s) => s.name)).toEqual([BOUND]);
+			expect(sel.fromTargets).toEqual([]);
+			expect(sel.droppedTargets).toEqual([]);
+		});
+
+		it('teams unreadable: nothing is relaunched from a binding', () => {
+			const sel = selectAutoRestoreSessions({ sessions: baseline, teams: null, targets: new Set([PIA]) });
+			expect(sel.fromTargets).toEqual([]);
+			expect(sel.droppedTargets).toEqual([PIA]);
+		});
+
+		it('pool unreadable: no targets, so nothing is relaunched from a binding', () => {
+			const sel = selectAutoRestoreSessions({ sessions: baseline, teams, targets: null });
+			expect(sel.fromTargets).toEqual([]);
+			expect(sel.droppedTargets).toEqual([]);
+		});
 	});
 });
 

@@ -36,13 +36,13 @@ import {
 	SessionCommandHelper,
 } from './services/session/index.js';
 import { RuntimePidRegistry } from './services/session/runtime-pid-registry.service.js';
-import { removeCrewlyAgentFile, resolvePersistedSessions, selectAutoRestoreSessions } from './services/session/session-binding.js';
+import { removeCrewlyAgentFile, resolvePersistedSessions, selectAutoRestoreSessions, type TargetBinding } from './services/session/session-binding.js';
 import type { PersistedSessionInfo } from './services/session/session-state-persistence.js';
 import { ApiController } from './controllers/api.controller.js';
 import { createApiRoutes } from './routes/api.routes.js';
 import { TerminalGateway, setTerminalGateway } from './websocket/terminal.gateway.js';
 import { initializeChatGateway } from './websocket/chat.gateway.js';
-import { StartupConfig } from './types/index.js';
+import { StartupConfig, type Team } from './types/index.js';
 import { LoggerService } from './services/core/logger.service.js';
 import { retryWithBackoff } from './services/core/retry.util.js';
 import {
@@ -5295,6 +5295,17 @@ void (async () => {
 				});
 			}
 			let targets: Set<string> | null = null;
+			// Why each target other than a WorkItem is owed something; the reason
+			// is logged in the restore plan for agents that were idle at shutdown.
+			const owedReason = new Map<string, string>();
+			const noteOwed = (names: Iterable<string>, reason: string): string[] => {
+				const out: string[] = [];
+				for (const name of names) {
+					if (!owedReason.has(name)) owedReason.set(name, reason);
+					out.push(name);
+				}
+				return out;
+			};
 			try {
 				const allItems = await TaskPoolService.getInstance().getAllItems();
 				// Work in hand only: active statuses, touched recently (see restore-filter),
@@ -5303,21 +5314,21 @@ void (async () => {
 				targets = sessionsToRestore(
 					allItems as RestoreWorkItem[],
 					[
-						...this.interruptedTurnsAtBoot.map((t) => t.sessionName),
+						...noteOwed(this.interruptedTurnsAtBoot.map((t) => t.sessionName), 'interrupted turn'),
 						// Agents with messages still waiting for them (restored from
 						// disk by the queue) — someone is owed an answer.
-						...SubAgentMessageQueue.getInstance().sessionsWithPending(),
+						...noteOwed(SubAgentMessageQueue.getInstance().sessionsWithPending(), 'queued messages'),
 						// Agents whose owner promise is past due and was never
 						// nudged: idle or not, they come back to be reminded once
 						// (2026-10-02, Eve). Not-yet-due and already-nudged
 						// promises are left to the open-items sweep.
-						...owed.map((c) => c.sessionName),
+						...noteOwed(owed.map((c) => c.sessionName), 'owed promise'),
 						// Agents an owner Slack thread waits on: a promised
 						// follow-up, an unanswered owner message, or an owner
 						// card they asked (2026-10-08: Atlas waited on a browser
 						// approval in the owner's thread and was skipped as "no
 						// work in hand").
-						...(await this.ownerThreadSessionsAtBoot()),
+						...noteOwed(await this.ownerThreadSessionsAtBoot(), 'owner thread waits on it'),
 					],
 				);
 			} catch (poolErr) {
@@ -5327,7 +5338,29 @@ void (async () => {
 				);
 			}
 
-			const selection = selectAutoRestoreSessions({ sessions: baselineSessions, teams, targets });
+			// A target that was not running at shutdown (idle-stopped earlier) is
+			// still owed something and comes back from its team binding — unless
+			// the owner stopped it, its team is paused, or its team moved to
+			// another machine (crewly#1348: Pia, 2026-10-16).
+			const { liveAgentSessions, movedAwayTeamIds } = await import('./services/messaging/owner-thread-sentinel.wiring.js');
+			const live = teams ? liveAgentSessions(teams, movedAwayTeamIds(this.config.crewlyHome)) : new Set<string>();
+			const selection = selectAutoRestoreSessions({
+				sessions: baselineSessions,
+				teams,
+				targets,
+				heldBack: (name) => name === ORCHESTRATOR_SESSION_NAME || !live.has(name) || isOwnerStopped(name) || !!pausedTeamOfSession(name),
+			});
+			if (selection.droppedTargets.length > 0) {
+				this.logger.info('Not restoring owed agents that were idle at shutdown: no live team member is bound to the name, or it is held back', {
+					dropped: selection.droppedTargets,
+				});
+			}
+			const idleAtShutdown = await this.persistedSessionsForBindings(teams ?? [], selection.fromTargets);
+			if (idleAtShutdown.length > 0) {
+				this.logger.info('Restoring owed agents that were idle at shutdown (not in the persisted state)', {
+					sessions: idleAtShutdown.map((s) => `${s.name} (${owedReason.get(s.name) ?? 'work in hand'})`),
+				});
+			}
 			if (selection.unbound.length > 0) {
 				this.logger.warn('Not auto-restoring sessions whose name no team member is bound to', {
 					unbound: selection.unbound,
@@ -5344,7 +5377,7 @@ void (async () => {
 					},
 				);
 			}
-			const agentSessions = selection.sessions;
+			const agentSessions = [...selection.sessions, ...idleAtShutdown];
 
 			if (agentSessions.length === 0) {
 				this.logger.info('No persisted agent sessions to restore (all idle, no pending WorkItems)');
@@ -5366,6 +5399,7 @@ void (async () => {
 				owedSince.set(c.sessionName, Math.min(owedSince.get(c.sessionName) ?? Infinity, Number.isFinite(due) ? due : 0));
 			}
 			const leadRoles: readonly string[] = TEAM_LEAD_CONSTANTS.LEAD_ROLES;
+			const wasIdle = new Set(idleAtShutdown.map((s) => s.name));
 			const entries: RestoreEntry[] = agentSessions.map((session): RestoreEntry => {
 				const ownerTimes = queueMessages.peek(session.name).filter((m) => m.meta?.owner === true).map((m) => m.queuedAt);
 				if (owedSince.has(session.name)) ownerTimes.push(owedSince.get(session.name) as number);
@@ -5392,16 +5426,21 @@ void (async () => {
 							forceRecreate: attempt === 0,
 						});
 						if (!result.success) this.logger.warn('Failed to restore agent session', { name: session.name, error: result.error });
+						// Every slot was taken: keep trying until one frees instead of
+						// dropping the agent (the owner's thread is still waiting).
+						if (!result.success && result.errorCode === RESOURCE_MODE_CONSTANTS.START_DEFERRED_ERROR_CODE) this.retryRestoreWhileOwed(session.name);
 						return { success: result.success };
 					},
 					onReady: () => this.sendRecoveryFor(session.name),
 				};
+				// An agent that was idle at shutdown says in the plan what it is owed.
+				const idle = wasIdle.has(session.name) ? ` (${owedReason.get(session.name) ?? 'work in hand'}; was idle at shutdown)` : '';
 				if (ownerTimes.length > 0) {
-					return { ...base, tier: RESTORE_TIER.OWNER, ownerSince: Math.min(...ownerTimes), reason: 'owner message waiting' };
+					return { ...base, tier: RESTORE_TIER.OWNER, ownerSince: Math.min(...ownerTimes), reason: `owner message waiting${idle}` };
 				}
 				if (session.role === ORCHESTRATOR_ROLE) return { ...base, tier: RESTORE_TIER.ORCHESTRATOR, reason: 'orchestrator' };
-				if (leadRoles.includes(session.role ?? '')) return { ...base, tier: RESTORE_TIER.LEAD, reason: 'team lead with work in hand' };
-				return { ...base, tier: RESTORE_TIER.OTHER, reason: 'work in hand' };
+				if (leadRoles.includes(session.role ?? '')) return { ...base, tier: RESTORE_TIER.LEAD, reason: `team lead with work in hand${idle}` };
+				return { ...base, tier: RESTORE_TIER.OTHER, reason: `work in hand${idle}` };
 			});
 
 			// Runs in the background; boot continues while agents come back.
@@ -5420,6 +5459,73 @@ void (async () => {
 			});
 			// Don't fail startup if auto-restore fails
 		}
+	}
+
+	/**
+	 * Restore entries for owed agents that have no persisted session: built from
+	 * the team config the way a team start would (member role and runtime, the
+	 * team's first project as the working directory). A binding whose member is
+	 * gone from the config by now is skipped.
+	 *
+	 * @param teams - Teams from storage
+	 * @param bindings - Targets resolved to members (see selectAutoRestoreSessions)
+	 * @returns Session entries in the shape the restore queue runs
+	 */
+	private async persistedSessionsForBindings(
+		teams: ReadonlyArray<Team>,
+		bindings: ReadonlyArray<TargetBinding>,
+	): Promise<PersistedSessionInfo[]> {
+		if (bindings.length === 0) return [];
+		let projectPaths = new Map<string, string>();
+		try {
+			projectPaths = new Map((await this.storageService.getProjects()).map((p) => [p.id, p.path]));
+		} catch (err) {
+			this.logger.warn('Could not read projects for the owed agents; restoring them in the server directory', {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+		const out: PersistedSessionInfo[] = [];
+		for (const binding of bindings) {
+			const team = teams.find((t) => t.id === binding.teamId);
+			const member = team?.members.find((m) => m.id === binding.memberId);
+			if (!team || !member) continue;
+			out.push({
+				name: binding.name,
+				cwd: (team.projectIds[0] && projectPaths.get(team.projectIds[0])) || process.cwd(),
+				command: '',
+				args: [],
+				runtimeType: member.runtimeType as RuntimeType,
+				role: member.role,
+				teamId: team.id,
+				memberId: member.id,
+			});
+		}
+		return out;
+	}
+
+	/**
+	 * A boot restore was deferred by the running-agent cap. The agent is owed
+	 * something that does not expire on its own (an owner thread, a promise,
+	 * queued messages), so keep trying until a slot frees (crewly#1337's retry;
+	 * the queue check is replaced because not every debt is a queued message).
+	 * Never throws.
+	 *
+	 * @param sessionName - The agent whose restore was deferred
+	 */
+	private retryRestoreWhileOwed(sessionName: string): void {
+		void (async () => {
+			const { scheduleDeferredStartRetry } = await import('./services/messaging/deferred-start-retry.js');
+			const { activateAgentBySession } = await import('./controllers/team/team.controller.js');
+			await scheduleDeferredStartRetry(sessionName, {
+				activate: (n) => activateAgentBySession(this.apiController, n),
+				hasPending: (n) => !isOwnerStopped(n),
+			});
+		})().catch((err) => {
+			this.logger.warn('Could not retry a deferred boot restore', {
+				sessionName,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		});
 	}
 
 	/**
@@ -7421,7 +7527,7 @@ void (async () => {
 	 * (with its messages persisted) was never started again (Pia, 2026-10-16).
 	 */
 	private wakeQueuedAgentsAfterBoot(): void {
-		const restoring = new Set(getRestoreQueue().stats().order);
+		const restoreQueue = getRestoreQueue();
 		const backend = getSessionBackendSync();
 		const registration = this.apiController.agentRegistrationService;
 		const sessions = SubAgentMessageQueue.getInstance()
@@ -7429,7 +7535,8 @@ void (async () => {
 			.filter(
 				(name) =>
 					name !== ORCHESTRATOR_SESSION_NAME &&
-					!restoring.has(name) &&
+					// Waiting in the restore queue or being started by it right now
+					!restoreQueue.isRestoring(name) &&
 					!isOwnerStopped(name) &&
 					!pausedTeamOfSession(name) &&
 					!backend?.sessionExists(name) &&

@@ -133,6 +133,10 @@ thread waits on: a promise, an unanswered owner message or an open card. The
 list is read from the sentinel's state file, together with the askers of open,
 posted, non-system owner cards from the last 24 h. Both are read from disk,
 because the restore can run before either service starts.
+An agent on the list that was not running at shutdown (idle-stopped earlier)
+is relaunched from its team binding, not dropped (crewly#1348; see
+`specs/2026-10-02-restart-busy-and-resume.md`, "Owed agents that were idle at
+shutdown").
 
 ## Noise risks
 
