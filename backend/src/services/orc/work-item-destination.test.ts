@@ -9,7 +9,9 @@ import {
   inheritedOrigin,
   isDelegatedInThread,
   isOwnerRequestTooOld,
+  isLeadReport,
   isWorkItemOrigin,
+  leadReportOf,
   originOfWorkItem,
   ownerOriginFromConversation,
   ownerOriginFromThreadKey,
@@ -398,5 +400,33 @@ describe('agent-initiated delegations (crewly#1357)', () => {
     expect(await deliverToWorkDestination('lyra', dest, 'x', { ...deps, messageAgent: undefined })).toBeNull();
     // The messenger refusing → the same.
     expect(await deliverToWorkDestination('lyra', dest, 'x', { ...deps, messageAgent: async () => false })).toBeNull();
+  });
+});
+
+describe('lead-reported team work (crewly#1371)', () => {
+  const ownerOrigin = { kind: 'owner', receivedBy: 'orchestrator', slackChannelId: 'D0ORC', threadTs: '1792000000.000100' };
+  const stamp = { lead: 'ella', worker: 'luna', teamId: 'team-mkt', teamName: 'Marketing', slackChannelId: 'C0MKTTEAM', channelName: 'marketing' };
+
+  it('isLeadReport / leadReportOf read only a complete stamp', () => {
+    expect(isLeadReport(stamp)).toBe(true);
+    expect(isLeadReport({ ...stamp, slackChannelId: '' })).toBe(false);
+    expect(isLeadReport(null)).toBe(false);
+    expect(leadReportOf(wi({ metadata: { leadReport: stamp } }))).toEqual(stamp);
+    expect(leadReportOf(wi({ metadata: { leadReport: { lead: 'ella' } } }))).toBeNull();
+    expect(leadReportOf(null)).toBeNull();
+  });
+
+  it('reply --work-item on stamped owner work → a new top-level post in the team channel, not the owner thread', () => {
+    const item = wi({ target: 'ella', metadata: { origin: ownerOrigin, leadReport: stamp } });
+    const d = planWorkDestination({ workItem: item, now: NOW });
+    expect(d).toEqual(expect.objectContaining({ kind: 'new-top-level', teamId: 'team-mkt' }));
+    expect((d as { topic?: string }).topic).toBeUndefined();
+    // Unstamped owner work keeps the owner thread.
+    expect(planWorkDestination({ workItem: wi({ metadata: { origin: ownerOrigin } }), now: NOW }).kind).not.toBe('new-top-level');
+  });
+
+  it('no owner-thread hand-over for stamped work', () => {
+    expect(ownerThreadHandover(wi({ target: 'luna', metadata: { origin: ownerOrigin, leadReport: stamp } }), 'Orc')).toBeNull();
+    expect(ownerThreadHandover(wi({ target: 'luna', metadata: { origin: ownerOrigin } }), 'Orc')).not.toBeNull();
   });
 });

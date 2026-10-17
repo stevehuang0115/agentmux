@@ -32,7 +32,7 @@ import { parseTicketNumber } from '../../types/v2/ticket.types.js';
 import { formatSlackThreadKey, parseSlackThreadKey } from '../slack/slack-thread-key.js';
 import type { TurnOrigin } from './orc-reply-route.service.js';
 import { hasReference, type PromptReference, type ReplyReference } from './agent-prompt-reference.service.js';
-import { currentWorkItemOf, originOfWorkItem, planWorkDestination, type WorkDestination } from './work-item-destination.js';
+import { currentWorkItemOf, leadReportOf, originOfWorkItem, planWorkDestination, type WorkDestination } from './work-item-destination.js';
 
 export type { ReplyReference } from './agent-prompt-reference.service.js';
 
@@ -519,7 +519,9 @@ async function guessDestination(
     };
   }
   const isScheduled = !!workItem && originOfWorkItem(workItem)?.kind === 'trigger';
-  if (planned.kind !== 'new-top-level' || isScheduled) {
+  // Team work its lead reports in the team channel (crewly#1371) goes there, not to the owner DM.
+  const isLeadReported = !!workItem && !!leadReportOf(workItem);
+  if (planned.kind !== 'new-top-level' || isScheduled || isLeadReported) {
     return { destination: { kind: 'work', destination: planned, source: 'current-work', reason: planned.reason }, ignoredHints };
   }
 

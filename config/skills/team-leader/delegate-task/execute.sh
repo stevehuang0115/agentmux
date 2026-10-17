@@ -342,6 +342,12 @@ OWNER_THREAD_NOTE=$(echo "$POOL_RESULT" | jq -r '.data.ownerThread.note // empty
 if [ -n "$OWNER_THREAD_NOTE" ]; then
   DELIVER_MESSAGE="${DELIVER_MESSAGE}\n\n${OWNER_THREAD_NOTE}"
 fi
+# Team work the orchestrator delegated for the owner (crewly#1371): the team
+# lead reports it to the owner in the team channel; the member is told so.
+LEAD_REPORT_NOTE=$(echo "$POOL_RESULT" | jq -r '.data.leadReport.note // empty' 2>/dev/null || true)
+if [ -n "$LEAD_REPORT_NOTE" ]; then
+  DELIVER_MESSAGE="${DELIVER_MESSAGE}\n\n${LEAD_REPORT_NOTE}"
+fi
 # No owner place named (crewly#1357): the result comes back to the delegator;
 # the member is told not to post it to the owner.
 RESULT_ROUTE_NOTE=$(echo "$POOL_RESULT" | jq -r '.data.resultRoute.note // empty' 2>/dev/null || true)

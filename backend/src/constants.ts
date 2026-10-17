@@ -7748,6 +7748,18 @@ export const WORK_ITEM_DESTINATION_CONSTANTS = {
 } as const;
 
 /**
+ * Team work the orchestrator delegated on the owner's behalf is reported to
+ * the owner by the team's lead, in the team's Slack channel, as the lead
+ * (crewly#1371). See `services/orc/team-lead-report.ts`.
+ */
+export const TEAM_LEAD_REPORT_CONSTANTS = {
+	/** `WorkItem.metadata` key holding who reports the finished work and where */
+	METADATA_KEY: 'leadReport',
+	/** Answer key prefix of a `reply --work-item <id>` report (owner completion report store) */
+	WORK_ITEM_ANSWER_PREFIX: 'wi:',
+} as const;
+
+/**
  * Finished owner-requested work is reported back where the owner asked
  * (2026-10-07: CREW-305/309/310 were all verified and nobody told the owner).
  * See `services/orc/owner-completion-report.service.ts`.

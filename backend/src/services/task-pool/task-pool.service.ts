@@ -69,8 +69,10 @@ import {
 } from '../orc/work-item-destination.js';
 import { reportOwnerThreadBlocking } from '../messaging/owner-thread-sentinel.service.js';
 import { getOwnerRequestContext, type OwnerRequestContext } from '../orc/owner-request-context.js';
+import { leadReportOf, orchestratorNote, type LeadReport } from '../orc/team-lead-report.js';
+import { resolveLeadReport } from '../orc/team-lead-report.wiring.js';
 import { formatSlackThreadKey, parseSlackThreadKey } from '../slack/slack-thread-key.js';
-import { OPEN_ITEMS_CONSTANTS, TEAM_PAUSE_CONSTANTS, TL_DELEGATION_CONSTANTS, WORK_ITEM_DESTINATION_CONSTANTS } from '../../constants.js';
+import { OPEN_ITEMS_CONSTANTS, TEAM_LEAD_REPORT_CONSTANTS, TEAM_PAUSE_CONSTANTS, TL_DELEGATION_CONSTANTS, WORK_ITEM_DESTINATION_CONSTANTS } from '../../constants.js';
 import { assignWorkItemTrace } from '../trace/trace-recorder.js';
 
 /**
@@ -417,6 +419,14 @@ export class TaskPoolService {
   private ownerAskedAtLookup: ((origin: Extract<WorkItemOrigin, { kind: 'owner' }>) => Promise<number | null>) | null = defaultOwnerAskedAt;
 
   /**
+   * Who reports a new owner-origin delegation to the owner, and where
+   * (crewly#1371: the team lead, in the team channel). null disables the
+   * stamp. Default: the real teams and Slack team channels.
+   */
+  private leadReportResolver: ((input: { workItem: WorkItem; creator?: string; items: readonly WorkItem[] }) => Promise<LeadReport | null>) | null = (input) =>
+    resolveLeadReport(input);
+
+  /**
    * Serializes claim operations to prevent the race where two concurrent
    * claimFromPool / claimSpecificItem calls both select the same queued
    * WorkItem between their read and write phases. In-process only — does
@@ -578,6 +588,15 @@ export class TaskPoolService {
    */
   setOwnerContextLookup(lookup: ((sessionName: string) => Promise<OwnerRequestContext | null>) | null): void {
     this.ownerContextLookup = lookup;
+  }
+
+  /**
+   * Replace (or disable with `null`) the lead-report resolver (crewly#1371).
+   *
+   * @param resolver - New item + creator + pool → its lead report, or null
+   */
+  setLeadReportResolver(resolver: ((input: { workItem: WorkItem; creator?: string; items: readonly WorkItem[] }) => Promise<LeadReport | null>) | null): void {
+    this.leadReportResolver = resolver;
   }
 
   /**
@@ -879,6 +898,58 @@ export class TaskPoolService {
    * @param ownerOnly - Stamp only an owner origin
    */
   private async inheritOrigin(workItem: WorkItem, creatorSession?: string, ownerOnly = false): Promise<void> {
+    await this.inheritOriginOnly(workItem, creatorSession, ownerOnly);
+    await this.stampLeadReport(workItem, creatorSession);
+  }
+
+  /**
+   * Stamp `metadata.leadReport` (crewly#1371): team work the orchestrator
+   * delegated on the owner's behalf is reported to the owner by the team's
+   * lead, in the team channel. A verify / retry / subtask item takes its
+   * parent's stamp; a new owner-origin delegation asks the resolver. Mutates
+   * the item before it is stored; failures are logged and ignored.
+   *
+   * @param workItem - The item about to be stored (origin already stamped)
+   * @param creatorSession - The agent creating it, when known
+   */
+  private async stampLeadReport(workItem: WorkItem, creatorSession?: string): Promise<void> {
+    try {
+      if (leadReportOf(workItem)) return;
+      const meta = (workItem.metadata ?? {}) as Record<string, unknown>;
+      const parentId = [workItem.parentWorkItemId, meta.verifyOf, meta.sourceWorkItemId].find(
+        (v): v is string => typeof v === 'string' && v.length > 0,
+      );
+      const parent = parentId ? await this.storage.findWorkItem(parentId) : null;
+      let stamp = parent ? leadReportOf(parent) : null;
+      if (!stamp) {
+        if (parent || !this.leadReportResolver || originOfWorkItem(workItem)?.kind !== 'owner') return;
+        const creator = creatorSession ?? (typeof meta.delegatedBy === 'string' ? meta.delegatedBy : undefined);
+        stamp = await this.leadReportResolver({ workItem, ...(creator ? { creator } : {}), items: await this.storage.getWorkItems() });
+      }
+      if (!stamp) return;
+      workItem.metadata = { ...meta, [TEAM_LEAD_REPORT_CONSTANTS.METADATA_KEY]: stamp };
+      this.logger.info('WorkItem is reported to the owner by its team lead, in the team channel', {
+        workItemId: workItem.id,
+        lead: stamp.lead,
+        teamId: stamp.teamId,
+        from: parent ? `parent ${parent.id}` : 'delegation',
+      });
+    } catch (err) {
+      this.logger.warn('Lead report stamp failed — WorkItem keeps the default report path', {
+        workItemId: workItem.id,
+        error: formatError(err),
+      });
+    }
+  }
+
+  /**
+   * The origin half of {@link inheritOrigin}.
+   *
+   * @param workItem - The item about to be stored
+   * @param creatorSession - The agent creating it, when known
+   * @param ownerOnly - Stamp only an owner origin
+   */
+  private async inheritOriginOnly(workItem: WorkItem, creatorSession?: string, ownerOnly = false): Promise<void> {
     try {
       const meta = (workItem.metadata ?? {}) as Record<string, unknown>;
       const parentId = [workItem.parentWorkItemId, meta.verifyOf, meta.sourceWorkItemId].find(
@@ -1289,6 +1360,7 @@ export class TaskPoolService {
       });
       return;
     }
+    const leadReport = leadReportOf(workItem);
     try {
       this.eventBus.publish({
         id: `${type}:${workItem.id}`,
@@ -1311,6 +1383,8 @@ export class TaskPoolService {
         // `target` is never used for subscription matching.
         ...(workItem.target ? { target: workItem.target } : {}),
         workItemTitle: workItem.title,
+        // crewly#1371: the team lead reports this to the owner; the orchestrator's notice is informational.
+        ...(leadReport ? { orchestratorNote: orchestratorNote(leadReport) } : {}),
       });
     } catch (err) {
       this.logger.warn(`${type} publish threw`, {

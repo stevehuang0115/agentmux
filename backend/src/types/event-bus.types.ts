@@ -374,6 +374,13 @@ export interface AgentEvent {
    */
   workItemTitle?: string;
 
+  /**
+   * A line for the orchestrator's notification only, on WorkItem-level
+   * `task:*` events (crewly#1371: "No owner post needed — <lead> reports it
+   * in #<channel>"). Never used for matching; other subscribers do not see it.
+   */
+  orchestratorNote?: string;
+
   /** Gmail thread id, on `gmail:reply_received` (matchable by watch-for-event filters). */
   threadId?: string;
 }

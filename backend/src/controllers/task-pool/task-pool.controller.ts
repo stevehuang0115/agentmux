@@ -40,6 +40,7 @@ import { decideCompletion, decideReviewAccept, evidenceRequiredFor, resolveEvide
 import { readAgentSessionHeader, resolveTransitionActor } from '../../utils/agent-caller.utils.js';
 import { getTicketIntakeService } from '../../services/v3/ticket-intake.service.js';
 import { ownerThreadHandover, delegatorResultNote } from '../../services/orc/work-item-destination.js';
+import { leadNameOf, leadReportOf, memberLeadReportNote, orchestratorNote } from '../../services/orc/team-lead-report.js';
 import { TlDelegationService } from '../../services/tl-delegation/tl-delegation.service.js';
 import { isTicketNumberRef } from '../../types/v2/ticket.types.js';
 import { ProjectTicketError } from '../../services/project-tickets/project-ticket.service.js';
@@ -571,6 +572,11 @@ export async function addItem(req: Request, res: Response): Promise<void> {
     // crewly#1357: a delegation the owner did not ask for in any thread — the
     // member reports to the delegator, never to the owner.
     const resultRoute = delegatorName ? delegatorResultNote(workItem, delegatorName) : null;
+    // crewly#1371: team work done for the owner is reported by the team lead, in the team channel.
+    const stamp = delegatorName ? leadReportOf(workItem) : null;
+    const leadReport = stamp
+      ? { lead: stamp.lead, leadName: leadNameOf(stamp), channel: `#${stamp.channelName}`, note: memberLeadReportNote(workItem, stamp), delegatorNote: orchestratorNote(stamp) }
+      : null;
     if (workItem.type === 'delegate') TlDelegationService.getInstance().recordDelegation(delegator, workItem.target);
 
     res.status(201).json({
@@ -582,6 +588,7 @@ export async function addItem(req: Request, res: Response): Promise<void> {
         status: workItem.status,
         ...(ownerThread ? { ownerThread } : {}),
         ...(resultRoute ? { resultRoute } : {}),
+        ...(leadReport ? { leadReport } : {}),
         ...(routed
           ? {
               projectTicket: {

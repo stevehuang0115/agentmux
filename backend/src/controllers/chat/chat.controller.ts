@@ -1330,7 +1330,19 @@ export async function agentResponse(
       // counter, the nudges never aged out.
       let deliveryOwed = false;
       try {
-        if (conversationIdWasExplicit) {
+        // crewly#1371: team work the orchestrator delegated for the owner is
+        // reported by the team lead in the team channel — the orchestrator
+        // owes no delivery in its own thread.
+        const { leadReportForStatus } = await import('../../services/orc/team-lead-report.wiring.js');
+        const leadReported = conversationIdWasExplicit
+          ? !!(await leadReportForStatus({
+              sender: agentHeader && !headerContradictsSender ? agentHeader : String(senderName),
+              ...(typeof req.body?.workItemId === 'string' && req.body.workItemId ? { workItemId: req.body.workItemId } : {}),
+            }))
+          : false;
+        if (leadReported) {
+          logger.info('Skipping delivery tracking — the team lead reports this work to the owner', { senderName, conversationId: resolvedConversationId });
+        } else if (conversationIdWasExplicit) {
           const { OrcDeliveryEnforcerService } = await import(
             '../../services/orc/orc-delivery-enforcer.service.js'
           );
