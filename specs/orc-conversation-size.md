@@ -14,7 +14,7 @@ The assembled system prompt is about 10.9k tokens, 1.8% of each turn. So the lev
 
 - It measures the last real turn of the transcript (input + cache read + cache write; `lastTurnContextTokens`).
 - If that is at or above `ORC_CONVERSATION_CONSTANTS.FRESH_CONTEXT_TOKENS` (300k; env `CREWLY_ORC_FRESH_CONTEXT_TOKENS`), the orc starts a fresh conversation instead of resuming.
-- `buildHandoverSummary` writes `~/.crewly/handover/crewly-orc-<ts>.md`. It holds the plain words at the end of the old conversation: at most 40 messages, 800 characters each, 16k characters in total, with no tool traffic or system reminders, and no model call. It also records the path of the old transcript.
+- `buildHandoverSummary` writes `~/.crewly/handover/crewly-orc-<ts>.md`. It holds the end of the old conversation: at most 60 messages, 2,000 characters each, 40k characters in total, with one line per tool call and tool result (tool name plus the first 200 characters of its input / output; images as a placeholder), no system reminders, and no model call. It also records the path of the old transcript. (Before crewly#1344: 40 × 800 / 16k, no tool traffic.)
 - The kickoff message tells the orc to read the handover file once after registering.
 - Its real state (tasks, teams, OKRs, wiki) lives in Crewly and is read back by the startup steps anyway.
 - This never happens mid-conversation. It applies only to the orchestrator on Claude Code.
@@ -33,6 +33,8 @@ Not changed: the orc's working directory, which is still the first project. The 
 
 `FreshTaskConversationService` (backend/src/services/agent/fresh-task-conversation.service.ts) keeps Claude Code team members' conversations bounded. It never applies to the orchestrator, and it never clears during a turn.
 
+**Thresholds (crewly#1344, see `specs/2026-10-17-agent-conversation-continuity.md`).** Claude Code compacts a conversation itself at 350k (`CLAUDE_CODE_CONTEXT.DEFAULT_AUTO_COMPACT_WINDOW`), and compaction keeps a far better summary than a handover tail, so every Crewly reset sits above it and is only a safety net: members start fresh at a launch at 400k (`CREWLY_MEMBER_FRESH_CONTEXT_TOKENS`), the idle cap is 450k (`CREWLY_MEMBER_CONTEXT_CAP_TOKENS`), and a new-task `/clear` needs the conversation to be at least the fresh-start threshold. A member the owner spoke to in the last two hours (an owner thread the sentinel watches) is never cleared for a new task.
+
 **How a task reaches a member, and where the clear happens.** A task gets exactly one delivery, and the clear runs once, before that delivery:
 
 - The dispatcher's `workitem:queued` push. `TaskPoolService.publishWorkItemQueued` puts `workItemId` and `target` on the event. `EventBusService.publish` passes both through its `event_published` signal. Before 2026-09-28 the signal carried only eventId, eventType and sessionName, so the listener never fired. `WorkItemDispatchSubscriber.dispatchTo` runs `prepareForTask`, then writes the brief. The queued push skips `crewly-orc`; the reconciler still handles the orc's items.
@@ -40,7 +42,7 @@ Not changed: the orc's working directory, which is still the first project. The 
 
 **Idle-boundary context cap.** One task can run for 1000+ turns. Every 60 s a sweep checks each registered member. It caps a member only when all of these hold:
 
-- its last turn (`lastTurnContextTokens`) is over `CREWLY_MEMBER_CONTEXT_CAP_TOKENS` (default 300k; `0` disables the cap);
+- its last turn (`lastTurnContextTokens`) is over `CREWLY_MEMBER_CONTEXT_CAP_TOKENS` (default 450k; `0` disables the cap);
 - it is idle (not `in_progress`, and the PTY has been quiet for 30 s or more);
 - nothing is being delivered to it, was delivered to it in the last 30 s, or is queued for it;
 - it has not been capped in the last 20 minutes;

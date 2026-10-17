@@ -108,6 +108,24 @@ unanswered owner message or a promise in the last 30 min) whenever another
 candidate exists. The idle-stop pending-work check counts the same thing as
 work.
 
+Since crewly#1344 the sentinel also answers `ownerActiveRecently(agent)`: the
+owner wrote to the agent in a watched thread, or the agent promised the owner
+something there, within `OWNER_ACTIVE_MS` (2 h) — answered or not. Such an
+agent is never a slot-cap victim unless memory is critical, waits
+`OWNER_THREAD_IDLE_TIMEOUT_MINUTES` (30) before an idle stop whatever the
+configured or pressure timeout says, and is never `/clear`ed for a new task.
+
+### Stale threads
+
+A watched thread with no owner activity (`ownerAt`, else the entry's last
+change) for `STALE_AFTER_MS` (3 days) is dropped at load and never counted as
+owed; so is a thread whose agent is no longer on this machine
+(`agentOnThisMachine`, from this machine's current members; at boot from the
+teams in storage minus teams archived or recorded as moved away under
+`team-moves/*/state.json`). Neither gets the "restarted" line (crewly#1344: a
+thread from 10-07 was re-stamped on every boot for ten days after its team
+moved to another machine).
+
 ### Boot restore
 
 `autoRestoreAgentSessionsIfEnabled` also restores every agent that an owner

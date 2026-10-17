@@ -90,15 +90,25 @@ describe('decideFreshConversation', () => {
   it('active work with the new root itself does not block', () => {
     expect(decideFreshConversation({ ...base, otherActiveRoots: ['task-b'] }).clear).toBe(true);
   });
+  // crewly#1344: 137 clears in 48 h, some of 56k-token conversations, and
+  // members cleared while the owner was mid-conversation with them.
+  it('never clears into an owner conversation, and only above the clear floor', () => {
+    expect(decideFreshConversation({ ...base, ownerConversationActive: true })).toEqual({ clear: false, reason: 'owner conversation' });
+    expect(decideFreshConversation({ ...base, minContextTokens: 400_000, contextTokens: 56_000 })).toEqual({ clear: false, reason: 'under the clear floor' });
+    expect(decideFreshConversation({ ...base, minContextTokens: 400_000, contextTokens: null })).toEqual({ clear: false, reason: 'conversation size unknown' });
+    expect(decideFreshConversation({ ...base, minContextTokens: 400_000, contextTokens: 400_000 }).clear).toBe(true);
+    // Without a floor given (older callers) the size is not looked at.
+    expect(decideFreshConversation({ ...base, contextTokens: 56_000 }).clear).toBe(true);
+  });
 });
 
 describe('memberContextCapTokens', () => {
-  it('defaults to 200k; 0 disables; junk falls back to the default', () => {
-    expect(memberContextCapTokens({})).toBe(200_000);
+  it('defaults to 450k; 0 disables; junk falls back to the default', () => {
+    expect(memberContextCapTokens({})).toBe(450_000);
     expect(memberContextCapTokens({ CREWLY_MEMBER_CONTEXT_CAP_TOKENS: '250000' })).toBe(250_000);
     expect(memberContextCapTokens({ CREWLY_MEMBER_CONTEXT_CAP_TOKENS: '0' })).toBe(0);
-    expect(memberContextCapTokens({ CREWLY_MEMBER_CONTEXT_CAP_TOKENS: 'lots' })).toBe(200_000);
-    expect(memberContextCapTokens({ CREWLY_MEMBER_CONTEXT_CAP_TOKENS: '-5' })).toBe(200_000);
+    expect(memberContextCapTokens({ CREWLY_MEMBER_CONTEXT_CAP_TOKENS: 'lots' })).toBe(450_000);
+    expect(memberContextCapTokens({ CREWLY_MEMBER_CONTEXT_CAP_TOKENS: '-5' })).toBe(450_000);
   });
 });
 
@@ -203,10 +213,12 @@ describe('FreshTaskConversationService', () => {
       {
         type: 'assistant',
         timestamp: 't2',
-        message: { content: [{ type: 'text', text: 'Login page done.' }], usage: { input_tokens: 10, cache_read_input_tokens: 200_000 } },
+        // Over the 400k clear floor (crewly#1344): the new-task clear below may run.
+        message: { content: [{ type: 'text', text: 'Login page done.' }], usage: { input_tokens: 10, cache_read_input_tokens: 450_000 } },
       },
     ]);
     deps = {
+      ownerConversationActive: jest.fn(() => false),
       getSessionInfo: jest.fn(() => ({ runtimeType: 'claude-code', cwd: CWD, sessionId: OLD_ID })),
       getClaimedSessionIds: jest.fn(() => new Set<string>()),
       updateSessionId: jest.fn((_s: string, id: string) => { events.push(`update:${id}`); }),
@@ -415,6 +427,32 @@ describe('FreshTaskConversationService', () => {
     expect((await svc.prepareForTask(SESSION, wi('task-b'))).cleared).toBe(false);
     expect(deps.writeToSession).not.toHaveBeenCalled();
     expect(deps.remember).not.toHaveBeenCalled();
+  });
+
+  it('a member the owner spoke to in the last two hours is not cleared for a new task (crewly#1344)', async () => {
+    deps.ownerConversationActive = jest.fn(() => true);
+    const svc = FreshTaskConversationService.createForTesting(deps);
+    await svc.prepareForTask(SESSION, wi('task-a'));
+    expect(await svc.prepareForTask(SESSION, wi('task-b'))).toEqual({ cleared: false });
+    expect(deps.writeToSession).not.toHaveBeenCalled();
+    expect(deps.isBusy).not.toHaveBeenCalled();
+    expect(svc.getLastRoot(SESSION)).toBe('task-b');
+  });
+
+  it('a conversation under the clear floor joins the new task instead of being cleared; the env override lowers the floor (crewly#1344)', async () => {
+    writeTranscript(OLD_ID, [
+      { type: 'user', timestamp: 't1', message: { content: 'Small task' } },
+      { type: 'assistant', timestamp: 't2', message: { content: [{ type: 'text', text: 'Done.' }], usage: { input_tokens: 10, cache_read_input_tokens: 56_000 } } },
+    ]);
+    const svc = FreshTaskConversationService.createForTesting(deps);
+    await svc.prepareForTask(SESSION, wi('task-a'));
+    expect(await svc.prepareForTask(SESSION, wi('task-b'))).toEqual({ cleared: false });
+    expect(deps.writeToSession).not.toHaveBeenCalled();
+
+    deps.env = { CREWLY_MEMBER_FRESH_CONTEXT_TOKENS: '50000' };
+    const low = FreshTaskConversationService.createForTesting(deps);
+    expect((await low.prepareForTask(SESSION, wi('task-c'))).cleared).toBe(true);
+    await settle();
   });
 
   it('orchestrator: never clears', async () => {

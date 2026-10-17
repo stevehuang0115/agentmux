@@ -740,6 +740,85 @@ describe('RuntimeFallbackService — a second Claude Code account (#942)', () =>
 		expect(h.store.load().exhausted['claude-code@b']).toMatchObject({ kind: 'usage_limit' });
 	});
 
+	// crewly#1344: a session moved between accounts always started fresh —
+	// the transcript lived in the other account's config dir.
+	describe('the conversation travels between Claude Code accounts', () => {
+		it('keeps the conversation id when the wiring carried the transcript to B, and says so in the kickoff note; the handover is still written', async () => {
+			const h = makeB();
+			const carried: unknown[] = [];
+			h.deps.carryConversation = async (args) => {
+				carried.push(args);
+				return true;
+			};
+			h.service.reportOutput('dev-1', 'claude-code', CLAUDE_LIMIT, 'output');
+			await settle();
+			expect(carried).toEqual([{ sessionName: 'dev-1', from: 'claude-code', to: 'claude-code@b', conversationId: 'claude-convo-1' }]);
+			expect(h.conversations.get('dev-1')).toBe('claude-convo-1');
+			expect(h.store.load().overrides['dev-1']).toMatchObject({ runtime: 'claude-code@b', primarySessionId: 'claude-convo-1' });
+			expect(h.handovers).toHaveLength(1);
+			const note = h.service.takeKickoffNote('dev-1') ?? '';
+			expect(note).toContain('Your conversation came with you');
+			expect(note).not.toContain('fresh conversation');
+		});
+
+		it('falls back to a fresh conversation with the handover when the copy fails or throws', async () => {
+			for (const carry of [async () => false, async () => { throw new Error('disk'); }]) {
+				const h = makeB();
+				h.deps.carryConversation = carry;
+				h.service.reportOutput('dev-1', 'claude-code', CLAUDE_LIMIT, 'output');
+				await settle();
+				expect(h.conversations.has('dev-1')).toBe(false);
+				expect(h.service.takeKickoffNote('dev-1')).toContain('This is a fresh conversation');
+			}
+		});
+
+		it('never tries to carry a conversation to a runtime that is not Claude Code', async () => {
+			const h = make();
+			const carry = jest.fn(async () => true);
+			h.deps.carryConversation = carry;
+			h.service.reportOutput('dev-1', 'claude-code', CLAUDE_LIMIT, 'output');
+			await settle();
+			expect(h.service.overrideFor('dev-1')).toBe('crewly-agent');
+			expect(carry).not.toHaveBeenCalled();
+			expect(h.conversations.has('dev-1')).toBe(false);
+		});
+
+		it('brings the conversation that went on on B back to the default login at the revert, for a running and for a stopped agent', async () => {
+			const h = makeB();
+			h.deps.carryConversation = async () => true;
+			h.service.reportOutput('dev-1', 'claude-code', CLAUDE_LIMIT, 'output');
+			h.service.beforeDelivery('dev-2', 'claude-code');
+			await settle();
+			// On B the conversations went on (new ids after a /clear there).
+			h.conversations.set('dev-1', 'convo-on-b-1');
+			h.conversations.set('dev-2', 'convo-on-b-2');
+			h.live.delete('dev-2');
+			h.probe.mockResolvedValue('available');
+			h.clock.now = Date.UTC(2026, 9, 1, 15, 3);
+			await h.service.tick();
+			expect(h.service.overrideFor('dev-1')).toBeNull();
+			expect(h.conversations.get('dev-1')).toBe('convo-on-b-1');
+			expect(h.service.takeKickoffNote('dev-1')).toContain('Your conversation came back with you');
+			expect(h.service.overrideFor('dev-2')).toBeNull();
+			expect(h.conversations.get('dev-2')).toBe('convo-on-b-2');
+		});
+
+		it('resumes the primary conversation from before the switch when the copy back fails', async () => {
+			const h = makeB();
+			let allow = true;
+			h.deps.carryConversation = async () => allow;
+			h.service.reportOutput('dev-1', 'claude-code', CLAUDE_LIMIT, 'output');
+			await settle();
+			h.conversations.set('dev-1', 'convo-on-b-1');
+			allow = false;
+			h.probe.mockResolvedValue('available');
+			h.clock.now = Date.UTC(2026, 9, 1, 15, 3);
+			await h.service.tick();
+			expect(h.conversations.get('dev-1')).toBe('claude-convo-1');
+			expect(h.service.takeKickoffNote('dev-1')).toContain('Work went on while you were away');
+		});
+	});
+
 	it('shows B in the badge', async () => {
 		const h = makeB();
 		h.service.reportOutput('dev-1', 'claude-code', CLAUDE_LIMIT, 'output');

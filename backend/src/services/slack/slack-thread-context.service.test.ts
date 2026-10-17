@@ -4,7 +4,7 @@
  * agent on another machine never reached this machine).
  */
 
-import {
+import { describeSlackFiles,
   SlackThreadContextService,
   contextKindFor,
   renderSlackThreadContext,
@@ -180,10 +180,12 @@ describe('SlackThreadContextService', () => {
     expect(ctx?.totalBefore).toBe(50);
     expect(ctx?.messages[ctx.messages.length - 1].text).toBe('msg-50');
     // The rendered block is compact: the newest BLOCK_RECENT_MESSAGES when the agent never posted here.
+    // The thread root is not among the messages kept (the read is capped at MAX_MESSAGES), so no root line.
     const block = renderSlackThreadContext(ctx);
     expect(block).toContain(`${SLACK_THREAD_CONTEXT_CONSTANTS.BLOCK_RECENT_MESSAGES} of 50 messages, older ones omitted`);
     expect(block).toContain('msg-50');
     expect(block).not.toContain('msg-40');
+    expect(block).not.toContain(SLACK_THREAD_CONTEXT_CONSTANTS.ROOT_MARK);
 
     // Character budget: the newest message survives, older ones fall off.
     const big: SlackThreadContext = {
@@ -195,10 +197,53 @@ describe('SlackThreadContextService', () => {
       ],
       totalBefore: 2,
     };
-    const small = renderSlackThreadContext(big, undefined, 50);
+    const small = renderSlackThreadContext({ ...big, kind: 'channel' }, undefined, 50);
     expect(small).toContain('B: newest');
     expect(small).not.toContain('A: old');
     expect(small).toContain('1 of 2 messages, older ones omitted');
+  });
+
+  // crewly#1344: a thread older than the window arrived headless — the agent
+  // saw the newest eight lines and not what the thread was about.
+  it('a thread block always opens with the root message, marked, and says how many messages lie between', () => {
+    const ctx: SlackThreadContext = {
+      kind: 'thread',
+      channelId: CH,
+      threadTs: '4.001',
+      totalBefore: 12,
+      messages: Array.from({ length: 12 }, (_, i) => ({ ts: `4.${String(i + 1).padStart(3, '0')}`, isBot: false, authorName: i === 0 ? 'Steve' : 'Dana', text: i === 0 ? 'Plan the Q4 launch video' : `detail ${i}` })),
+    };
+    const block = renderSlackThreadContext(ctx);
+    const lines = block.split('\n').filter((l) => l.startsWith('  '));
+    expect(lines[0]).toBe(`  Steve ${SLACK_THREAD_CONTEXT_CONSTANTS.ROOT_MARK}: Plan the Q4 launch video`);
+    expect(lines[1]).toBe('  … 3 older messages omitted …');
+    expect(lines).toHaveLength(2 + SLACK_THREAD_CONTEXT_CONSTANTS.BLOCK_RECENT_MESSAGES);
+    expect(block).toContain('9 of 12 messages, the root and the newest kept, older ones omitted');
+    // Everything shown already: no root line, no omitted line.
+    const short = renderSlackThreadContext({ ...ctx, totalBefore: 3, messages: ctx.messages.slice(0, 3) });
+    expect(short).not.toContain(SLACK_THREAD_CONTEXT_CONSTANTS.ROOT_MARK);
+    expect(short).toContain('3 messages');
+  });
+
+  it('describes attachments by kind, name and title / alt text instead of a bare file name (crewly#1344)', async () => {
+    const { fetchImpl } = fakeSlack((method, params) =>
+      method === 'conversations.replies'
+        ? {
+            body: {
+              ok: true,
+              messages: [
+                { ts: '5.1', user: 'USTEVE', text: 'see these', files: [{ name: 'IMG_4821.jpg', mimetype: 'image/jpeg', filetype: 'jpg', alt_txt: 'the venue entrance' }, { name: 'deck.pdf', filetype: 'pdf', title: 'Q4 deck' }, { title: 'notes', filetype: 'txt' }] },
+                { ts: '5.5', user: 'USTEVE', text: 'trigger' },
+              ],
+            },
+          }
+        : usersInfo(params),
+    );
+    const svc = new SlackThreadContextService({ fetchImpl, logger: makeLogger() });
+    const ctx = await svc.getContext({ channelId: CH, ts: '5.5', threadTs: '5.1' }, ['t']);
+    expect(ctx?.messages[0].text).toBe('see these [attachments: image "IMG_4821.jpg" — alt: the venue entrance; PDF "deck.pdf" — Q4 deck; txt file "notes"]');
+    expect(describeSlackFiles(undefined)).toBe('');
+    expect(describeSlackFiles([{ name: 'clip.mp4', mimetype: 'video/mp4' }])).toBe('[attachments: video "clip.mp4"]');
   });
 
   // 2026-10-08, #content-team: Rex (another machine) asked Ella three times
@@ -225,9 +270,11 @@ describe('SlackThreadContextService', () => {
     it('shows everything since the agent\'s own last post (at least the newest 8), clipped, other machines included', () => {
       const block = renderSlackThreadContext(thread(), { botUserId: ELLA, name: 'Ella (Crewly Marketing)' });
       const lines = block.split('\n').filter((l) => l.startsWith('  '));
-      // The newest 8 reach back past Ella's own post, so it is the window.
-      expect(lines).toHaveLength(8);
-      expect(lines[0]).toContain('Dana [bot]: old research 5');
+      // The thread root first (crewly#1344), then the newest 8, which reach back past Ella's own post.
+      expect(lines).toHaveLength(2 + 8);
+      expect(lines[0]).toBe(`  Steve ${SLACK_THREAD_CONTEXT_CONSTANTS.ROOT_MARK}: video plan?`);
+      expect(lines[1]).toBe('  … 5 older messages omitted …');
+      expect(lines[2]).toContain('Dana [bot]: old research 5');
       expect(block).toContain('Ella (Crewly Marketing) [bot] (you): Here is the English draft');
       // A 4 000-char post is clipped to the block's per-message size.
       const own = lines.find((l) => l.includes('(you)')) as string;

@@ -2,6 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { StorageService } from '../core/storage.service.js';
+import { resolveProjectSlugCandidatesSync } from '../monitoring/claude-session-tokens.service.js';
 import type { Team } from '../../types/index.js';
 import { generateTargetKeyPair } from './team-move-crypto.js';
 import { buildEncryptedPackage } from './team-move-exporter.js';
@@ -260,24 +261,75 @@ describe('TeamMoveImporter', () => {
       expect(await storage.getProjects()).toHaveLength(1);
     });
 
-    it('drops project ids that did not come along, so the start does not trip on a missing project', async () => {
+    // crewly#1344: the SteamFun team arrived on the Air with projectIds: []
+    // and no project — its agents ran with no project CLAUDE.md, memory or wiki.
+    it('keeps a project id that did not come along: a flagged placeholder folder, a note, and one DM to the owner', async () => {
+      const dms: string[] = [];
       const dangling = await pack(
         (m) => {
+          m.team.name = 'SteamFun';
           m.projects = [];
           m.repos = [];
         },
         { config: { ...projectless, projectIds: ['gone-1'] } },
       );
-      await run(dangling, deps({ startTeam: async () => ({ ok: true }) }));
+      const report = await run(dangling, deps({ startTeam: async () => ({ ok: true }), notifyOwner: async (text) => void dms.push(text), machineName: () => 'the Air' }));
       const [team] = await storage.getTeams();
       const [project] = await storage.getProjects();
-      expect(team!.projectIds).toEqual([project!.id]);
+      expect(team!.projectIds).toEqual(['gone-1']);
+      expect(project!.id).toBe('gone-1');
+      expect(project!.path).toBe(path.join(root, 'projects', 'steamfun-project-NEEDS-PATH'));
+      expect((await fs.stat(project!.path)).isDirectory()).toBe(true);
+      expect(report.warnings.join(' ')).toMatch(/placeholder .*steamfun-project-NEEDS-PATH — set the real path/);
+      expect(dms).toHaveLength(1);
+      expect(dms[0]).toContain('SteamFun moved to the Air');
+      expect(dms[0]).toContain('steamfun-project-NEEDS-PATH');
+    });
+
+    it('names the source path when the manifest knows the project, and sends no DM when nothing is missing', async () => {
+      const dms: string[] = [];
+      const dangling = await pack(
+        (m) => {
+          m.repos = [];
+          m.projects = [{ id: 'gone-2', name: 'Site', sourcePath: '/Users/src/site', dataDir: '.crewly', files: 0, bytes: 0, skipped: [], sharedWithTeams: [] }];
+          m.team.projectIds = ['gone-2'];
+        },
+        { config: { ...projectless, projectIds: ['gone-2'] } },
+      );
+      // The manifest project is registered normally (relocated under the projects root): nothing is missing.
+      const report = await run(dangling, deps({ startTeam: async () => ({ ok: true }), notifyOwner: async (text) => void dms.push(text) }));
+      expect((await storage.getTeams())[0]!.projectIds).toEqual(['gone-2']);
+      expect(report.warnings.join(' ')).not.toContain('NEEDS-PATH');
+      expect(dms).toEqual([]);
     });
 
     it("keeps the team's own projects when it has them", async () => {
       await run(await pack(), deps({ startTeam: async () => ({ ok: true }) }));
       expect((await storage.getTeams())[0]!.projectIds).toEqual(['p1']);
       expect(await storage.getProjects()).toHaveLength(1);
+    });
+  });
+
+  describe('agent conversations (crewly#1344)', () => {
+    it('puts a carried transcript under this machine\'s Claude home for the member\'s new cwd and remembers it for the launch', async () => {
+      const claudeHome = path.join(root, 'claude');
+      const p = await pack(async (m, s) => {
+        await s.writeText('transcripts/s-a/conv-a.jsonl', `${JSON.stringify({ type: 'user', cwd: '/src/p', message: { content: 'open /src/p/README.md' } })}\n`);
+        m.conversations = [{ sessionName: 's-a', sessionId: 'conv-a', cwd: '/src/p', bytes: 10, file: 'transcripts/s-a/conv-a.jsonl', files: 1 }, { sessionName: 's-b', sessionId: 'conv-b', cwd: '/src/p', bytes: 0, skipped: 'not_found' }];
+        m.files = s.files();
+      });
+      const report = await run(p, deps({ claudeHome }));
+      const [project] = await storage.getProjects();
+      const [slug] = resolveProjectSlugCandidatesSync(project!.path);
+      const text = await fs.readFile(path.join(claudeHome, 'projects', slug, 'conv-a.jsonl'), 'utf8');
+      expect(text).toContain(`open ${project!.path}/README.md`);
+      expect(JSON.parse(await fs.readFile(path.join(home, 'last-conversations.json'), 'utf8'))['s-a']).toMatchObject({ sessionId: 'conv-a', cwd: project!.path });
+      expect(report.moved['conversationsResumed']).toBe(1);
+    });
+
+    it('an older package without conversations imports as before', async () => {
+      const report = await run(await pack());
+      expect(report.moved['conversationsResumed']).toBe(0);
     });
   });
 

@@ -318,6 +318,25 @@ export interface PackageMember {
   runtimeType: string;
 }
 
+/**
+ * A member's latest Claude Code conversation in the package (crewly#1344):
+ * `transcripts/<session>/<id>.jsonl` plus its sidecar folder, resumed on the
+ * target. `skipped` names why it was left behind (the agent then starts fresh).
+ */
+export interface PackageConversation {
+  sessionName: string;
+  /** Claude Code conversation id (`--resume <id>`) */
+  sessionId: string;
+  /** The member's cwd on the source (the transcript is keyed on it there) */
+  cwd: string;
+  bytes: number;
+  /** Package path of the transcript, when it travels */
+  file?: string;
+  /** Files staged (transcript plus sidecar files) */
+  files?: number;
+  skipped?: 'too_large' | 'not_found' | 'unreadable';
+}
+
 /** The full manifest, `manifest.json` at the root of the package. */
 export interface TeamMoveManifest {
   kind: 'crewly-team-move';
@@ -330,6 +349,8 @@ export interface TeamMoveManifest {
   /** What is in the package, by kind. */
   counts: Record<string, number>;
   projects: PackageProject[];
+  /** The members' latest Claude Code conversations (absent in packages from before crewly#1344). */
+  conversations?: PackageConversation[];
   repos: PackageRepo[];
   /** Tools the team's prompts, norms and SOPs mention. */
   requiredTools: string[];

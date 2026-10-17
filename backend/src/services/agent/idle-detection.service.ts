@@ -22,7 +22,7 @@ import { ResourceModeService, RESOURCE_MODE_CONSTANTS, memoryIsTightFor } from '
 import type { AgentRegistrationService } from './agent-registration.service.js';
 import type { WorkItemStatus } from '../../types/v2/work-item.types.js';
 import { effectiveRuntimeType } from '../runtime-fallback/effective-runtime.js';
-import { reportOwnerThreadBlocking } from '../messaging/owner-thread-sentinel.service.js';
+import { getOwnerThreadSentinel, reportOwnerThreadBlocking } from '../messaging/owner-thread-sentinel.service.js';
 import { isDriveWarm } from '../drive/drive-keep-warm.js';
 
 /**
@@ -362,9 +362,18 @@ export class IdleDetectionService {
 				}
 
 				// Use longer timeout for 'started' agents to allow initialization to complete
-				const effectiveTimeoutMs = isStarted
+				let effectiveTimeoutMs = isStarted
 					? AGENT_SUSPEND_CONSTANTS.STARTED_AGENT_IDLE_TIMEOUT_MINUTES * 60 * 1000
 					: timeoutMs;
+				// A member in a conversation with the owner (an owner thread active in
+				// the last two hours) waits at least OWNER_THREAD_IDLE_TIMEOUT_MINUTES
+				// before an idle stop, whatever the configured or pressure timeout
+				// says (crewly#1344: 50 ten-minute idle stops in 9 h, many of them
+				// agents the owner was still talking to). Memory pressure below still
+				// decides whether the stop happens at all.
+				if (!isStarted && this.ownerConversationActive(member.sessionName)) {
+					effectiveTimeoutMs = Math.max(effectiveTimeoutMs, AGENT_SUSPEND_CONSTANTS.OWNER_THREAD_IDLE_TIMEOUT_MINUTES * 60 * 1000);
+				}
 
 				// Check if idle — dual detection:
 				// PTY-based runtimes: use PtyActivityTracker
@@ -546,6 +555,21 @@ export class IdleDetectionService {
 	 */
 	setOwedStopHook(hook: ((sessionName: string) => void) | null): void {
 		this.owedStopHook = hook;
+	}
+
+	/**
+	 * Whether the owner spoke to the agent in a watched Slack thread (or it
+	 * promised the owner something there) in the last two hours.
+	 *
+	 * @param sessionName - Agent session
+	 * @returns True while the owner conversation is live; false without a sentinel
+	 */
+	private ownerConversationActive(sessionName: string): boolean {
+		try {
+			return getOwnerThreadSentinel()?.ownerActiveRecently(sessionName) === true;
+		} catch {
+			return false;
+		}
 	}
 
 	private async holdReason(sessionName: string): Promise<string | null> {

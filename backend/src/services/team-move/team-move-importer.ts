@@ -29,6 +29,7 @@ import type { WorkItem } from '../../types/v2/work-item.types.js';
 import { atomicWriteFile } from '../../utils/file-io.utils.js';
 import { getCrewlyHomePath, resolveProjectDataDir } from '../core/crewly-home.utils.js';
 import { applyTeamChat, type ApplyChatResult, type ChatRecords } from './team-move-chat.js';
+import { importAgentTranscript } from './team-move-transcripts.js';
 import { createDecryptStream } from './team-move-crypto.js';
 import { hasTextExtension, looksLikeText, pathExists, rewritePathPrefix, sha256File, slugify, walkFiles, writeFileAtomic } from './team-move-fs.js';
 import { applyCarry } from './team-move-carry.js';
@@ -89,6 +90,14 @@ export interface ImportDeps {
   adoptSlackMapping: (mapping: Record<string, unknown>) => Promise<boolean>;
   /** Add chat channels and members (defaults to writing the chat-v2 database). */
   applyChat?: (records: ChatRecords) => ApplyChatResult;
+  /** Claude home the members' conversations are written into (default: the default login's `~/.claude`). */
+  claudeHome?: string;
+  /**
+   * One DM to the owner when the import needs them: a project the team lists
+   * could not be placed and got a placeholder path (crewly#1344). Omit to
+   * leave it to the report alone.
+   */
+  notifyOwner?: (text: string) => Promise<unknown>;
   /** Start the team; returns ok/error. Omit to import without starting. */
   startTeam?: (teamId: string) => Promise<{ ok: boolean; error?: string }>;
   /**
@@ -568,7 +577,41 @@ export class TeamMoveImporter {
       add(await this.copyTree(path.join(staging, 'agents', member.sessionName), path.join(this.home, 'agents', member.sessionName), rewrites, tag));
     }
     add(await this.copyTree(path.join(staging, 'handover'), path.join(this.home, 'handover'), rewrites, tag));
-    return { filesWritten: total.written, filesUnchanged: total.unchanged, filesReplaced: total.replaced, pathsRewritten: total.rewritten };
+    // The members' conversations (crewly#1344): under this machine's Claude
+    // home for the cwd they will run in here, remembered for the first launch.
+    let conversations = 0;
+    const cwd = this.memberCwd(manifest, mappings);
+    for (const conversation of manifest.conversations ?? []) {
+      if (!conversation.file || !cwd) continue;
+      try {
+        const written = await importAgentTranscript({
+          home: this.home,
+          conversation,
+          staging,
+          targetCwd: cwd,
+          rewrites,
+          ...(this.deps.claudeHome ? { claudeHome: this.deps.claudeHome } : {}),
+          now: () => Date.parse(this.now()) || Date.now(),
+        });
+        if (written) conversations += 1;
+      } catch {
+        // the agent starts from its handover note instead
+      }
+    }
+    return { filesWritten: total.written, filesUnchanged: total.unchanged, filesReplaced: total.replaced, pathsRewritten: total.rewritten, conversationsResumed: conversations };
+  }
+
+  /**
+   * Where the team's members run on this machine: its first project's path
+   * here (what the start route launches them in), or null when the team has
+   * no project that came along.
+   */
+  private memberCwd(manifest: TeamMoveManifest, mappings: ProjectMapping[]): string | null {
+    for (const id of manifest.team.projectIds) {
+      const m = mappings.find((x) => x.projectId === id);
+      if (m) return m.to;
+    }
+    return mappings[0]?.to ?? null;
   }
 
   private projectDataDir(project: PackageProject, targetPath: string): string {
@@ -615,6 +658,7 @@ export class TeamMoveImporter {
     const chatResult = (this.deps.applyChat ?? ((r: ChatRecords) => applyTeamChat(this.home, r)))(chat);
     out['chatChannelsAdded'] = chatResult.channelsAdded;
     out['chatChannelsExisting'] = chatResult.channelsExisting;
+    if (chatResult.messagesAdded !== undefined) out['chatMessagesAdded'] = chatResult.messagesAdded;
 
     const pool = await this.readRecord<{ workItems: WorkItem[] }>(staging, 'records/task-pool.json', rewrites, { workItems: [] });
     out['taskPoolItemsAdded'] = await this.deps.addWorkItems(pool.workItems ?? []);
@@ -657,7 +701,25 @@ export class TeamMoveImporter {
     delete (team as { moveArchive?: unknown }).moveArchive;
     const notes = await this.bindProjects(team, manifest);
     await this.deps.storage.saveTeam(team);
+    await this.tellOwnerAboutPlaceholders(manifest, notes);
     return { paused: !!(config['paused'] as unknown), notes };
+  }
+
+  /**
+   * One DM to the owner naming the placeholder project folders they have to
+   * re-point (crewly#1344). Best-effort; the report carries the same notes.
+   */
+  private async tellOwnerAboutPlaceholders(manifest: TeamMoveManifest, notes: string[]): Promise<void> {
+    const placeholders = notes.filter((n) => n.includes(C.PLACEHOLDER_PROJECT_SUFFIX));
+    if (placeholders.length === 0 || !this.deps.notifyOwner) return;
+    const machine = (await Promise.resolve(this.deps.machineName?.()).catch(() => undefined)) || 'this machine';
+    try {
+      await this.deps.notifyOwner(
+        [`${manifest.team.name} moved to ${machine}, but ${placeholders.length === 1 ? 'one of its projects' : `${placeholders.length} of its projects`} could not be placed:`, ...placeholders.map((n) => `• ${n}`), 'Set the real path in Settings → Projects (or clone the repository there); until then the team works from the placeholder folder.'].join('\n'),
+      );
+    } catch {
+      // the report still says so
+    }
   }
 
   /**
@@ -673,7 +735,24 @@ export class TeamMoveImporter {
     const wanted = Array.isArray(team.projectIds) ? team.projectIds : [];
     const present = wanted.filter((id) => known.some((p) => p.id === id));
     const notes: string[] = [];
-    if (present.length < wanted.length) notes.push(`${wanted.length - present.length} project(s) of the team are not on this machine and were left out of its project list.`);
+    // A project the team lists but the package did not carry (not in the
+    // source's project store, or left out) is never dropped silently
+    // (crewly#1344: the team arrived with no project at all, so its agents
+    // ran with no project CLAUDE.md, memory or wiki). It gets a placeholder
+    // folder with a name that says so, stays in the team's list, and the owner
+    // is told which path to set.
+    for (const id of wanted) {
+      if (present.includes(id)) continue;
+      const fromManifest = manifest.projects.find((p) => p.id === id);
+      const name = fromManifest?.name ?? `${manifest.team.name || 'Team'} project`;
+      const root = projectsRoot();
+      const dir = path.join(root, `${slugify(name)}${C.PLACEHOLDER_PROJECT_SUFFIX}`);
+      await fs.mkdir(dir, { recursive: true });
+      const at = this.now();
+      await this.deps.storage.saveProject({ id, name, path: dir, teams: {}, status: 'stopped', createdAt: at, updatedAt: at } as Project);
+      present.push(id);
+      notes.push(`${name}: its folder${fromManifest ? ` (${fromManifest.sourcePath} on the source)` : ''} is not on this machine; it was given the placeholder ${dir} — set the real path in Settings → Projects.`);
+    }
     if (present.length === 0) {
       const id = `team-home-${manifest.team.id}`;
       let project = known.find((p) => p.id === id);
@@ -808,6 +887,7 @@ export class TeamMoveImporter {
     const moved: Record<string, number> = { ...manifest.counts };
     for (const [k, v] of Object.entries(records)) if (typeof v === 'number') moved[k] = v;
     moved['filesWritten'] = data['filesWritten'] ?? 0;
+    moved['conversationsResumed'] = data['conversationsResumed'] ?? 0;
 
     return {
       moved,

@@ -1155,6 +1155,17 @@ export const AGENT_SUSPEND_CONSTANTS = {
 	 * paid that 50 times a day on steamfun-ops (2026-09-16).
 	 */
 	CRON_KEEPALIVE_WINDOW_MINUTES: 30,
+	/**
+	 * An idle member that is in a conversation with the owner (an owner thread
+	 * the sentinel watches: the owner wrote to it, or it promised the owner
+	 * something, in the last two hours) is kept at least this long before an
+	 * idle stop, whatever the configured or pressure timeout says. Under the
+	 * 10-minute pressure timeout the audit of 2026-10-16 counted 50 idle stops
+	 * in 9 h, many of them agents the owner was still talking to; every stop
+	 * costs a cold start and, past the fresh-start threshold, the conversation
+	 * (crewly#1344). Memory-pressure and critical stops still apply.
+	 */
+	OWNER_THREAD_IDLE_TIMEOUT_MINUTES: 30,
 } as const;
 
 // ========================= SERVER PROCESS CONSTANTS =========================

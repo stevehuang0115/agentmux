@@ -21,10 +21,25 @@ export interface ChannelMemberRecord {
   joined_at: number;
 }
 
+/** A `chat_messages` row (columns vary by schema version). */
+export type MessageRecord = Record<string, string | number | null>;
+
 /** What a package carries of the chat store. */
 export interface ChatRecords {
   channels: ChannelRecord[];
   members: ChannelMemberRecord[];
+  /**
+   * The newest messages of the team's Slack room (crewly#1344): the room's
+   * thread history, so a thread turn on the target does not reach the agent
+   * with only the clipped "thread so far" block. Absent in older packages.
+   */
+  messages?: MessageRecord[];
+}
+
+/** Caps on the messages carried. */
+export interface ChatMessageLimits {
+  perChannel: number;
+  totalBytes: number;
 }
 
 /** File name of the chat-v2 store under the Crewly home (the default chat database path). */
@@ -47,11 +62,12 @@ function open(home: string): ChatDatabase {
  * @param id - Team identity
  * @returns Records (empty when the machine has no chat store)
  */
-export function readTeamChat(home: string, id: TeamIdentity): ChatRecords {
+export function readTeamChat(home: string, id: TeamIdentity, options: { includeChannelIds?: readonly string[]; messages?: ChatMessageLimits & { channelIds: readonly string[] } } = {}): ChatRecords {
   if (!existsSync(path.join(home, CHAT_V2_DB_FILE))) return { channels: [], members: [] };
   const db = open(home);
   try {
     const sessions = [...id.sessions];
+    const always = new Set(options.includeChannelIds ?? []);
     const channels = db.prepare('SELECT * FROM chat_channels WHERE archived_at IS NULL').all() as ChannelRecord[];
     const members = db.prepare('SELECT channel_id, member_session, joined_at FROM chat_channel_members').all() as ChannelMemberRecord[];
     const membersByChannel = new Map<string, string[]>();
@@ -61,6 +77,10 @@ export function readTeamChat(home: string, id: TeamIdentity): ChatRecords {
       membersByChannel.set(m.channel_id, list);
     }
     const selected = channels.filter((c) => {
+      // The room behind the team's Slack channel always travels, whoever else
+      // is in it (the orchestrator, a guest agent): on the SteamFun move the
+      // Slack mapping pointed at a room the target never had (crewly#1344).
+      if (always.has(String(c['id']))) return true;
       if (c['team_id'] === id.teamId) return true;
       if (c['type'] === 'dm') return typeof c['agent_session'] === 'string' && id.sessions.has(c['agent_session']);
       if (c['type'] === 'huddle') {
@@ -70,10 +90,42 @@ export function readTeamChat(home: string, id: TeamIdentity): ChatRecords {
       return false;
     });
     const ids = new Set(selected.map((c) => String(c['id'])));
-    return { channels: selected, members: members.filter((m) => ids.has(m.channel_id)) };
+    const records: ChatRecords = { channels: selected, members: members.filter((m) => ids.has(m.channel_id)) };
+    if (options.messages) {
+      const wanted = options.messages.channelIds.filter((c) => ids.has(c));
+      if (wanted.length > 0) records.messages = readRecentMessages(db, wanted, options.messages);
+    }
+    return records;
   } finally {
     db.close();
   }
+}
+
+/**
+ * The newest messages of the given channels, oldest first, within the caps.
+ *
+ * @param db - Open chat store
+ * @param channelIds - Channels to read
+ * @param limits - Per-channel count and total byte caps
+ * @returns Rows, oldest first per channel
+ */
+function readRecentMessages(db: ChatDatabase, channelIds: readonly string[], limits: ChatMessageLimits): MessageRecord[] {
+  const out: MessageRecord[] = [];
+  let bytes = 0;
+  const stmt = db.prepare('SELECT * FROM chat_messages WHERE channel_id = ? ORDER BY seq DESC LIMIT ?');
+  for (const channelId of channelIds) {
+    const rows = (stmt.all(channelId, limits.perChannel) as MessageRecord[]).reverse();
+    const kept: MessageRecord[] = [];
+    // Newest kept when the byte cap bites: drop from the oldest end.
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const size = JSON.stringify(rows[i]).length;
+      if (bytes + size > limits.totalBytes) break;
+      bytes += size;
+      kept.unshift(rows[i]!);
+    }
+    out.push(...kept);
+  }
+  return out;
 }
 
 /** Outcome of {@link applyTeamChat}. */
@@ -81,6 +133,8 @@ export interface ApplyChatResult {
   channelsAdded: number;
   channelsExisting: number;
   membersAdded: number;
+  /** Carried messages written (absent when the package carried none) */
+  messagesAdded?: number;
 }
 
 /**
@@ -110,6 +164,17 @@ export function applyTeamChat(home: string, records: ChatRecords): ApplyChatResu
         const exists = db.prepare('SELECT 1 FROM chat_channels WHERE id = ?').get(m.channel_id);
         if (!exists) continue;
         if (insertMember.run(m.channel_id, m.member_session, m.joined_at).changes > 0) result.membersAdded += 1;
+      }
+      if (records.messages && records.messages.length > 0) {
+        result.messagesAdded = 0;
+        const messageColumns = new Set((db.prepare('PRAGMA table_info(chat_messages)').all() as Array<{ name: string }>).map((c) => c.name));
+        for (const row of records.messages) {
+          const channelId = row['channel_id'];
+          if (typeof channelId !== 'string' || !db.prepare('SELECT 1 FROM chat_channels WHERE id = ?').get(channelId)) continue;
+          const keys = Object.keys(row).filter((k) => messageColumns.has(k));
+          const sql = `INSERT OR IGNORE INTO chat_messages (${keys.join(',')}) VALUES (${keys.map(() => '?').join(',')})`;
+          if (db.prepare(sql).run(...keys.map((k) => row[k] ?? null)).changes > 0) result.messagesAdded += 1;
+        }
       }
     });
     tx();

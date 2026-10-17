@@ -2015,9 +2015,15 @@ export const SLACK_THREAD_CONTEXT_CONSTANTS = {
 	/** Whether the Slack context block is fetched at all */
 	ENABLED: true,
 	/** Most messages shown (newest kept) */
-	MAX_MESSAGES: 30,
-	/** Character budget of the whole block's message lines (newest kept) */
-	MAX_CHARS: 5_000,
+	MAX_MESSAGES: 40,
+	/**
+	 * Character budget of the whole block's message lines (newest kept).
+	 * 5 000 → 12 000 (crewly#1344): with the thread root always shown and
+	 * 1 500 characters per message, eight messages no longer fit in 5 000,
+	 * and the owner approved the larger prompt over agents that could not see
+	 * what the thread was about.
+	 */
+	MAX_CHARS: 12_000,
 	/** Characters kept per message before clipping */
 	PER_MESSAGE_CHARS: 4_000,
 	/**
@@ -2025,11 +2031,18 @@ export const SLACK_THREAD_CONTEXT_CONSTANTS = {
 	 * compact "thread so far", not a transcript: a 4 000-char draft pasted in
 	 * the thread made the prompt 13.5k chars, the busy-agent note cut it at
 	 * 6 000, and the newest posts and the owner's ping were the part cut
-	 * (2026-10-08, #content-team).
+	 * (2026-10-08, #content-team). 500 → 1 500 (crewly#1344): 500 cut most
+	 * owner briefs mid-sentence; the busy-agent note now keeps the block's end.
 	 */
-	BLOCK_PER_MESSAGE_CHARS: 500,
+	BLOCK_PER_MESSAGE_CHARS: 1_500,
 	/** The block shows at least this many of the newest messages, or everything since the agent's own last post when that is more */
 	BLOCK_RECENT_MESSAGES: 8,
+	/**
+	 * The thread's root message is always in the block, even when it is
+	 * older than the window — it says what the thread is about (crewly#1344).
+	 * Shown with this marker and a line saying how many messages were skipped.
+	 */
+	ROOT_MARK: '(thread root)',
 	/** Marks a line addressed to the agent (or a person's post) after its last post in the thread */
 	UNANSWERED_MARK: '⟵ not answered by you yet',
 	/**
@@ -3252,12 +3265,24 @@ export const ORC_CONVERSATION_CONSTANTS = {
 	FRESH_CONTEXT_TOKENS: 300_000,
 	/** How much of the old transcript's end is read to find the last turn's size */
 	TAIL_BYTES: 2 * 1024 * 1024,
-	/** Messages kept in the handover file, newest last */
-	HANDOVER_MESSAGES: 40,
+	/**
+	 * Messages kept in the handover file, newest last. Raised 40 → 60 with
+	 * the per-message and total caps (crewly#1344): a 16k-character tail of
+	 * plain words lost the tool traffic entirely, and agents that were reset
+	 * several times a day "remembered worse" than plain Claude Code.
+	 */
+	HANDOVER_MESSAGES: 60,
 	/** Characters kept per handover message */
-	HANDOVER_MESSAGE_CHARS: 800,
-	/** Total cap on the handover file's body */
-	HANDOVER_MAX_CHARS: 16_000,
+	HANDOVER_MESSAGE_CHARS: 2_000,
+	/** Total cap on the handover file's body (~40k characters, ~10k tokens) */
+	HANDOVER_MAX_CHARS: 40_000,
+	/**
+	 * Characters kept of each tool call / tool result in a handover: the tool
+	 * name plus the start of its input or output, one line each, so the new
+	 * conversation knows WHAT was done (files read, commands run), not just
+	 * what was said about it. Images stay a described placeholder.
+	 */
+	HANDOVER_TOOL_RESULT_CHARS: 200,
 	/** Directory under CREWLY_HOME for handover files */
 	HANDOVER_DIR: 'handover',
 	/** A plain restart hands over the previous conversation only when its transcript was written within this window */
@@ -3267,7 +3292,7 @@ export const ORC_CONVERSATION_CONSTANTS = {
 	/** How much of a transcript's start is read to check it belongs to a session (cwd-wide fallback) */
 	OWNERSHIP_HEAD_BYTES: 256 * 1024,
 	/** Most of an earlier handover carried into a new one when the source conversation is unreadable */
-	CHAINED_HANDOVER_MAX_CHARS: 16_000,
+	CHAINED_HANDOVER_MAX_CHARS: 40_000,
 } as const;
 
 /** Pointer header (open work, suggested skills) written at the top of a handover file. */
@@ -3331,17 +3356,43 @@ export const FRESH_TASK_CONVERSATION_CONSTANTS = {
 	NEW_SESSION_POLL_MS: 1_000,
 	/** Cap on the handover text stored through memory (mirrored into the wiki) */
 	MEMORY_MAX_CHARS: 4_000,
-	/** Members start fresh at launch when their last turn carried this many tokens. Env: CREWLY_MEMBER_FRESH_CONTEXT_TOKENS */
-	MEMBER_FRESH_CONTEXT_TOKENS: 150_000,
+	/**
+	 * Members start fresh at launch when their last turn carried this many
+	 * tokens. Env: CREWLY_MEMBER_FRESH_CONTEXT_TOKENS.
+	 *
+	 * Above Claude Code's own auto-compact window (CLAUDE_CODE_CONTEXT, 350k)
+	 * on purpose (crewly#1344): Claude compacts its conversation itself and
+	 * keeps a far better summary than a handover tail, so Crewly's reset is
+	 * only a safety net for a conversation that compaction did not bring
+	 * down. At the old 150k the audit of 2026-10-16 counted 58 fresh starts
+	 * in 48 h, every one of them replacing a live conversation with 16k
+	 * characters of tail.
+	 */
+	MEMBER_FRESH_CONTEXT_TOKENS: 400_000,
+	/**
+	 * The smallest conversation a new-task `/clear` may close (last-turn
+	 * tokens): the same as {@link MEMBER_FRESH_CONTEXT_TOKENS}, read through
+	 * `memberFreshContextTokens()` so the env override applies to both. A
+	 * conversation under it is cheap to keep and is what the agent remembers
+	 * by; 137 clears in 48 h, some at 56k, were the cost of not having a floor.
+	 */
+	MIN_CLEAR_CONTEXT_TOKENS: 400_000,
+	/**
+	 * A member the owner spoke to this recently (an owner thread the sentinel
+	 * watches: the owner's last message, or an open promise) is never cleared
+	 * for a new task — the clear would wipe the conversation the owner is in.
+	 */
+	OWNER_CONVERSATION_ACTIVE_MS: 2 * 60 * 60 * 1000,
 	/**
 	 * Idle-boundary context cap: a Claude Code member (never the orchestrator)
 	 * whose last turn carried more than this many tokens is saved (handover +
 	 * wiki) and cleared between turns, then re-oriented on its WorkItem. One
-	 * long task can otherwise run 1000+ turns at 650k–965k context. Matches
-	 * the 200k context ceiling the monitor alerts at, so a member never sits
-	 * in "critical" between turns.
+	 * long task can otherwise run 1000+ turns at 650k–965k context. Above the
+	 * fresh-start threshold and Claude Code's 350k auto-compact (crewly#1344),
+	 * so compaction runs first and this only catches a conversation that kept
+	 * growing through it.
 	 */
-	MEMBER_CONTEXT_CAP_TOKENS: 200_000,
+	MEMBER_CONTEXT_CAP_TOKENS: 450_000,
 	/** Env override for {@link MEMBER_CONTEXT_CAP_TOKENS}; `0` disables the cap */
 	MEMBER_CONTEXT_CAP_ENV: 'CREWLY_MEMBER_CONTEXT_CAP_TOKENS',
 	/** At most one context-cap clear per session in this window */
@@ -8280,6 +8331,19 @@ export const OWNER_THREAD_SENTINEL_CONSTANTS = {
 	BOOT_CARD_MAX_AGE_MS: 24 * 60 * 60 * 1000,
 	/** A card goes into an owner thread only when that thread was active this recently */
 	CARD_THREAD_MAX_AGE_MS: 2 * 60 * 60 * 1000,
+	/**
+	 * A watched thread with no owner activity for this long is dropped at
+	 * load and never counted as owed again (crewly#1344): a thread from 10-07
+	 * whose owner last wrote on 10-08 was re-stamped "restarted" on every boot
+	 * and listed as "work in hand" for ten days.
+	 */
+	STALE_AFTER_MS: 3 * 24 * 60 * 60 * 1000,
+	/**
+	 * An agent counts as "in an owner conversation" while the owner wrote to
+	 * it (or it promised the owner something) in a watched thread within this
+	 * window — the per-task clear and the slot-cap eviction spare it (crewly#1344).
+	 */
+	OWNER_ACTIVE_MS: 2 * 60 * 60 * 1000,
 } as const;
 
 /**
@@ -8647,6 +8711,23 @@ export const TEAM_MOVE_CONSTANTS = {
 	NON_MACHINE_INSTANCE_PATTERN: '^crewly-cloud',
 	/** Newest handover notes kept per agent. */
 	HANDOVERS_PER_AGENT: 10,
+	/**
+	 * Largest Claude Code transcript (the agent's current conversation) that
+	 * travels with a move, per agent (crewly#1344). Only the latest
+	 * conversation per agent is packaged, under `transcripts/<session>/`, and
+	 * resumed on the target; a bigger one is left behind and listed.
+	 */
+	TRANSCRIPT_MAX_BYTES: 64 * 1024 * 1024,
+	/** Newest chat-v2 messages of the team's Slack room carried in the package (per channel). */
+	CHAT_MESSAGES_PER_CHANNEL: 500,
+	/** Total cap on carried chat messages' content (bytes), all channels together. */
+	CHAT_MESSAGES_MAX_BYTES: 4 * 1024 * 1024,
+	/**
+	 * Suffix of the folder a project is given on the target when the team
+	 * lists a project the package did not carry: a clearly flagged placeholder
+	 * the owner is told to re-point (never silently dropped, crewly#1344).
+	 */
+	PLACEHOLDER_PROJECT_SUFFIX: '-NEEDS-PATH',
 	/** Largest text file that is path-rewritten and secret-scanned in memory. */
 	TEXT_FILE_MAX_BYTES: 8 * 1024 * 1024,
 	/** Free disk the target needs beyond the package (bytes): 2x package + this. */

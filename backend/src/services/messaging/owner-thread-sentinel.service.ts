@@ -108,6 +108,14 @@ export interface OwnerThreadSentinelDeps {
   /** Persisted state; omitted in tests that do not exercise restarts */
   storePath?: string;
   now?: () => number;
+  /**
+   * Whether an agent (session name) still exists on this machine. A watched
+   * thread of an agent that is gone — its team moved to another machine, the
+   * member removed — is dropped at load and on every tick, never re-stamped
+   * "restarted" or counted as work in hand (crewly#1344). Omitted: every
+   * agent counts as present.
+   */
+  agentOnThisMachine?: (agent: string) => boolean;
 }
 
 /** A detected promise in an agent's post. */
@@ -493,6 +501,29 @@ export class OwnerThreadSentinelService {
   }
 
   /**
+   * Whether the agent is in a conversation with the owner: the owner wrote to
+   * it in a watched thread, or it promised the owner something there, within
+   * `windowMs` (default OWNER_ACTIVE_MS, 2 h) — answered or not. The per-task
+   * `/clear`, the idle stop and the slot-cap eviction spare such an agent
+   * (crewly#1344): a clear or a stop in the middle of an owner conversation
+   * costs the owner the context they were just given.
+   *
+   * @param agent - The agent
+   * @param windowMs - How far back owner activity counts
+   * @returns True while the owner conversation is live
+   */
+  ownerActiveRecently(agent: string, windowMs: number = C.OWNER_ACTIVE_MS): boolean {
+    const now = this.now();
+    for (const e of this.entries.values()) {
+      if (e.agent !== agent) continue;
+      if (e.ownerAt && now - e.ownerAt <= windowMs) return true;
+      const p = openPromise(e);
+      if (p && now - p.at <= windowMs) return true;
+    }
+    return false;
+  }
+
+  /**
    * Age in ms of the newest promise (or unanswered owner message) the agent
    * owes in a watched thread, or null when it owes none.
    *
@@ -592,6 +623,11 @@ export class OwnerThreadSentinelService {
       const now = this.now();
       for (const entry of [...this.entries.values()]) {
         if (now - entry.updatedAt > C.FORGET_AFTER_MS && entry.cards.length === 0) {
+          this.entries.delete(entry.key);
+          continue;
+        }
+        if (isStale(entry, now) || !this.agentPresent(entry.agent)) {
+          this.logger.info('Dropped a watched owner thread: stale or its agent is no longer on this machine', { key: entry.key, agent: entry.agent });
           this.entries.delete(entry.key);
           continue;
         }
@@ -770,15 +806,46 @@ export class OwnerThreadSentinelService {
     }
   }
 
+  /** Whether the agent is still on this machine (true when the wiring cannot tell). */
+  private agentPresent(agent: string): boolean {
+    try {
+      return this.deps.agentOnThisMachine?.(agent) !== false;
+    } catch {
+      return true;
+    }
+  }
+
   private load(): void {
     const now = this.now();
+    let dropped = 0;
     for (const e of readEntries(this.deps.storePath)) {
+      // A thread the owner has not touched for days, or whose agent left this
+      // machine, is not restored: it was re-stamped "restarted" on every boot
+      // and listed as work in hand for ten days (crewly#1344).
+      if (isStale(e, now) || !this.agentPresent(e.agent)) {
+        dropped += 1;
+        continue;
+      }
       // Anything active when Crewly went down gets one restart line.
       e.restartPending = owes(e, now) && (!!openPromise(e) || (!!e.ownerAt && (!e.agentPostAt || e.ownerAt > e.agentPostAt)));
       this.entries.set(e.key, e);
     }
-    if (this.entries.size > 0) this.logger.info('Restored watched owner threads from before the restart', { count: this.entries.size });
+    if (dropped > 0) this.persist();
+    if (this.entries.size > 0 || dropped > 0) this.logger.info('Restored watched owner threads from before the restart', { count: this.entries.size, dropped });
   }
+}
+
+/**
+ * Whether a watched thread is stale: no owner activity (the owner's last
+ * message, else the entry's last change) for STALE_AFTER_MS.
+ *
+ * @param e - The entry
+ * @param now - Clock
+ * @returns True when the thread should be forgotten
+ */
+export function isStale(e: OwnerThreadEntry, now: number): boolean {
+  const last = e.ownerAt ?? e.updatedAt;
+  return now - last > C.STALE_AFTER_MS;
 }
 
 /**
@@ -842,8 +909,14 @@ function readEntries(file: string | undefined): OwnerThreadEntry[] {
  * @param now - Clock
  * @returns Session names
  */
-export function owingAgentsOnDisk(file: string, now: number = Date.now()): string[] {
-  return [...new Set(readEntries(file).filter((e) => owes(e, now)).map((e) => e.agent))];
+export function owingAgentsOnDisk(file: string, now: number = Date.now(), agentOnThisMachine?: (agent: string) => boolean): string[] {
+  return [
+    ...new Set(
+      readEntries(file)
+        .filter((e) => owes(e, now) && !isStale(e, now) && (agentOnThisMachine?.(e.agent) ?? true))
+        .map((e) => e.agent),
+    ),
+  ];
 }
 
 // ---------------------------------------------------------------------------

@@ -635,10 +635,58 @@ export function lastTurnContextTokens(filePath: string): number | null {
   return null;
 }
 
+/** One content block of a Claude Code transcript entry, the fields the handover reads. */
+interface TranscriptBlock {
+  type?: string;
+  text?: string;
+  name?: string;
+  id?: string;
+  input?: unknown;
+  tool_use_id?: string;
+  content?: unknown;
+}
+
 /**
- * The plain words at the end of a conversation — what was said to the agent
- * and what it answered, without tool calls or tool output — for the file a
- * fresh conversation starts from.
+ * Clip to one line of at most `max` characters.
+ *
+ * @param text - Text
+ * @param max - Limit
+ * @returns One line
+ */
+function oneLine(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+}
+
+/**
+ * The text of a tool result block: its string content, or the text parts of
+ * its array content, with images named rather than copied.
+ *
+ * @param content - `tool_result.content`
+ * @returns Text (may be empty), and whether an image was among the parts
+ */
+function toolResultText(content: unknown): { text: string; images: number } {
+  if (typeof content === 'string') return { text: content, images: 0 };
+  let images = 0;
+  const parts: string[] = [];
+  if (Array.isArray(content)) {
+    for (const part of content as TranscriptBlock[]) {
+      if (part?.type === 'text' && typeof part.text === 'string') parts.push(part.text);
+      else if (part?.type === 'image') images += 1;
+    }
+  }
+  return { text: parts.join(' '), images };
+}
+
+/**
+ * What was said and done at the end of a conversation, for the file a fresh
+ * conversation starts from: the plain words delivered to the agent and its
+ * answers, plus one line per tool call and tool result (tool name and the
+ * first {@link ORC_CONVERSATION_CONSTANTS.HANDOVER_TOOL_RESULT_CHARS}
+ * characters of its input / output) so the new conversation knows which files
+ * were read and which commands ran, not only what was said about them
+ * (crewly#1344). Images are a described placeholder, never copied. System
+ * reminders and command wrappers are left out.
  *
  * @param filePath - Transcript path
  * @returns Markdown, newest last; empty when nothing readable was found
@@ -659,6 +707,9 @@ export function buildHandoverSummary(filePath: string): string {
   } catch {
     return '';
   }
+  const clip = ORC_CONVERSATION_CONSTANTS.HANDOVER_MESSAGE_CHARS;
+  const toolClip = ORC_CONVERSATION_CONSTANTS.HANDOVER_TOOL_RESULT_CHARS;
+  const toolNames = new Map<string, string>();
   const said: Array<{ who: string; when: string; text: string }> = [];
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
@@ -670,21 +721,43 @@ export function buildHandoverSummary(filePath: string): string {
     }
     if ((entry.type !== 'user' && entry.type !== 'assistant') || entry.isMeta) continue;
     const content = entry.message?.content;
-    const parts: string[] = [];
-    if (typeof content === 'string') parts.push(content);
+    const words: string[] = [];
+    const tools: string[] = [];
+    if (typeof content === 'string') words.push(content);
     else if (Array.isArray(content)) {
-      for (const block of content as Array<{ type?: string; text?: string }>) {
-        if (block?.type === 'text' && typeof block.text === 'string') parts.push(block.text);
+      for (const block of content as TranscriptBlock[]) {
+        if (!block) continue;
+        if (block.type === 'text' && typeof block.text === 'string') words.push(block.text);
+        else if (block.type === 'image') tools.push('↳ [image attached]');
+        else if (block.type === 'tool_use') {
+          const name = typeof block.name === 'string' ? block.name : 'tool';
+          if (typeof block.id === 'string') toolNames.set(block.id, name);
+          let input = '';
+          try {
+            input = typeof block.input === 'string' ? block.input : JSON.stringify(block.input ?? '');
+          } catch {
+            input = '';
+          }
+          tools.push(`↳ ${name}: ${oneLine(input, toolClip)}`);
+        } else if (block.type === 'tool_result') {
+          const name = (typeof block.tool_use_id === 'string' && toolNames.get(block.tool_use_id)) || 'tool';
+          const result = toolResultText(block.content);
+          const parts = [result.text ? oneLine(result.text, toolClip) : '', result.images > 0 ? `[${result.images} image${result.images === 1 ? '' : 's'} returned]` : '']
+            .filter(Boolean)
+            .join(' ');
+          tools.push(`↳ ${name} result: ${parts || '(empty)'}`);
+        }
       }
     }
-    const joined = parts.join('\n').trim();
+    let joined = words.join('\n').trim();
     // System reminders and command wrappers are not conversation.
-    if (!joined || joined.startsWith('<')) continue;
-    const clip = ORC_CONVERSATION_CONSTANTS.HANDOVER_MESSAGE_CHARS;
+    if (joined.startsWith('<')) joined = '';
+    if (!joined && tools.length === 0) continue;
+    const body = [joined ? (joined.length > clip ? `${joined.slice(0, clip)}…` : joined) : '', ...tools].filter(Boolean).join('\n');
     said.push({
       who: entry.type === 'user' ? 'Delivered to you' : 'You',
       when: entry.timestamp ?? '',
-      text: joined.length > clip ? `${joined.slice(0, clip)}…` : joined,
+      text: body,
     });
   }
   const kept = said.slice(-ORC_CONVERSATION_CONSTANTS.HANDOVER_MESSAGES);
@@ -699,6 +772,60 @@ export function buildHandoverSummary(filePath: string): string {
   // A token pasted into the conversation must not be copied into a plain file
   // (and from there into every later handover).
   return redactHandoverText(blocks.join('\n\n'));
+}
+
+/** Outcome of {@link copyClaudeConversation}. */
+export interface CopiedClaudeConversation {
+  /** The transcript the copy was made from */
+  source: string;
+  /** The transcript written under the target home */
+  target: string;
+  /** Files and folders written (the transcript, and its sidecar folder when it has one) */
+  copied: string[];
+}
+
+/**
+ * Copy a Claude Code conversation from one Claude home to another so that
+ * `claude --resume <id>` finds it there (crewly#1344).
+ *
+ * Claude Code keeps a conversation as `<home>/projects/<cwd slug>/<id>.jsonl`
+ * and, for conversations that ran subagents, a sidecar folder
+ * `<home>/projects/<cwd slug>/<id>/`. Both are copied, under the same slug,
+ * so a session the runtime fallback moves to another of the owner's Claude
+ * Code accounts (a different `CLAUDE_CONFIG_DIR`) keeps its conversation
+ * instead of starting fresh with a handover tail. The copy overwrites an
+ * older copy on the target (the source is the live one). Nothing else of the
+ * account — credentials, settings, history — is touched.
+ *
+ * @param args - Conversation id, the agent's cwd, the homes it may be under (current first) and the home to copy into
+ * @returns What was copied, or null when the transcript was not found or the copy failed
+ *
+ * @example
+ * ```typescript
+ * copyClaudeConversation({ sessionId, cwd, fromHomes: [defaultClaudeHome()], toHome: claudeAccountConfigDir('work') });
+ * ```
+ */
+export function copyClaudeConversation(args: { sessionId: string; cwd: string; fromHomes: readonly string[]; toHome: string }): CopiedClaudeConversation | null {
+  const source = findClaudeTranscript({ sessionId: args.sessionId, cwd: args.cwd, claudeHomes: args.fromHomes });
+  if (!source) return null;
+  const slug = path.basename(path.dirname(source));
+  const targetDir = path.join(args.toHome, 'projects', slug);
+  const target = path.join(targetDir, `${args.sessionId}.jsonl`);
+  if (path.resolve(target) === path.resolve(source)) return { source, target, copied: [] };
+  try {
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.copyFileSync(source, target);
+    const copied = [target];
+    const sidecar = path.join(path.dirname(source), args.sessionId);
+    if (fs.existsSync(sidecar) && fs.statSync(sidecar).isDirectory()) {
+      const sidecarTarget = path.join(targetDir, args.sessionId);
+      fs.cpSync(sidecar, sidecarTarget, { recursive: true, force: true });
+      copied.push(sidecarTarget);
+    }
+    return { source, target, copied };
+  } catch {
+    return null;
+  }
 }
 
 /**

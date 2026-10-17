@@ -9,8 +9,10 @@
  */
 
 import * as path from 'path';
-import { ORCHESTRATOR_SESSION_NAME, OWNER_THREAD_SENTINEL_CONSTANTS as C } from '../../constants.js';
+import { readdirSync, readFileSync } from 'fs';
+import { ORCHESTRATOR_SESSION_NAME, OWNER_THREAD_SENTINEL_CONSTANTS as C, TEAM_MOVE_CONSTANTS } from '../../constants.js';
 import type { OwnerDecision } from '../../types/decision.types.js';
+import type { Team } from '../../types/index.js';
 import type { WorkItem } from '../../types/v2/work-item.types.js';
 import { originOfWorkItem } from '../orc/work-item-destination.js';
 import { isOwnerStopped } from '../agent/owner-stopped.registry.js';
@@ -148,6 +150,53 @@ export interface OwnerThreadSentinelWiringDeps {
   listItems: () => Promise<WorkItem[]>;
   /** Working status ("in_progress" / "idle"), when known */
   workingStatusOf?: (session: string) => string | null;
+  /** Whether the agent is still a member of a team on this machine (see {@link liveAgentSessions}) */
+  agentOnThisMachine?: (session: string) => boolean;
+}
+
+/**
+ * Team ids this machine moved to another machine (`team-moves/<id>/state.json`
+ * with role `source`, action `stop_archive`, phase `done`). Their agents are
+ * gone from here, whatever an old owner-thread record says (crewly#1344).
+ *
+ * @param crewlyHome - CREWLY_HOME
+ * @returns Team ids (empty when nothing was moved or the folder is unreadable)
+ */
+export function movedAwayTeamIds(crewlyHome: string): Set<string> {
+  const out = new Set<string>();
+  const root = path.join(crewlyHome, TEAM_MOVE_CONSTANTS.HOME_DIR);
+  let dirs: string[];
+  try {
+    dirs = readdirSync(root);
+  } catch {
+    return out;
+  }
+  for (const dir of dirs) {
+    try {
+      const state = JSON.parse(readFileSync(path.join(root, dir, 'state.json'), 'utf8')) as { teamId?: string; role?: string; action?: string; phase?: string };
+      if (state.role === 'source' && state.action === 'stop_archive' && state.phase === 'done' && typeof state.teamId === 'string') out.add(state.teamId);
+    } catch {
+      // not a move folder, or unreadable
+    }
+  }
+  return out;
+}
+
+/**
+ * Session names of the agents that are on this machine: members of teams
+ * that are neither archived by a move nor recorded as moved away.
+ *
+ * @param teams - Teams from storage
+ * @param movedAway - Ids from {@link movedAwayTeamIds}
+ * @returns Session names
+ */
+export function liveAgentSessions(teams: ReadonlyArray<Pick<Team, 'id' | 'members'> & { moveArchive?: unknown }>, movedAway: ReadonlySet<string> = new Set()): Set<string> {
+  const out = new Set<string>();
+  for (const team of teams) {
+    if (team.moveArchive || movedAway.has(team.id)) continue;
+    for (const m of team.members ?? []) if (m.sessionName) out.add(m.sessionName);
+  }
+  return out;
 }
 
 /**
@@ -226,6 +275,7 @@ export function createOwnerThreadSentinel(deps: OwnerThreadSentinelWiringDeps): 
     postStatus: (thread, agent, text) => postSentinelStatus(deps, thread, agent, text),
     nudgeAgent: (agent, text) => nudgeSentinelAgent(deps, agent, text),
     ...(deps.displayNameOf ? { displayNameOf: deps.displayNameOf } : {}),
+    ...(deps.agentOnThisMachine ? { agentOnThisMachine: deps.agentOnThisMachine } : {}),
     ownerWorkThread: async (agent) => ownerThreadOfAgentWork(await deps.listItems(), agent),
     currentActivity: (agent) => describeAgentActivity(deps, agent),
     storePath: path.join(deps.crewlyHome, C.STORE_FILENAME),
@@ -253,10 +303,11 @@ export async function ownerThreadSessionsAtBoot(
   crewlyHome: string,
   now: number = Date.now(),
   onError?: (message: string, error: unknown) => void,
+  agentOnThisMachine?: (agent: string) => boolean,
 ): Promise<string[]> {
   const out = new Set<string>();
   try {
-    for (const s of owingAgentsOnDisk(path.join(crewlyHome, C.STORE_FILENAME), now)) out.add(s);
+    for (const s of owingAgentsOnDisk(path.join(crewlyHome, C.STORE_FILENAME), now, agentOnThisMachine)) out.add(s);
   } catch (error) {
     onError?.('Could not read the owner thread sentinel state at boot (non-fatal)', error);
   }

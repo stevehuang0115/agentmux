@@ -287,7 +287,8 @@ describe('relaxing after a long wait', () => {
 	it('even when relaxed, prefers an agent that is only under the idle timeout over a protected one', async () => {
 		jest.useFakeTimers();
 		try {
-			const { svc, stopped } = setup([agent('protected', 9e6), agent('young', 60_000)], { protected: 'it owns open ticket T-1' });
+			// 'young' is past the 5-minute eviction floor (crewly#1344) but under the 10-minute idle timeout.
+			const { svc, stopped } = setup([agent('protected', 9e6), agent('young', 6 * 60_000)], { protected: 'it owns open ticket T-1' });
 			await enter(svc);
 			const first = svc.requestStart('new', false);
 			await jest.advanceTimersByTimeAsync(RESOURCE_MODE_CONSTANTS.RELAX_AFTER_MS + 10);
@@ -352,10 +353,11 @@ describe('anti-thrash rules (2026-10-16: Luna and Max evicting each other)', () 
 	afterEach(() => jest.useRealTimers());
 
 	it('a relaxed start never stops an agent started less than MIN_RUN_BEFORE_EVICT_MS ago', async () => {
-		const { svc, stopped, run } = setup([agent('old', 30_000)], { max: 2 });
+		// Both past the 5-minute eviction floor (crewly#1344) but under the 10-minute idle timeout.
+		const { svc, stopped, run } = setup([agent('old', 6 * 60_000)], { max: 2 });
 		await enter(svc);
 		expect(await svc.requestStart('fresh', false)).toBe(true);
-		run('fresh', 60_000);
+		run('fresh', 7 * 60_000);
 		// Both are under the idle timeout and 'fresh' is idle longer, but it was just started: relaxing may only stop 'old'
 		expect(await waitedStart(svc, 'waiter')).toBe(true);
 		expect(stopped).toEqual(['old']);
@@ -365,7 +367,7 @@ describe('anti-thrash rules (2026-10-16: Luna and Max evicting each other)', () 
 		const { svc, stopped, run } = setup([], { max: 1 });
 		await enter(svc);
 		expect(await svc.requestStart('luna', false)).toBe(true);
-		run('luna', 0);
+		run('luna', 6 * 60_000);
 		expect(await waitedStart(svc, 'max')).toBe(false);
 		expect(stopped).toEqual([]);
 		await jest.advanceTimersByTimeAsync(RESOURCE_MODE_CONSTANTS.MIN_RUN_BEFORE_EVICT_MS);
@@ -377,8 +379,23 @@ describe('anti-thrash rules (2026-10-16: Luna and Max evicting each other)', () 
 		const { svc, stopped, run } = setup([], { max: 1 });
 		await enter(svc);
 		expect(await svc.requestStart('luna', false)).toBe(true);
-		run('luna', 60_000);
+		run('luna', 6 * 60_000);
 		expect(await settleWithin(svc.requestStart('max', true), 20)).toBe(true);
+		expect(stopped).toEqual(['luna']);
+	});
+
+	it('an agent idle for less than MIN_IDLE_BEFORE_EVICT_MS is never a slot — not for an owner-message start, not when the rules relax (crewly#1344)', async () => {
+		const { svc, stopped, run } = setup([agent('luna', 9e6)], { max: 1 });
+		await enter(svc);
+		// Luna just finished a turn: 0 minutes idle, well past her start window.
+		run('luna', 0);
+		await jest.advanceTimersByTimeAsync(RESOURCE_MODE_CONSTANTS.MIN_RUN_BEFORE_EVICT_MS);
+		expect(await settleWithin(svc.requestStart('max', true), 20)).toBe(false);
+		expect(await waitedStart(svc, 'max')).toBe(false);
+		expect(stopped).toEqual([]);
+		// Past the floor (still under the idle timeout) the relaxed start may take her.
+		run('luna', RESOURCE_MODE_CONSTANTS.MIN_IDLE_BEFORE_EVICT_MS);
+		expect(await waitedStart(svc, 'max')).toBe(true);
 		expect(stopped).toEqual(['luna']);
 	});
 
@@ -490,7 +507,8 @@ describe('owner-triggered start under the cap', () => {
 	}
 
 	it('stops the longest-idle agent at once even when every agent is under the idle timeout', async () => {
-		const { svc, stopped } = setup([agent('a', 60_000), agent('b', 120_000)]);
+		// Both past the 5-minute eviction floor (crewly#1344), both under the 10-minute idle timeout.
+		const { svc, stopped } = setup([agent('a', 6 * 60_000), agent('b', 7 * 60_000)]);
 		await enter(svc);
 		expect(await svc.requestStart('new', true)).toBe(true);
 		expect(stopped).toEqual(['b']);
@@ -499,7 +517,7 @@ describe('owner-triggered start under the cap', () => {
 	it('still keeps an agent with pending work, an open ticket or an open delegation', async () => {
 		jest.useFakeTimers();
 		try {
-			const { svc, stopped } = setup([agent('a', 60_000), agent('b', 120_000)], { b: 'work item w1 is queued for it' });
+			const { svc, stopped } = setup([agent('a', 6 * 60_000), agent('b', 7 * 60_000)], { b: 'work item w1 is queued for it' });
 			await enter(svc);
 			expect(await svc.requestStart('new', true)).toBe(true);
 			expect(stopped).toEqual(['a']);
@@ -511,7 +529,7 @@ describe('owner-triggered start under the cap', () => {
 	it('an ordinary (not owner) start still respects the idle timeout', async () => {
 		jest.useFakeTimers();
 		try {
-			const { svc, stopped } = setup([agent('a', 60_000)]);
+			const { svc, stopped } = setup([agent('a', 6 * 60_000)]);
 			await enter(svc);
 			const p = svc.requestStart('new', false);
 			await jest.advanceTimersByTimeAsync(RESOURCE_MODE_CONSTANTS.START_WAIT_MS + 10);

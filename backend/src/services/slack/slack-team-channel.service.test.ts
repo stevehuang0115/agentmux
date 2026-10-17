@@ -832,6 +832,25 @@ describe('adoptMapping (team move, crewly#1189)', () => {
     expect(raw.mappings.map((m) => m.teamId)).toEqual(['team-moved']);
   });
 
+  // crewly#1344 (#air-steamfun): the adopted mapping pointed at a chat channel
+  // the target never had — 404 on its messages, no local thread history.
+  it('a mapping whose chat channel does not exist here gets a fresh one at start, with the team roster, and is saved', async () => {
+    storage.teams = [team(), { ...team(), id: 'team-moved', name: 'Moved Team' } as never];
+    await service.adoptMapping(incoming);
+    expect(chat.getChannelForBridge('huddle-moved')).toBeNull();
+
+    expect(await service.healMissingChatChannels()).toBe(1);
+    const healed = service.findByTeamId('team-moved')!;
+    expect(healed.chatChannelId).not.toBe('huddle-moved');
+    const channel = chat.getChannelForBridge(healed.chatChannelId)!;
+    expect(channel.name).toBe('#moved');
+    expect([...chat.members.get(healed.chatChannelId)!]).toEqual(['crewly-alpha-sam', 'crewly-alpha-leo']);
+    const raw = JSON.parse(await fs.readFile(path.join(tmpDir, 'slack-team-channels.json'), 'utf8')) as { mappings: Array<{ teamId: string; chatChannelId: string }> };
+    expect(raw.mappings.find((m) => m.teamId === 'team-moved')!.chatChannelId).toBe(healed.chatChannelId);
+    // A second pass changes nothing; a mapping with a live channel is left alone.
+    expect(await service.healMissingChatChannels()).toBe(0);
+  });
+
   it('keeps the Slack channel when a team moves away, unlike a delete', async () => {
     await service.ensureTeamChannel(team());
     await service.handleStorageEvent({ kind: 'team-moved-away', teamId: 'team-alpha' });

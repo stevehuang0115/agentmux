@@ -26,11 +26,20 @@
  * idle and nobody else just wrote to it; any failure falls back to plain
  * delivery — nothing here throws into dispatch.
  *
+ * Two floors since crewly#1344 (audit of 2026-10-16: 137 clears in 48 h, some
+ * of 56k-token conversations, and agents cleared mid-conversation with the
+ * owner): a conversation is only cleared once its last turn is at least
+ * `memberFreshContextTokens()` (400k, above Claude Code's own 350k
+ * auto-compact, so compaction runs first), and never while the agent is in a
+ * conversation with the owner (an owner thread the sentinel watches, active
+ * in the last two hours). Below the floor a new task simply joins the
+ * conversation — that is what the agent remembers by.
+ *
  * Idle-boundary context cap: one task can run for 1000+ turns, so a new root
  * alone does not bound the context. A periodic sweep
  * ({@link FreshTaskConversationService.startContextCapSweep}) saves and
  * clears an idle Claude Code member whose last turn carried more than
- * `CREWLY_MEMBER_CONTEXT_CAP_TOKENS` (200k by default, `0` disables), then
+ * `CREWLY_MEMBER_CONTEXT_CAP_TOKENS` (450k by default, `0` disables), then
  * writes one line naming its active WorkItem (when it has one) and the
  * handover. Members working from chat with no WorkItem are capped too. Same safety
  * rules — never the orchestrator, never mid-turn, never while a message is
@@ -56,7 +65,9 @@ import {
   defaultClaudeHome,
   findClaudeTranscript,
   lastTurnContextTokens,
+  memberFreshContextTokens,
 } from './runtime-session-recovery.js';
+import { getOwnerThreadSentinel } from '../messaging/owner-thread-sentinel.service.js';
 import { withHandoverPointers } from './handover-pointers.js';
 import { effectiveClaudeAccount } from '../runtime-fallback/effective-runtime.js';
 import { claudeAccountConfigDir } from '../harness/claude-accounts.js';
@@ -132,6 +143,24 @@ export interface FreshTaskDecisionInput {
    * wipe the live context of work in progress.
    */
   alreadyStarted?: boolean;
+  /**
+   * The agent is in a conversation with the owner: an owner thread the
+   * sentinel watches was active in the last
+   * {@link FRESH_TASK_CONVERSATION_CONSTANTS.OWNER_CONVERSATION_ACTIVE_MS}.
+   * A clear would wipe the conversation the owner is in (crewly#1344).
+   */
+  ownerConversationActive?: boolean;
+  /**
+   * Last-turn context of the current conversation in tokens; null when the
+   * transcript cannot be read. Only checked when `minContextTokens` is given.
+   */
+  contextTokens?: number | null;
+  /**
+   * The smallest conversation a clear may close (`memberFreshContextTokens()`).
+   * An unknown size counts as under it: a conversation that cannot be
+   * measured is not cleared on a guess.
+   */
+  minContextTokens?: number;
 }
 
 /** The clear decision and why. */
@@ -154,6 +183,11 @@ export function decideFreshConversation(input: FreshTaskDecisionInput): FreshTas
   if (!input.enabled) return { clear: false, reason: 'disabled' };
   if (!input.previousRoot) return { clear: false, reason: 'first task' };
   if (input.previousRoot === input.newRoot) return { clear: false, reason: 'same task' };
+  if (input.ownerConversationActive) return { clear: false, reason: 'owner conversation' };
+  if (input.minContextTokens !== undefined) {
+    if (input.contextTokens === null || input.contextTokens === undefined) return { clear: false, reason: 'conversation size unknown' };
+    if (input.contextTokens < input.minContextTokens) return { clear: false, reason: 'under the clear floor' };
+  }
   if (input.busy) return { clear: false, reason: 'busy' };
   if (input.recentDelivery) return { clear: false, reason: 'recent delivery' };
   if (input.alreadyStarted) return { clear: false, reason: 'already working on it' };
@@ -352,6 +386,12 @@ export interface FreshTaskDeps {
   getQuietMs: (sessionName: string) => number | null;
   /** Write one message into the session (paste + Enter); false when the session is gone */
   sendMessage: (sessionName: string, text: string) => Promise<boolean>;
+  /**
+   * The agent is in a conversation with the owner right now (an owner thread
+   * active in the last two hours); such an agent is never cleared for a new
+   * task. Default: the owner-thread sentinel.
+   */
+  ownerConversationActive: (sessionName: string) => boolean;
 }
 
 /** Statuses that mean the agent is actively on a work item. */
@@ -461,6 +501,13 @@ function defaultDeps(): FreshTaskDeps {
     getQuietMs: (sessionName) => {
       const tracker = PtyActivityTrackerService.getInstance();
       return tracker.hasActivity(sessionName) ? tracker.getIdleTimeMs(sessionName) : null;
+    },
+    ownerConversationActive: (sessionName) => {
+      try {
+        return getOwnerThreadSentinel()?.ownerActiveRecently(sessionName, FRESH_TASK_CONVERSATION_CONSTANTS.OWNER_CONVERSATION_ACTIVE_MS) === true;
+      } catch {
+        return false;
+      }
     },
     sendMessage: async (sessionName, text) => {
       const backend = getSessionBackendSync();
@@ -878,13 +925,38 @@ export class FreshTaskConversationService {
     });
     if (decision.clear) {
       const enabled = freshTaskConversationEnvEnabled(this.deps.env) && (await this.deps.settingEnabled());
-      const busy = enabled ? await this.deps.isBusy(sessionName).catch(() => true) : false;
+      // The two floors (crewly#1344) come before any async lookup: a
+      // conversation under the fresh-start threshold, or one the owner is in,
+      // is kept whatever else is true.
+      const minContextTokens = memberFreshContextTokens(this.deps.env);
+      const transcript = info?.cwd && info.sessionId ? this.transcriptOf(sessionName, info.sessionId, info.cwd) : null;
+      const contextTokens = transcript && fs.existsSync(transcript) ? lastTurnContextTokens(transcript) : null;
+      let ownerConversationActive = false;
+      try {
+        ownerConversationActive = enabled && this.deps.ownerConversationActive(sessionName);
+      } catch {
+        ownerConversationActive = false;
+      }
+      decision = decideFreshConversation({
+        sessionName,
+        runtimeType: info?.runtimeType,
+        previousRoot,
+        newRoot,
+        enabled,
+        busy: false,
+        recentDelivery: false,
+        otherActiveRoots: [],
+        ownerConversationActive,
+        contextTokens,
+        minContextTokens,
+      });
+      const busy = decision.clear ? await this.deps.isBusy(sessionName).catch(() => true) : false;
       const last = this.lastDelivery.get(sessionName);
       const recentDelivery =
         this.isDelivering(sessionName) ||
         (last !== undefined && this.deps.now() - last < FRESH_TASK_CONVERSATION_CONSTANTS.RECENT_DELIVERY_MS);
-      const active = enabled && !busy ? await this.deps.getActiveItems(sessionName).catch(() => null) : [];
-      decision = decideFreshConversation({
+      const active = decision.clear && !busy ? await this.deps.getActiveItems(sessionName).catch(() => null) : [];
+      if (decision.clear) decision = decideFreshConversation({
         sessionName,
         runtimeType: info?.runtimeType,
         previousRoot,
@@ -892,6 +964,9 @@ export class FreshTaskConversationService {
         enabled,
         busy: busy || active === null,
         recentDelivery,
+        ownerConversationActive,
+        contextTokens,
+        minContextTokens,
         otherActiveRoots: (active ?? []).filter((wi) => wi.id !== workItem.id).map((wi) => rootWorkItemId(wi.id)),
         alreadyStarted: (active ?? []).some(
           (wi) =>

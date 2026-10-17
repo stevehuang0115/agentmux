@@ -13,7 +13,7 @@ import * as path from 'path';
 import { ORC_CONVERSATION_CONSTANTS, ORCHESTRATOR_SESSION_NAME, RUNTIME_FALLBACK_CONSTANTS, RUNTIME_TYPES } from '../../constants.js';
 import type { ApiKeyProvider } from '../../types/settings.types.js';
 import { withHandoverPointers } from '../agent/handover-pointers.js';
-import { buildHandoverSummary, chainedHandoverBlock, claudeTranscriptPath, latestHandoverFile } from '../agent/runtime-session-recovery.js';
+import { buildHandoverSummary, chainedHandoverBlock, claudeTranscriptPath, copyClaudeConversation, defaultClaudeHome, latestHandoverFile } from '../agent/runtime-session-recovery.js';
 import { claudeAccountConfigDir, describeClaudeAccounts, parseRuntimeTarget } from '../harness/claude-accounts.js';
 import { setRuntimeFallbackHooks } from './effective-runtime.js';
 import { computeRuntimeAvailability } from './runtime-availability.js';
@@ -145,6 +145,36 @@ export function writeRuntimeHandover(crewlyHome: string, req: HandoverRequest, c
 		'utf-8',
 	);
 	return file;
+}
+
+/**
+ * The Claude home a runtime target keeps its conversations in: another of
+ * the owner's accounts has its own config dir, the default login `~/.claude`.
+ *
+ * @param target - Runtime target (`claude-code` or `claude-code@<account>`)
+ * @returns Absolute path
+ */
+export function claudeHomeOfTarget(target: string): string {
+	const { account } = parseRuntimeTarget(target);
+	return account ? claudeAccountConfigDir(account) : defaultClaudeHome();
+}
+
+/**
+ * Carry a Claude Code conversation between two Claude Code targets so the
+ * agent resumes it on the target account instead of starting fresh
+ * (crewly#1344). Same home on both sides: nothing to copy, resumable.
+ *
+ * @param args - Session, the two targets, the conversation id and the agent's cwd
+ * @returns True when the transcript is in place under the target's home
+ */
+export function carryClaudeConversation(args: { sessionName: string; from: string; to: string; conversationId: string; cwd: string | undefined }): boolean {
+	if (!args.cwd) return false;
+	const fromHome = claudeHomeOfTarget(args.from);
+	const toHome = claudeHomeOfTarget(args.to);
+	if (path.resolve(fromHome) === path.resolve(toHome)) return true;
+	// The transcript may still be under the default home from before an
+	// earlier hop, so both homes are searched, the current one first.
+	return copyClaudeConversation({ sessionId: args.conversationId, cwd: args.cwd, fromHomes: [fromHome, defaultClaudeHome()], toHome }) !== null;
 }
 
 /**
@@ -308,6 +338,12 @@ export function startBackendRuntimeFallback(ctx: RuntimeFallbackWiringContext): 
 			get: (s) => persistenceSync?.getSessionId(s),
 			set: (s, id) => persistenceSync?.updateSessionId(s, id),
 			clear: (s) => persistenceSync?.clearSessionId(s),
+		},
+		carryConversation: async ({ sessionName, from, to, conversationId }) => {
+			const cwd = (await persistence().catch(() => null))?.getSessionMetadata(sessionName)?.cwd;
+			const ok = carryClaudeConversation({ sessionName, from, to, conversationId, cwd });
+			if (!ok) ctx.logger.warn('Conversation transcript not found or not copied; the target account starts fresh', { sessionName, from, to, conversationId });
+			return ok;
 		},
 		relaunch: async (agent) => {
 			const reg = ctx.registration();
