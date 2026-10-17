@@ -1066,6 +1066,19 @@ describe('AgentRegistrationService', () => {
 				expect(codexEnv.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION).toBeUndefined();
 			});
 
+			it('Claude Code spawn env carries no CLAUDE_CODE_OAUTH_TOKEN once no token is stored (Crewly never injects a Claude sign-in token)', () => {
+				// Nothing stored: even a token in Crewly's own process env is not passed on by the harness env.
+				const env = (service as any).buildAgentIdentityEnv('s', 'developer', '/p', RUNTIME_TYPES.CLAUDE_CODE);
+				expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+			});
+
+			it('Claude Code spawn env still gets a token an older Crewly saved, only until it is retired (transition)', () => {
+				realFs.writeFileSync(`${crewlyHome}/harness-credentials.json`, JSON.stringify({ claude: { oauthToken: 'sk-ant-oat01-legacy', updatedAt: 'then' } }));
+				expect((service as any).buildAgentIdentityEnv('s', 'developer', '/p', RUNTIME_TYPES.CLAUDE_CODE).CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-oat01-legacy');
+				realFs.writeFileSync(`${crewlyHome}/harness-credentials.json`, JSON.stringify({}));
+				expect((service as any).buildAgentIdentityEnv('s', 'developer', '/p', RUNTIME_TYPES.CLAUDE_CODE).CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+			});
+
 			it('keeps the saved Antigravity key out of other runtimes\' spawn env', () => {
 				saveHarnessKey('AIza-harness-key');
 				expect((service as any).buildAgentIdentityEnv('s', 'developer', '/p', RUNTIME_TYPES.ANTIGRAVITY_CLI).GEMINI_API_KEY).toBe('AIza-harness-key');
