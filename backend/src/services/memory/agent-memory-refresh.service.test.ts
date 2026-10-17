@@ -96,6 +96,17 @@ describe('AgentMemoryRefreshService', () => {
     expect(Date.parse(memory!.updatedAt)).toBeGreaterThan(0);
   });
 
+  it('skips work records: they describe what the agent did, not what it learned (#1349)', async () => {
+    await writeProjectLog(
+      entry(2, AGENT, '(gotcha) a real lesson') +
+        serializeLogEntry({ timestamp: new Date(NOW - HOUR).toISOString(), sourceType: 'work_record', caller: AGENT, ref: 'work-record:a#final', body: '(record) **Did a task** — done (no review)\nasked by: Owen\ndone by: Fern\noutcome: done (no review)\nmeta: wi=a phase=final status=done' }),
+    );
+    const [outcome] = await build().runOnce();
+    expect(outcome).toMatchObject({ candidates: 1, knowledge: 1 });
+    const knowledge = await agentMemory.getRoleKnowledge(AGENT);
+    expect(knowledge.map((k) => k.content)).toEqual(['a real lesson']);
+  });
+
   it('is idempotent: a second run within the interval does nothing, a forced run reinforces instead of duplicating', async () => {
     await writeProjectLog(entry(2, AGENT, '(gotcha) something real'));
     const svc = build();

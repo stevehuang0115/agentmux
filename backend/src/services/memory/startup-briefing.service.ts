@@ -33,7 +33,9 @@ import { WikiIndexService, type WikiIndexEntry } from '../wiki/wiki-index.servic
 import { WikiRecentService, type WikiRecentEntry } from '../wiki/wiki-recent.service.js';
 import { isSeedFile, isLogArchivePath } from '../wiki/wiki-vault-walk.js';
 import { parsePage } from '../wiki/wiki-page.js';
-import { logBodyKey, parseLogEntries, recentContentEntries } from '../wiki/wiki-log-entries.js';
+import { logBodyKey, parseLogEntries, recentContentEntries, type WikiLogEntryRecord } from '../wiki/wiki-log-entries.js';
+import { isWorkRecordEntry, parseWorkRecordBody, shortWorkRecordLine } from '../wiki/work-record.js';
+import { WORK_RECORD_CONSTANTS } from '../../constants.js';
 import { getOwnerThreadSentinel, type OwnerThreadEntry } from '../messaging/owner-thread-sentinel.service.js';
 
 /** Input to {@link StartupBriefingService.build}. */
@@ -55,6 +57,9 @@ export interface StartupBriefingDeps {
   /** Clock (tests). */
   now?: () => number;
 }
+
+/** Sections of the briefing, in trim order (see {@link StartupBriefingService.fitToBudget}). */
+type BriefingPartKey = 'index' | 'pages' | 'work' | 'lessons' | 'threads';
 
 /** One lesson line. */
 interface Lesson {
@@ -114,15 +119,18 @@ export class StartupBriefingService {
     const vaultPath = path.join(input.projectPath, '.crewly', 'wiki');
     const hasVault = existsSync(path.join(vaultPath, 'SCHEMA.md'));
 
-    const [indexMd, pagesMd, lessonsMd, threadsMd] = await Promise.all([
+    const ownEntries = await this.ownLogEntries(input.sessionName, hasVault ? vaultPath : null, now);
+    const [indexMd, pagesMd, threadsMd] = await Promise.all([
       hasVault ? this.renderIndex(vaultPath) : Promise.resolve(''),
       hasVault ? this.renderRecentPages(vaultPath) : Promise.resolve(''),
-      this.renderLessons(input.sessionName, hasVault ? vaultPath : null, now),
       Promise.resolve(this.renderOwnerThreads(input.sessionName, now)),
     ]);
+    const lessonsMd = await this.renderLessons(input.sessionName, ownEntries.lessons, now);
+    const workMd = this.renderRecentWork(ownEntries.records);
 
-    const parts: Array<{ key: 'index' | 'pages' | 'lessons' | 'threads'; md: string }> = [];
+    const parts: Array<{ key: BriefingPartKey; md: string }> = [];
     if (threadsMd) parts.push({ key: 'threads', md: threadsMd });
+    if (workMd) parts.push({ key: 'work', md: workMd });
     if (lessonsMd) parts.push({ key: 'lessons', md: lessonsMd });
     if (pagesMd) parts.push({ key: 'pages', md: pagesMd });
     if (indexMd) parts.push({ key: 'index', md: indexMd });
@@ -132,7 +140,7 @@ export class StartupBriefingService {
     const md = [
       STARTUP_BRIEFING_CONSTANTS.HEADING,
       '',
-      'Read before acting: what this project already knows, what you learned recently, and which owner threads are waiting on you. Use `wiki-query` / `recall` for anything not listed.',
+      'Read before acting: what this project already knows, what you recently did and for whom, what you learned, and which owner threads are waiting on you. Use `wiki-query` / `recall` for anything not listed.',
       '',
       ...sections,
     ].join('\n').trim();
@@ -147,10 +155,10 @@ export class StartupBriefingService {
    * trimmed first (it is the cheapest to re-fetch with `wiki-query`), then
    * recent pages, then lessons. Owner threads are never cut.
    */
-  private fitToBudget(parts: Array<{ key: 'index' | 'pages' | 'lessons' | 'threads'; md: string }>): string[] {
+  private fitToBudget(parts: Array<{ key: BriefingPartKey; md: string }>): string[] {
     const headerChars = STARTUP_BRIEFING_CONSTANTS.HEADING.length + 200;
     const total = (): number => parts.reduce((n, p) => n + p.md.length + 2, headerChars);
-    for (const key of ['index', 'pages', 'lessons'] as const) {
+    for (const key of ['index', 'pages', 'work', 'lessons'] as const) {
       if (total() <= STARTUP_BRIEFING_CONSTANTS.MAX_CHARS) break;
       const i = parts.findIndex((p) => p.key === key);
       if (i < 0) continue;
@@ -225,10 +233,55 @@ export class StartupBriefingService {
   }
 
   /**
+   * The agent's own recent entries in the project and global vault logs,
+   * split into work records (#1349) and lessons.
+   */
+  private async ownLogEntries(sessionName: string, projectVault: string | null, now: number): Promise<{ lessons: Lesson[]; records: WikiLogEntryRecord[] }> {
+    const lessons: Lesson[] = [];
+    const records: WikiLogEntryRecord[] = [];
+    for (const vault of [projectVault, this.globalVaultPath]) {
+      if (!vault) continue;
+      const logAbs = path.join(vault, WIKI_LOG_CONSTANTS.LOG_RELATIVE_PATH);
+      let raw: string;
+      try {
+        raw = await fs.readFile(logAbs, 'utf8');
+      } catch {
+        continue;
+      }
+      for (const e of recentContentEntries(parseLogEntries(raw), STARTUP_BRIEFING_CONSTANTS.LESSONS_DAYS, now)) {
+        if (e.caller !== sessionName) continue;
+        if (isWorkRecordEntry(e)) records.push(e);
+        else lessons.push({ at: e.timestampMs, text: e.body, source: vault === projectVault ? 'project log' : 'global log' });
+      }
+    }
+    return { lessons, records };
+  }
+
+  /**
+   * `### Your recent work (last N days)` — the agent's last work records,
+   * one line each: what it did, for whom, how it ended.
+   */
+  private renderRecentWork(records: readonly WikiLogEntryRecord[]): string {
+    const lines: string[] = [];
+    const seen = new Set<string>();
+    for (const e of [...records].sort((a, b) => b.timestampMs - a.timestampMs)) {
+      const parsed = parseWorkRecordBody(e.body);
+      if (!parsed) continue;
+      const key = parsed.meta.wi ?? e.ref;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      lines.push(`- ${e.timestamp.slice(0, 10)}: ${shortWorkRecordLine(parsed)}`);
+      if (lines.length >= WORK_RECORD_CONSTANTS.BRIEFING_MAX) break;
+    }
+    if (lines.length === 0) return '';
+    return [`### Your recent work (last ${STARTUP_BRIEFING_CONSTANTS.LESSONS_DAYS} days)`, '', ...lines].join('\n');
+  }
+
+  /**
    * `### Your lessons (last N days)` — role knowledge and the agent's own
    * vault log entries, newest first, deduped, capped.
    */
-  private async renderLessons(sessionName: string, projectVault: string | null, now: number): Promise<string> {
+  private async renderLessons(sessionName: string, logLessons: readonly Lesson[], now: number): Promise<string> {
     const cutoff = now - STARTUP_BRIEFING_CONSTANTS.LESSONS_DAYS * 86_400_000;
     const lessons: Lesson[] = [];
     const seen = new Set<string>();
@@ -248,21 +301,7 @@ export class StartupBriefingService {
     } catch {
       // an agent without memory yet has no lessons
     }
-
-    for (const vault of [projectVault, this.globalVaultPath]) {
-      if (!vault) continue;
-      const logAbs = path.join(vault, WIKI_LOG_CONSTANTS.LOG_RELATIVE_PATH);
-      let raw: string;
-      try {
-        raw = await fs.readFile(logAbs, 'utf8');
-      } catch {
-        continue;
-      }
-      for (const e of recentContentEntries(parseLogEntries(raw), STARTUP_BRIEFING_CONSTANTS.LESSONS_DAYS, now)) {
-        if (e.caller !== sessionName) continue;
-        push({ at: e.timestampMs, text: e.body, source: vault === projectVault ? 'project log' : 'global log' });
-      }
-    }
+    for (const l of logLessons) push(l);
     if (lessons.length === 0) return '';
     lessons.sort((a, b) => b.at - a.at);
     const lines = lessons

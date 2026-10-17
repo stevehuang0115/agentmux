@@ -1882,6 +1882,66 @@ export const AGENT_MEMORY_REFRESH_CONSTANTS = {
 } as const;
 
 /**
+ * Automatic per-task work records (#1349): one `(record)` entry per finished
+ * WorkItem in the project vault log, compiled into the weekly digest.
+ */
+export const WORK_RECORD_CONSTANTS = {
+	/** Hourly tick: catch-up for finished items without a record, blocked items, deferred items. */
+	TICK_MS: 60 * 60 * 1000,
+	/** Delay before the boot-time pass, after the other wiki jobs settled. */
+	BOOT_DELAY_MS: 3 * 60 * 1000,
+	/** A terminal event waits this long before the record is assembled (ticket sync, verify item, evidence land first). */
+	EVENT_DELAY_MS: 20 * 1000,
+	/** Catch-up looks at items that ended within this many days. */
+	CATCHUP_WINDOW_DAYS: 7,
+	/** Cap on records written per pass (the rest wait for the next tick). */
+	CATCHUP_MAX_PER_PASS: 200,
+	/** A record waiting for the owner's OK on a ticket is written anyway after this long. */
+	DEFER_MAX_MS: 72 * 60 * 60 * 1000,
+	/** An item parked in `blocked` for longer than this gets a blocked record. */
+	BLOCKED_AFTER_MS: 24 * 60 * 60 * 1000,
+	/** Hard cap on one record's body (the `meta:` line always fits). */
+	MAX_CHARS: 2_500,
+	/** Characters of the ask quoted. */
+	QUOTE_MAX_CHARS: 160,
+	/** Characters of the result summary kept. */
+	DID_MAX_CHARS: 400,
+	/** Cap on output lines and characters per line. */
+	MAX_OUTPUTS: 8,
+	OUTPUT_MAX_CHARS: 160,
+	/** Cap on error lines and characters per line. */
+	MAX_ERRORS: 5,
+	ERROR_MAX_CHARS: 160,
+	/** Cap on helper lines and characters per line. */
+	MAX_HELPERS: 6,
+	HELPER_MAX_CHARS: 120,
+	/** Bytes read from the end of the agent's transcript for the task window. */
+	TRANSCRIPT_TAIL_BYTES: 2 * 1024 * 1024,
+	/** Transcripts are consulted only for items that ended within this long (older windows are not in the tail). */
+	TRANSCRIPT_MAX_AGE_MS: 48 * 60 * 60 * 1000,
+	/** Slack around the task window when slicing the transcript. */
+	TRANSCRIPT_WINDOW_SLACK_MS: 60 * 1000,
+	/** Cap on trace events read per record. */
+	TRACE_MAX_EVENTS: 2_000,
+	/** State file (recorded keys), under CREWLY_HOME. */
+	STATE_FILE: 'work-records-state.json',
+	/** Cap on remembered record keys. */
+	STATE_MAX_KEYS: 5_000,
+	/** Kill switch env var; the value `false` disables work records. */
+	ENV_KILL_SWITCH: 'CREWLY_WORK_RECORDS',
+	/** Source type of a record entry in the vault log. */
+	SOURCE_TYPE: 'work_record',
+	/** Prefix of a record's `ref:` (`work-record:<workItemId>#<phase>`). */
+	REF_PREFIX: 'work-record:',
+	/** Records the startup briefing lists. */
+	BRIEFING_MAX: 5,
+	/** Characters of one record line in the briefing. */
+	BRIEFING_LINE_MAX_CHARS: 240,
+	/** WorkItem types that are bookkeeping, never recorded. */
+	SKIPPED_TYPES: ['check', 'reconcile', 'confirm', 'ticket_triage', 'autopilot_retro', 'goal_replan', 'ticket_hygiene_review', 'autopilot_self_review'] as readonly string[],
+} as const;
+
+/**
  * Startup briefing content (#1345): wiki pages, recent lessons and open
  * owner threads an agent gets at registration, on top of its session memory.
  */

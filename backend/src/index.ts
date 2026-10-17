@@ -1259,6 +1259,48 @@ void (async () => {
 				});
 			}
 
+			// Work records (#1349): one structured `(record)` entry per finished
+			// (or long-blocked) WorkItem in the project vault log — who asked, who
+			// did it, outputs, errors, helpers, outcome — from the WorkItem, its
+			// ticket, its children, the trace and the doer's transcript tail. The
+			// digest, search and the startup briefing read them. No LLM. Non-fatal.
+			try {
+				const [{ WorkRecordService }, { ProjectTicketService }, { getTraceStore }] = await Promise.all([
+					import('./services/wiki/work-record.service.js'),
+					import('./services/project-tickets/project-ticket.service.js'),
+					import('./services/trace/trace-store.js'),
+				]);
+				const pool = TaskPoolService.getInstance();
+				const tickets = ProjectTicketService.getInstance();
+				const records = new WorkRecordService({
+					listWorkItems: () => pool.getAllItems(),
+					findWorkItem: (id) => pool.findWorkItem(id),
+					listTeams: () => this.storageService.getTeams(),
+					listProjects: () => this.storageService.getProjects(),
+					getTicket: (projectPath, id) => tickets.get(projectPath, id),
+					getRequest: (id) => RequestService.getInstance().getById(id),
+					readTrace: async (wi) => {
+						const store = getTraceStore();
+						const traceId = wi.traceId ?? store.traceByRef('workItem', wi.id);
+						if (!traceId) return [];
+						const all = await store.readAll(traceId);
+						return all?.events ?? [];
+					},
+					locateTranscript: this.askTranscriptLocator(),
+					eventBus: this.eventBusService,
+					onTicketSettled: (listener) => tickets.onChange((change) => {
+						const settled = change.ticket.status === 'done' || change.ticket.status === 'cancelled';
+						if (settled && change.before.status !== change.ticket.status && change.ticket.workItemId) listener(change.ticket.workItemId);
+					}),
+				});
+				WorkRecordService.setInstance(records);
+				records.start();
+			} catch (recordErr) {
+				this.logger.warn('Work records failed to start (non-fatal)', {
+					error: (recordErr as Error).message,
+				});
+			}
+
 			// LLM-wiki → WorkItem bridge (2026-05-27): pending wiki queue
 			// items + legacy migration candidates become claimable
 			// WorkItems in the V3 pool. Replaces the bookkeep/reflect

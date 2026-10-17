@@ -45,6 +45,7 @@ import {
   recentContentEntries,
   type WikiLogEntryRecord,
 } from '../wiki/wiki-log-entries.js';
+import { isWorkRecordEntry } from '../wiki/work-record.js';
 
 /** An agent the refresh should consider. */
 export interface RefreshableAgent {
@@ -294,6 +295,9 @@ export class AgentMemoryRefreshService {
       }
       for (const e of recentContentEntries(parseLogEntries(raw), windowDays, now)) {
         if (e.caller !== sessionName || e.timestampMs <= since) continue;
+        // Work records (#1349) describe what the agent did, not what it learned;
+        // the startup briefing lists them, memory does not.
+        if (isWorkRecordEntry(e)) continue;
         const key = logBodyKey(e.body);
         if (seen.has(key)) continue;
         seen.add(key);

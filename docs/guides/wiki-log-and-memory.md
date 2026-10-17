@@ -34,13 +34,36 @@ decisions, into the project's memory. At registration an agent gets
 `## Your Project Knowledge`: owner threads waiting on it, its lessons of the
 last 7 days, the recently changed pages and the wiki index.
 
+## Work records
+
+Every task that finishes (verified, done, rejected, cancelled, failed), and
+every task blocked for more than a day, gets one `(record)` entry in the
+project vault log (and the team vault, when there is one): who asked and a
+short quote of the ask, who did it, what was done and the outputs, errors on
+the way and whether they were fixed, who was pulled in, and how it ended.
+Nothing is asked of the agent; the record is assembled by the backend from
+the task, its ticket, its sub-tasks, the run trace and the agent's own
+transcript, with secrets masked. Ticket ids stay on the record's `meta:`
+line, which the digest never renders.
+
+- The weekly digest adds **Work done**, **Errors and fixes** and
+  **Collaboration** (who delegated to or helped whom, per pair).
+- An agent's registration briefing adds **Your recent work**: its last five
+  records, one line each.
+- The memory refresh skips records (they are what the agent did, not what it
+  learned).
+- On first start the backend catches up on the last 7 days, 200 records per
+  hourly pass. Design: `specs/2026-10-17-work-records.md`.
+
 ## Switches
 
 | Env | Effect |
 |---|---|
 | `CREWLY_WIKI_MAINTENANCE=false` | No drain, rotation or compile. |
 | `CREWLY_AGENT_MEMORY_REFRESH=false` | No daily memory refresh. |
+| `CREWLY_WORK_RECORDS=false` | No work records. |
 | `WIKI_BRIDGE_ENABLED=false` | No LLM classification WorkItems (the drain still runs). |
 
 State files under `~/.crewly/`: `wiki-maintenance-state.json`,
-`agent-memory-refresh-state.json`; per vault `.wiki-compile-state.json`.
+`agent-memory-refresh-state.json`, `work-records-state.json`; per vault
+`.wiki-compile-state.json`.
