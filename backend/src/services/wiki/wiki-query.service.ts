@@ -32,6 +32,8 @@ import { WikiIndexService } from './wiki-index.service.js';
 import { WikiUsageService } from './wiki-usage.service.js';
 import { parsePage, isVisibleTo, type WikiPageFrontmatter } from './wiki-page.js';
 import { walkCuratedPages, isSeedFile } from './wiki-vault-walk.js';
+import { isLogEntryPath, isNoiseLogBody, parseLogEntries } from './wiki-log-entries.js';
+import { WIKI_LOG_CONSTANTS } from '../../constants.js';
 
 const DEFAULT_RECENT_LOG_ENTRIES = 20;
 const DEFAULT_TOP_K_PAGES = 5;
@@ -210,6 +212,7 @@ export class WikiQueryService {
         'Cite pages by their relative path inside the vault.',
         'Do not propose writes into any frozenPaths — refuse or redirect to llm-curated/.',
         'candidatePages.excerpt is truncated; `pages` returns full content.',
+        `A candidate whose path is \`${WIKI_LOG_CONSTANTS.LOG_RELATIVE_PATH}${WIKI_LOG_CONSTANTS.ENTRY_PATH_SEPARATOR}<timestamp>\` is one recent log entry (a learning nobody turned into a page yet); its excerpt is the whole entry — cite it as "log entry <timestamp>", it cannot be requested through \`pages\`.`,
         'Pages marked superseded are hidden; ask with includeSuperseded when you need the history of a judgement.',
         'The recentLog is append-only audit; never propose rewrites to its content.',
         'If nothing here answers the question, say so — that miss is recorded as a capture gap.',
@@ -279,54 +282,29 @@ export class WikiQueryService {
     vaultPath: string,
     limit: number,
   ): Promise<WikiLogEntry[]> {
-    const logPath = path.join(vaultPath, 'llm-curated', 'log.md');
+    const logPath = path.join(vaultPath, WIKI_LOG_CONSTANTS.LOG_RELATIVE_PATH);
     let raw: string;
     try {
       raw = await fs.readFile(logPath, 'utf8');
     } catch {
       return [];
     }
-    const headerRe = /^## \[([^\]]+)\]\s+(\S+)\s+\|\s+(.+)$/gm;
-    const entries: WikiLogEntry[] = [];
-    const matches: Array<{ idx: number; ts: string; sourceType: string; caller: string }> = [];
-    let m: RegExpExecArray | null;
-    while ((m = headerRe.exec(raw))) {
-      matches.push({
-        idx: m.index,
-        ts: m[1],
-        sourceType: m[2],
-        caller: m[3].trim(),
-      });
-    }
-    for (let i = 0; i < matches.length; i++) {
-      const start = matches[i].idx;
-      const end = i + 1 < matches.length ? matches[i + 1].idx : raw.length;
-      const block = raw.slice(start, end);
-      const refMatch = block.match(/^ref:\s*(.+)$/m);
-      // Body is everything after the `ref:` line (skipping the blank line).
-      let body = '';
-      if (refMatch) {
-        const refLineEnd = block.indexOf(refMatch[0]) + refMatch[0].length;
-        body = block.slice(refLineEnd).replace(/^\n+/, '').trim();
-      }
-      entries.push({
-        timestamp: matches[i].ts,
-        sourceType: matches[i].sourceType,
-        caller: matches[i].caller,
-        ref: refMatch ? refMatch[1].trim() : '',
-        body,
-      });
-    }
-    // Most-recent-first; cap to requested limit.
-    return entries.slice(-limit).reverse();
+    // Content-free templated entries (auto-learning transitions) are not
+    // worth a reader's context (#1345); the rest, most-recent-first.
+    const entries = parseLogEntries(raw).filter((e) => !isNoiseLogBody(e.body));
+    return entries
+      .slice(-limit)
+      .reverse()
+      .map((e) => ({ timestamp: e.timestamp, sourceType: e.sourceType, caller: e.caller, ref: e.ref, body: e.body }));
   }
 
   /**
    * Rank the vault's `llm-curated/` pages by Okapi BM25 against the query,
    * reusing {@link WikiSearchService.searchCorpus} so the agent-facing
    * skill scores identically to the wiki UI search. Seed files (index,
-   * log) are excluded; superseded/invisible/proposed pages are dropped by
-   * the search filters.
+   * log) are excluded as files; the log's recent entries take part one by
+   * one with a lower weight (#1345). Superseded/invisible/proposed pages
+   * are dropped by the search filters.
    *
    * @param vaultPath - Vault root
    * @param query - Query text
@@ -340,12 +318,18 @@ export class WikiQueryService {
     topK: number,
     filters: WikiSearchFilters,
   ): Promise<WikiCandidatePage[]> {
-    const docs = (await walkCuratedPages(vaultPath)).filter((p) => !isSeedFile(p.relativePath));
+    const search = WikiSearchService.getInstance();
+    const pages = (await walkCuratedPages(vaultPath)).filter((p) => !isSeedFile(p.relativePath));
+    const entries = await search.collectLogEntryDocs(vaultPath);
+    const docs = [...pages, ...entries];
     if (docs.length === 0) return [];
-    const hits = await WikiSearchService.getInstance().searchCorpus(vaultPath, docs, query, filters);
+    const inline = new Map(entries.map((d) => [d.relativePath, d.content ?? '']));
+    const hits = await search.searchCorpus(vaultPath, docs, query, filters);
     const candidates: WikiCandidatePage[] = [];
     for (const hit of hits.slice(0, topK)) {
-      const excerpt = await this.readExcerpt(path.join(vaultPath, hit.relativePath));
+      const excerpt = isLogEntryPath(hit.relativePath)
+        ? inline.get(hit.relativePath) ?? ''
+        : await this.readExcerpt(path.join(vaultPath, hit.relativePath));
       candidates.push({ path: hit.relativePath, excerpt, score: hit.score });
     }
     return candidates;

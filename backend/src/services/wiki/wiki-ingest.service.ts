@@ -31,6 +31,8 @@ import { applyPrivacyGate } from './wiki-redaction.js';
 import { decideWrite } from './wiki-policy.js';
 import { WikiIndexService } from './wiki-index.service.js';
 import { WikiHistoryService } from './wiki-history.service.js';
+import { WIKI_LOG_CONSTANTS } from '../../constants.js';
+import { WIKI_LOG_HEADER, isNoiseLogBody, logBodyKey, parseLogEntries } from './wiki-log-entries.js';
 
 /**
  * Categories of sources that trigger ingest. Mirrors §4 (ingest trigger
@@ -105,7 +107,12 @@ export interface WikiIngestRefusedFrozen {
 
 export interface WikiIngestRefusedInvalid {
   ok: false;
-  reason: 'invalid_input' | 'schema_missing' | 'empty_body';
+  /**
+   * `content_free`: a templated record with nothing a reader could use
+   * (an auto-learning state transition); `duplicate`: the same body was
+   * appended to this log recently (#1345). Both are refused, not written.
+   */
+  reason: 'invalid_input' | 'schema_missing' | 'empty_body' | 'content_free' | 'duplicate';
   message: string;
 }
 
@@ -115,7 +122,7 @@ export type WikiIngestOutcome =
   | WikiIngestRefusedInvalid
   | WikiIngestRefusedGate;
 
-const DEFAULT_LOG_RELATIVE_PATH = 'llm-curated/log.md';
+const DEFAULT_LOG_RELATIVE_PATH = WIKI_LOG_CONSTANTS.LOG_RELATIVE_PATH;
 const MAX_BODY_BYTES = 64 * 1024;
 
 // Spec note (Steve, 2026-05-22): the earlier keyword-based
@@ -136,6 +143,12 @@ export class WikiIngestService {
   private readonly schemaLoader: SchemaLoaderService;
   private readonly index: WikiIndexService;
   private readonly history: WikiHistoryService;
+  /**
+   * Per log file: keys of the bodies appended most recently (insertion
+   * ordered, bounded), seeded from the file tail on first use. An append
+   * whose body key is present is refused as a duplicate (#1345).
+   */
+  private readonly recentBodies = new Map<string, Set<string>>();
 
   constructor(schemaLoader?: SchemaLoaderService, index?: WikiIndexService, history?: WikiHistoryService) {
     this.logger = LoggerService.getInstance().createComponentLogger('WikiIngest');
@@ -203,7 +216,15 @@ export class WikiIngestService {
 
     const isLogTarget = path.basename(target) === 'log.md';
     if (isLogTarget) {
+      if (isNoiseLogBody(safeInput.sourceBody)) {
+        this.logger.debug('WikiIngest refused a content-free log entry', { vault: input.vaultPath, sourceType: input.sourceType, sourceRef: input.sourceRef });
+        return { ok: false, reason: 'content_free', message: 'a templated state-transition record carries nothing a reader could use; not written to log.md' };
+      }
       const absoluteTarget = path.join(input.vaultPath, target);
+      if (await this.isRecentDuplicate(absoluteTarget, safeInput.sourceBody)) {
+        this.logger.debug('WikiIngest dropped a duplicate log entry', { vault: input.vaultPath, sourceType: input.sourceType, sourceRef: input.sourceRef });
+        return { ok: false, reason: 'duplicate', message: 'an identical entry was appended to this log recently; not written again' };
+      }
       await fs.mkdir(path.dirname(absoluteTarget), { recursive: true });
       const logEntry = this.formatLogEntry(safeInput);
       await this.appendOrCreate(absoluteTarget, logEntry);
@@ -409,20 +430,69 @@ export class WikiIngestService {
 
   private async appendOrCreate(absolutePath: string, entry: string): Promise<void> {
     if (!existsSync(absolutePath)) {
-      const header = this.buildPageHeader();
-      await fs.writeFile(absolutePath, header + entry, 'utf8');
+      await fs.writeFile(absolutePath, WIKI_LOG_HEADER + entry, 'utf8');
       return;
     }
     await fs.appendFile(absolutePath, entry, 'utf8');
   }
 
   /**
-   * Header for a freshly-created `log.md` (pages are built by {@link writePage}).
+   * Whether `body` was appended to this log recently. The first call for a
+   * log seeds the set from the file's tail; every accepted append records
+   * its key; the set is bounded FIFO. A rotation replaces the file, so the
+   * set is re-seeded when the file disappears or shrinks.
    *
-   * @returns The activity-log preamble
+   * @param absolutePath - Log file
+   * @param body - Candidate body
+   * @returns True when an identical body is in the recent set (and records the key otherwise)
    */
-  private buildPageHeader(): string {
-    return '# Activity log\n\nAppend-only log of ingested sources. Each entry: `## [<ISO>] <sourceType> | <caller>`.\n';
+  private async isRecentDuplicate(absolutePath: string, body: string): Promise<boolean> {
+    const key = logBodyKey(body);
+    let recent = this.recentBodies.get(absolutePath);
+    if (!recent) {
+      recent = new Set<string>();
+      for (const k of await this.seedRecentKeys(absolutePath)) recent.add(k);
+      this.recentBodies.set(absolutePath, recent);
+    }
+    if (recent.has(key)) return true;
+    recent.add(key);
+    while (recent.size > WIKI_LOG_CONSTANTS.DEDUPE_RECENT_ENTRIES) {
+      const oldest = recent.values().next().value;
+      if (oldest === undefined) break;
+      recent.delete(oldest);
+    }
+    return false;
+  }
+
+  /**
+   * Body keys of the entries in the last `DEDUPE_SEED_TAIL_BYTES` of a log.
+   *
+   * @param absolutePath - Log file
+   * @returns Keys in file order (empty when the file is missing)
+   */
+  private async seedRecentKeys(absolutePath: string): Promise<string[]> {
+    let handle: fs.FileHandle | null = null;
+    try {
+      handle = await fs.open(absolutePath, 'r');
+      const { size } = await handle.stat();
+      const length = Math.min(size, WIKI_LOG_CONSTANTS.DEDUPE_SEED_TAIL_BYTES);
+      const buffer = Buffer.alloc(length);
+      await handle.read(buffer, 0, length, size - length);
+      return parseLogEntries(buffer.toString('utf8')).map((e) => logBodyKey(e.body));
+    } catch {
+      return [];
+    } finally {
+      await handle?.close();
+    }
+  }
+
+  /**
+   * Forget the recent-body set of a log (a rotation replaced the file).
+   *
+   * @param absolutePath - Log file
+   */
+  forgetRecentBodies(absolutePath: string): void {
+    this.recentBodies.delete(absolutePath);
   }
 
   /**

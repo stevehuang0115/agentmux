@@ -31,7 +31,7 @@ import { WikiQueueService } from './wiki-queue.service.js';
 import { WikiUsageService, type WikiUsageReport } from './wiki-usage.service.js';
 import { WikiIndexService, type WikiIndexCoverage } from './wiki-index.service.js';
 import { WikiCurationService } from './wiki-curation.service.js';
-import { walkCuratedPages, isSeedFile } from './wiki-vault-walk.js';
+import { walkCuratedPages, isSeedFile, LOG_ARCHIVE_DIR_NAME } from './wiki-vault-walk.js';
 import { parsePage, checkRetention } from './wiki-page.js';
 
 const DEFAULT_WINDOW_DAYS = 7;
@@ -297,6 +297,8 @@ export class WikiBookkeepService {
           if (entry.name.startsWith('.')) continue;
           const full = path.join(current, entry.name);
           if (entry.isDirectory()) {
+            // Rotated logs are kept, not counted as pages (#1345).
+            if (entry.name === LOG_ARCHIVE_DIR_NAME && path.basename(current) === 'llm-curated') continue;
             stack.push(full);
             continue;
           }

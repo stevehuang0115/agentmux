@@ -7,7 +7,7 @@
 
 import * as path from 'path';
 import * as fs from 'fs/promises';
-import { WIKI_KB_CONSTANTS } from '../../constants.js';
+import { WIKI_KB_CONSTANTS, WIKI_LOG_CONSTANTS } from '../../constants.js';
 
 /** A page reference. */
 export interface WikiPageRef {
@@ -21,6 +21,22 @@ export function isSeedFile(relativePath: string): boolean {
   const base = relativePath.split('/').pop()?.toLowerCase() ?? '';
   return base === 'index.md' || base === 'log.md' || base === 'readme.md' || base === 'schema.md';
 }
+
+/**
+ * Whether a vault-relative path lies inside the rotated-log archive
+ * (`llm-curated/log-archive/`). Archived logs are kept, never searched,
+ * counted or linted (#1345).
+ *
+ * @param relativePath - POSIX path relative to the vault root
+ * @returns True for the archive folder and anything under it
+ */
+export function isLogArchivePath(relativePath: string): boolean {
+  const normalized = relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
+  return normalized === WIKI_LOG_CONSTANTS.ARCHIVE_DIR || normalized.startsWith(`${WIKI_LOG_CONSTANTS.ARCHIVE_DIR}/`);
+}
+
+/** Directory basename of the rotated-log archive. */
+export const LOG_ARCHIVE_DIR_NAME = WIKI_LOG_CONSTANTS.ARCHIVE_DIR.split('/').pop() ?? 'log-archive';
 
 /**
  * Walk `<vault>/llm-curated/` and list every `.md` page.
@@ -50,6 +66,7 @@ export async function walkCuratedPages(
       if (entry.isDirectory()) {
         if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
         if (abs === proposedAbs && !options.includeProposed) continue;
+        if (isLogArchivePath(path.relative(vaultPath, abs).replace(/\\/g, '/'))) continue;
         stack.push(abs);
       } else if (entry.isFile() && entry.name.endsWith('.md')) {
         out.push({ relativePath: path.relative(vaultPath, abs).replace(/\\/g, '/'), absPath: abs });

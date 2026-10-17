@@ -1,13 +1,14 @@
 /**
- * Tests for AutoLearningSubscriber (LEARN-1).
+ * Tests for AutoLearningSubscriber (LEARN-1, observability-only since #1345).
  *
  * Covers:
- *   - one recordLearning per mapped event (per category)
- *   - templated summary content (entity, transition, resolver, mission/team, ts)
- *   - V1 idempotency: replayed event produces a single learning
+ *   - one structured transition line per mapped event (per category)
+ *   - the templated summary content (entity, transition, resolver, mission/team, ts)
+ *   - nothing is ever written through `recordLearning` (the templated
+ *     transition is not a learning)
+ *   - V1 idempotency: a replayed event produces a single line
  *   - skip path for events without an identifying key
- *   - skip path for events with no category mapping
- *   - error isolation: a rejected recordLearning is logged, not propagated
+ *   - error isolation: a throwing logger is contained
  *   - lifecycle: start/stop is idempotent; stop detaches all subscriptions
  *   - V7 / V9 self-checks: subscriber exports zero new event-class symbols
  *
@@ -17,12 +18,11 @@
 import { EventBusService } from '../event-bus/event-bus.service.js';
 import {
   AutoLearningSubscriber,
-  AUTO_LEARNING_AGENT_ID,
-  AUTO_LEARNING_AGENT_ROLE,
   LEARN_SUBSCRIBED_EVENTS,
 } from './auto-learning.subscriber.js';
 import type { AutoLearningTag } from './auto-learning.subscriber.js';
-import type { IMemoryService, LearningParams } from './memory.service.js';
+import type { IMemoryService } from './memory.service.js';
+import type { ComponentLogger } from '../core/logger.service.js';
 import type { AgentEvent } from '../../types/event-bus.types.js';
 
 jest.mock('../core/logger.service.js', () => ({
@@ -65,52 +65,65 @@ function buildEvent(overrides: Partial<AgentEvent> = {}): AgentEvent {
   };
 }
 
-/**
- * In-memory fake of {@link IMemoryService}. Captures every recordLearning
- * call so tests can assert on the recorded shape and count without going
- * near the disk.
- */
-function buildFakeMemoryService(): {
-  service: IMemoryService;
-  recorded: LearningParams[];
-  rejectNext: (err?: Error) => void;
-} {
-  const recorded: LearningParams[] = [];
-  let nextRejection: Error | null = null;
+/** A transition line as the subscriber logs it. */
+interface TransitionLine {
+  eventType: string;
+  category: AutoLearningTag;
+  key: string;
+  relatedTask?: string;
+  summary: string;
+}
 
-  const service: IMemoryService = {
+/**
+ * Fake memory service: every method is a spy, so the tests can assert that
+ * `recordLearning` is never called.
+ */
+function buildFakeMemoryService(): IMemoryService {
+  return {
     remember: jest.fn(),
     recall: jest.fn(),
     getFullContext: jest.fn(),
     initializeForSession: jest.fn(),
     getAgentMemoryService: jest.fn(),
     getProjectMemoryService: jest.fn(),
-    recordLearning: jest.fn(async (params: LearningParams) => {
-      if (nextRejection) {
-        const err = nextRejection;
-        nextRejection = null;
-        throw err;
-      }
-      recorded.push(params);
-    }),
+    recordLearning: jest.fn(),
   } as unknown as IMemoryService;
-
-  return {
-    service,
-    recorded,
-    rejectNext: (err?: Error) => {
-      nextRejection = err ?? new Error('simulated recordLearning failure');
-    },
-  };
 }
 
-/** Convenience: build a subscriber wired to the given fake. */
-function buildSubscriber(memoryService: IMemoryService, eventBus: EventBusService) {
+/**
+ * Fake component logger that captures `AutoLearning transition` lines and
+ * can be made to throw once (error-isolation tests).
+ */
+function buildFakeLogger(): { logger: ComponentLogger; transitions: TransitionLine[]; errors: unknown[]; throwNext: () => void } {
+  const transitions: TransitionLine[] = [];
+  const errors: unknown[] = [];
+  let shouldThrow = false;
+  const logger = {
+    info: jest.fn((message: string, meta?: Record<string, unknown>) => {
+      if (message !== 'AutoLearning transition') return;
+      if (shouldThrow) {
+        shouldThrow = false;
+        throw new Error('simulated logger failure');
+      }
+      transitions.push(meta as unknown as TransitionLine);
+    }),
+    warn: jest.fn(),
+    error: jest.fn((_message: string, meta?: Record<string, unknown>) => {
+      errors.push(meta);
+    }),
+    debug: jest.fn(),
+  } as unknown as ComponentLogger;
+  return { logger, transitions, errors, throwNext: () => { shouldThrow = true; } };
+}
+
+/** Convenience: build a subscriber wired to the given fakes. */
+function buildSubscriber(memoryService: IMemoryService, eventBus: EventBusService, logger: ComponentLogger, dedupCapacity = 100) {
   return new AutoLearningSubscriber({
     eventBus,
     memoryService,
     projectPath: '/fake/project',
-    dedupCapacity: 100,
+    dedupCapacity,
+    logger,
   });
 }
 
@@ -121,12 +134,14 @@ function buildSubscriber(memoryService: IMemoryService, eventBus: EventBusServic
 describe('AutoLearningSubscriber', () => {
   let bus: EventBusService;
   let subscriber: AutoLearningSubscriber;
-  let memory: ReturnType<typeof buildFakeMemoryService>;
+  let memory: IMemoryService;
+  let log: ReturnType<typeof buildFakeLogger>;
 
   beforeEach(() => {
     bus = new EventBusService();
     memory = buildFakeMemoryService();
-    subscriber = buildSubscriber(memory.service, bus);
+    log = buildFakeLogger();
+    subscriber = buildSubscriber(memory, bus, log.logger);
     subscriber.start();
   });
 
@@ -142,10 +157,7 @@ describe('AutoLearningSubscriber', () => {
   describe('subscription contract', () => {
     it('subscribes to exactly the five LEARN_SUBSCRIBED_EVENTS', () => {
       // Pinned by the closed-set rationale on LEARN_SUBSCRIBED_EVENTS (Arch
-      // N1, 2026-04-27): this list is the canonical, closed set. Length and
-      // ordering are part of the contract — adding a member without updating
-      // this assertion fails CI, which forces the future contributor to also
-      // update the EVENT_CATEGORY_MAP and add per-event dispatch coverage.
+      // N1, 2026-04-27): this list is the canonical, closed set.
       expect(LEARN_SUBSCRIBED_EVENTS).toHaveLength(5);
       expect(LEARN_SUBSCRIBED_EVENTS).toEqual([
         'task:verified',
@@ -157,19 +169,17 @@ describe('AutoLearningSubscriber', () => {
     });
 
     it('start() is idempotent — calling twice does not double-subscribe', async () => {
-      // Second start() should be a no-op; otherwise the same event would
-      // produce two learnings.
       subscriber.start();
       bus.publish(buildEvent({ type: 'task:verified' }));
       await subscriber.flushPending();
-      expect(memory.recorded).toHaveLength(1);
+      expect(log.transitions).toHaveLength(1);
     });
 
     it('stop() detaches all subscriptions', async () => {
       subscriber.stop();
       bus.publish(buildEvent({ type: 'task:verified' }));
       await subscriber.flushPending();
-      expect(memory.recorded).toHaveLength(0);
+      expect(log.transitions).toHaveLength(0);
     });
 
     it('stop() is idempotent — calling twice does not throw', () => {
@@ -179,7 +189,7 @@ describe('AutoLearningSubscriber', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Per-event category mapping (LEARN-1 acceptance criteria)
+  // Per-event category mapping
   // -------------------------------------------------------------------------
 
   describe('event → category mapping', () => {
@@ -191,11 +201,28 @@ describe('AutoLearningSubscriber', () => {
       { type: 'mission:replanned', tag: 'sop_update' },
     ];
 
-    it.each(cases)('$type → records learning tagged [$tag]', async ({ type, tag }) => {
+    it.each(cases)('$type → logs one transition tagged $tag', async ({ type, tag }) => {
       bus.publish(buildEvent({ id: `evt-${type}`, type, workItemId: `wi-${type}` }));
       await subscriber.flushPending();
-      expect(memory.recorded).toHaveLength(1);
-      expect(memory.recorded[0].learning.startsWith(`[${tag}] `)).toBe(true);
+      expect(log.transitions).toHaveLength(1);
+      expect(log.transitions[0].category).toBe(tag);
+      expect(log.transitions[0].eventType).toBe(type);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Observability only (#1345)
+  // -------------------------------------------------------------------------
+
+  describe('observability only (#1345)', () => {
+    it('never writes the templated transition through recordLearning', async () => {
+      for (const type of LEARN_SUBSCRIBED_EVENTS) {
+        bus.publish(buildEvent({ id: `evt-${type}`, type, workItemId: `wi-${type}`, sessionName: `s-${type}` }));
+      }
+      await subscriber.flushPending();
+      expect(log.transitions).toHaveLength(LEARN_SUBSCRIBED_EVENTS.length);
+      expect(memory.recordLearning).not.toHaveBeenCalled();
+      expect(memory.remember).not.toHaveBeenCalled();
     });
   });
 
@@ -219,22 +246,21 @@ describe('AutoLearningSubscriber', () => {
       );
       await subscriber.flushPending();
 
-      const learning = memory.recorded[0].learning;
-      expect(learning).toContain('[gotcha]');
-      expect(learning).toContain('[[WorkItem-wi-42]]');
-      expect(learning).toContain('task:rejected');
-      expect(learning).toContain('running→rejected');
-      expect(learning).toContain('team=team-X');
-      expect(learning).toContain('mission=mission-Y');
-      expect(learning).toContain('resolver=crewly-product-leo');
-      expect(learning).toContain('timestamp=2026-04-27T14:30:00.000Z');
+      const { summary, category } = log.transitions[0];
+      expect(category).toBe('gotcha');
+      expect(summary).toContain('[[WorkItem-wi-42]]');
+      expect(summary).toContain('task:rejected');
+      expect(summary).toContain('running→rejected');
+      expect(summary).toContain('team=team-X');
+      expect(summary).toContain('mission=mission-Y');
+      expect(summary).toContain('resolver=crewly-product-leo');
+      expect(summary).toContain('timestamp=2026-04-27T14:30:00.000Z');
     });
 
     it('uses Mission entity prefix and missionId for mission:replanned', async () => {
       bus.publish(
         buildEvent({
           type: 'mission:replanned',
-          // mission events typically have no workItemId
           workItemId: undefined,
           missionId: 'mission-Z',
           newValue: 'replanned',
@@ -242,23 +268,14 @@ describe('AutoLearningSubscriber', () => {
         }),
       );
       await subscriber.flushPending();
-      const learning = memory.recorded[0].learning;
-      expect(learning).toContain('[sop_update]');
-      expect(learning).toContain('[[Mission-mission-Z]]');
+      expect(log.transitions[0].category).toBe('sop_update');
+      expect(log.transitions[0].summary).toContain('[[Mission-mission-Z]]');
     });
 
-    it('records under the system identity, not the resolver session', async () => {
-      bus.publish(buildEvent({ type: 'task:verified', sessionName: 'some-resolver' }));
-      await subscriber.flushPending();
-      expect(memory.recorded[0].agentId).toBe(AUTO_LEARNING_AGENT_ID);
-      expect(memory.recorded[0].agentRole).toBe(AUTO_LEARNING_AGENT_ROLE);
-      expect(memory.recorded[0].projectPath).toBe('/fake/project');
-    });
-
-    it('passes workItemId as relatedTask for task:* events', async () => {
+    it('carries workItemId as relatedTask for task:* events', async () => {
       bus.publish(buildEvent({ type: 'task:verified', workItemId: 'wi-task-link' }));
       await subscriber.flushPending();
-      expect(memory.recorded[0].relatedTask).toBe('wi-task-link');
+      expect(log.transitions[0].relatedTask).toBe('wi-task-link');
     });
   });
 
@@ -267,85 +284,55 @@ describe('AutoLearningSubscriber', () => {
   // -------------------------------------------------------------------------
 
   describe('idempotency (V1)', () => {
-    it('replayed task event with same workItemId does NOT double-record', async () => {
+    it('replayed task event with same workItemId does NOT log twice', async () => {
       const event = buildEvent({ type: 'task:verified', id: 'evt-A', workItemId: 'wi-1' });
       bus.publish(event);
-      // Same event, different envelope id (replay)
       bus.publish({ ...event, id: 'evt-A-replay' });
       await subscriber.flushPending();
 
-      expect(memory.recorded).toHaveLength(1);
+      expect(log.transitions).toHaveLength(1);
       expect(subscriber.dedupSize).toBe(1);
     });
 
-    it('different workItemIds in the same event type produce separate learnings', async () => {
+    it('different workItemIds in the same event type produce separate lines', async () => {
       // sessionName must vary or the EventBus's (type,sessionName) debounce
       // suppresses the second publish within the dedup window.
       bus.publish(buildEvent({ type: 'task:verified', workItemId: 'wi-1', sessionName: 's-A' }));
       bus.publish(buildEvent({ type: 'task:verified', workItemId: 'wi-2', sessionName: 's-B' }));
       await subscriber.flushPending();
-      expect(memory.recorded).toHaveLength(2);
+      expect(log.transitions).toHaveLength(2);
       expect(subscriber.dedupSize).toBe(2);
     });
 
-    it('same workItemId in different event types produces separate learnings', async () => {
-      // A WorkItem can be both 'task:done' AND later 'task:verified' — those
-      // are distinct lifecycle moments and each warrants its own learning.
-      // Different event types bypass the bus's (type,sessionName) dedup.
+    it('same workItemId in different event types produces separate lines', async () => {
       bus.publish(buildEvent({ type: 'task:done', workItemId: 'wi-1' }));
       bus.publish(buildEvent({ type: 'task:verified', workItemId: 'wi-1' }));
       await subscriber.flushPending();
-      expect(memory.recorded).toHaveLength(2);
+      expect(log.transitions).toHaveLength(2);
     });
 
     it('mission:replanned dedupes on missionId + eventId, not just missionId', async () => {
-      // Two distinct replans on the same mission → two learnings. Vary
-      // sessionName to bypass the EventBus (type,sessionName) debounce.
-      bus.publish(
-        buildEvent({
-          type: 'mission:replanned',
-          id: 'replan-1',
-          missionId: 'mission-1',
-          workItemId: undefined,
-          sessionName: 's-A',
-        }),
-      );
-      bus.publish(
-        buildEvent({
-          type: 'mission:replanned',
-          id: 'replan-2',
-          missionId: 'mission-1',
-          workItemId: undefined,
-          sessionName: 's-B',
-        }),
-      );
+      bus.publish(buildEvent({ type: 'mission:replanned', id: 'replan-1', missionId: 'mission-1', workItemId: undefined, sessionName: 's-A' }));
+      bus.publish(buildEvent({ type: 'mission:replanned', id: 'replan-2', missionId: 'mission-1', workItemId: undefined, sessionName: 's-B' }));
       await subscriber.flushPending();
-      expect(memory.recorded).toHaveLength(2);
+      expect(log.transitions).toHaveLength(2);
     });
 
     it('LRU cap is respected — exceeding capacity evicts oldest keys', async () => {
-      const tightSub = new AutoLearningSubscriber({
-        eventBus: bus,
-        memoryService: memory.service,
-        projectPath: '/fake/project',
-        dedupCapacity: 2, // tiny cap to exercise eviction
-      });
+      const tightLog = buildFakeLogger();
+      const tightSub = buildSubscriber(memory, bus, tightLog.logger, 2);
       tightSub.start();
       try {
-        // Three different keys → cap=2 evicts the first. Stop the parent
-        // subscriber so only `tightSub` records (avoids double-counting), and
-        // vary sessionName to bypass the bus's (type,sessionName) debounce.
         subscriber.stop();
         bus.publish(buildEvent({ type: 'task:verified', workItemId: 'wi-A', sessionName: 's-A' }));
         bus.publish(buildEvent({ type: 'task:verified', workItemId: 'wi-B', sessionName: 's-B' }));
         bus.publish(buildEvent({ type: 'task:verified', workItemId: 'wi-C', sessionName: 's-C' }));
         await tightSub.flushPending();
         expect(tightSub.dedupSize).toBe(2);
-        // Replay 'A' — should be re-recorded because A was evicted from the cap=2 set.
+        // Replay 'A' — logged again because A was evicted from the cap=2 set.
         bus.publish(buildEvent({ type: 'task:verified', workItemId: 'wi-A', sessionName: 's-D' }));
         await tightSub.flushPending();
-        // 3 from initial + 1 from re-record = 4 total recordLearning calls.
-        expect(memory.recorded).toHaveLength(4);
+        expect(tightLog.transitions).toHaveLength(4);
       } finally {
         tightSub.stop();
       }
@@ -353,52 +340,33 @@ describe('AutoLearningSubscriber', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Edge cases — events that should NOT record
+  // Edge cases — events that should NOT log
   // -------------------------------------------------------------------------
 
   describe('skip paths', () => {
     it('task event without workItemId/taskId is skipped', async () => {
-      bus.publish(
-        buildEvent({
-          type: 'task:verified',
-          workItemId: undefined,
-          taskId: undefined,
-        }),
-      );
+      bus.publish(buildEvent({ type: 'task:verified', workItemId: undefined, taskId: undefined }));
       await subscriber.flushPending();
-      expect(memory.recorded).toHaveLength(0);
+      expect(log.transitions).toHaveLength(0);
     });
 
     it('mission event without missionId is skipped', async () => {
-      bus.publish(
-        buildEvent({
-          type: 'mission:replanned',
-          missionId: undefined,
-          workItemId: undefined,
-        }),
-      );
+      bus.publish(buildEvent({ type: 'mission:replanned', missionId: undefined, workItemId: undefined }));
       await subscriber.flushPending();
-      expect(memory.recorded).toHaveLength(0);
+      expect(log.transitions).toHaveLength(0);
     });
 
     it('task event uses taskId fallback when workItemId is absent', async () => {
-      bus.publish(
-        buildEvent({
-          type: 'task:verified',
-          workItemId: undefined,
-          taskId: 'legacy-task-id',
-        }),
-      );
+      bus.publish(buildEvent({ type: 'task:verified', workItemId: undefined, taskId: 'legacy-task-id' }));
       await subscriber.flushPending();
-      expect(memory.recorded).toHaveLength(1);
-      expect(memory.recorded[0].relatedTask).toBe('legacy-task-id');
+      expect(log.transitions).toHaveLength(1);
+      expect(log.transitions[0].relatedTask).toBe('legacy-task-id');
     });
 
     it('events the subscriber is not subscribed to do nothing', async () => {
-      // 'task:submitted' is not in LEARN_SUBSCRIBED_EVENTS — no recording.
       bus.publish(buildEvent({ type: 'task:submitted' }));
       await subscriber.flushPending();
-      expect(memory.recorded).toHaveLength(0);
+      expect(log.transitions).toHaveLength(0);
     });
   });
 
@@ -407,24 +375,21 @@ describe('AutoLearningSubscriber', () => {
   // -------------------------------------------------------------------------
 
   describe('error isolation', () => {
-    it('a rejected recordLearning is caught — does not throw to publisher', async () => {
-      memory.rejectNext(new Error('disk full'));
-      // bus.publish must not throw. Handler's logger.error captures the failure.
+    it('a throwing handler is caught — does not throw to publisher', async () => {
+      log.throwNext();
       expect(() => bus.publish(buildEvent({ type: 'task:verified' }))).not.toThrow();
       await subscriber.flushPending();
-      // The dedup key was still added so a subsequent retry of the same event
-      // is suppressed (matches BRIDGE-1's V1 semantics — safe replay > correctness).
+      // The dedup key was still added so a replay of the same event is suppressed.
       expect(subscriber.dedupSize).toBe(1);
+      expect(log.errors).toHaveLength(1);
     });
 
-    it('a synchronous handler throw does not prevent later events from recording', async () => {
-      memory.rejectNext(new Error('transient'));
-      // Vary sessionName to bypass the bus's (type,sessionName) debounce.
+    it('a throw on one event does not prevent later events from logging', async () => {
+      log.throwNext();
       bus.publish(buildEvent({ type: 'task:verified', workItemId: 'wi-1', sessionName: 's-A' }));
       bus.publish(buildEvent({ type: 'task:verified', workItemId: 'wi-2', sessionName: 's-B' }));
       await subscriber.flushPending();
-      // wi-1 failed (rejection), wi-2 must still have been recorded.
-      expect(memory.recorded.map((p) => p.relatedTask)).toEqual(['wi-2']);
+      expect(log.transitions.map((t) => t.relatedTask)).toEqual(['wi-2']);
     });
   });
 
@@ -434,10 +399,7 @@ describe('AutoLearningSubscriber', () => {
 
   describe('Arch veto self-checks', () => {
     it('exports no new event-class symbol (V7) — only the subscriber + tag type', () => {
-      // If a future contributor adds `class LearningEvent` or `interface
-      // LearningEvent` to this module, this spec must catch it. We assert
-      // the module's named exports stay on the allowlist.
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
       const mod = require('./auto-learning.subscriber.js') as Record<string, unknown>;
       const exported = Object.keys(mod).sort();
       expect(exported).toEqual(
@@ -451,16 +413,11 @@ describe('AutoLearningSubscriber', () => {
       );
     });
 
-    it('does not inject a new memory scope (V9) — uses recordLearning, not remember', async () => {
+    it('does not inject a new memory scope (V9) — touches neither remember nor recordLearning', async () => {
       bus.publish(buildEvent({ type: 'task:verified' }));
       await subscriber.flushPending();
-      // The fake records LearningParams (no scope/category fields). Asserting
-      // its shape catches a future contributor wiring the subscriber to the
-      // unified `remember` operation (which does take scope) — that would be
-      // a V9 leak vector.
-      const recorded = memory.recorded[0] as unknown as Record<string, unknown>;
-      expect('scope' in recorded).toBe(false);
-      expect('category' in recorded).toBe(false);
+      expect(memory.remember).not.toHaveBeenCalled();
+      expect(memory.recordLearning).not.toHaveBeenCalled();
     });
   });
 });

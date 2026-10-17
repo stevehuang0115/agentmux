@@ -13,6 +13,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { existsSync } from 'fs';
+import { LOG_ARCHIVE_DIR_NAME } from './wiki-vault-walk.js';
 
 /** Default number of recent pages returned when caller passes no limit. */
 export const WIKI_RECENT_DEFAULT_LIMIT = 8;
@@ -107,6 +108,7 @@ export class WikiRecentService {
       if (entry.name.startsWith('.')) continue;
       const abs = path.join(dir, entry.name);
       if (entry.isDirectory()) {
+        if (entry.name === LOG_ARCHIVE_DIR_NAME && path.basename(dir) === 'llm-curated') continue;
         await this.collectMdFiles(rootDir, abs, acc);
       } else if (entry.isFile() && entry.name.endsWith('.md')) {
         try {

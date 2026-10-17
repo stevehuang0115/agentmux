@@ -282,3 +282,43 @@ describe('WikiQueryService', () => {
     });
   });
 });
+
+describe('WikiQueryService — log entries (#1345)', () => {
+  let vault: string;
+  let svc: WikiQueryService;
+  const now = Date.now();
+  const iso = (ageDays: number) => new Date(now - ageDays * 86_400_000).toISOString();
+
+  beforeEach(async () => {
+    WikiQueryService._resetForTesting();
+    vault = await fs.mkdtemp(path.join(os.tmpdir(), 'crewly-query-log-'));
+    await fs.writeFile(path.join(vault, 'SCHEMA.md'), PROJECT_VAULT_YAML, 'utf8');
+    await fs.mkdir(path.join(vault, 'llm-curated'), { recursive: true });
+    await fs.writeFile(
+      path.join(vault, 'llm-curated/log.md'),
+      [
+        '# Activity log\n',
+        `\n## [${iso(1)}] record_learning | leo\n\nref: r1\n\n(gotcha) The staging deploy needs the platypus flag or it silently no-ops.\n`,
+        `\n## [${iso(0.5)}] record_learning | system:auto-learning\n\nref: r2\n\n(learning) [pattern] [[WorkItem-x]] task:done running→done. timestamp=2026-10-17T01:59:15.178Z. Source: task:done:x.\n`,
+      ].join(''),
+      'utf8',
+    );
+    svc = new WikiQueryService();
+  });
+
+  afterEach(async () => {
+    await fs.rm(vault, { recursive: true, force: true });
+  });
+
+  it('offers a recent log entry as a candidate with its body as excerpt, and hides noise from recentLog', async () => {
+    const r = await svc.query({ vaultPath: vault, query: 'platypus flag' });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.context.candidatePages).toHaveLength(1);
+    expect(r.context.candidatePages[0].path.startsWith('llm-curated/log.md#')).toBe(true);
+    expect(r.context.candidatePages[0].excerpt).toContain('platypus flag');
+    expect(r.context.recentLog).toHaveLength(1);
+    expect(r.context.recentLog[0].caller).toBe('leo');
+    expect(r.context.callerNotes.some((n) => n.includes('log entry'))).toBe(true);
+  });
+});

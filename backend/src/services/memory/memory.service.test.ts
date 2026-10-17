@@ -797,6 +797,19 @@ describe('MemoryService', () => {
       expect(learnings).toContain('database queries');
     });
 
+    it('drops a content-free templated transition (#1345)', async () => {
+      await service.recordLearning({
+        agentId: testAgentId,
+        agentRole: testRole,
+        projectPath: testProjectPath,
+        learning: '[pattern] [[WorkItem-abc]] task:done running→done. timestamp=2026-10-17T01:59:15.178Z. Source: task:done:abc.',
+        relatedTask: 'abc',
+      });
+
+      const learnings = await service.getProjectMemoryService().getRecentLearnings(testProjectPath);
+      expect(learnings).not.toContain('WorkItem-abc');
+    });
+
     it('should also store role-relevant learning in agent memory', async () => {
       await service.recordLearning({
         agentId: testAgentId,

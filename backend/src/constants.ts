@@ -1790,6 +1790,122 @@ export const WIKI_QUEUE_CONSTANTS = {
 	CLAIM_TIMEOUT_MS: WIKI_QUEUE_DAY_MS,
 	/** Sub-folder of the queue root that holds expired items (kept, never deleted). */
 	DEAD_LETTER_DIR: 'dead-letter',
+	/**
+	 * Code drain (#1345): a pending item nobody claimed within this age is
+	 * filed into the vault's `log.md` by the backend, without an LLM.
+	 */
+	DRAIN_MIN_AGE_MS: WIKI_QUEUE_DAY_MS,
+	/** Items filed per drain pass (the pass runs hourly, so a backlog of hundreds clears within a day). */
+	DRAIN_BATCH_SIZE: 100,
+	/** Pause between two filed items, so a long backlog does not saturate disk I/O. */
+	DRAIN_ITEM_PAUSE_MS: 25,
+	/** `claimedBy` / caller the drain stamps on items it files. */
+	DRAIN_CLAIMANT: 'system:wiki-queue-drain',
+} as const;
+
+/**
+ * The vault activity log (`llm-curated/log.md`) and what the backend does
+ * with it (#1345): dedupe on append, rotation into an archive, recent
+ * entries in search, and a weekly digest page compiled from them.
+ */
+export const WIKI_LOG_CONSTANTS = {
+	/** Vault-relative path of the activity log. */
+	LOG_RELATIVE_PATH: 'llm-curated/log.md',
+	/** Vault-relative folder rotated logs move to (`log-YYYY-MM-DD.md`). Never read by search. */
+	ARCHIVE_DIR: 'llm-curated/log-archive',
+	/** Rotate when the log is larger than this. */
+	ROTATE_MAX_BYTES: 2 * 1024 * 1024,
+	/** Rotate when the log holds more entries than this. */
+	ROTATE_MAX_ENTRIES: 2000,
+	/** After a rotation the fresh log keeps the non-noise entries from this many days. */
+	CARRY_FORWARD_DAYS: 30,
+	/** Cap on entries carried into the fresh log. */
+	CARRY_FORWARD_MAX_ENTRIES: 500,
+	/** Search/recall index the entries from this many days. */
+	SEARCH_WINDOW_DAYS: 30,
+	/** Cap on log entries one vault contributes to a search. */
+	SEARCH_MAX_ENTRIES_PER_VAULT: 300,
+	/** BM25 score multiplier for a log entry (pages rank above entries of equal relevance). */
+	SEARCH_ENTRY_WEIGHT: 0.6,
+	/** Separator between the log path and an entry's timestamp in a search hit path. */
+	ENTRY_PATH_SEPARATOR: '#',
+	/** Recent entry bodies remembered per vault to drop an identical append. */
+	DEDUPE_RECENT_ENTRIES: 500,
+	/** Bytes of the log tail read once to seed the dedupe set. */
+	DEDUPE_SEED_TAIL_BYTES: 256 * 1024,
+	/** The digest compiles the uncompiled non-noise entries from this many days. */
+	COMPILE_WINDOW_DAYS: 7,
+	/** Fewer uncompiled entries than this: no digest page is written. */
+	COMPILE_MIN_ENTRIES: 3,
+	/** Cap on entries one digest page takes (the rest wait for the next run). */
+	COMPILE_MAX_ENTRIES: 150,
+	/** Characters of an entry body quoted in the digest. */
+	COMPILE_ENTRY_MAX_CHARS: 400,
+	/** Vault-relative folder of digest pages. */
+	COMPILE_DIR: 'llm-curated/digests',
+	/** Vault-root file remembering which entries were compiled (dot-file: walkers skip it). */
+	COMPILE_STATE_FILE: '.wiki-compile-state.json',
+	/** Cap on remembered compiled entry keys per vault. */
+	COMPILE_STATE_MAX_KEYS: 5000,
+	/** Hourly maintenance tick (drain every tick; rotation + compile once per day). */
+	MAINTENANCE_INTERVAL_MS: 60 * 60 * 1000,
+	/** Rotation + compile run at most this often. */
+	MAINTENANCE_DAILY_MS: 24 * 60 * 60 * 1000,
+	/** Delay before the boot-time pass, so boot I/O settles first. */
+	MAINTENANCE_BOOT_DELAY_MS: 90 * 1000,
+	/** Maintenance bookkeeping (last daily pass), under CREWLY_HOME. */
+	MAINTENANCE_STATE_FILE: 'wiki-maintenance-state.json',
+	/** Kill switch env var; the value `false` disables all wiki maintenance. */
+	MAINTENANCE_ENV_KILL_SWITCH: 'CREWLY_WIKI_MAINTENANCE',
+} as const;
+
+/**
+ * Daily agent-memory refresh (#1345): what an agent recorded in the wiki
+ * log is reflected into its `memory.json` and the project's memory.
+ */
+export const AGENT_MEMORY_REFRESH_CONSTANTS = {
+	INTERVAL_MS: 24 * 60 * 60 * 1000,
+	/** Delay before the boot-time catch-up run. */
+	BOOT_DELAY_MS: 2 * 60 * 1000,
+	/** Entries newer than this are considered on the first run (later runs use the last-run watermark). */
+	LOOKBACK_MS: 24 * 60 * 60 * 1000,
+	/** Cap on role-knowledge entries added per agent per run. */
+	MAX_ENTRIES_PER_AGENT: 10,
+	/** Cap on characters of one entry kept as knowledge. */
+	ENTRY_MAX_CHARS: 600,
+	/** Confidence of a knowledge entry derived from the agent's own log entries. */
+	CONFIDENCE: 0.5,
+	/** State file (last run per agent), under CREWLY_HOME. */
+	STATE_FILE: 'agent-memory-refresh-state.json',
+	/** Kill switch env var; the value `false` disables the refresh. */
+	ENV_KILL_SWITCH: 'CREWLY_AGENT_MEMORY_REFRESH',
+} as const;
+
+/**
+ * Startup briefing content (#1345): wiki pages, recent lessons and open
+ * owner threads an agent gets at registration, on top of its session memory.
+ */
+export const STARTUP_BRIEFING_CONSTANTS = {
+	/** Hard cap on the whole section. */
+	MAX_CHARS: 12_000,
+	/** Cap on the wiki index excerpt. */
+	INDEX_MAX_CHARS: 4_000,
+	/** Most-recently-changed topic pages listed. */
+	RECENT_PAGES: 5,
+	/** Characters of a page summary shown. */
+	PAGE_SUMMARY_MAX_CHARS: 240,
+	/** Lessons from this many days back. */
+	LESSONS_DAYS: 7,
+	/** Cap on lessons listed. */
+	LESSONS_MAX: 12,
+	/** Characters of one lesson shown. */
+	LESSON_MAX_CHARS: 300,
+	/** Cap on owner threads listed. */
+	THREADS_MAX: 5,
+	/** Characters of a thread preview shown. */
+	THREAD_PREVIEW_MAX_CHARS: 160,
+	/** Section heading. */
+	HEADING: '## Your Project Knowledge',
 } as const;
 
 /**

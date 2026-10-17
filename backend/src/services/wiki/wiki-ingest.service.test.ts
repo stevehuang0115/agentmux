@@ -371,3 +371,50 @@ describe('WikiIngestService', () => {
   });
 
 });
+
+describe('WikiIngestService — log hygiene (#1345)', () => {
+  let vault: string;
+  let service: WikiIngestService;
+  const NOISE = '(learning) [pattern] [[WorkItem-x]] task:done running→done. timestamp=2026-10-17T01:59:15.178Z. Source: task:done:x.';
+
+  beforeEach(async () => {
+    vault = await fs.mkdtemp(path.join(os.tmpdir(), 'crewly-ingest-hygiene-'));
+    await fs.writeFile(path.join(vault, 'SCHEMA.md'), PROJECT_VAULT_YAML, 'utf8');
+    service = new WikiIngestService();
+  });
+
+  afterEach(async () => {
+    await fs.rm(vault, { recursive: true, force: true });
+  });
+
+  const ingest = (body: string, ref = 'ref-1') =>
+    service.ingest({ vaultPath: vault, sourceType: 'record_learning', sourceRef: ref, sourceBody: body, callerSession: 'leo' });
+
+  it('refuses a content-free templated record and writes nothing', async () => {
+    const r = await ingest(NOISE);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe('content_free');
+    expect(fsSync.existsSync(path.join(vault, 'llm-curated/log.md'))).toBe(false);
+  });
+
+  it('refuses an identical body appended again, even by a fresh service instance', async () => {
+    expect((await ingest('Rebase before pushing; main moves fast.')).ok).toBe(true);
+    const dup = await ingest('rebase before pushing; main moves fast', 'ref-2');
+    expect(dup.ok).toBe(false);
+    if (!dup.ok) expect(dup.reason).toBe('duplicate');
+    // A restart re-seeds the recent set from the file tail.
+    const fresh = new WikiIngestService();
+    const again = await fresh.ingest({ vaultPath: vault, sourceType: 'record_learning', sourceRef: 'ref-3', sourceBody: 'Rebase before pushing; main moves fast.' });
+    expect(again.ok).toBe(false);
+    expect((await ingest('A different lesson.')).ok).toBe(true);
+    const log = await fs.readFile(path.join(vault, 'llm-curated/log.md'), 'utf8');
+    expect(log.match(/^## \[/gm)).toHaveLength(2);
+  });
+
+  it('forgetRecentBodies lets a body through again (after a rotation)', async () => {
+    expect((await ingest('Once.')).ok).toBe(true);
+    service.forgetRecentBodies(path.join(vault, 'llm-curated/log.md'));
+    await fs.writeFile(path.join(vault, 'llm-curated/log.md'), '# Activity log\n', 'utf8');
+    expect((await ingest('Once.')).ok).toBe(true);
+  });
+});

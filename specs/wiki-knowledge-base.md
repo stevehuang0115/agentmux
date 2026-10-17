@@ -103,6 +103,16 @@ Things fixed here that had left items queued forever:
 
 `GET /api/wiki/queue/stats` also returns `oldestPendingQueuedAt`.
 
+## Log, drain, compile (#1345, 2026-10-17)
+
+The bridge above is the LLM path and may be off (`WIKI_BRIDGE_ENABLED=false`).
+Independently of it, `WikiMaintenanceService` files pending items older than
+a day into the vault's `log.md`, runs the sweep, rotates oversized logs into
+`llm-curated/log-archive/`, and compiles the week's entries into
+`llm-curated/digests/`. Recent log entries are part of search and recall.
+Templated transitions are refused at ingest. Details:
+`specs/2026-10-17-wiki-log-memory-hygiene.md`.
+
 ## Judging whether it is alive
 
 `GET /api/wiki/usage?vaultPath=…&days=7` → if `queries` is 0 for a month, the vault is dead: stop feeding it rather than tuning it.
