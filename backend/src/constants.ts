@@ -7356,6 +7356,51 @@ export const TL_DELEGATION_CONSTANTS = {
 } as const;
 
 /**
+ * Agent-to-agent coordination in Slack rooms (crewly#1340): local
+ * coordination stays inside Crewly, cross-machine coordination goes in a
+ * thread, ticket ids never reach Slack, near-identical repeats are dropped.
+ */
+export const AGENT_COORDINATION_CONSTANTS = {
+	/** chat-v2 message metadata: this agent post was delivered inside Crewly only (value: the reason) */
+	INTERNAL_METADATA_KEY: 'agentCoordinationInternal',
+	/** A repeat to the same recipients in the same room within this window is dropped (ms) */
+	DUPLICATE_WINDOW_MS: 15 * 60 * 1000,
+	/** Character-bigram similarity at which two messages count as the same message */
+	DUPLICATE_SIMILARITY: 0.85,
+	/** Messages remembered per sender/recipients/room */
+	DUPLICATE_HISTORY: 10,
+	/** Sender/recipients/room keys remembered at most */
+	DUPLICATE_MAX_KEYS: 500,
+	/** Request ticket prefix — always internal (`TKT-187`) */
+	REQUEST_TICKET_PREFIX: 'TKT',
+	/** Ticket prefixes are re-read at most this often (ms) */
+	TICKET_PREFIX_CACHE_MS: 10 * 60 * 1000,
+	/** Who asked a helper is remembered this long, to hand back a reply it cannot post (ms) */
+	ASKED_BY_TTL_MS: 6 * 60 * 60 * 1000,
+	/** Entries of the asked-by map at most */
+	ASKED_BY_MAX: 500,
+	/** Longest wait for the directory when telling agents elsewhere from people (ms) */
+	DIRECTORY_LOOKUP_MS: 2000,
+	/** Coordination threads (one per room per UTC day) remembered at most */
+	COORDINATION_THREADS_MAX: 200,
+	/**
+	 * Rules for every agent prompted from a Slack room. 2026-10-16: three
+	 * agents on one machine flooded #content-team with top-level coordination,
+	 * repeated one conclusion three times, quoted ticket ids, and promised to
+	 * watch a log "every 3h".
+	 */
+	PROMPT_RULES:
+		'Working with colleagues: when you need a colleague\'s help, @ them — if everyone you @ is an agent on this machine, it reaches them inside Crewly and is not posted to Slack. ' +
+		'Helpers answer whoever asked them, not the room; the agent the room asked posts one consolidated update in the original thread once the result is in. ' +
+		'Do not resend an answer you already gave the same colleague — point to it in one line. ' +
+		'Never promise to poll or watch something periodically ("I\'ll check the log every 3h"): ask to be pinged, or rely on the event that tells you. ' +
+		'Ticket ids (e.g. CREW-12) and ticket mechanics are internal: never write them in anything people read.',
+	/** Added when the message came from a colleague inside Crewly (never in Slack). */
+	INTERNAL_PROMPT_LINE:
+		'This message came from a colleague inside Crewly and is not in Slack: reply with the command above — your answer goes to them, not to the room.',
+} as const;
+
+/**
  * Harness-owned reply routing (specs/2026-10-02-harness-owned-routing.md).
  */
 export const REPLY_ROUTING_CONSTANTS = {

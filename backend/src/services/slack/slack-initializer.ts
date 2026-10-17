@@ -1032,6 +1032,13 @@ export async function startSlackTeamChannels(): Promise<void> {
         typing,
         autoWorking,
         isLocalAgent: (agentSession) => getSlackService().isLocalAgent?.(agentSession) ?? false,
+        // Ticket ids never reach Slack (crewly#1340): the real prefixes in use.
+        ticketPrefixes: async () => {
+          const { listTicketPrefixes } = await import('../project-tickets/ticket-prefixes.js');
+          return listTicketPrefixes({
+            listProjectPaths: async () => (await StorageService.getInstance().getProjects()).map((p) => p.path).filter((p) => !!p),
+          });
+        },
         isAgentAwake: (agentSession) => sessionBackendExists(agentSession),
         getOwnerUserId: () => getSlackCloudConfigService()?.getConfig()?.workspace.installedBy || null,
         resolveInstanceId: async () => getSlackInstanceRegistryService()?.resolveInstanceId() ?? null,
