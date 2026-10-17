@@ -3154,6 +3154,25 @@ export class TaskPoolService {
   }
 
   /**
+   * Replace the `blockedReason` of a blocked WorkItem (no status change): a
+   * held follow-up whose due time moved (crewly#1360).
+   *
+   * @param workItemId - WorkItem id
+   * @param reason - The new reason
+   * @returns The updated WorkItem, or null when not found or not blocked
+   */
+  async setBlockedReason(workItemId: string, reason: string): Promise<WorkItem | null> {
+    const current = await this.storage.findWorkItem(workItemId);
+    if (!current || current.status !== 'blocked') return null;
+    const ok = await this.storage.updateWorkItem(workItemId, (wi) => {
+      wi.blockedReason = reason;
+    });
+    if (!ok) return null;
+    await this.storage.flush();
+    return (await this.storage.findWorkItem(workItemId)) ?? null;
+  }
+
+  /**
    * Re-point a queued WorkItem at another agent (its target went stale).
    * Only `queued` items move: running work belongs to whoever holds it.
    *

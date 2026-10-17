@@ -13,6 +13,7 @@ import * as path from 'path';
 import { redactSecrets } from '../../utils/secret-redactor.js';
 import { getCrewlyHomePath } from '../core/crewly-home.utils.js';
 import { HANDOVER_POINTERS_CONSTANTS } from '../../constants.js';
+import { interruptedFromHandoverBody } from './handover-interrupted.js';
 
 /** One open WorkItem of the agent. */
 export interface HandoverOpenWork {
@@ -94,6 +95,10 @@ export function suggestedSkillsFor(role?: string): string[] {
  * Prepend the pointer header to a handover body. Does nothing when the body
  * already starts with one (chained handovers carry no second copy).
  *
+ * Work the restart interrupted (a sub-agent or background command the body's
+ * "Interrupted by the restart" section lists, crewly#1361) is repeated under
+ * "Open work": it is the agent's to restart or report, not background.
+ *
  * @param body - Handover body (the transcript tail)
  * @param opts - Session, optional role, optional CREWLY_HOME and open work override (tests)
  * @returns Header plus body, redacted
@@ -104,10 +109,12 @@ export function withHandoverPointers(
 ): string {
 	if (body.includes(C.START_MARK)) return body;
 	const open = opts.openWork ?? readOpenWorkSync(opts.sessionName, opts.crewlyHome);
+	const interrupted = interruptedFromHandoverBody(body);
 	const links = findArtifactLinks(body);
 	const lines = [C.START_MARK, '## Open work', ''];
-	if (open.length === 0) lines.push('None open for you (no WorkItems in flight).');
-	else for (const w of open) lines.push(`- ${w.id} — ${w.title} (${w.status})`);
+	if (open.length === 0 && interrupted.length === 0) lines.push('None open for you (no WorkItems in flight).');
+	for (const w of open) lines.push(`- ${w.id} — ${w.title} (${w.status})`);
+	for (const i of interrupted) lines.push(`- Interrupted by the restart (${i.kind === 'sub-agent' ? 'sub-agent' : 'background command'}, not running now): ${i.text}`);
 	if (links.length) lines.push('', 'Mentioned in the conversation: ' + links.join(', '));
 	lines.push('', `## Suggested skills`, '', `Call the Skill tool for: ${suggestedSkillsFor(opts.role).join(', ')}.`, C.END_MARK, '');
 	return redactHandoverText(`${lines.join('\n')}\n${body}`);

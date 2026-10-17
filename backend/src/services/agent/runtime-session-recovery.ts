@@ -34,6 +34,7 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { ANTIGRAVITY_CONSTANTS, RUNTIME_TYPES, ORC_CONVERSATION_CONSTANTS, FRESH_TASK_CONVERSATION_CONSTANTS } from '../../constants.js';
 import { redactHandoverText, stripHandoverPointers, withHandoverPointers } from './handover-pointers.js';
+import { formatInterruptedSection, interruptedWork, type PendingToolCall } from './handover-interrupted.js';
 import { getAntigravityConfigDir } from '../../utils/antigravity-settings.utils.js';
 import { resolveProjectSlugCandidatesSync } from '../monitoring/claude-session-tokens.service.js';
 
@@ -688,6 +689,13 @@ function toolResultText(content: unknown): { text: string; images: number } {
  * (crewly#1344). Images are a described placeholder, never copied. System
  * reminders and command wrappers are left out.
  *
+ * A sub-agent or background command whose tool call never got its result
+ * before the end of the transcript died with the restart: it is listed first,
+ * under {@link HANDOVER_CONSTANTS.INTERRUPTED_HEADING}, so the new
+ * conversation does not take the agent's last "still in progress" words for
+ * work that is running (crewly#1361). That section is capped on its own
+ * (items × characters) and does not count against the body's limit.
+ *
  * @param filePath - Transcript path
  * @returns Markdown, newest last; empty when nothing readable was found
  */
@@ -710,6 +718,8 @@ export function buildHandoverSummary(filePath: string): string {
   const clip = ORC_CONVERSATION_CONSTANTS.HANDOVER_MESSAGE_CHARS;
   const toolClip = ORC_CONVERSATION_CONSTANTS.HANDOVER_TOOL_RESULT_CHARS;
   const toolNames = new Map<string, string>();
+  // Calls still waiting for their result when the transcript ends (insertion order = transcript order).
+  const pending = new Map<string, PendingToolCall>();
   const said: Array<{ who: string; when: string; text: string }> = [];
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
@@ -731,7 +741,10 @@ export function buildHandoverSummary(filePath: string): string {
         else if (block.type === 'image') tools.push('↳ [image attached]');
         else if (block.type === 'tool_use') {
           const name = typeof block.name === 'string' ? block.name : 'tool';
-          if (typeof block.id === 'string') toolNames.set(block.id, name);
+          if (typeof block.id === 'string') {
+            toolNames.set(block.id, name);
+            pending.set(block.id, { id: block.id, name, input: block.input });
+          }
           let input = '';
           try {
             input = typeof block.input === 'string' ? block.input : JSON.stringify(block.input ?? '');
@@ -740,6 +753,7 @@ export function buildHandoverSummary(filePath: string): string {
           }
           tools.push(`↳ ${name}: ${oneLine(input, toolClip)}`);
         } else if (block.type === 'tool_result') {
+          if (typeof block.tool_use_id === 'string') pending.delete(block.tool_use_id);
           const name = (typeof block.tool_use_id === 'string' && toolNames.get(block.tool_use_id)) || 'tool';
           const result = toolResultText(block.content);
           const parts = [result.text ? oneLine(result.text, toolClip) : '', result.images > 0 ? `[${result.images} image${result.images === 1 ? '' : 's'} returned]` : '']
@@ -769,6 +783,8 @@ export function buildHandoverSummary(filePath: string): string {
     blocks.unshift(b);
     total += b.length;
   }
+  const interrupted = formatInterruptedSection(interruptedWork([...pending.values()]));
+  if (interrupted) blocks.unshift(interrupted);
   // A token pasted into the conversation must not be copied into a plain file
   // (and from there into every later handover).
   return redactHandoverText(blocks.join('\n\n'));

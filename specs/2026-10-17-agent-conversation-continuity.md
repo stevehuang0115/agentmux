@@ -112,6 +112,41 @@ PDF / `<type> file`), file name, title, alt text. The member path appends
 tool call (`↳ <tool>: <input…>`) and tool result (`↳ <tool> result: <text…>`),
 images as `[N images returned]` / `[image attached]`.
 
+#### Interrupted work (crewly#1361)
+
+A restart (or a close for size) kills whatever was running inside the
+conversation: a sub-agent started with the Task / Agent tool, a command run
+in the background, a render. The transcript still ends with the agent's own
+words ("v4 还在改"), so a resumed agent read the handover and waited for work
+that nothing was doing — 16 hours on W41 (Pia, 2026-10-17).
+
+`buildHandoverSummary` keeps every `tool_use` id until its `tool_result`
+arrives; the ids still pending at the end of the transcript are the
+interrupted calls (`handover-interrupted.ts`). Listed: a Task / Agent call
+(`HANDOVER_CONSTANTS.SUBAGENT_TOOLS`), and a Bash call with
+`run_in_background: true` or whose command matches `LONG_COMMAND_PATTERN`
+(ffmpeg, remotion, render, encode, build, `&`). A short foreground command
+without a result is not listed — nothing was lost but its output.
+
+The section opens the summary, before the transcript tail, so every writer
+(restart, oversized conversation, new-task `/clear`, runtime switch) carries
+it:
+
+```
+## Interrupted by the restart
+
+- A sub-agent was running: <description>: <prompt head>. It did not finish and is not running now. Restart it or report that it was lost.
+- A background command was running: <command head>. It is not running now.
+```
+
+At most `INTERRUPTED_MAX_ITEMS` (5) items of `INTERRUPTED_TEXT_MAX_CHARS`
+(200) characters; the section does not count against `HANDOVER_MAX_CHARS`.
+`withHandoverPointers` reads the section back (`interruptedFromHandoverBody`)
+and repeats each item under "## Open work" as `Interrupted by the restart
+(sub-agent | background command, not running now): …`, so the new
+conversation treats it as its own open work rather than background. Factual
+only: nothing about mechanics.
+
 ### 8. Owner-thread sentinel hygiene
 
 `STALE_AFTER_MS` (3 days, no owner activity) and

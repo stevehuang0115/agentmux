@@ -371,6 +371,42 @@ describe('an orchestrator conversation too big to carry on', () => {
     expect(summary).toContain('↳ tool result: [1 image returned]');
   });
 
+  it('lists the sub-agent and background command the restart cut off, not the finished ones (crewly#1361)', () => {
+    const file = path.join(dir, 'c.jsonl');
+    fs.writeFileSync(file, [
+      line({ type: 'user', timestamp: 't1', message: { content: 'Ella: plan approved, go ahead with v4' } }),
+      line({ type: 'assistant', timestamp: 't2', message: { content: [{ type: 'tool_use', id: 'tu-done', name: 'Task', input: { description: 'Review v3', prompt: 'Review the v3 cut.' } }] } }),
+      line({ type: 'user', timestamp: 't2', message: { content: [{ type: 'tool_result', tool_use_id: 'tu-done', content: 'Review done: 3 notes.' }] } }),
+      line({ type: 'assistant', timestamp: 't3', message: { content: [
+        { type: 'text', text: 'W41 full version v4 is still being cut by the sub-agent.' },
+        { type: 'tool_use', id: 'tu-open', name: 'Task', input: { description: 'Make W41 v4', prompt: 'Cut v4, then run a fresh review agent twice and re-cut 9:16.' } },
+        { type: 'tool_use', id: 'tu-bg', name: 'Bash', input: { command: 'npx remotion render W41 out/v4.mp4', run_in_background: true } },
+        { type: 'tool_use', id: 'tu-short', name: 'Bash', input: { command: 'ls out' } },
+      ] } }),
+      '',
+    ].join('\n'));
+
+    const summary = buildHandoverSummary(file);
+
+    expect(summary.startsWith('## Interrupted by the restart')).toBe(true);
+    expect(summary).toContain('- A sub-agent was running: Make W41 v4: Cut v4, then run a fresh review agent twice and re-cut 9:16. It did not finish and is not running now. Restart it or report that it was lost.');
+    expect(summary).toContain('- A background command was running: npx remotion render W41 out/v4.mp4. It is not running now.');
+    expect(summary).not.toContain('A sub-agent was running: Review v3');
+    expect(summary).not.toContain('A background command was running: ls out');
+    // The section comes before the transcript tail, which still carries the agent's words.
+    expect(summary.indexOf('## Interrupted by the restart')).toBeLessThan(summary.indexOf('still being cut'));
+  });
+
+  it('writes no interrupted section when every call got its result', () => {
+    const file = path.join(dir, 'c.jsonl');
+    fs.writeFileSync(file, [
+      line({ type: 'assistant', timestamp: 't2', message: { content: [{ type: 'tool_use', id: 'tu-1', name: 'Task', input: { description: 'Review', prompt: 'x' } }] } }),
+      line({ type: 'user', timestamp: 't2', message: { content: [{ type: 'tool_result', tool_use_id: 'tu-1', content: 'done' }] } }),
+      '',
+    ].join('\n'));
+    expect(buildHandoverSummary(file)).not.toContain('Interrupted by the restart');
+  });
+
   it('keeps the handover short however long the conversation was', () => {
     const file = path.join(dir, 'c.jsonl');
     const lines: string[] = [];

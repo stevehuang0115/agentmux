@@ -3309,6 +3309,25 @@ describe('TaskPoolService', () => {
     });
   });
 
+  describe('setBlockedReason (crewly#1360)', () => {
+    it('replaces the reason of a blocked item and leaves its status alone', async () => {
+      const wi = makeWorkItem();
+      wi.status = 'blocked';
+      wi.blockedReason = 'Waiting for the promised work (due 2026-10-17T23:14:58.000Z)';
+      await service.addToPool(wi);
+      const updated = await service.setBlockedReason(wi.id, 'Waiting for the promised work (due 2026-10-17T00:15:00.000Z)');
+      expect(updated?.status).toBe('blocked');
+      expect(updated?.blockedReason).toBe('Waiting for the promised work (due 2026-10-17T00:15:00.000Z)');
+    });
+
+    it('does nothing for a queued item or an unknown one', async () => {
+      const wi = makeWorkItem();
+      await service.addToPool(wi);
+      expect(await service.setBlockedReason(wi.id, 'x')).toBeNull();
+      expect(await service.setBlockedReason('ghost', 'x')).toBeNull();
+    });
+  });
+
   describe('updateItemStatus', () => {
     it('updates running item to blocked', async () => {
       const wi = makeWorkItem();
