@@ -1961,6 +1961,8 @@ export const BOOT_PRESSURE_CONSTANTS = {
 	SETTLE_AFTER_READY_MS: 20 * 1000,
 	/** Under pressure: how often the snapshot is re-read while a launch waits for the machine to calm down. */
 	PRESSURE_POLL_MS: 10 * 1000,
+	/** A held launch is logged on the first poll and then every this many polls (once a minute at the default poll). */
+	PRESSURE_HOLD_LOG_EVERY_POLLS: 6,
 	/** Under pressure: an owner-waiting agent waits at most this long for the machine to calm, then launches anyway. */
 	PRESSURE_HOLD_MAX_MS: 10 * 60 * 1000,
 	/** Under pressure: at most this many boot launches in flight at once. */

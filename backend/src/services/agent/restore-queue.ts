@@ -271,16 +271,17 @@ export class RestoreQueue {
 		// launch itself is already counted in `active`).
 		if (first && this.active.size <= this.pressureConcurrency) return;
 		const heldSince = this.now();
-		let reason: string | null = tight;
-		for (;;) {
-			reason = bootPressureReason(this.snapshot(), this.thresholds);
+		for (let poll = 0; ; poll++) {
+			const reason = bootPressureReason(this.snapshot(), this.thresholds);
 			const crowded = this.active.size > this.pressureConcurrency;
 			if (!reason && !crowded) return;
 			if (this.now() - heldSince >= this.holdMaxMs) {
 				this.logger.warn('Launching an owner-waiting agent although memory is still tight: held long enough', { name, memory: reason, heldMs: this.now() - heldSince });
 				return;
 			}
-			if (reason) this.logger.info('Holding an owner-waiting boot restore until memory eases', { name, memory: reason, crowded });
+			if (poll % BOOT_PRESSURE_CONSTANTS.PRESSURE_HOLD_LOG_EVERY_POLLS === 0) {
+				this.logger.info('Holding an owner-waiting boot restore until memory eases', { name, memory: reason, crowded, heldMs: this.now() - heldSince });
+			}
 			await this.sleep(this.pollMs);
 		}
 	}
