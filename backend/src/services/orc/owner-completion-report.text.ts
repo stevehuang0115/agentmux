@@ -182,3 +182,41 @@ export function fallbackLine(input: FallbackLineInput): string {
   const sentence = what ? `${input.agentName} finished ${what}; the details will follow here.` : `${input.agentName} finished what you asked for; the details will follow here.`;
   return `${sentence}\n— sent by Crewly`;
 }
+
+/** Inputs of {@link leadFallbackLine}. */
+export interface LeadFallbackLineInput {
+  /** Who did the work (display name) */
+  workerName: string;
+  /** Titles / summaries of the finished work */
+  deliverables: readonly (string | undefined | null)[];
+  /** The owner's language */
+  language: OwnerLanguage;
+  /** Link to the thread the owner approved it in, when it is a Slack thread */
+  approvalLink?: string | null;
+}
+
+/**
+ * The line the harness posts in the team channel, as the team lead, when the
+ * lead never reported team work the orchestrator delegated for the owner
+ * (crewly#1371): who finished what the owner approved, and where the owner
+ * approved it; plus the short "sent by Crewly" marker.
+ *
+ * @param input - Worker name, deliverables, language, approval link
+ * @returns The lines
+ *
+ * @example
+ * ```typescript
+ * leadFallbackLine({ workerName: 'Dana', deliverables: ['两个账号的教程文案'], language: 'zh', approvalLink: 'https://slack.com/archives/D1/p1' });
+ * // 'Dana 做完了你批准的两个账号的教程文案。\n批准的对话：https://slack.com/archives/D1/p1\n— 由 Crewly 代发'
+ * ```
+ */
+export function leadFallbackLine(input: LeadFallbackLineInput): string {
+  const what = joinDeliverables(plainDeliverables(input.deliverables), input.language);
+  const link = input.approvalLink?.trim();
+  if (input.language === 'zh') {
+    const sentence = what ? `${input.workerName} 做完了你批准的${what}。` : `${input.workerName} 把你批准的事做完了。`;
+    return [sentence, ...(link ? [`批准的对话：${link}`] : []), '— 由 Crewly 代发'].join('\n');
+  }
+  const sentence = what ? `${input.workerName} finished ${what}, which you approved.` : `${input.workerName} finished what you approved.`;
+  return [sentence, ...(link ? [`Where you approved it: ${link}`] : []), '— sent by Crewly'].join('\n');
+}

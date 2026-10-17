@@ -30,6 +30,12 @@
  * own initiative carries an agent origin (crewly#1357) and is never reported
  * to the owner by the harness.
  *
+ * Team work the orchestrator delegated for the owner (stamped with a lead
+ * report, crewly#1371) forms its own chain per team: the team lead is the
+ * responsible agent, the nudge asks it to report in the team channel, and the
+ * fallback line is posted there as the lead — never in the orchestrator's
+ * thread. Only `reply --work-item` on the chain's items counts as its report.
+ *
  * Each chain is handled once (persisted, so a restart neither repeats nor
  * forgets a step). Work added to the same place after a chain was handled
  * starts a new chain. Chains whose responsible agent is the orchestrator are
@@ -44,12 +50,13 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import * as path from 'path';
-import { ORCHESTRATOR_SESSION_NAME, OWNER_COMPLETION_REPORT_CONSTANTS as C } from '../../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, OWNER_COMPLETION_REPORT_CONSTANTS as C, TEAM_LEAD_REPORT_CONSTANTS } from '../../constants.js';
 import type { WorkItem, WorkItemStatus } from '../../types/v2/work-item.types.js';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
 import { isPastReminderCutoff, leadStaleNotice, reminderFooter } from './harness-reminder.js';
-import { detectOwnerLanguage, fallbackLine, type OwnerLanguage } from './owner-completion-report.text.js';
-import { originOfWorkItem, type WorkItemOrigin } from './work-item-destination.js';
+import { detectOwnerLanguage, fallbackLine, leadFallbackLine, type OwnerLanguage } from './owner-completion-report.text.js';
+import { leadReportOf, originOfWorkItem, type LeadReport, type WorkItemOrigin } from './work-item-destination.js';
+import { approvalLink } from './team-lead-report.js';
 
 /** An owner origin. */
 export type OwnerOrigin = Extract<WorkItemOrigin, { kind: 'owner' }>;
@@ -107,8 +114,10 @@ export interface OwnerChain {
   open: boolean;
   /** At least one item succeeded */
   succeeded: boolean;
-  /** Who received the owner's request */
+  /** Who received the owner's request (the team lead for team work, crewly#1371) */
   responsible: string;
+  /** Team work the orchestrator delegated: the lead reports it in the team channel (crewly#1371) */
+  leadReport?: LeadReport;
   /** Earliest / latest creation of its items (epoch ms) */
   firstCreatedAt: number;
   lastCreatedAt: number;
@@ -139,8 +148,12 @@ export function collectOwnerChains(items: readonly WorkItem[], handledThrough: R
   for (const wi of items) {
     const origin = originOfWorkItem(wi);
     if (origin?.kind !== 'owner' || !origin.receivedBy) continue;
-    const key = ownerPlaceKey(origin);
-    if (!key) continue;
+    const placeKey = ownerPlaceKey(origin);
+    if (!placeKey) continue;
+    // Team work its lead reports (crewly#1371): one chain per team, so a thread
+    // that holds items of two teams is reported by each team's lead separately.
+    const stamp = leadReportOf(wi);
+    const key = stamp ? `${placeKey}#team:${stamp.teamId}` : placeKey;
     if (ms(wi.createdAt) <= (handledThrough[key] ?? -Infinity)) continue;
     const g = groups.get(key) ?? { origin, items: [] };
     g.items.push(wi);
@@ -161,13 +174,15 @@ export function collectOwnerChains(items: readonly WorkItem[], handledThrough: R
     }
     const finishedAt = Math.max(...(work.length ? work : sorted).map(endOf));
     const handedOver = (w: WorkItem): number => Math.min(endOf(w), verifyCreated.get(w.id) ?? Infinity);
+    const leadReport = sorted.map((w) => leadReportOf(w)).find((r): r is LeadReport => !!r);
     chains.push({
       key,
       origin: firstOrigin,
       items: sorted,
       open: sorted.some((w) => !CLOSED.has(w.status)),
       succeeded: sorted.some((w) => SUCCEEDED.has(w.status)),
-      responsible: firstOrigin.receivedBy ?? first.target ?? '',
+      responsible: leadReport?.lead ?? firstOrigin.receivedBy ?? first.target ?? '',
+      ...(leadReport ? { leadReport } : {}),
       firstCreatedAt: ms(first.createdAt),
       lastCreatedAt: Math.max(...sorted.map((w) => ms(w.createdAt))),
       finishedAt,
@@ -243,6 +258,8 @@ export interface ChainReportRecord {
   finishedAt: number;
   /** Answers posted after this count as the report (see {@link OwnerChain.workDoneAt}); older records lack it */
   answerFrom?: number;
+  /** Team work: the lead reports it in the team channel (crewly#1371) */
+  leadReport?: LeadReport;
   /**
    * `settling` (closed, waiting SETTLE_MS) → `asked` (the one nudge) →
    * `posted`; `answered`: an agent answered in the owner's place; `skipped`:
@@ -391,6 +408,8 @@ export class OwnerCompletionReportService {
   noteWorkItemReply(workItemId: string): number {
     if (!workItemId) return 0;
     const now = this.now();
+    // Also kept as an answer: a lead's report can come before its chain closes (crewly#1371).
+    this.noteAnswer(`${TEAM_LEAD_REPORT_CONSTANTS.WORK_ITEM_ANSWER_PREFIX}${workItemId}`, now);
     let settled = 0;
     for (const record of Object.values(this.store.active)) {
       if (record.replyWorkItemId !== workItemId && !record.workItemIds.includes(workItemId)) continue;
@@ -467,9 +486,21 @@ export class OwnerCompletionReportService {
       lastCreatedAt: chain.lastCreatedAt,
       finishedAt: chain.finishedAt,
       answerFrom: chain.workDoneAt,
+      ...(chain.leadReport ? { leadReport: chain.leadReport } : {}),
       stage: 'settling',
       closedSince: now,
     };
+  }
+
+  /**
+   * The team channel a lead reports team work in (crewly#1371): a new
+   * top-level post there.
+   *
+   * @param report - The chain's lead report
+   * @returns The place
+   */
+  private teamChannelPlace(report: LeadReport): ReportPlace {
+    return { kind: 'slack', slackChannelId: report.slackChannelId, label: `#${report.channelName}` };
   }
 
   private async advance(record: ChainReportRecord, chain: OwnerChain | null, now: number): Promise<void> {
@@ -491,7 +522,9 @@ export class OwnerCompletionReportService {
       }
       record.answerFrom = chain.workDoneAt;
     }
-    const place = await this.deps.resolvePlace(record.origin).catch(() => null);
+    // Where the owner asked; for team work the lead reports in the team channel instead (crewly#1371).
+    const ownerPlace = await this.deps.resolvePlace(record.origin).catch(() => null);
+    const place = record.leadReport ? this.teamChannelPlace(record.leadReport) : ownerPlace;
     if (this.answeredSince(record, place, record.answerFrom ?? record.finishedAt)) {
       this.end(record, 'answered', now);
       return;
@@ -522,7 +555,10 @@ export class OwnerCompletionReportService {
           this.end(record, 'skipped', now);
           return;
         }
-        const ok = await this.deps.deliver(record.responsible, this.askText(record, place)).catch(() => false);
+        const ask = record.leadReport
+          ? this.leadAskText(record, record.leadReport, await this.languageOf(record, ownerPlace), now)
+          : this.askText(record, place);
+        const ok = await this.deps.deliver(record.responsible, ask).catch(() => false);
         record.stage = 'asked';
         record.askedAt = now;
         this.save();
@@ -534,8 +570,11 @@ export class OwnerCompletionReportService {
         // One nudge, then the grace period; the harness posts one plain line.
         const nudgedAt = Math.max(record.askedAt ?? 0, record.remindedAt ?? 0, record.finishedAt);
         if (now - nudgedAt < C.NUDGE_GRACE_MS || !place) return;
-        const language = (await this.deps.ownerLanguage?.(record.origin, place).catch(() => null)) ?? detectOwnerLanguage(null);
-        const posted = await this.deps.postFallback(place, record.responsible, this.fallbackText(record, chain?.items ?? [], language)).catch(() => false);
+        const language = await this.languageOf(record, ownerPlace);
+        const text = record.leadReport
+          ? this.leadFallbackText(record, record.leadReport, chain?.items ?? [], language)
+          : this.fallbackText(record, chain?.items ?? [], language);
+        const posted = await this.deps.postFallback(place, record.responsible, text).catch(() => false);
         this.log.info('Posted the finished owner work line for the agent', { key: record.key, agent: record.responsible, language, posted });
         record.postedAt = now;
         this.end(record, 'posted', now);
@@ -547,7 +586,70 @@ export class OwnerCompletionReportService {
   }
 
   private answeredSince(record: ChainReportRecord, place: ReportPlace | null, since: number): boolean {
-    return answerKeysOf(record.origin, place).some((k) => (this.store.answers[k] ?? 0) > since);
+    // Team work: only the lead's `reply --work-item` on the chain's items counts —
+    // any post in the team channel, or in the orchestrator's thread, does not (crewly#1371).
+    const keys = record.leadReport
+      ? record.workItemIds.map((id) => `${TEAM_LEAD_REPORT_CONSTANTS.WORK_ITEM_ANSWER_PREFIX}${id}`)
+      : answerKeysOf(record.origin, place);
+    return keys.some((k) => (this.store.answers[k] ?? 0) > since);
+  }
+
+  /**
+   * The owner's language where they asked (English when unknown).
+   *
+   * @param record - Chain record
+   * @param ownerPlace - Where the owner asked
+   * @returns Language
+   */
+  private async languageOf(record: ChainReportRecord, ownerPlace: ReportPlace | null): Promise<OwnerLanguage> {
+    return (await this.deps.ownerLanguage?.(record.origin, ownerPlace).catch(() => null)) ?? detectOwnerLanguage(null);
+  }
+
+  /**
+   * The nudge asking a team lead to report team work the orchestrator
+   * delegated for the owner, in the team channel, as itself (crewly#1371).
+   *
+   * @param record - Chain record
+   * @param report - Its lead report
+   * @param language - The owner's language
+   * @param now - Clock (epoch ms)
+   * @returns English harness text
+   */
+  leadAskText(record: ChainReportRecord, report: LeadReport, language: OwnerLanguage = 'en', now: number = Date.now()): string {
+    const link = approvalLink(record.origin);
+    const worker = report.workerName ?? this.name(report.worker);
+    const by = report.worker === report.lead ? 'You finished' : `${worker} finished`;
+    const where = link ? `the orchestrator's thread with the owner (${link})` : `the owner's chat with the orchestrator`;
+    return (
+      `[OWNER REPORT DUE] ${by} work the owner approved in ${where}: ${record.titles}. ` +
+      `You report it to the owner, as yourself, in #${report.channelName}; the orchestrator does not relay it. ` +
+      `Post one or two plain lines in the owner's language (${language === 'zh' ? 'Chinese' : 'English'}): what the owner approved, the outcome with its link` +
+      `${link ? `, and the link to the thread the approval came from (${link})` : ''}. ` +
+      `No ticket or work item ids, no status lines. Run: reply --work-item ${record.replyWorkItemId} "<your message>" — it posts a new message in #${report.channelName}. ` +
+      `If you do not post it within ${Math.round(C.NUDGE_GRACE_MS / 60_000)} minutes, Crewly posts one line there for you.` +
+      reminderFooter(1, record.finishedAt, now)
+    );
+  }
+
+  /**
+   * The line the harness posts in the team channel, as the lead, when the
+   * lead never reported team work (crewly#1371).
+   *
+   * @param record - Chain record
+   * @param report - Its lead report
+   * @param items - The chain's items, when still in the pool
+   * @param language - The owner's language
+   * @returns The line
+   */
+  leadFallbackText(record: ChainReportRecord, report: LeadReport, items: readonly WorkItem[], language: OwnerLanguage = 'en'): string {
+    const fromPool = deliverableTexts(items);
+    const deliverables = fromPool.length ? fromPool : record.deliverables?.length ? record.deliverables : titlesOf(record.titles);
+    return leadFallbackLine({
+      workerName: report.workerName ?? this.name(report.worker),
+      deliverables,
+      language,
+      approvalLink: approvalLink(record.origin),
+    });
   }
 
   private name(session: string): string {

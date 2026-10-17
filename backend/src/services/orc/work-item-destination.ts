@@ -22,7 +22,7 @@
  * @module services/orc/work-item-destination
  */
 
-import { TL_DELEGATION_CONSTANTS, WORK_ITEM_DESTINATION_CONSTANTS } from '../../constants.js';
+import { TEAM_LEAD_REPORT_CONSTANTS, TL_DELEGATION_CONSTANTS, WORK_ITEM_DESTINATION_CONSTANTS } from '../../constants.js';
 import type { WorkItem, WorkItemStatus } from '../../types/v2/work-item.types.js';
 import type { TurnOrigin } from './orc-reply-route.service.js';
 import { formatSlackThreadKey, parseSlackThreadKey, slackThreadTag } from '../slack/slack-thread-key.js';
@@ -52,6 +52,51 @@ export type WorkItemOrigin =
    * crewly#1357): the result goes back to that agent, never to the owner.
    */
   | { kind: 'agent'; sessionName: string };
+
+/**
+ * Who reports finished team work to the owner, and where
+ * (`metadata.leadReport`, crewly#1371; see `team-lead-report.ts`).
+ */
+export interface LeadReport {
+  /** Session of the agent that reports (the team lead; the worker when the team has no lead) */
+  lead: string;
+  /** Its display name, when known */
+  leadName?: string;
+  /** Session of the agent that did the work */
+  worker: string;
+  /** Its display name, when known */
+  workerName?: string;
+  /** The team */
+  teamId: string;
+  teamName: string;
+  /** The team's Slack channel */
+  slackChannelId: string;
+  /** Its name, without the `#` */
+  channelName: string;
+}
+
+/**
+ * Shape check for a stamped lead report.
+ *
+ * @param value - Anything
+ * @returns True for a {@link LeadReport}
+ */
+export function isLeadReport(value: unknown): value is LeadReport {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return ['lead', 'worker', 'teamId', 'slackChannelId'].every((k) => typeof v[k] === 'string' && (v[k] as string).length > 0);
+}
+
+/**
+ * The lead report a work item is stamped with (crewly#1371).
+ *
+ * @param wi - Work item
+ * @returns The stamp, or null when its finished work is not reported by a team lead
+ */
+export function leadReportOf(wi: Pick<WorkItem, 'metadata'> | null | undefined): LeadReport | null {
+  const stamp = ((wi?.metadata ?? {}) as Record<string, unknown>)[TEAM_LEAD_REPORT_CONSTANTS.METADATA_KEY];
+  return isLeadReport(stamp) ? stamp : null;
+}
 
 /** Where the answer goes. */
 export type WorkDestination =
@@ -369,6 +414,18 @@ export function planWorkDestination(input: WorkDestinationInput): WorkDestinatio
   }
   switch (origin.kind) {
     case 'owner': {
+      // Team work the orchestrator delegated for the owner: answers about it go
+      // to the team channel, where the lead reports it (crewly#1371) — never
+      // into the orchestrator's thread with the owner.
+      const leadReport = leadReportOf(workItem);
+      if (leadReport) {
+        return {
+          kind: 'new-top-level',
+          // No topic line: the report is one or two plain lines for the owner.
+          teamId: leadReport.teamId,
+          reason: `work item ${workItem.id} is team work ${leadReport.leadName ?? leadReport.lead} reports to the owner in #${leadReport.channelName}`,
+        };
+      }
       if (origin.conversationId) {
         const threadKey = origin.slackChannelId && origin.threadTs ? `${origin.slackChannelId}:${origin.threadTs}` : undefined;
         return {
@@ -538,6 +595,8 @@ export function ownerThreadHandover(wi: WorkItem, delegatorName?: string): { key
   const origin = originOfWorkItem(wi);
   if (origin?.kind !== 'owner' || !origin.slackChannelId || !origin.threadTs) return null;
   if (!wi.target || wi.target === delegatorName) return null;
+  // Its lead reports it in the team channel (crewly#1371): no answer in the owner's thread.
+  if (leadReportOf(wi)) return null;
   const key = formatSlackThreadKey(origin.slackChannelId, origin.threadTs);
   const relay = delegatorName ? ` ${delegatorName} does not relay it for you.` : '';
   const note =

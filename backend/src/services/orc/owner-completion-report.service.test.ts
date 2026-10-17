@@ -509,3 +509,95 @@ describe('OwnerCompletionReportService', () => {
     await expect(svc.tick()).resolves.toBeUndefined();
   });
 });
+
+describe('team work the orchestrator delegated is reported by the team lead (crewly#1371)', () => {
+  const ORC_DM: OwnerOrigin = { kind: 'owner', receivedBy: ORCHESTRATOR_SESSION_NAME, slackChannelId: 'D0ORC', threadTs: '1792000000.000100' };
+  const MKT = { lead: 'ella', leadName: 'Ella', worker: 'luna', workerName: 'Luna', teamId: 'team-mkt', teamName: 'Marketing', slackChannelId: 'C0MKTTEAM', channelName: 'marketing' };
+  const OPS = { lead: 'atlas', leadName: 'Atlas', worker: 'atlas', workerName: 'Atlas', teamId: 'team-ops', teamName: 'Ops', slackChannelId: 'C0OPSTEAM', channelName: 'ops' };
+
+  let dir: string;
+  let now: number;
+  let items: WorkItem[];
+  let deliver: jest.Mock<Promise<boolean>, [string, string]>;
+  let postFallback: jest.Mock<Promise<boolean>, [ReportPlace, string, string]>;
+
+  const make = (over: Partial<OwnerCompletionReportDeps> = {}): OwnerCompletionReportService =>
+    new OwnerCompletionReportService({
+      crewlyHome: dir,
+      listItems: async () => items,
+      deliver,
+      resolvePlace: async (o) => ({ kind: 'slack', slackChannelId: o.slackChannelId!, threadTs: o.threadTs, label: 'Slack thread' }),
+      postFallback,
+      now: () => now,
+      logger: { info: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() } as never,
+      ...over,
+    });
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-report-lead-'));
+    now = T0 - MIN;
+    deliver = jest.fn(async (_s: string, _t: string) => true);
+    postFallback = jest.fn(async (_p: ReportPlace, _a: string, _t: string) => true);
+    // One orc DM thread, four items across two teams (the 2026-10-17 incident).
+    items = [
+      item('tut', { origin: ORC_DM, target: 'luna', title: 'Re-word the tutorial', at: T0, doneAt: T0 + 5 * MIN, metadata: { leadReport: MKT } }),
+      item('tut:verify', { origin: ORC_DM, target: 'ella', type: 'review', at: T0 + 4 * MIN, doneAt: T0 + 5 * MIN, metadata: { verifyOf: 'tut', leadReport: MKT } }),
+      item('backup', { origin: ORC_DM, target: 'atlas', title: 'Rotate backups', at: T0 + MIN, doneAt: T0 + 6 * MIN, metadata: { leadReport: OPS } }),
+    ];
+  });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('one owner thread splits into one chain per team, each the lead\'s', () => {
+    const chains = collectOwnerChains(items, {});
+    expect(chains.map((c) => [c.key, c.responsible])).toEqual([
+      ['slack:D0ORC:1792000000.000100#team:team-mkt', 'ella'],
+      ['slack:D0ORC:1792000000.000100#team:team-ops', 'atlas'],
+    ]);
+    expect(chains[0].leadReport).toMatchObject({ channelName: 'marketing' });
+  });
+
+  it('unstamped orc work in the same thread stays the orchestrator\'s (existing behaviour)', () => {
+    items.push(item('own', { origin: ORC_DM, target: 'sam', at: T0 + 2 * MIN }));
+    const chains = collectOwnerChains(items, {});
+    expect(chains.find((c) => c.key === 'slack:D0ORC:1792000000.000100')?.responsible).toBe(ORCHESTRATOR_SESSION_NAME);
+  });
+
+  it('nudges the lead (not the orc) to post in the team channel, then posts the fallback there as the lead', async () => {
+    const svc = make({ ownerLanguage: async () => 'zh' as const });
+    now = T0 + 7 * MIN;
+    await svc.tick();
+    now += C.SETTLE_MS;
+    await svc.tick();
+    expect(deliver.mock.calls.map((c) => c[0]).sort()).toEqual(['atlas', 'ella']);
+    const ask = deliver.mock.calls.find((c) => c[0] === 'ella')![1];
+    expect(ask).toContain('[OWNER REPORT DUE] Luna finished work the owner approved');
+    expect(ask).toContain('in #marketing; the orchestrator does not relay it');
+    expect(ask).toContain('(Chinese)');
+    expect(ask).toContain('https://slack.com/archives/D0ORC/p1792000000000100');
+    expect(ask).toContain('No ticket or work item ids, no status lines');
+    expect(ask).toContain('reply --work-item tut ');
+    const own = deliver.mock.calls.find((c) => c[0] === 'atlas')![1];
+    expect(own).toContain('[OWNER REPORT DUE] You finished work');
+
+    now += C.NUDGE_GRACE_MS;
+    await svc.tick();
+    expect(postFallback).toHaveBeenCalledTimes(2);
+    const [where, as, line] = postFallback.mock.calls.find((c) => c[1] === 'ella')!;
+    expect(where).toEqual({ kind: 'slack', slackChannelId: 'C0MKTTEAM', label: '#marketing' });
+    expect(as).toBe('ella');
+    expect(line).toBe('Luna 做完了你批准的Re-word the tutorial。\n批准的对话：https://slack.com/archives/D0ORC/p1792000000000100\n— 由 Crewly 代发');
+    expect(postFallback.mock.calls.every((c) => (c[0] as { slackChannelId: string }).slackChannelId !== 'D0ORC')).toBe(true);
+  });
+
+  it('a post in the orc thread does not count; the lead\'s reply --work-item does — even before its record exists', async () => {
+    const svc = make();
+    now = T0 + 6 * MIN + 30_000;
+    expect(svc.noteWorkItemReply('backup')).toBe(0); // Atlas reported before the scan picked the chain up
+    now = T0 + 7 * MIN;
+    svc.noteSlackAnswer('D0ORC', '1792000000.000100'); // the orc posted in its thread
+    await svc.tick();
+    now += C.SETTLE_MS;
+    await svc.tick();
+    expect(deliver.mock.calls.map((c) => c[0])).toEqual(['ella']);
+  });
+});

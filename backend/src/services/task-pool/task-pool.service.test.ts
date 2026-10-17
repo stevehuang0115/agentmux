@@ -178,6 +178,46 @@ describe('TaskPoolService', () => {
         expect(storedVerify.metadata?.origin).toEqual(stored.metadata?.origin);
       });
 
+      describe('team lead report stamp (crewly#1371)', () => {
+        const stamp = { lead: 'ella', worker: 'luna', teamId: 'mkt', teamName: 'Marketing', slackChannelId: 'C0MKT', channelName: 'marketing' };
+        afterEach(() => service.setLeadReportResolver(null));
+
+        it('owner work the orc delegates is stamped; its verify item copies the stamp without asking again', async () => {
+          const resolver = jest.fn(async () => stamp);
+          service.setLeadReportResolver(resolver);
+          service.setTurnOriginLookup((s) => (s === 'crewly-orc' ? ownerTurn : undefined));
+          const delegate = makeWorkItem({ target: 'luna', metadata: { delegatedBy: 'crewly-orc', ownerThread: 'C0BRIEF:1790856242.596149' } });
+          await service.addToPool(delegate, { creatorSession: 'crewly-orc' });
+          const stored = (await service.getAllItems()).find((w) => w.id === delegate.id)!;
+          expect(stored.metadata?.leadReport).toEqual(stamp);
+          expect(resolver).toHaveBeenCalledWith(expect.objectContaining({ creator: 'crewly-orc' }));
+
+          service.setTurnOriginLookup(() => undefined);
+          const verify = makeWorkItem({ id: `${delegate.id}:verify:${delegate.id}`, type: 'review', target: 'ella', parentWorkItemId: delegate.id, metadata: { verifyOf: delegate.id } });
+          await service.addToPool(verify);
+          expect((await service.getAllItems()).find((w) => w.id === verify.id)!.metadata?.leadReport).toEqual(stamp);
+          expect(resolver).toHaveBeenCalledTimes(1);
+        });
+
+        it('non-owner work is never offered to the resolver; a failing resolver adds nothing', async () => {
+          const resolver = jest.fn(async () => stamp);
+          service.setLeadReportResolver(resolver);
+          service.setTurnOriginLookup(() => undefined);
+          const own = makeWorkItem({ target: 'luna', metadata: { delegatedBy: 'ella' } });
+          await service.addToPool(own, { creatorSession: 'ella' });
+          expect(resolver).not.toHaveBeenCalled();
+          expect((await service.getAllItems())[0].metadata?.leadReport).toBeUndefined();
+
+          service.setLeadReportResolver(async () => Promise.reject(new Error('teams')));
+          service.setTurnOriginLookup(() => ownerTurn);
+          const owner = makeWorkItem({ target: 'luna', metadata: { delegatedBy: 'crewly-orc', ownerThread: 'C0BRIEF:1790856242.596149' } });
+          await service.addToPool(owner, { creatorSession: 'crewly-orc' });
+          const stored = (await service.getAllItems()).find((w) => w.id === owner.id)!;
+          expect(stored.metadata?.origin).toMatchObject({ kind: 'owner' });
+          expect(stored.metadata?.leadReport).toBeUndefined();
+        });
+      });
+
       it('a retry / give-up review linked by sourceWorkItemId inherits too', async () => {
         service.setTurnOriginLookup(() => ownerTurn);
         const source = makeWorkItem({ target: 'atlas' });
@@ -2674,6 +2714,19 @@ describe('TaskPoolService', () => {
       expect(published.filter((e) => e.type === 'task:failed')).toEqual([
         expect.objectContaining({ workItemId: wi.id, teamId: '' }),
       ]);
+    });
+
+    it('task:verified on lead-reported team work carries the orchestrator note (crewly#1371)', async () => {
+      const leadReport = { lead: 'ella', leadName: 'Ella', worker: 'think-tank-sage', teamId: 'team-think-tank', teamName: 'Think Tank', slackChannelId: 'C0TT', channelName: 'think-tank' };
+      const wi = makeWorkItem({ target: 'think-tank-sage', metadata: { reviewer: 'tl-sam', leadReport } });
+      await service.addToPool(wi);
+      await service.claimSpecificItem('think-tank-sage', wi.id);
+      await service.submitForVerification(wi.id, { role: 'agent', session: 'think-tank-sage' });
+      await service.verifyItem(wi.id, { role: 'owner' }, 'verified');
+
+      const verified = published.filter((e) => e.type === 'task:verified');
+      expect(verified).toHaveLength(1);
+      expect(verified[0].orchestratorNote).toBe('No owner post needed — Ella reports it in #think-tank; do not post it in your thread with the owner.');
     });
   });
 

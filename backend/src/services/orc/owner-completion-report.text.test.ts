@@ -1,5 +1,5 @@
 import { OWNER_COMPLETION_REPORT_CONSTANTS as C } from '../../constants.js';
-import { detectOwnerLanguage, fallbackLine, joinDeliverables, plainDeliverable, plainDeliverables } from './owner-completion-report.text.js';
+import { detectOwnerLanguage, fallbackLine, joinDeliverables, leadFallbackLine, plainDeliverable, plainDeliverables } from './owner-completion-report.text.js';
 
 describe('detectOwnerLanguage', () => {
   it('Chinese when enough of the letters are CJK; English otherwise; empty is English', () => {
@@ -77,5 +77,23 @@ describe('fallbackLine', () => {
   it('nothing nameable → a generic sentence', () => {
     expect(fallbackLine({ agentName: 'Lyra', deliverables: ['https://x.test/only-a-link'], language: 'en' })).toBe('Lyra finished what you asked for; the details will follow here.\n— sent by Crewly');
     expect(fallbackLine({ agentName: 'Lyra', deliverables: [], language: 'zh' })).toBe('Lyra 把你要的事做完了，细节稍后补在这里。\n— 由 Crewly 代发');
+  });
+});
+
+describe('leadFallbackLine (crewly#1371)', () => {
+  const link = 'https://slack.com/archives/D0ORC/p1792000000000100';
+
+  it('names the worker, the deliverable and the approval thread, in the owner\'s language', () => {
+    expect(leadFallbackLine({ workerName: 'Luna', deliverables: ['教程改写'], language: 'zh', approvalLink: link })).toBe(
+      `Luna 做完了你批准的教程改写。\n批准的对话：${link}\n— 由 Crewly 代发`,
+    );
+    expect(leadFallbackLine({ workerName: 'Luna', deliverables: ['the tutorial rewrite'], language: 'en', approvalLink: link })).toBe(
+      `Luna finished the tutorial rewrite, which you approved.\nWhere you approved it: ${link}\n— sent by Crewly`,
+    );
+  });
+
+  it('no deliverable, no link → a plain sentence and the marker only', () => {
+    expect(leadFallbackLine({ workerName: 'Luna', deliverables: [], language: 'zh' })).toBe('Luna 把你批准的事做完了。\n— 由 Crewly 代发');
+    expect(leadFallbackLine({ workerName: 'Luna', deliverables: [], language: 'en', approvalLink: '  ' })).toBe('Luna finished what you approved.\n— sent by Crewly');
   });
 });
