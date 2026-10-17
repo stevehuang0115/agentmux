@@ -1167,6 +1167,16 @@ through Anthropic's own flow. Crewly therefore no longer captures a Claude token
 - **Success.** `claude auth login` exits 0 on success, so success is exit 0
   plus one real Claude turn on that login (token-free env). A login that only
   looks signed in is not a success.
+- **Where Claude Code keeps a login on macOS (read from Claude Code 2.1.302's own code,
+  `strings` on the binary, 2026-10-17).** Keychain service =
+  `Claude Code-credentials` + (when `CLAUDE_CONFIG_DIR` is set) `-` + the first 8 hex
+  characters of `sha256(NFC(CLAUDE_CONFIG_DIR))`; account = the OS user name. With
+  `CLAUDE_CONFIG_DIR` unset the service is plain `Claude Code-credentials`. Two config
+  dirs therefore never share a keychain item (for example `/tmp/scratch-A/claude` ->
+  `Claude Code-credentials-aa80408f`, `/tmp/scratch-B/claude` ->
+  `Claude Code-credentials-1941323a`). Linux/Windows use `<config dir>/.credentials.json`.
+  A config dir spelled differently (trailing slash, symlink) hashes differently, so
+  Crewly always uses the one absolute path from `claudeAccountConfigDir`.
 - **Signed-in check.** `claude auth status --json` with `CLAUDE_CONFIG_DIR`
   (macOS keeps the default login in the keychain, scoped per config dir; an
   empty config dir reports `loggedIn: false`, so a file check alone is wrong
