@@ -14,7 +14,8 @@ import { ORC_CONVERSATION_CONSTANTS, ORCHESTRATOR_SESSION_NAME, RUNTIME_FALLBACK
 import type { ApiKeyProvider } from '../../types/settings.types.js';
 import { withHandoverPointers } from '../agent/handover-pointers.js';
 import { buildHandoverSummary, chainedHandoverBlock, claudeTranscriptPath, copyClaudeConversation, defaultClaudeHome, latestHandoverFile } from '../agent/runtime-session-recovery.js';
-import { claudeAccountConfigDir, describeClaudeAccounts, parseRuntimeTarget } from '../harness/claude-accounts.js';
+import { claudeAccountConfigDir, describeClaudeAccounts, listClaudeAccounts, parseRuntimeTarget } from '../harness/claude-accounts.js';
+import { refreshClaudeNativeLogins } from '../harness/claude-native-login.js';
 import { setRuntimeFallbackHooks } from './effective-runtime.js';
 import { computeRuntimeAvailability } from './runtime-availability.js';
 import { FileRuntimeFallbackStore } from './runtime-fallback.store.js';
@@ -311,6 +312,8 @@ export function startBackendRuntimeFallback(ctx: RuntimeFallbackWiringContext): 
 			const key = keyProvider ? await getSettingsService().getApiKey(keyProvider, { runtime: RUNTIME_TYPES.CREWLY_AGENT }).catch(() => undefined) : undefined;
 			const { getRuntimeTermsConsentService } = await import('../runtime-terms/runtime-terms-consent.service.js');
 			const terms = getRuntimeTermsConsentService();
+			// Claude Code's own record of which account dirs are signed in (a keychain login leaves no file).
+			await refreshClaudeNativeLogins(listClaudeAccounts().map((name) => ({ account: name, configDir: claudeAccountConfigDir(name) })));
 			return computeRuntimeAvailability({
 				...(terms ? { termsBlocked: (runtime: string) => terms.blockedReason(runtime) } : {}),
 				harnesses,

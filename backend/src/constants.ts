@@ -6638,7 +6638,7 @@ export const HARNESS_CONSTANTS = {
 		ENTER: '\r',
 		/**
 		 * Pause between typing the user's input and pressing Enter (ms). Ink TUIs
-		 * (Claude's `setup-token`) read one write of "code + \r" as a paste and
+		 * (Claude's `auth login`) read one write of "code + \r" as a paste and
 		 * swallow the Enter, leaving the code sitting at the prompt
 		 * (iriss-air.lan, 2026-10-01).
 		 */
@@ -6742,6 +6742,18 @@ export const HARNESS_CONSTANTS = {
 		 * with its own config dir (`CLAUDE_CONFIG_DIR`) and login, used as
 		 * runtime fallbacks (`claude-code@<name>`). Issue #942.
 		 */
+		/**
+		 * Retiring the Claude sign-in tokens older Crewly versions saved
+		 * (claude-token-migration.service.ts).
+		 */
+		TOKEN_MIGRATION: {
+			/** Bookkeeping under CREWLY_HOME (no credential in it) */
+			STATE_FILE: 'claude-token-migration.json',
+			/** First run after the backend starts */
+			START_DELAY_MS: 60_000,
+			/** How often saved tokens are re-checked (a login done by hand is noticed) */
+			RUN_INTERVAL_MS: 60 * 60_000,
+		},
 		ACCOUNTS: {
 			/** Directory under CREWLY_HOME holding one config dir per account */
 			DIR: 'claude-accounts',

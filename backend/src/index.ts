@@ -213,6 +213,7 @@ import { OrcReplyRouteService } from './services/orc/orc-reply-route.service.js'
 import { buildTriggerOrigin } from './services/orc/work-item-destination.js';
 import { ReloginAgentResumerService } from './services/agent/relogin-agent-resumer.service.js';
 import { getHarnessReloginService, harnessCommandWord } from './services/harness/harness-relogin.service.js';
+import { getClaudeTokenMigrationService } from './services/harness/claude-token-migration.service.js';
 import { getHarnessService } from './services/harness/harness.service.js';
 import { SlackReloginDmService, createReloginReplyInterceptor } from './services/slack/slack-relogin-dm.service.js';
 import { startBackendRuntimeFallback } from './services/runtime-fallback/runtime-fallback.wiring.js';
@@ -2737,6 +2738,24 @@ void (async () => {
 				this.logger.info('Runtime fallback wired');
 			} catch (error) {
 				this.logger.warn('Failed to wire runtime fallback (non-critical)', {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+
+			// Claude sign-in tokens older versions saved: keep them working until the
+			// account is signed in through Claude Code itself, then delete them; the
+			// owner is told once which accounts need one re-sign-in.
+			try {
+				const migrationDm = new SlackReloginDmService(
+					() => getSlackService(),
+					undefined,
+					(agentSession) => getSlackAgentIdentityService()?.getInstalled(agentSession)?.botToken ?? null,
+				);
+				const migration = getClaudeTokenMigrationService();
+				migration.setNotifier(() => migrationDm);
+				migration.start();
+			} catch (error) {
+				this.logger.warn('Failed to start the Claude token migration (non-critical)', {
 					error: error instanceof Error ? error.message : String(error),
 				});
 			}
@@ -8468,6 +8487,7 @@ void (async () => {
 			// Stop OAuth relogin monitor and the Slack re-login status check
 			OAuthReloginMonitorService.getInstance().destroy();
 			getHarnessReloginService().stop();
+			getClaudeTokenMigrationService().stop();
 			getRuntimeFallbackService()?.stop();
 
 			// Stop orchestrator heartbeat monitor
