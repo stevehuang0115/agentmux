@@ -29,6 +29,8 @@ export const DEFERRED_START_RETRY_CONSTANTS = {
 	 * nothing tried again.
 	 */
 	MAX_TOTAL_MS: 6 * 60 * 60_000,
+	/** A held round is logged on the first round and then every this many rounds */
+	HOLD_LOG_EVERY_ROUNDS: 10,
 } as const;
 
 /** What the retry needs. */
@@ -37,6 +39,12 @@ export interface DeferredStartRetryDeps {
 	activate: (sessionName: string) => Promise<{ success: boolean; deferred?: boolean }>;
 	/** Whether messages still wait on the agent's queue. */
 	hasPending: (sessionName: string) => boolean;
+	/**
+	 * Why the start must wait this round without being tried (crewly#1353:
+	 * memory is tight after a boot, or another boot launch just began).
+	 * Null/undefined = try now. The rounds keep counting against MAX_TOTAL_MS.
+	 */
+	hold?: (sessionName: string) => string | null | undefined;
 	/** Pause between rounds (tests inject an instant one). */
 	sleep?: (ms: number) => Promise<void>;
 	/** Pause before the first round (default: the usual round pause) */
@@ -79,6 +87,11 @@ export async function scheduleDeferredStartRetry(sessionName: string, deps: Defe
 						: DEFERRED_START_RETRY_CONSTANTS.SLOW_ROUND_PAUSE_MS;
 			await sleep(pause);
 			if (!deps.hasPending(sessionName)) return;
+			const held = deps.hold?.(sessionName);
+			if (held) {
+				if (round === 1 || round % DEFERRED_START_RETRY_CONSTANTS.HOLD_LOG_EVERY_ROUNDS === 0) logger.info('Deferred start held', { sessionName, round, reason: held });
+				continue;
+			}
 			let res: { success: boolean; deferred?: boolean };
 			try {
 				res = await deps.activate(sessionName);

@@ -51,7 +51,15 @@ export interface WikiMaintenanceOptions {
   now?: () => number;
   /** Dry run: every step reports and writes nothing. */
   dryRun?: boolean;
+  /**
+   * Held before the boot tick (crewly#1353): resolves when the restore queue
+   * is drained and memory is calm, or when it gave up waiting. Default: none.
+   */
+  bootGate?: BootGate;
 }
+
+/** Waits for a quiet machine before a boot pass; `reduced` when it gave up waiting. */
+export type BootGate = () => Promise<{ reduced: boolean; waitedMs: number; reason?: string }>;
 
 /** Outcome of one tick. */
 export interface WikiMaintenanceTickResult {
@@ -77,6 +85,7 @@ export class WikiMaintenanceService {
   private readonly drain: WikiQueueDrainService;
   private readonly nowFn: () => number;
   private readonly dryRun: boolean;
+  private readonly bootGate: BootGate | null;
   private timer: NodeJS.Timeout | null = null;
   private bootTimer: NodeJS.Timeout | null = null;
   private running = false;
@@ -95,6 +104,7 @@ export class WikiMaintenanceService {
     this.drain = opts.drain ?? WikiQueueDrainService.getInstance();
     this.nowFn = opts.now ?? (() => Date.now());
     this.dryRun = opts.dryRun === true;
+    this.bootGate = opts.bootGate ?? null;
   }
 
   static getInstance(): WikiMaintenanceService | null {
@@ -120,13 +130,31 @@ export class WikiMaintenanceService {
     }
     this.bootTimer = setTimeout(() => {
       this.bootTimer = null;
-      void this.tick();
+      void this.bootTick();
     }, this.bootDelayMs);
     this.bootTimer.unref?.();
     this.timer = setInterval(() => void this.tick(), this.intervalMs);
     this.timer.unref?.();
-    this.logger.info('WikiMaintenance started', { intervalMs: this.intervalMs, dailyMs: this.dailyMs, bootDelayMs: this.bootDelayMs, dryRun: this.dryRun });
+    this.logger.info('WikiMaintenance started', { intervalMs: this.intervalMs, dailyMs: this.dailyMs, bootDelayMs: this.bootDelayMs, dryRun: this.dryRun, bootGate: !!this.bootGate });
     return true;
+  }
+
+  /**
+   * The boot tick: waits at the boot gate (restore queue drained, memory
+   * calm) when one is wired, then ticks. Public for tests.
+   *
+   * @returns What ran
+   */
+  async bootTick(): Promise<WikiMaintenanceTickResult> {
+    if (this.bootGate) {
+      try {
+        const gate = await this.bootGate();
+        if (gate.waitedMs > 0) this.logger.info('WikiMaintenance boot pass waited for a quiet machine', { waitedMs: gate.waitedMs, reduced: gate.reduced, reason: gate.reason });
+      } catch (err) {
+        this.logger.warn('WikiMaintenance boot gate failed (running anyway)', { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return this.tick();
   }
 
   /** Stop ticking. Safe to call more than once. */

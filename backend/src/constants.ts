@@ -1942,6 +1942,59 @@ export const WORK_RECORD_CONSTANTS = {
 } as const;
 
 /**
+ * Memory-aware boot (crewly#1353). On 2026-10-17 a 16 GB Mac kernel-panicked
+ * a minute after a Crewly restart: 10 agents restored back-to-back, then the
+ * wiki, memory and work-record boot passes on fixed delays, while the machine
+ * was already swapping. Pressure mode only engages after two 30 s samples,
+ * so the boot restore reads the raw snapshot itself and the boot maintenance
+ * passes wait for a quiet machine. Env overrides exist for the two memory
+ * thresholds and the launch spacing.
+ */
+export const BOOT_PRESSURE_CONSTANTS = {
+	/** Swap in use at or above this share counts as tight for the boot (`CREWLY_BOOT_PRESSURE_SWAP_PERCENT`). */
+	SWAP_USED_PERCENT: 80,
+	/** Free memory below this counts as tight for the boot (`CREWLY_BOOT_PRESSURE_MIN_FREE_MB`). */
+	MIN_FREE_MB: 3 * 1024,
+	/** Minimum gap between two boot launches, pressure or not, so RSS growth is visible before the next (`CREWLY_RESTORE_LAUNCH_SPACING_MS`). */
+	MIN_LAUNCH_SPACING_MS: 15 * 1000,
+	/** Under pressure: how long after an agent registered its process counts as settled before the next launch. */
+	SETTLE_AFTER_READY_MS: 20 * 1000,
+	/** Under pressure: how often the snapshot is re-read while a launch waits for the machine to calm down. */
+	PRESSURE_POLL_MS: 10 * 1000,
+	/** Under pressure: an owner-waiting agent waits at most this long for the machine to calm, then launches anyway. */
+	PRESSURE_HOLD_MAX_MS: 10 * 60 * 1000,
+	/** Under pressure: at most this many boot launches in flight at once. */
+	PRESSURE_MAX_CONCURRENCY: 2,
+	/** Boot maintenance passes re-check the restore queue and the snapshot this often. */
+	MAINTENANCE_POLL_MS: 30 * 1000,
+	/** Boot maintenance passes give up waiting after this long and run reduced. */
+	MAINTENANCE_WAIT_MAX_MS: 30 * 60 * 1000,
+	/** Work records written by the boot pass when it runs reduced (instead of CATCHUP_MAX_PER_PASS). */
+	WORK_RECORD_REDUCED_BATCH: 50,
+	/** A vault log larger than this is rotated by streaming (tail read, header count) instead of being read whole. */
+	ROTATION_STREAM_BYTES: 10 * 1024 * 1024,
+	/** Bytes read from the end of a streamed log to pick the entries carried forward. */
+	ROTATION_TAIL_BYTES: 2 * 1024 * 1024,
+	/** Chunk size of the streaming entry count. */
+	ROTATION_CHUNK_BYTES: 1024 * 1024,
+	/** The owner gets one line when boot restores have been held back for longer than this. */
+	OWNER_NOTE_AFTER_MS: 10 * 60 * 1000,
+	/**
+	 * Boot launches outside the restore queue (the deferred-start retry) are
+	 * held for memory at most this long after boot; afterwards the pressure
+	 * mode cap alone decides, because macOS swap stays full for hours after
+	 * the pressure is gone and a held agent is still owed something.
+	 */
+	RETRY_HOLD_MAX_MS: 60 * 60 * 1000,
+	/** Env override of SWAP_USED_PERCENT. */
+	ENV_SWAP_PERCENT: 'CREWLY_BOOT_PRESSURE_SWAP_PERCENT',
+	/** Env override of MIN_FREE_MB. */
+	ENV_MIN_FREE_MB: 'CREWLY_BOOT_PRESSURE_MIN_FREE_MB',
+	/** Env override of MIN_LAUNCH_SPACING_MS. */
+	ENV_LAUNCH_SPACING_MS: 'CREWLY_RESTORE_LAUNCH_SPACING_MS',
+} as const;
+
+/**
  * Startup briefing content (#1345): wiki pages, recent lessons and open
  * owner threads an agent gets at registration, on top of its session memory.
  */

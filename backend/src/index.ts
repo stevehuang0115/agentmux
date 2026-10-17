@@ -270,6 +270,13 @@ import { WorkItemWorktreeService } from './services/worktree/workitem-worktree.s
 import { WorkItemWorktreeSubscriber, createTerminalNotifier } from './services/worktree/workitem-worktree.subscriber.js';
 import { ResourceModeService, RESOURCE_MODE_CONSTANTS, type RunningAgent } from './services/agent/resource-mode.service.js';
 import { getRestoreQueue, RESTORE_TIER, type RestoreEntry } from './services/agent/restore-queue.js';
+import {
+	bootLaunchHoldReason,
+	getBootLaunchPacer,
+	readBootPressureSnapshot,
+	scheduleHeldBackNotice,
+	waitForBootQuiet,
+} from './services/agent/boot-pressure.js';
 import { sessionsToRestore, type RestoreWorkItem } from './services/agent/restore-filter.js';
 import { ProjectMemoryService } from './services/memory/project-memory.service.js';
 import { TaskHistorySubscriber } from './services/memory/task-history.subscriber.js';
@@ -466,6 +473,16 @@ export class CrewlyServer {
 	});
 	/** Owner promises past due and never nudged at boot; their agents are restored and reminded once */
 	private openCommitmentsAtBoot: OwedCommitment[] = [];
+	/**
+	 * The boot restore is over: the queue drained, or there was nothing to
+	 * restore. The boot maintenance passes wait for this (crewly#1353).
+	 */
+	private bootRestoreDone = false;
+	/** When this backend booted (the memory hold on boot retries is time-boxed from here) */
+	private readonly bootAt = Date.now();
+	/** Agents the boot restore handed to the retry because memory was tight (crewly#1353) */
+	private heldBackAtBoot = new Set<string>();
+	private heldBackNoticeScheduled = false;
 	private healthMonitoringInterval: NodeJS.Timeout | null = null;
 	private backgroundWatchdog: BackgroundWorkWatchdog | null = null;
 
@@ -1218,7 +1235,7 @@ void (async () => {
 			// digest page compiled from the log. No LLM. Non-fatal.
 			try {
 				const { WikiMaintenanceService } = await import('./services/wiki/wiki-maintenance.service.js');
-				const maintenance = new WikiMaintenanceService();
+				const maintenance = new WikiMaintenanceService({ bootGate: this.bootQuietGate() });
 				WikiMaintenanceService.setInstance(maintenance);
 				maintenance.start();
 			} catch (maintenanceErr) {
@@ -1250,6 +1267,7 @@ void (async () => {
 						}
 						return agents;
 					},
+					bootGate: this.bootQuietGate(),
 				});
 				AgentMemoryRefreshService.setInstance(refresh);
 				refresh.start();
@@ -1292,6 +1310,7 @@ void (async () => {
 						const settled = change.ticket.status === 'done' || change.ticket.status === 'cancelled';
 						if (settled && change.before.status !== change.ticket.status && change.ticket.workItemId) listener(change.ticket.workItemId);
 					}),
+					bootGate: this.bootQuietGate(),
 				});
 				WorkRecordService.setInstance(records);
 				records.start();
@@ -5295,6 +5314,7 @@ void (async () => {
 
 			if (!settings.general.autoResumeOnRestart) {
 				this.logger.info('Auto-resume on restart is disabled, skipping agent session restore');
+				this.bootRestoreDone = true;
 				return;
 			}
 
@@ -5303,6 +5323,7 @@ void (async () => {
 
 			if (!state || state.sessions.length === 0) {
 				this.logger.debug('No persisted agent sessions to restore');
+				this.bootRestoreDone = true;
 				return;
 			}
 
@@ -5340,6 +5361,8 @@ void (async () => {
 			// Why each target other than a WorkItem is owed something; the reason
 			// is logged in the restore plan for agents that were idle at shutdown.
 			const owedReason = new Map<string, string>();
+			// Agents an owner thread waits on: launched even while memory is tight (crewly#1353).
+			const ownerThreadWaits = new Set<string>();
 			const noteOwed = (names: Iterable<string>, reason: string): string[] => {
 				const out: string[] = [];
 				for (const name of names) {
@@ -5370,7 +5393,7 @@ void (async () => {
 						// card they asked (2026-10-08: Atlas waited on a browser
 						// approval in the owner's thread and was skipped as "no
 						// work in hand").
-						...noteOwed(await this.ownerThreadSessionsAtBoot(), 'owner thread waits on it'),
+						...noteOwed(await this.ownerThreadSessionsAtBoot().then((names) => { for (const n of names) ownerThreadWaits.add(n); return names; }), 'owner thread waits on it'),
 					],
 				);
 			} catch (poolErr) {
@@ -5423,6 +5446,7 @@ void (async () => {
 
 			if (agentSessions.length === 0) {
 				this.logger.info('No persisted agent sessions to restore (all idle, no pending WorkItems)');
+				this.bootRestoreDone = true;
 				return;
 			}
 
@@ -5474,6 +5498,13 @@ void (async () => {
 						return { success: result.success };
 					},
 					onReady: () => this.sendRecoveryFor(session.name),
+					// Memory is tight and nobody waits on it: the retry brings it back
+					// when the machine eases (held by bootLaunchHold), never dropped.
+					onDeferred: () => {
+						this.noteHeldBackAtBoot(session.name);
+						this.retryRestoreWhileOwed(session.name);
+					},
+					essential: ownerTimes.length > 0 || session.role === ORCHESTRATOR_ROLE || ownerThreadWaits.has(session.name),
 				};
 				// An agent that was idle at shutdown says in the plan what it is owed.
 				const idle = wasIdle.has(session.name) ? ` (${owedReason.get(session.name) ?? 'work in hand'}; was idle at shutdown)` : '';
@@ -5494,8 +5525,12 @@ void (async () => {
 				})
 				.catch((error: unknown) => {
 					this.logger.error('Restore queue failed', { error: error instanceof Error ? error.message : String(error) });
+				})
+				.finally(() => {
+					this.bootRestoreDone = true;
 				});
 		} catch (error) {
+			this.bootRestoreDone = true;
 			this.logger.error('Failed to auto-restore agent sessions', {
 				error: error instanceof Error ? error.message : String(error),
 			});
@@ -5559,14 +5594,70 @@ void (async () => {
 			const { scheduleDeferredStartRetry } = await import('./services/messaging/deferred-start-retry.js');
 			const { activateAgentBySession } = await import('./controllers/team/team.controller.js');
 			await scheduleDeferredStartRetry(sessionName, {
-				activate: (n) => activateAgentBySession(this.apiController, n),
+				activate: (n) => {
+					getBootLaunchPacer().note();
+					return activateAgentBySession(this.apiController, n);
+				},
 				hasPending: (n) => !isOwnerStopped(n),
+				hold: () => this.bootLaunchHold(),
 			});
 		})().catch((err) => {
 			this.logger.warn('Could not retry a deferred boot restore', {
 				sessionName,
 				error: err instanceof Error ? err.message : String(err),
 			});
+		});
+	}
+
+	/**
+	 * Why a boot launch outside the restore queue must wait this round
+	 * (crewly#1353): memory is tight (within the first hour), the restore queue
+	 * is still launching, or another boot launch began less than the launch
+	 * spacing ago. Null = go.
+	 *
+	 * @returns Reason to hold, or null
+	 */
+	private bootLaunchHold(): string | null {
+		return bootLaunchHoldReason({
+			snapshot: readBootPressureSnapshot,
+			restoreRunning: () => getRestoreQueue().stats().running,
+			pacer: getBootLaunchPacer(),
+			bootAt: this.bootAt,
+		});
+	}
+
+	/**
+	 * Gate for the boot maintenance passes (crewly#1353): resolves when the
+	 * boot restore is over and memory is calm, or after the wait cap with
+	 * `reduced: true`.
+	 *
+	 * @returns A gate function for the service constructors
+	 */
+	private bootQuietGate(): () => ReturnType<typeof waitForBootQuiet> {
+		return () => waitForBootQuiet({ restoreDone: () => this.bootRestoreDone });
+	}
+
+	/**
+	 * The boot restore handed an agent to the retry because memory was tight.
+	 * Once, when the first one is held back, schedule the one-line owner note
+	 * that is sent only if some of them are still down after
+	 * OWNER_NOTE_AFTER_MS (crewly#1353).
+	 *
+	 * @param sessionName - The agent held back
+	 */
+	private noteHeldBackAtBoot(sessionName: string): void {
+		this.heldBackAtBoot.add(sessionName);
+		if (this.heldBackNoticeScheduled) return;
+		this.heldBackNoticeScheduled = true;
+		void scheduleHeldBackNotice({
+			stillHeld: async () => {
+				const out: string[] = [];
+				for (const name of this.heldBackAtBoot) {
+					if (!(await this.apiController.agentRegistrationService.isSessionLiveOrLaunching(name))) out.push(name);
+				}
+				return out;
+			},
+			notify: (line) => slackOwnerAlertNotifier({ title: 'Agents waiting on memory', message: line, urgent: false }),
 		});
 	}
 
@@ -7544,14 +7635,20 @@ void (async () => {
 	 *
 	 * @param sessionName - The agent to start
 	 * @param firstPauseMs - Pause before the first attempt (default: the retry's own)
+	 * @param opts - `boot`: a boot launch, held while memory is tight and paced with the restore queue (crewly#1353)
 	 */
-	private retryStartWhileQueued(sessionName: string, firstPauseMs?: number): void {
+	private retryStartWhileQueued(sessionName: string, firstPauseMs?: number, opts: { boot?: boolean } = {}): void {
 		void (async () => {
 			const { scheduleDeferredStartRetry } = await import('./services/messaging/deferred-start-retry.js');
 			const { activateAgentBySession } = await import('./controllers/team/team.controller.js');
 			await scheduleDeferredStartRetry(sessionName, {
-				activate: (n) => activateAgentBySession(this.apiController, n),
+				activate: (n) => {
+					if (opts.boot) getBootLaunchPacer().note();
+					return activateAgentBySession(this.apiController, n);
+				},
 				hasPending: (n) => SubAgentMessageQueue.getInstance().hasPending(n),
+				// Boot launches outside the restore queue keep its spacing and its memory gate (crewly#1353).
+				...(opts.boot ? { hold: () => this.bootLaunchHold() } : {}),
 				...(firstPauseMs !== undefined ? { firstPauseMs } : {}),
 			});
 		})().catch((err) => {
@@ -7586,7 +7683,7 @@ void (async () => {
 			);
 		if (sessions.length === 0) return;
 		this.logger.info('Starting agents that were down with messages queued for them', { sessions });
-		for (const name of sessions) this.retryStartWhileQueued(name, SUB_AGENT_QUEUE_CONSTANTS.BOOT_QUEUED_WAKE_DELAY_MS);
+		for (const name of sessions) this.retryStartWhileQueued(name, SUB_AGENT_QUEUE_CONSTANTS.BOOT_QUEUED_WAKE_DELAY_MS, { boot: true });
 	}
 
 	/**

@@ -135,6 +135,30 @@ All of these keep the PTY-activity fallback when their verdict is `unknown`.
 - When the promise comes due, the existing open-items sweep nudges the agent once, and later posts one owner note if the work is still undelivered.
 - A top-level Slack post with no thread is not mirrored into chat-v2, and so cannot be tied to a ticket. This is unchanged.
 
+### 5. Memory-aware boot (crewly#1353, 2026-10-17)
+
+**Incident.** A 16 GB Mac (4 GB swap) kernel-panicked (`watchdog timeout: no checkins from watchdogd in 92 seconds`) about one minute after a Crewly restart (1.20.359). Twelve minutes earlier Crewly had been idle-stopping agents under memory pressure. The boot then, within ~90 s: restored 10 agents back-to-back (concurrency 1, no spacing; a Claude Code process is 300–450 MB RSS), ran the WikiMaintenance boot pass at +90 s (a 19 MB and a 6.6 MB log read whole for rotation, digests over 20 vaults), AgentMemoryRefresh at +120 s and the WorkRecord catch-up at +180 s (200 records, 2 MB transcript tails). Pressure mode needs two tight 30 s samples, so for the first minute every start went through. Correlation with memory/swap thrash is strong, not proven.
+
+**Constants.** One block, `BOOT_PRESSURE_CONSTANTS` (`backend/src/constants.ts`): swap ≥ 80 % or free < 3 GB counts as tight (env `CREWLY_BOOT_PRESSURE_SWAP_PERCENT`, `CREWLY_BOOT_PRESSURE_MIN_FREE_MB`); 15 s between launches (`CREWLY_RESTORE_LAUNCH_SPACING_MS`); 20 s settle after a registration under pressure; 10 s poll; 10 min hold cap for an owner-waiting agent; 2 launches in flight under pressure; maintenance gate polls every 30 s and gives up after 30 min; reduced work-record batch 50; logs over 10 MB rotate by streaming (2 MB tail, 1 MB chunks); the owner note after 10 min; the memory hold on retries lasts at most 1 h after boot.
+
+**Snapshot** (`services/agent/boot-pressure.ts`). `readBootPressureSnapshot()` = ResourceModeService's memory reading (used %, free MB, swap %, OS pressure) plus whether it is in pressure mode. `bootPressureReason()` names each tight signal or returns null; an unreadable snapshot is calm, so a boot never stalls on a failed reading.
+
+**Restore queue** (`services/agent/restore-queue.ts`). Before each entry the worker reads the snapshot:
+- Tight and the entry is not `essential` → the entry is **deferred**, not launched: counted in `stats().deferred`, logged with the reading, and `onDeferred` hands it to the deferred-start retry (crewly#1337/#1350 semantics: it is owed something, it is never dropped). `essential` = owner message waiting, owed promise, an owner thread waits on it (`ownerThreadSessionsAtBoot`), or the orchestrator.
+- Tight and essential → launched, with: the launch spacing or the settle time (whichever is longer) since the previous launch settled; at most `PRESSURE_MAX_CONCURRENCY` in flight; and, except for the very first launches, a wait for the reading to clear, polled every 10 s, capped at 10 minutes (then it launches anyway: the owner is waiting).
+- Calm → launched after the launch spacing since the previous launch settled, pressure or not, so RSS growth is visible before the next.
+Every launch notes the process-wide `BootLaunchPacer`.
+
+**Deferred-start retry** (`services/messaging/deferred-start-retry.ts`). New `hold(sessionName)` dependency: a round whose hold returns a reason is skipped without a start (logged on the first round and every 10th). Boot launches outside the queue (the deferred restores and `wakeQueuedAgentsAfterBoot`) pass `bootLaunchHoldReason`: memory tight (only within the first hour after boot, because macOS swap stays full for hours after the pressure is gone), the restore queue still launching, or another boot launch began less than the spacing ago. Runtime deferred starts (a cap deferral while the backend runs) are not held.
+
+**Boot maintenance gate** (`waitForBootQuiet`). WikiMaintenance (`bootTick`), AgentMemoryRefresh (`bootRun`) and WorkRecord (`bootPass`) wait, after their own boot delay, until `bootRestoreDone` (the queue drained, or there was nothing to restore, or the restore failed) **and** the snapshot is calm; they poll every 30 s and give up after 30 min with `reduced: true`. WorkRecord then writes at most 50 records in that pass (`runOnce({ maxPerPass })`). A gate that throws never blocks the pass.
+
+**Streaming rotation** (`WikiLogRotationService.rotate`). A log over `ROTATION_STREAM_BYTES` is not read whole: `countLogHeaders` streams the file in 1 MB chunks and counts header lines (`isLogEntryHeaderLine`), `readLogTail` reads the last 2 MB cut at the first entry header, and the carry-forward set is chosen from that tail. The result carries `streamed: true`. Such a log is over the byte cap already, so it rotates either way; an entry older than the tail is by construction older than anything that would be carried.
+
+**Owner note.** When the first entry is deferred, `scheduleHeldBackNotice` is armed once. After 10 minutes it asks which held-back agents are still not live (`isSessionLiveOrLaunching`) and, if any, sends one line through the shared Slack owner notifier: "Memory is tight on this machine, so Ella and Pia have not been brought back yet; they will start as soon as it eases." Nothing is sent when they came back in time. No mechanics in the line.
+
+**Tests.** `boot-pressure.test.ts` (thresholds and env overrides, the tight/calm reading on the 2026-10-17 numbers, the gate with a fake clock, the hold reasons and their one-hour cap, the pacer, the owner line); `restore-queue.test.ts` (spacing between calm launches; deferral with the reading; settle + poll until calm; hold cap; pressure concurrency; the pacer on every launch); `deferred-start-retry.test.ts` (held rounds skip the start, a hold that never lifts still ends at the budget); `wiki-log-rotation.service.test.ts` (streamed rotation: count, tail carry, archive intact; header counting across chunk boundaries; tail boundary); `wiki-maintenance.service.test.ts`, `agent-memory-refresh.service.test.ts`, `work-record.service.test.ts` (the boot pass waits at the gate; the reduced batch; a failing gate never blocks).
+
 ## Tests
 
 - `agent-turn-state.test.ts`:

@@ -46,6 +46,7 @@ import {
   type WikiLogEntryRecord,
 } from '../wiki/wiki-log-entries.js';
 import { isWorkRecordEntry } from '../wiki/work-record.js';
+import type { BootGate } from '../wiki/wiki-maintenance.service.js';
 
 /** An agent the refresh should consider. */
 export interface RefreshableAgent {
@@ -78,6 +79,8 @@ export interface AgentMemoryRefreshOptions {
   projectMemory?: ProjectMemoryWriterLike;
   /** Clock (tests). */
   now?: () => number;
+  /** Held before the boot run (crewly#1353): restore queue drained, memory calm. Default: none. */
+  bootGate?: BootGate;
 }
 
 /** Persisted state: last run per agent. */
@@ -107,6 +110,7 @@ export class AgentMemoryRefreshService {
   private readonly listAgents: () => Promise<RefreshableAgent[]>;
   private readonly intervalMs: number;
   private readonly bootDelayMs: number;
+  private readonly bootGate: BootGate | null;
   private readonly statePath: string | null;
   private readonly globalVaultPath: string;
   private readonly agentMemory: IAgentMemoryService;
@@ -123,6 +127,7 @@ export class AgentMemoryRefreshService {
     this.listAgents = opts.listAgents;
     this.intervalMs = opts.intervalMs ?? AGENT_MEMORY_REFRESH_CONSTANTS.INTERVAL_MS;
     this.bootDelayMs = opts.bootDelayMs ?? AGENT_MEMORY_REFRESH_CONSTANTS.BOOT_DELAY_MS;
+    this.bootGate = opts.bootGate ?? null;
     this.statePath = opts.statePath === null ? null : opts.statePath ?? path.join(getCrewlyHomePath(), AGENT_MEMORY_REFRESH_CONSTANTS.STATE_FILE);
     this.globalVaultPath = opts.globalVaultPath ?? path.join(getCrewlyHomePath(), 'global-wiki');
     this.agentMemory = opts.agentMemory ?? AgentMemoryService.getInstance();
@@ -154,13 +159,31 @@ export class AgentMemoryRefreshService {
     }
     this.bootTimer = setTimeout(() => {
       this.bootTimer = null;
-      void this.runOnce();
+      void this.bootRun();
     }, this.bootDelayMs);
     this.bootTimer.unref?.();
     this.timer = setInterval(() => void this.runOnce(), this.intervalMs);
     this.timer.unref?.();
-    this.logger.info('AgentMemoryRefresh started', { intervalMs: this.intervalMs, bootDelayMs: this.bootDelayMs });
+    this.logger.info('AgentMemoryRefresh started', { intervalMs: this.intervalMs, bootDelayMs: this.bootDelayMs, bootGate: !!this.bootGate });
     return true;
+  }
+
+  /**
+   * The boot run: waits at the boot gate when one is wired, then runs once.
+   * Public for tests.
+   *
+   * @returns One outcome per agent refreshed
+   */
+  async bootRun(): Promise<AgentRefreshOutcome[]> {
+    if (this.bootGate) {
+      try {
+        const gate = await this.bootGate();
+        if (gate.waitedMs > 0) this.logger.info('AgentMemoryRefresh boot run waited for a quiet machine', { waitedMs: gate.waitedMs, reduced: gate.reduced, reason: gate.reason });
+      } catch (err) {
+        this.logger.warn('AgentMemoryRefresh boot gate failed (running anyway)', { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return this.runOnce();
   }
 
   /** Stop the schedule. Safe to call more than once. */

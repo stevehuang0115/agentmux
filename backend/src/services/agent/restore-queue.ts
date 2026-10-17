@@ -8,6 +8,15 @@
  */
 
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
+import { BOOT_PRESSURE_CONSTANTS } from '../../constants.js';
+import {
+	bootPressureReason,
+	bootPressureThresholds,
+	getBootLaunchPacer,
+	readBootPressureSnapshot,
+	type BootPressureSnapshot,
+	type BootPressureThresholds,
+} from './boot-pressure.js';
 
 /** Defaults for the restore queue. */
 export const RESTORE_QUEUE_CONSTANTS = {
@@ -34,6 +43,29 @@ export interface RestoreEntry {
 	run: (attempt: number) => Promise<{ success: boolean }>;
 	/** Called right after the agent registered */
 	onReady?: () => Promise<void>;
+	/**
+	 * Launched even while memory is tight (crewly#1353): the owner waits on it
+	 * (owner message, owed promise, owner thread) or it is the orchestrator.
+	 * Everything else is deferred to the retry when the machine is tight.
+	 */
+	essential?: boolean;
+	/** The queue handed the agent to the deferred-start retry instead of launching it (tight memory) */
+	onDeferred?: (snapshot: BootPressureSnapshot | null, reason: string) => void;
+}
+
+/** Memory awareness and pacing of the queue (tests inject fakes). */
+export interface RestoreQueueOptions {
+	/** Current memory reading (default: the live one; null = unknown, treated as calm) */
+	snapshot?: () => BootPressureSnapshot | null;
+	thresholds?: BootPressureThresholds;
+	now?: () => number;
+	sleep?: (ms: number) => Promise<void>;
+	/** A launch began (default: the process-wide pacer) */
+	onLaunch?: () => void;
+	settleMs?: number;
+	pollMs?: number;
+	holdMaxMs?: number;
+	pressureConcurrency?: number;
 }
 
 /** Progress counters exposed in /health. */
@@ -44,6 +76,8 @@ export interface RestoreQueueStats {
 	ready: number;
 	failed: number;
 	timedOut: number;
+	/** Handed to the deferred-start retry because memory was tight */
+	deferred: number;
 	order: string[];
 }
 
@@ -81,16 +115,37 @@ interface Slot { entry: RestoreEntry; attempt: number; promoted: boolean }
 export class RestoreQueue {
 	private pending: Slot[] = [];
 	private active = new Set<string>();
-	private counters = { started: 0, ready: 0, failed: 0, timedOut: 0 };
+	private counters = { started: 0, ready: 0, failed: 0, timedOut: 0, deferred: 0 };
 	private running = false;
 	private done: Promise<void> = Promise.resolve();
 	private readonly logger: ComponentLogger;
+	private readonly snapshot: () => BootPressureSnapshot | null;
+	private readonly thresholds: BootPressureThresholds;
+	private readonly now: () => number;
+	private readonly sleep: (ms: number) => Promise<void>;
+	private readonly onLaunch: () => void;
+	private readonly settleMs: number;
+	private readonly pollMs: number;
+	private readonly holdMaxMs: number;
+	private readonly pressureConcurrency: number;
+	/** When the last launch settled (registered, failed or timed out); spacing counts from here */
+	private lastSettledAt: number | null = null;
 
 	constructor(
 		private readonly concurrency: number = restoreConcurrencyFromEnv(),
 		private readonly timeoutMs: number = Number(process.env.CREWLY_RESTORE_TIMEOUT_MS) || RESTORE_QUEUE_CONSTANTS.DEFAULT_TIMEOUT_MS,
+		opts: RestoreQueueOptions = {},
 	) {
 		this.logger = LoggerService.getInstance().createComponentLogger('RestoreQueue');
+		this.snapshot = opts.snapshot ?? readBootPressureSnapshot;
+		this.thresholds = opts.thresholds ?? bootPressureThresholds();
+		this.now = opts.now ?? Date.now;
+		this.sleep = opts.sleep ?? ((ms) => new Promise<void>((resolve) => { const t = setTimeout(resolve, ms); t.unref?.(); }));
+		this.onLaunch = opts.onLaunch ?? (() => getBootLaunchPacer().note());
+		this.settleMs = opts.settleMs ?? BOOT_PRESSURE_CONSTANTS.SETTLE_AFTER_READY_MS;
+		this.pollMs = opts.pollMs ?? BOOT_PRESSURE_CONSTANTS.PRESSURE_POLL_MS;
+		this.holdMaxMs = opts.holdMaxMs ?? BOOT_PRESSURE_CONSTANTS.PRESSURE_HOLD_MAX_MS;
+		this.pressureConcurrency = opts.pressureConcurrency ?? BOOT_PRESSURE_CONSTANTS.PRESSURE_MAX_CONCURRENCY;
 	}
 
 	/**
@@ -103,11 +158,13 @@ export class RestoreQueue {
 	start(entries: readonly RestoreEntry[]): Promise<void> {
 		if (this.running) return this.done;
 		this.pending = orderRestoreEntries(entries).map((entry) => ({ entry, attempt: 0, promoted: false }));
-		this.counters = { started: 0, ready: 0, failed: 0, timedOut: 0 };
+		this.counters = { started: 0, ready: 0, failed: 0, timedOut: 0, deferred: 0 };
 		this.running = true;
+		this.lastSettledAt = null;
 		this.logger.info('Restore plan', {
 			concurrency: this.concurrency,
-			order: this.pending.map((s, i) => `${i + 1}. ${s.entry.name} (${s.entry.reason})`),
+			launchSpacingMs: this.thresholds.launchSpacingMs,
+			order: this.pending.map((s, i) => `${i + 1}. ${s.entry.name} (${s.entry.reason}${s.entry.essential ? '; launched even under memory pressure' : ''})`),
 		});
 		const workers = Array.from({ length: this.concurrency }, () => this.worker());
 		this.done = Promise.all(workers).then(() => {
@@ -159,7 +216,72 @@ export class RestoreQueue {
 		for (;;) {
 			const slot = this.pending.shift();
 			if (!slot) return;
-			await this.runSlot(slot);
+			const snap = this.snapshot();
+			const tight = bootPressureReason(snap, this.thresholds);
+			if (tight && !slot.entry.essential) {
+				this.defer(slot, snap, tight);
+				continue;
+			}
+			// In flight from here (isRestoring, the pressure concurrency), pacing included.
+			this.active.add(slot.entry.name);
+			try {
+				await this.paceBeforeLaunch(slot, tight);
+				await this.runSlot(slot);
+			} finally {
+				this.active.delete(slot.entry.name);
+				this.lastSettledAt = this.now();
+			}
+		}
+	}
+
+	/**
+	 * Memory is tight and nobody waits on this agent: hand it to the
+	 * deferred-start retry (it is owed something, so it is not dropped) and
+	 * log the reading it was deferred on.
+	 */
+	private defer(slot: Slot, snapshot: BootPressureSnapshot | null, reason: string): void {
+		this.counters.deferred++;
+		this.logger.warn('Deferring boot restore: memory is tight and the owner is not waiting on this agent', {
+			name: slot.entry.name, reason: slot.entry.reason, memory: reason, remaining: this.pending.length,
+		});
+		try {
+			slot.entry.onDeferred?.(snapshot, reason);
+		} catch (err) {
+			this.logger.warn('Deferral hook failed', { name: slot.entry.name, error: err instanceof Error ? err.message : String(err) });
+		}
+	}
+
+	/**
+	 * Wait before a launch: always the launch spacing since the previous one
+	 * settled (RSS growth is visible before the next); under pressure also the
+	 * settle time, the pressure concurrency, and the snapshot clearing (at most
+	 * `holdMaxMs`, then the owner-waiting agent launches anyway).
+	 */
+	private async paceBeforeLaunch(slot: Slot, tight: string | null): Promise<void> {
+		const { name } = slot.entry;
+		const first = this.lastSettledAt === null;
+		if (!first) {
+			const gap = tight ? Math.max(this.thresholds.launchSpacingMs, this.settleMs) : this.thresholds.launchSpacingMs;
+			const wait = gap - (this.now() - (this.lastSettledAt as number));
+			if (wait > 0) await this.sleep(wait);
+		}
+		if (!tight) return;
+		// The first launches under pressure are the owner's agents: nothing has
+		// settled yet, so they go now (within the pressure concurrency; this
+		// launch itself is already counted in `active`).
+		if (first && this.active.size <= this.pressureConcurrency) return;
+		const heldSince = this.now();
+		let reason: string | null = tight;
+		for (;;) {
+			reason = bootPressureReason(this.snapshot(), this.thresholds);
+			const crowded = this.active.size > this.pressureConcurrency;
+			if (!reason && !crowded) return;
+			if (this.now() - heldSince >= this.holdMaxMs) {
+				this.logger.warn('Launching an owner-waiting agent although memory is still tight: held long enough', { name, memory: reason, heldMs: this.now() - heldSince });
+				return;
+			}
+			if (reason) this.logger.info('Holding an owner-waiting boot restore until memory eases', { name, memory: reason, crowded });
+			await this.sleep(this.pollMs);
 		}
 	}
 
@@ -167,6 +289,7 @@ export class RestoreQueue {
 		const { name } = entry;
 		this.active.add(name);
 		this.counters.started++;
+		this.onLaunch();
 		this.logger.info('Restoring agent', { name, attempt, reason: entry.reason, remaining: this.pending.length });
 		let timer: NodeJS.Timeout | undefined;
 		const TIMEOUT = Symbol('timeout');

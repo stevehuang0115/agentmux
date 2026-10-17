@@ -319,4 +319,18 @@ describe('WorkRecordService', () => {
     const entries = await logEntries();
     expect(entries.map((e) => e.sourceType)).toEqual(['record_learning', 'work_record']);
   });
+
+  it('the boot pass waits at the boot gate and writes a reduced batch when the gate gave up waiting (crewly#1353)', async () => {
+    items = [wi('a'), wi('b', { status: 'done', completedAt: new Date(NOW - HOUR).toISOString() }), wi('c', { status: 'done', completedAt: new Date(NOW - 2 * HOUR).toISOString() })];
+    const bootGate = jest.fn(async () => ({ reduced: true, waitedMs: 1_800_000, reason: 'pressure mode' }));
+    const reduced = await build({ bootGate, reducedMaxPerPass: 1 }).bootPass();
+    expect(bootGate).toHaveBeenCalledTimes(1);
+    expect(reduced).toMatchObject({ candidates: 3, written: 1 });
+    expect(await logEntries()).toHaveLength(1);
+
+    // A gate that waited and returned calm runs the full pass; a failing gate never blocks it.
+    const full = await build({ bootGate: async () => ({ reduced: false, waitedMs: 0 }) }).bootPass();
+    expect(full).toMatchObject({ candidates: 2, written: 2 });
+    expect(await build({ bootGate: async () => { throw new Error('gate broke'); } }).bootPass()).toMatchObject({ candidates: 0, written: 0 });
+  });
 });

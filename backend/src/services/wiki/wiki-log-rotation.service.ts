@@ -20,10 +20,10 @@
 
 import * as path from 'path';
 import * as fs from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, createReadStream } from 'fs';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
-import { WIKI_LOG_CONSTANTS } from '../../constants.js';
-import { WIKI_LOG_HEADER, parseLogEntries, recentContentEntries, serializeLogEntry } from './wiki-log-entries.js';
+import { BOOT_PRESSURE_CONSTANTS, WIKI_LOG_CONSTANTS } from '../../constants.js';
+import { WIKI_LOG_HEADER, isLogEntryHeaderLine, parseLogEntries, recentContentEntries, serializeLogEntry, type WikiLogEntryRecord } from './wiki-log-entries.js';
 import { WikiIngestService } from './wiki-ingest.service.js';
 
 /** Options for {@link WikiLogRotationService.rotate}. */
@@ -36,6 +36,60 @@ export interface WikiLogRotateOptions {
   maxBytes?: number;
   /** Entry-count cap override (tests). */
   maxEntries?: number;
+  /** Logs larger than this are rotated by streaming (tests; default BOOT_PRESSURE_CONSTANTS.ROTATION_STREAM_BYTES). */
+  streamBytes?: number;
+  /** Tail read for the carry-forward candidates of a streamed log (tests; default BOOT_PRESSURE_CONSTANTS.ROTATION_TAIL_BYTES). */
+  tailBytes?: number;
+}
+
+/**
+ * Count entry header lines of a log by streaming it in chunks, so a very
+ * large log is never held in memory whole.
+ *
+ * @param file - Absolute log path
+ * @returns Number of entries
+ */
+export async function countLogHeaders(file: string): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    let count = 0;
+    let carry = '';
+    const stream = createReadStream(file, { encoding: 'utf8', highWaterMark: BOOT_PRESSURE_CONSTANTS.ROTATION_CHUNK_BYTES });
+    stream.on('data', (chunk: string | Buffer) => {
+      const text = carry + (typeof chunk === 'string' ? chunk : chunk.toString('utf8'));
+      const lines = text.split('\n');
+      carry = lines.pop() ?? '';
+      for (const line of lines) if (isLogEntryHeaderLine(line)) count++;
+    });
+    stream.on('end', () => {
+      if (isLogEntryHeaderLine(carry)) count++;
+      resolve(count);
+    });
+    stream.on('error', reject);
+  });
+}
+
+/**
+ * The last `bytes` of a log, cut at the first entry boundary so it parses
+ * as whole entries.
+ *
+ * @param file - Absolute log path
+ * @param size - File size (from stat)
+ * @param bytes - How much of the end to read
+ * @returns Tail text starting at an entry header (empty when none in the tail)
+ */
+export async function readLogTail(file: string, size: number, bytes: number): Promise<string> {
+  const length = Math.min(size, bytes);
+  const handle = await fs.open(file, 'r');
+  try {
+    const buf = Buffer.alloc(length);
+    await handle.read(buf, 0, length, size - length);
+    const text = buf.toString('utf8');
+    if (length >= size) return text;
+    const at = text.indexOf('\n## [');
+    return at < 0 ? '' : text.slice(at + 1);
+  } finally {
+    await handle.close();
+  }
 }
 
 /** Outcome of one vault's rotation check. */
@@ -54,6 +108,8 @@ export interface WikiLogRotateResult {
   /** Vault-relative archive path (set when rotated, or planned in a dry run). */
   archivePath?: string;
   dryRun: boolean;
+  /** The log was too large to read whole: entries were counted by streaming and carried from the tail. */
+  streamed?: boolean;
 }
 
 /**
@@ -105,13 +161,25 @@ export class WikiLogRotationService {
       return { ...base, reason: 'no_log' };
     }
     base.bytes = size;
-    const raw = await fs.readFile(logAbs, 'utf8');
-    const entries = parseLogEntries(raw);
-    base.entries = entries.length;
-    if (size <= maxBytes && entries.length <= maxEntries) return { ...base, reason: 'under_caps' };
+    let recent: readonly WikiLogEntryRecord[];
+    if (size > (opts.streamBytes ?? BOOT_PRESSURE_CONSTANTS.ROTATION_STREAM_BYTES)) {
+      // A log this large (19 MB on 2026-10-17, crewly#1353) is not read whole:
+      // the entry count is streamed and the carry-forward candidates come from
+      // the tail. It is over the byte cap already, so it rotates either way.
+      const [count, tail] = await Promise.all([countLogHeaders(logAbs), readLogTail(logAbs, size, opts.tailBytes ?? BOOT_PRESSURE_CONSTANTS.ROTATION_TAIL_BYTES)]);
+      base.entries = count;
+      recent = parseLogEntries(tail);
+      base.streamed = true;
+    } else {
+      const raw = await fs.readFile(logAbs, 'utf8');
+      const entries = parseLogEntries(raw);
+      base.entries = entries.length;
+      if (size <= maxBytes && entries.length <= maxEntries) return { ...base, reason: 'under_caps' };
+      recent = entries;
+    }
 
     // Handover snapshots are carried: an agent may still be pointed at one.
-    const carried = recentContentEntries(entries, WIKI_LOG_CONSTANTS.CARRY_FORWARD_DAYS, now, WIKI_LOG_CONSTANTS.CARRY_FORWARD_MAX_ENTRIES, { includeHandovers: true })
+    const carried = recentContentEntries(recent, WIKI_LOG_CONSTANTS.CARRY_FORWARD_DAYS, now, WIKI_LOG_CONSTANTS.CARRY_FORWARD_MAX_ENTRIES, { includeHandovers: true })
       // Oldest first in the fresh file, like any log.
       .sort((a, b) => a.timestampMs - b.timestampMs);
     const archiveRel = this.archivePathFor(vaultPath, now);
