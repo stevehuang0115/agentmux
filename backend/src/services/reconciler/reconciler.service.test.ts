@@ -233,6 +233,32 @@ describe('ReconcilerService', () => {
       expect(result.staleItemsCleaned).toBeGreaterThan(0);
     });
 
+    it('does not TTL-cancel work waiting on an open owner decision card (crewly#1369 §5)', async () => {
+      const now = Date.now();
+      const waiting = makeWorkItem({ id: 'ttl-waiting-card', status: 'running', createdAt: new Date(now - 30 * 3600000).toISOString() });
+      const stale = makeWorkItem({ id: 'ttl-stale', status: 'running', createdAt: new Date(now - 30 * 3600000).toISOString() });
+      const getOpenDecisionHolds = jest.fn().mockResolvedValue([{ workItemId: 'ttl-waiting-card' }]);
+      provider = createMockProvider({ getActiveWorkItems: jest.fn().mockResolvedValue([waiting, stale]), getOpenDecisionHolds });
+      service = new ReconcilerService(provider);
+
+      const result = await service.runFull();
+
+      expect(getOpenDecisionHolds).toHaveBeenCalled();
+      expect(result.corrections.find((c) => c.entityId === 'ttl-waiting-card' && c.newState === 'cancelled')).toBeUndefined();
+      expect(result.corrections.find((c) => c.entityId === 'ttl-stale' && c.newState === 'cancelled')).toBeDefined();
+    });
+
+    it('a failing decision lookup does not stop the TTL pass', async () => {
+      const stale = makeWorkItem({ id: 'ttl-stale-2', status: 'running', createdAt: new Date(Date.now() - 30 * 3600000).toISOString() });
+      provider = createMockProvider({
+        getActiveWorkItems: jest.fn().mockResolvedValue([stale]),
+        getOpenDecisionHolds: jest.fn().mockRejectedValue(new Error('store down')),
+      });
+      service = new ReconcilerService(provider);
+      const result = await service.runFull();
+      expect(result.corrections.find((c) => c.entityId === 'ttl-stale-2' && c.newState === 'cancelled')).toBeDefined();
+    });
+
     it('counts a TTL-cancelled item in staleItemsCleaned but NOT a TTL auto-verified one', async () => {
       // `staleItemsCleaned` must mean exactly one thing: work that was
       // DISCARDED. The TTL rule produces two opposite outcomes —

@@ -220,6 +220,26 @@ export function createDecisionService(input: DecisionWiringInput): DecisionServi
           return true;
         },
       }),
+    // The owner's language where the card goes (crewly#1367): the same
+    // lookup the completion report uses (#1365).
+    ownerLanguage: async (place) => {
+      try {
+        const { ownerLanguageOf } = await import('../orc/owner-completion-report.wiring.js');
+        const { getChatV2Service } = await import('../chat-v2/chat-v2.singleton.js');
+        const { getSlackAgentDmService } = await import('../slack/slack-agent-dm.service.js');
+        return ownerLanguageOf(
+          { kind: 'owner', ...(place?.slackChannelId ? { slackChannelId: place.slackChannelId } : {}), ...(place?.threadTs ? { threadTs: place.threadTs } : {}) },
+          null,
+          getChatV2Service(),
+          (slackChannelId) =>
+            getSlackTeamChannelService()?.findBySlackChannelId(slackChannelId)?.chatChannelId ??
+            getSlackAgentDmService()?.findBySlackChannelId(slackChannelId)?.chatChannelId ??
+            null,
+        );
+      } catch {
+        return null;
+      }
+    },
     deliverToAgent: (session, text) => (session === ORCHESTRATOR_SESSION_NAME ? input.sendToOrchestrator(text) : input.sendToAgent(session, text)),
     ...(input.queueForAgent ? { queueForAgent: input.queueForAgent } : {}),
     closeWatchdog: (session, slackChannelId, threadTs) => {

@@ -169,6 +169,25 @@ export interface GmailSendSubject {
   subject: string;
 }
 
+/**
+ * What the owner needs to answer a card without opening the PR or the ticket
+ * (crewly#1369 §3). Every field is one short line in the owner's language.
+ * Required on a merge card: at least {@link DecisionContext.runtimeChanges}.
+ */
+export interface DecisionContext {
+  /** Who asked for the work, and when ("Ella, Oct 6") */
+  requestedBy?: string;
+  /** What the owner said last about it, when known (quoted) */
+  ownerLastSaid?: string;
+  /** What changes at runtime once this is done / merged (new background jobs, scopes, polling) */
+  runtimeChanges?: string;
+  /** The PR / doc link, shown in the card's short details line */
+  link?: string;
+}
+
+/** Languages the harness writes a card's own text in (buttons, context line, reminders). */
+export type DecisionLanguage = 'en' | 'zh';
+
 /** One answer the owner can pick. */
 export interface DecisionOption {
   /** Stable key (`a`, `b`, `c`) carried in the button value */
@@ -286,6 +305,17 @@ export interface OwnerDecision {
   title?: string;
   /** Extra mrkdwn sections shown under the question (system decisions) */
   body?: string[];
+  /** Context the asker gave (who asked, what the owner said, what changes) — crewly#1369 §3 */
+  context?: DecisionContext;
+  /**
+   * Internal references taken out of the question at creation (PR numbers,
+   * links): shown only in the card's short details line (crewly#1367).
+   */
+  details?: string[];
+  /** The card asks the owner to merge a PR */
+  merge?: boolean;
+  /** The owner's language when the card was asked: the harness's own card text uses it (absent = English) */
+  ownerLanguage?: DecisionLanguage;
   status: DecisionStatus;
   card?: DecisionCardRef;
   /** Why the card could not be posted (shown in the dashboard; retried on the next tick) */
@@ -344,6 +374,8 @@ export interface AskOwnerInput {
   /** Ticket id (with `project`) */
   ticket?: unknown;
   project?: unknown;
+  /** `{requestedBy?, ownerLastSaid?, runtimeChanges?, link?}` ({@link DecisionContext}) */
+  context?: unknown;
 }
 
 /** A validated ask. */
@@ -355,6 +387,11 @@ export interface ValidatedAsk {
   sensitive?: DecisionSensitiveKind;
   ticketId?: string;
   project?: string;
+  context?: DecisionContext;
+  /** Internal references stripped from the question (PR numbers, links) */
+  details?: string[];
+  /** The ask is about merging a PR */
+  merge?: boolean;
 }
 
 /** Button `value` JSON (also read by Cloud: only `i`). */

@@ -12,7 +12,7 @@
  */
 
 import type { ReconcilerDataProvider } from './reconciler.service.js';
-import type { AgentHealth } from './reconcile-rules.js';
+import type { AgentHealth, DecisionHoldLink } from './reconcile-rules.js';
 import type {
   WorkItem,
   Request,
@@ -819,6 +819,31 @@ export class LiveReconcilerDataProvider implements ReconcilerDataProvider {
    *
    * @returns Available pool items (always an array)
    */
+  /**
+   * Open owner decision cards, as the work item / ticket each waits for
+   * (crewly#1369 §5): the reconciler does not TTL-cancel work waiting on one.
+   *
+   * @returns Holds (empty when the decision service is not running)
+   */
+  async getOpenDecisionHolds(): Promise<DecisionHoldLink[]> {
+    try {
+      const { DecisionService } = await import('../decisions/decision.service.js');
+      const service = DecisionService.getInstance();
+      if (!service) return [];
+      const open = await service.list('open');
+      return open
+        .filter((d) => d.status === 'open')
+        .map((d) => ({
+          ...(d.workItemId ? { workItemId: d.workItemId } : {}),
+          ...(d.ticket ? { ticket: { projectPath: d.ticket.projectPath, id: d.ticket.id } } : {}),
+        }))
+        .filter((h) => h.workItemId || h.ticket);
+    } catch (err) {
+      this.logger.debug('Could not read open decision cards for the TTL hold', { error: err instanceof Error ? err.message : String(err) });
+      return [];
+    }
+  }
+
   async getAvailablePoolItems(): Promise<WorkItem[]> {
     try {
       const pool = TaskPoolService.getInstance();

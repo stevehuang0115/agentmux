@@ -30,6 +30,7 @@ import {
   selectBestAgent,
   computeAgentScore,
   runPruningPass,
+  decisionHoldPredicate,
   detectUndisposedStrandedWorkItems,
   hasUnresolvedDependencies,
   UNCLAIMED_THRESHOLD_MS,
@@ -2752,5 +2753,44 @@ describe('detectStuckWorkItems — live claim lease (CE-232)', () => {
     const agentMap = makeAgentMap([['agent-dead', { status: 'inactive' }]]);
     const { corrections } = detectStuckWorkItems([wi], agentMap, 600_000, undefined, [claimFor(wi.id, -60_000)]);
     expect(corrections[0].newState).toBe('blocked');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// crewly#1369 §5: work waiting on an open owner decision card is not TTL-cancelled
+// ---------------------------------------------------------------------------
+describe('decision-card hold on the TTL', () => {
+  const old = (extra: Record<string, unknown> = {}) =>
+    makeWorkItem({ status: 'running', createdAt: new Date(Date.now() - 30 * 3600 * 1000).toISOString(), ...extra });
+
+  it('skips the work item the open card was asked from', () => {
+    const asked = old();
+    const other = old();
+    const held = decisionHoldPredicate([{ workItemId: asked.id }]);
+    const { expiredIds } = detectTTLExpiredWorkItems([asked, other], 24 * 3600 * 1000, held);
+    expect(expiredIds).toEqual([other.id]);
+  });
+
+  it('skips work on the open card\'s ticket (metadata link or bare ticket id)', () => {
+    const linked = old({ metadata: { projectTicket: { projectPath: '/proj', id: 'CREW-646' } } });
+    const bare = old({ projectTaskId: 'CREW-646' });
+    const otherProject = old({ metadata: { projectTicket: { projectPath: '/other', id: 'CREW-646' } } });
+    const held = decisionHoldPredicate([{ ticket: { projectPath: '/proj', id: 'CREW-646' } }]);
+    expect(held(linked)).toBe(true);
+    expect(held(bare)).toBe(true);
+    expect(held(otherProject)).toBe(false);
+    const { expiredIds } = detectTTLExpiredWorkItems([linked, bare, otherProject], 24 * 3600 * 1000, held);
+    expect(expiredIds).toEqual([otherProject.id]);
+  });
+
+  it('no open cards: nothing is held', () => {
+    expect(decisionHoldPredicate([])(old())).toBe(false);
+  });
+
+  it('runPruningPass passes the hold to the TTL rule', () => {
+    const asked = old();
+    const result = runPruningPass([asked], undefined, undefined, decisionHoldPredicate([{ workItemId: asked.id }]));
+    expect(result.ttlCancelledCount).toBe(0);
+    expect(runPruningPass([asked]).ttlCancelledCount).toBe(1);
   });
 });
