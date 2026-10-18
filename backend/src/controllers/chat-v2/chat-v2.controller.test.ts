@@ -48,8 +48,10 @@ jest.mock('../../services/slack/slack-team-channel.service.js', () => ({
   getSlackTeamChannelService: jest.fn(() => mockTeamChannels.current),
 }));
 const mockDeliverReply = jest.fn();
+const mockCurrentRouteOf = jest.fn(async (_session: string): Promise<unknown> => null);
 jest.mock('../../services/orc/reply-destination.wiring.js', () => ({
   deliverReply: (input: unknown) => mockDeliverReply(input),
+  currentRouteOf: (session: string) => mockCurrentRouteOf(session),
 }));
 
 // Automatic file hand-off: the Cloud-facing service is swapped per test.
@@ -359,13 +361,63 @@ describe('chat-v2 controller (REST)', () => {
         .send({ content: 'The cut is rendering.' });
       expect(plain.status).toBe(201);
 
-      // A turn that came from the owner again: the same post goes through.
+      // R6 (message-routing audit 2026-10-18): a turn that came from the owner
+      // no longer lets an agents-only post into the owner thread. This used to
+      // go through (201); agents never converse inside an owner thread.
       tracker.noteDelivery('sess-a', `[CHAT:${chId}] <owner@Pia> ask Atlas`);
       const prompted = await request(app)
         .post(`/api/chat/channels/${chId}/messages`)
         .set('X-Agent-Session', 'sess-a')
         .send({ content: '@Atlas the owner asks for the numbers' });
-      expect(prompted.status).toBe(201);
+      expect(prompted.status).toBe(409);
+      expect(prompted.body.error.code).toBe('agent_mention_in_owner_thread');
+    } finally {
+      storage.mockRestore();
+      setTurnTriggerTrackerForTesting(null);
+      service.close();
+    }
+  });
+
+  it('POST /api/chat/channels/:id/messages — R6: an agents-only post in an owner thread is delivered privately to the agent, with the owner thread as its route', async () => {
+    const db = openChatDatabase({ dbPath: ':memory:', inMemory: true, skipIntegrityCheck: true });
+    const service = new ChatV2Service({ config: loadChatV2Config({}), db, getPresence: () => ({ status: 'online', lastSeenAt: 111 }), now: () => 1000 });
+    const delivered: Array<{ to: string; text: string }> = [];
+    const dispatcher = {
+      dispatchMessage: jest.fn(async () => ({ outcome: 'skipped' })),
+      deliverToAgentPrivately: jest.fn(async (to: string, text: string) => {
+        delivered.push({ to, text });
+        return { success: true };
+      }),
+    };
+    const app = express();
+    app.use(express.json());
+    app.use(ownerUnlessAgentForTests);
+    app.use('/api/chat', createChatV2Router(service, { dispatcher: dispatcher as unknown as ChatV2DispatcherService }));
+    const tracker = new TurnTriggerTracker();
+    setTurnTriggerTrackerForTesting(tracker);
+    const storage = jest.spyOn(StorageService, 'getInstance').mockReturnValue({
+      getTeams: async () => [{ id: 'tt', name: 'Think Tank', members: [{ name: 'Atlas', sessionName: 'think-tank-atlas-b4e166f6' }, { name: 'Pia', sessionName: 'sess-a' }] }],
+      findMemberBySessionName: async (s: string) => (s === 'sess-a' ? { team: { id: 'fp', name: 'Flopost', members: [] }, member: { name: 'Pia', sessionName: 'sess-a' } } : null),
+    } as unknown as StorageService);
+    try {
+      const created = await request(app).post('/api/chat/channels').send({ agentSession: 'sess-a', name: 'Ch' });
+      const chId = created.body.data.id;
+      // The owner asked Pia here (Ella-style delegation inside the owner's thread, O5).
+      tracker.noteDelivery('sess-a', `[CHAT:${chId}] <owner@Pia> make the three videos`);
+      const res = await request(app)
+        .post(`/api/chat/channels/${chId}/messages`)
+        .set('X-Agent-Session', 'sess-a')
+        .send({ content: '@Atlas please check the numbers', threadId: 'root-7' });
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({ deliveredPrivately: true, to: ['think-tank-atlas-b4e166f6'] });
+      expect(delivered).toHaveLength(1);
+      expect(delivered[0].to).toBe('think-tank-atlas-b4e166f6');
+      expect(delivered[0].text).toMatch(/^\[MESSAGE from Pia \(Flopost\)/);
+      expect(delivered[0].text).toContain(`{route: owner ${chId} thread root-7}`);
+      expect(delivered[0].text).toContain('@Atlas please check the numbers');
+      // Nothing was posted in the owner's thread.
+      const listed = await request(app).get(`/api/chat/channels/${chId}/messages`);
+      expect(JSON.stringify(listed.body)).not.toContain('please check the numbers');
     } finally {
       storage.mockRestore();
       setTurnTriggerTrackerForTesting(null);

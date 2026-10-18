@@ -30,9 +30,15 @@ describe('misdirectedAgentMention (crewly#1375)', () => {
     expect(r?.message).toContain(`send-message --to ${ATLAS}`);
   });
 
-  it('keeps the post when the turn came from the owner', () => {
-    expect(misdirectedAgentMention(input({ latest: { kind: 'owner', at: 1 } }))).toBeNull();
-    expect(misdirectedAgentMention(input({ latest: null }))).toBeNull();
+  // R6 (message-routing audit 2026-10-18): agents never converse inside an
+  // owner thread, even when the owner prompted the turn. This used to keep
+  // the post; now it is taken out of the thread too.
+  it('takes an agents-only post out of the owner thread even when the owner prompted the turn (R6)', () => {
+    const fromOwner = misdirectedAgentMention(input({ latest: { kind: 'owner', at: 1 } }));
+    expect(fromOwner).toEqual(expect.objectContaining({ mentioned: [ATLAS] }));
+    expect(fromOwner?.sender).toBeUndefined();
+    expect(fromOwner?.message).toContain(`send-message --to ${ATLAS}`);
+    expect(misdirectedAgentMention(input({ latest: null }))?.mentioned).toEqual([ATLAS]);
   });
 
   it('keeps the post outside an owner thread (an agents\' room)', () => {

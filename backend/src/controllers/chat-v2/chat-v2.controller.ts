@@ -41,6 +41,7 @@ import {
   type ChatPrincipal,
 } from '../../services/chat-v2/types.js';
 import { stripTraceMarkers } from '../../services/trace/trace-markers.js';
+import type { MessageRoute } from '../../services/orc/message-route.js';
 import { getCallerIdentity, rejectUnverifiedCaller, sendOwnerAuthRequired } from '../../middleware/caller-identity.middleware.js';
 
 // ---------------------------------------------------------------------------
@@ -278,17 +279,28 @@ async function holdAlreadyAnsweredReply(req: Request, res: Response): Promise<bo
   return true;
 }
 
+/** Where an agents-only post taken out of an owner thread is delivered instead. */
+export interface PrivateAgentDelivery {
+  /** Deliver framed text to one agent */
+  deliverToAgentPrivately(sessionName: string, text: string): Promise<{ success: boolean; queued?: boolean; error?: string }>;
+}
+
 /**
- * Refuse an agent's post into the owner's thread that only @-mentions other
- * agents, when its turn came from another agent's message, not from this
- * thread (crewly#1375): answer that agent with send-message instead. Never
- * blocks a post because a lookup failed.
+ * Take an agent's post into the owner's thread that only @-mentions other
+ * agents out of the thread (crewly#1375; R6 of the message-routing audit
+ * 2026-10-18: agents never converse inside an owner thread). The text is
+ * delivered privately to the agents it @-mentions, framed with the sender
+ * and the owner thread's route, and the poster gets 200
+ * `{ deliveredPrivately: true, to }`. With no private delivery wired (REST
+ * tests), or when it fails, the post is refused with 409 naming
+ * send-message. Never blocks a post because a lookup failed.
  *
  * @param req - The send request
- * @param res - Response (written when refused)
- * @returns True when the post was refused
+ * @param res - Response (written when the post is taken out)
+ * @param delivery - Private delivery to agents, when wired
+ * @returns True when the post did not go into the thread
  */
-async function refuseAgentOnlyPostInOwnerThread(req: Request, res: Response): Promise<boolean> {
+async function refuseAgentOnlyPostInOwnerThread(req: Request, res: Response, delivery?: PrivateAgentDelivery): Promise<boolean> {
   try {
     const session = principalFromRequestSafe(req).agentSession;
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -301,8 +313,9 @@ async function refuseAgentOnlyPostInOwnerThread(req: Request, res: Response): Pr
       import('../../services/core/storage.service.js'),
     ]);
     const tracker = getTurnTriggerTracker();
-    const latest = latestInputOf(tracker.trigger(session));
-    if (latest?.kind !== 'agent') return false;
+    const ownerAskedHere = tracker.ownerAskedRecently(session, conversationId);
+    if (!ownerAskedHere) return false;
+    const latest = latestInputOf(tracker.routedTrigger(session) ?? tracker.trigger(session));
     const teams = await StorageService.getInstance().getTeams().catch(() => []);
     const byName = new Map<string, string>();
     for (const team of teams) {
@@ -314,15 +327,73 @@ async function refuseAgentOnlyPostInOwnerThread(req: Request, res: Response): Pr
       session,
       content: body.content,
       latest,
-      ownerAskedHere: tracker.ownerAskedRecently(session, conversationId),
+      ownerAskedHere,
       agentByName: (name) => byName.get(name.toLowerCase()) ?? null,
     });
     if (!refusal) return false;
+    if (delivery) {
+      const delivered = await deliverAgentPostPrivately(session, conversationId, body, refusal.mentioned, delivery);
+      if (delivered) {
+        res.status(200).json({
+          success: true,
+          data: {
+            deliveredPrivately: true,
+            to: refusal.mentioned,
+            note: 'Not posted in the owner\'s thread: agents do not talk to each other there. Delivered privately to the agents you @-mentioned; post only your final answer to the owner in this thread.',
+          },
+        });
+        return true;
+      }
+    }
     res.status(409).json({
       success: false,
       error: { code: 'agent_mention_in_owner_thread', message: refusal.message },
       refused: true,
     });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Deliver an agents-only post privately to each agent it @-mentions, framed
+ * with the poster and the owner thread's route (the answer goes back to the
+ * poster; the owner thread stays the place of the final answer).
+ *
+ * @param session - Poster
+ * @param conversationId - The owner conversation the post was written into
+ * @param body - The send body (content, threadId)
+ * @param to - Agent sessions to deliver to
+ * @param delivery - Private delivery
+ * @returns True when every agent got it
+ */
+async function deliverAgentPostPrivately(
+  session: string,
+  conversationId: string,
+  body: Record<string, unknown>,
+  to: string[],
+  delivery: PrivateAgentDelivery,
+): Promise<boolean> {
+  try {
+    const [{ describeAgentSender, wrapAgentMessage }, { StorageService }, { currentRouteOf }] = await Promise.all([
+      import('../../services/messaging/agent-message-envelope.js'),
+      import('../../services/core/storage.service.js'),
+      import('../../services/orc/reply-destination.wiring.js'),
+    ]);
+    const described = await describeAgentSender(session, (s) => StorageService.getInstance().findMemberBySessionName(s));
+    const current = await currentRouteOf(session).catch(() => null);
+    const threadId = typeof body.threadId === 'string' && body.threadId ? body.threadId : undefined;
+    const route: MessageRoute =
+      current?.kind === 'owner' && current.conversationId === conversationId
+        ? current
+        : { kind: 'owner', conversationId, ...(threadId ? { thread: threadId } : {}) };
+    const sender = { ...(described ?? { session, name: session }), route };
+    const text = wrapAgentMessage(stripTraceMarkers(String(body.content)), sender);
+    for (const target of to) {
+      const result = await delivery.deliverToAgentPrivately(target, text);
+      if (!result.success && !result.queued) return false;
+    }
     return true;
   } catch {
     return false;
@@ -699,7 +770,7 @@ export function createChatV2Controller(
       if (await refuseUnthreadedAgentPostInSlackRoom(req, res)) return;
       // A post in the owner's thread that only talks to other agents, unprompted
       // by that thread: it goes to the agent instead (crewly#1375).
-      if (await refuseAgentOnlyPostInOwnerThread(req, res)) return;
+      if (await refuseAgentOnlyPostInOwnerThread(req, res, resolveDeps().dispatcher)) return;
       // A colleague already answered the owner's latest message in this
       // thread: hold this one (specs/2026-10-03-one-responder-per-message.md §2).
       if (await holdAlreadyAnsweredReply(req, res)) return;

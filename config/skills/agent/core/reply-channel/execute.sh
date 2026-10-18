@@ -295,7 +295,12 @@ try:
 except Exception:
     print(json.dumps({"success": True, "channelId": os.environ["CHANNEL_ID"], "raw": raw}, separators=(",", ":")))
     raise SystemExit(0)
-mid = (d.get("data") or {}).get("id", "")
+data = d.get("data") or {}
+if data.get("deliveredPrivately"):
+    # R6: an agents-only post never lands in the owner thread; it went to the agents.
+    print(json.dumps({"success": True, "posted": False, "deliveredPrivately": True, "to": data.get("to", []), "note": data.get("note", "")}, separators=(",", ":"), ensure_ascii=False))
+    raise SystemExit(0)
+mid = data.get("id", "")
 out = {"success": True}
 if mid:
     out["messageId"] = mid
