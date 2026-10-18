@@ -136,6 +136,20 @@ export function plainDeliverables(texts: readonly (string | undefined | null)[])
 }
 
 /**
+ * The deliverables of a chain written in the owner's language, plain-worded.
+ * A phrase in another language is left out: a Chinese line never embeds an
+ * English WorkItem title ("Atlas 做完了Website-plan PDF built and posted in
+ * Steve thread", crewly#1376), and the line then names no deliverable.
+ *
+ * @param texts - Titles / summaries of the finished work, in order
+ * @param language - The owner's language
+ * @returns Plain phrases in that language (possibly none)
+ */
+export function plainDeliverablesIn(texts: readonly (string | undefined | null)[], language: OwnerLanguage): string[] {
+  return plainDeliverables(texts).filter((phrase) => detectOwnerLanguage(phrase) === language);
+}
+
+/**
  * Join phrases the way the language does ("a, b and c" / "a、b和c").
  *
  * @param phrases - Plain phrases
@@ -162,7 +176,9 @@ export interface FallbackLineInput {
 
 /**
  * The one sentence posted for the agent, plus the short "sent by Crewly"
- * marker, in the owner's language.
+ * marker, in the owner's language. It names only deliverables written in
+ * that language and promises nothing: "details later" was a promise nobody
+ * owned (crewly#1376).
  *
  * @param input - Agent name, deliverables, language
  * @returns Two lines: the sentence and the marker
@@ -170,16 +186,16 @@ export interface FallbackLineInput {
  * @example
  * ```typescript
  * fallbackLine({ agentName: 'Ella', deliverables: ['排期里 5 张卡的文案', '教程页的录屏'], language: 'zh' });
- * // 'Ella 做完了排期里 5 张卡的文案和教程页的录屏，细节稍后补在这里。\n— 由 Crewly 代发'
+ * // 'Ella 做完了排期里 5 张卡的文案和教程页的录屏。\n— 由 Crewly 代发'
  * ```
  */
 export function fallbackLine(input: FallbackLineInput): string {
-  const what = joinDeliverables(plainDeliverables(input.deliverables), input.language);
+  const what = joinDeliverables(plainDeliverablesIn(input.deliverables, input.language), input.language);
   if (input.language === 'zh') {
-    const sentence = what ? `${input.agentName} 做完了${what}，细节稍后补在这里。` : `${input.agentName} 把你要的事做完了，细节稍后补在这里。`;
+    const sentence = what ? `${input.agentName} 做完了${what}。` : `${input.agentName} 把你要的事做完了。`;
     return `${sentence}\n— 由 Crewly 代发`;
   }
-  const sentence = what ? `${input.agentName} finished ${what}; the details will follow here.` : `${input.agentName} finished what you asked for; the details will follow here.`;
+  const sentence = what ? `${input.agentName} finished ${what}.` : `${input.agentName} finished what you asked for.`;
   return `${sentence}\n— sent by Crewly`;
 }
 
@@ -211,7 +227,7 @@ export interface LeadFallbackLineInput {
  * ```
  */
 export function leadFallbackLine(input: LeadFallbackLineInput): string {
-  const what = joinDeliverables(plainDeliverables(input.deliverables), input.language);
+  const what = joinDeliverables(plainDeliverablesIn(input.deliverables, input.language), input.language);
   const link = input.approvalLink?.trim();
   if (input.language === 'zh') {
     const sentence = what ? `${input.workerName} 做完了你批准的${what}。` : `${input.workerName} 把你批准的事做完了。`;
