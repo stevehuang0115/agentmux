@@ -1306,7 +1306,7 @@
       "name": "RedNote (小红书) Reader",
       "description": "Read content from 小红书 (RedNote) iPad app on macOS via Accessibility API + screencapture. Actions: feed (read posts), scroll-feed, nav, screenshot (capture window), search (type keyword), tap (click coordinates), read-detail (screenshot + text), goto-profile (navigate to user profile by username). Zero network requests — cannot trigger account bans.",
       "author": "Crewly Team",
-      "version": "3.0.0",
+      "version": "3.1.0",
       "category": "automation",
       "tags": [
         "automation",
@@ -1321,12 +1321,12 @@
       "downloads": 0,
       "rating": 0,
       "createdAt": "2026-02-22T23:57:06.027Z",
-      "updatedAt": "2026-09-24T19:55:44.195Z",
+      "updatedAt": "2026-10-18T12:46:33.984Z",
       "source": "config/skills/agent/marketplace/rednote-reader",
       "assets": {
         "archive": "config/skills/agent/marketplace/rednote-reader",
         "checksum": "",
-        "sizeBytes": 60050
+        "sizeBytes": 64321
       },
       "metadata": {
         "skillType": "claude-skill",
