@@ -19,7 +19,7 @@ jest.mock('../core/logger.service.js', () => ({
 import { OWNER_HOOK_MESSAGE_CONSTANTS as C } from '../../constants.js';
 import { SubAgentMessageQueue, withSurfacedNotice } from './sub-agent-message-queue.service.js';
 import { AgentPostLog, answersConversation, type QueueMessageMeta } from './queue-priority.js';
-import { buildOwnerHookNote, joinHookNotes, ownerHookNoteFor } from './owner-hook-message.js';
+import { HOOK_NOTE_JOIN_RESERVE, buildOwnerHookNote, defaultOverflowWriter, joinHookNotes, ownerHookNoteFor } from './owner-hook-message.js';
 
 const AGENT = 'crewly-orc';
 const DM: QueueMessageMeta = { owner: true, ref: 'chat:dm-1:m1', where: { chatChannelId: 'dm-1' } };
@@ -195,10 +195,69 @@ describe('owner message at the next tool boundary', () => {
 			expect(note).toContain('周报发了吗？');
 		});
 
-		it('cuts a long message to the ceiling and says so', () => {
-			const note = buildOwnerHookNote({ data: 'x'.repeat(10_000), queuedAt: 1, surfaceCount: 1 }, 1000);
+		// R0 (message-routing audit 2026-10-18): the owner's own text is never
+		// cut. A message too long for the note used to be cut in the middle;
+		// it is now written in full to a file the note points to.
+		it('points to the full text in a file when the owner message alone is too long', () => {
+			const written: string[] = [];
+			const data = `[CHAT:dm-1] owner:\n\n${'x'.repeat(10_000)}END`;
+			const note = buildOwnerHookNote({ data, queuedAt: 1, surfaceCount: 1 }, 1000, {
+				overflow: (full) => {
+					written.push(full);
+					return '/home/.crewly/runtime/owner-messages/dev-1-1.md';
+				},
+			});
 			expect(note.length).toBeLessThanOrEqual(1000);
-			expect(note).toContain('older part cut here');
+			expect(written).toEqual([data]);
+			expect(note).toContain('[CHAT:dm-1] owner:');
+			expect(note).toContain('/home/.crewly/runtime/owner-messages/dev-1-1.md');
+			expect(note).toContain('10003 characters');
+			expect(note).toContain('x'.repeat(100));
+		});
+
+		it('falls back to a cut that says the owner text may be incomplete when no file can be written', () => {
+			const note = buildOwnerHookNote({ data: 'x'.repeat(10_000), queuedAt: 1, surfaceCount: 1 }, 1000, { overflow: () => null });
+			expect(note.length).toBeLessThanOrEqual(1000);
+			expect(note).toContain("the owner's message may be incomplete");
+		});
+
+		it('writes the overflow file under CREWLY_HOME by default', () => {
+			const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ohm-home-'));
+			const prev = process.env.CREWLY_HOME;
+			process.env.CREWLY_HOME = home;
+			try {
+				const file = defaultOverflowWriter('crewly dev/1')('full text');
+				expect(file).toBeTruthy();
+				expect(path.dirname(String(file))).toBe(path.join(home, C.OVERFLOW_DIR));
+				expect(path.basename(String(file))).toMatch(/^crewly_dev_1-\d+\.md$/);
+				expect(fs.readFileSync(String(file), 'utf8')).toBe('full text');
+			} finally {
+				if (prev === undefined) delete process.env.CREWLY_HOME;
+				else process.env.CREWLY_HOME = prev;
+				fs.rmSync(home, { recursive: true, force: true });
+			}
+		});
+
+		it('cuts the reply instructions and the thread, never the owner text, when both are long', () => {
+			const ownerText = '请把下面这些都做完：' + '要点。'.repeat(600);
+			const data = [
+				'[CHAT:room-1] <UOWNER@#awesome-videos>',
+				'',
+				'[Slack thread so far — oldest→newest]',
+				...Array.from({ length: 80 }, (_, i) => `  Pia [bot]: earlier line ${i}`),
+				'[end of Slack thread]',
+				'',
+				ownerText,
+				'',
+				'---',
+				'Reply with reply-channel --channel room-1 --thread t-1. ' + 'Rule text. '.repeat(400),
+			].join('\n');
+			const note = buildOwnerHookNote({ data, queuedAt: 1, surfaceCount: 1 }, 6000, { overflow: () => null });
+			expect(note.length).toBeLessThanOrEqual(6000);
+			expect(note).toContain(ownerText);
+			expect(note).toContain('Reply with reply-channel --channel room-1 --thread t-1.');
+			expect(note).toContain('rest of the reply instructions cut');
+			expect(note).toContain('older thread lines cut here');
 		});
 
 		// 2026-10-08, #content-team: a 13.5k-char thread prompt was cut at the
@@ -225,7 +284,7 @@ describe('owner message at the next tool boundary', () => {
 			expect(note).toContain('<@UELLA>');
 			expect(note).toContain('Reply with reply-channel --channel huddle-1 --thread root-1');
 			expect(note).not.toContain('old research line 0\n');
-			expect(note).toContain('older part cut here');
+			expect(note).toContain('older thread lines cut here');
 		});
 
 		// 2026-10-18, #awesome-videos: the reply instructions alone filled the
@@ -253,12 +312,28 @@ describe('owner message at the next tool boundary', () => {
 			expect(note).toContain('rest of the reply instructions cut');
 		});
 
-		it('joins notes owner-first within the ceiling, dropping one that does not fit', () => {
+		// Nothing goes silently (message-routing audit 2026-10-18): a note that
+		// does not fit is named, and a cut is marked. These used to be a silent
+		// drop and a silent hard slice.
+		it('joins notes owner-first within the ceiling, naming a note left out and marking a cut', () => {
 			expect(joinHookNotes([null, undefined])).toBeNull();
 			expect(joinHookNotes(['owner', 'nudge'])).toBe('owner\n\nnudge');
 			expect(joinHookNotes([null, 'nudge'])).toBe('nudge');
-			expect(joinHookNotes(['o'.repeat(90), 'n'.repeat(20)], 100)).toBe('o'.repeat(90));
-			expect(joinHookNotes(['o'.repeat(150)], 100)).toHaveLength(100);
+			const ceiling = 1000;
+			const joined = String(joinHookNotes(['o'.repeat(700), 'TL nudge: ' + 'n'.repeat(400)], ceiling));
+			expect(joined.length).toBeLessThanOrEqual(ceiling);
+			expect(joined.startsWith('o'.repeat(700))).toBe(true);
+			expect(joined).toContain('[Left out to fit: 1 more Crewly note — TL nudge:');
+			const cut = String(joinHookNotes(['o'.repeat(1500)], ceiling));
+			expect(cut.length).toBeLessThanOrEqual(ceiling);
+			expect(cut).toContain('(note cut to fit)');
+		});
+
+		it('an owner note built for the room HOOK_NOTE_JOIN_RESERVE leaves is never cut by the join', () => {
+			const owner = 'o'.repeat(C.MAX_CONTEXT_CHARS - HOOK_NOTE_JOIN_RESERVE);
+			const joined = String(joinHookNotes([owner, 'n'.repeat(500)]));
+			expect(joined.startsWith(owner)).toBe(true);
+			expect(joined).toContain('Left out to fit');
 		});
 
 		it('ownerHookNoteFor takes from the queue, and the kill switch turns it off', () => {
