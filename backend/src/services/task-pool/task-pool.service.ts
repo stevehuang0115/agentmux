@@ -239,6 +239,15 @@ export interface AddToPoolOptions {
    * owner's request (the ticket's own link already says which ticket it is).
    */
   ownerOriginOnly?: boolean;
+  /**
+   * Whether an item the creator assigns to ITSELF inherits the creator's
+   * current owner turn, owner context or current work's origin (default
+   * true for harness-made items). An agent's own `create-task` passes false:
+   * its item gets an owner place only when it names one
+   * (`--thread` / `--conversation`), never the creator's last owner thread
+   * (message-routing audit 2026-10-18).
+   */
+  inheritCreatorTurn?: boolean;
 }
 
 /**
@@ -840,7 +849,7 @@ export class TaskPoolService {
 
     // An owner-origin-only add (a ticket assignment) keeps its own links.
     if (!options.ownerOriginOnly) this.inferRequestIdFromTurn(workItem, options.creatorSession);
-    await this.inheritOrigin(workItem, options.creatorSession, options.ownerOriginOnly === true);
+    await this.inheritOrigin(workItem, options.creatorSession, options.ownerOriginOnly === true, options.inheritCreatorTurn !== false);
     await this.routeUntargeted(workItem, options.creatorSession);
     assignWorkItemTrace(workItem, options.creatorSession);
 
@@ -897,8 +906,8 @@ export class TaskPoolService {
    * @param creatorSession - The agent creating it, when known
    * @param ownerOnly - Stamp only an owner origin
    */
-  private async inheritOrigin(workItem: WorkItem, creatorSession?: string, ownerOnly = false): Promise<void> {
-    await this.inheritOriginOnly(workItem, creatorSession, ownerOnly);
+  private async inheritOrigin(workItem: WorkItem, creatorSession?: string, ownerOnly = false, inheritCreatorTurn = true): Promise<void> {
+    await this.inheritOriginOnly(workItem, creatorSession, ownerOnly, inheritCreatorTurn);
     await this.stampLeadReport(workItem, creatorSession);
   }
 
@@ -948,8 +957,9 @@ export class TaskPoolService {
    * @param workItem - The item about to be stored
    * @param creatorSession - The agent creating it, when known
    * @param ownerOnly - Stamp only an owner origin
+   * @param inheritCreatorTurn - A self-assigned item may take the creator's turn / context / current work origin
    */
-  private async inheritOriginOnly(workItem: WorkItem, creatorSession?: string, ownerOnly = false): Promise<void> {
+  private async inheritOriginOnly(workItem: WorkItem, creatorSession?: string, ownerOnly = false, inheritCreatorTurn = true): Promise<void> {
     try {
       const meta = (workItem.metadata ?? {}) as Record<string, unknown>;
       const parentId = [workItem.parentWorkItemId, meta.verifyOf, meta.sourceWorkItemId].find(
@@ -991,6 +1001,10 @@ export class TaskPoolService {
       let creatorWorkItem: WorkItem | null = null;
       let creatorDestination = null;
       let creatorOwnerContext: OwnerRequestContext | null = null;
+      if (!parent && creator && !delegation && !inheritCreatorTurn) {
+        this.logger.info('Self-assigned WorkItem names no owner place — it inherits none from its creator', { workItemId: workItem.id, creator });
+        return;
+      }
       if (!parent && creator && !delegation) {
         creatorWorkItem = currentWorkItemOf(await this.storage.getWorkItems(), creator);
         creatorDestination = planWorkDestination({

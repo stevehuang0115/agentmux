@@ -228,6 +228,23 @@ describe('TaskPoolService', () => {
         expect((await service.getAllItems()).find((w) => w.id === review.id)!.metadata?.origin).toMatchObject({ kind: 'owner', conversationId: 'room-brief' });
       });
 
+      /**
+       * Message-routing audit 2026-10-18: an agent's own create-task used to
+       * inherit its last owner turn, so the work later answered in whatever
+       * thread the owner last wrote in. It inherits nothing unless it names
+       * the place (--thread / --conversation).
+       */
+      it("a self-assigned item from create-task (inheritCreatorTurn:false) does not take the creator's owner turn; a named thread is still used", async () => {
+        service.setTurnOriginLookup((s) => (s === 'atlas' ? ownerTurn : undefined));
+        const own = makeWorkItem({ target: 'atlas' });
+        await service.addToPool(own, { creatorSession: 'atlas', inheritCreatorTurn: false });
+        expect((await service.getAllItems()).find((w) => w.id === own.id)!.metadata?.origin).toBeUndefined();
+
+        const named = makeWorkItem({ target: 'atlas', metadata: { ownerThread: 'C0BRIEF:1790856242.596149' } });
+        await service.addToPool(named, { creatorSession: 'atlas', inheritCreatorTurn: false });
+        expect((await service.getAllItems()).find((w) => w.id === named.id)!.metadata?.origin).toMatchObject({ kind: 'owner', conversationId: 'room-brief', threadTs: '1790856242.596149' });
+      });
+
       it('no owner turn and no current work → self work gets no origin; an explicit origin is never replaced', async () => {
         service.setTurnOriginLookup(() => undefined);
         const plain = makeWorkItem({ target: 'atlas' });

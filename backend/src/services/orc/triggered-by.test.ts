@@ -78,3 +78,23 @@ describe('line and metadata', () => {
 		expect(triggeredByMetadata({ ...t, traceId: 'tr-1' }, null, 'tr-9').traceId).toBe('tr-1');
 	});
 });
+
+describe('triggeredByPhrase — delegated_result (message-routing audit 2026-10-18)', () => {
+	const route = { kind: 'owner' as const, conversationId: 'room-brief', thread: 'C0BRIEF01:1.2' };
+
+	it('a result posted where the owner asked needs no line', () => {
+		expect(triggeredByPhrase(trig({ triggerKind: 'delegated_result', sender: LYRA, route }), { postedConversationId: 'room-brief' })).toBeNull();
+	});
+
+	it('elsewhere: names whose result it is and that it passes on the owner request', () => {
+		expect(triggeredByPhrase(trig({ triggerKind: 'delegated_result', sender: LYRA, route }), { postedConversationId: 'room-x' })).toBe(
+			"Lyra's result for work you delegated (passing on your request)",
+		);
+	});
+
+	it('no owner route behind it: just the result', () => {
+		expect(triggeredByPhrase(trig({ triggerKind: 'delegated_result', sender: ELLA }), { postedConversationId: 'room-x' })).toBe(
+			"Ella's result for work you delegated",
+		);
+	});
+});

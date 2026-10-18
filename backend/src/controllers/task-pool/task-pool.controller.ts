@@ -35,7 +35,8 @@ import {
 import { formatError } from '../../utils/format-error.js';
 import { TeamBudgetExceededError } from '../../services/budget/team-budget-gate.service.js';
 import { LoggerService } from '../../services/core/logger.service.js';
-import { ORCHESTRATOR_SESSION_NAME, PROJECT_TICKET_CONSTANTS, TL_DELEGATION_CONSTANTS, OPEN_ITEMS_CONSTANTS, PEOPLE_CONSTANTS, COMPLETION_EVIDENCE_CONSTANTS, TEAM_PAUSE_CONSTANTS } from '../../constants.js';
+import { isMessageRoute } from '../../services/orc/message-route.js';
+import { MESSAGE_ROUTE_CONSTANTS, ORCHESTRATOR_SESSION_NAME, PROJECT_TICKET_CONSTANTS, TL_DELEGATION_CONSTANTS, OPEN_ITEMS_CONSTANTS, PEOPLE_CONSTANTS, COMPLETION_EVIDENCE_CONSTANTS, TEAM_PAUSE_CONSTANTS } from '../../constants.js';
 import { decideCompletion, decideReviewAccept, evidenceRequiredFor, resolveEvidenceEnforcementMode } from '../../services/task-pool/completion-evidence.service.js';
 import { readAgentSessionHeader, resolveTransitionActor } from '../../utils/agent-caller.utils.js';
 import { getTicketIntakeService } from '../../services/v3/ticket-intake.service.js';
@@ -541,7 +542,26 @@ export async function addItem(req: Request, res: Response): Promise<void> {
     // Project tickets §11: delegating project work to a teammate goes through
     // a project ticket — the named one, or one created for it. The workflow
     // then adds the WorkItem itself (under the ticket folder lock).
-    const addOptions = { creatorSession: readAgentSessionHeader(req) };
+    const creatorSession = readAgentSessionHeader(req);
+    // Every message carries its destination (message-routing audit
+    // 2026-10-18): a delegation carries the route its delegator is answering,
+    // so the delegate's [RESULT] comes back naming where the consolidated
+    // answer goes. Self-assigned work never inherits the creator's last owner
+    // thread: it names one (--thread / --conversation) or has none.
+    const selfAssigned = !!creatorSession && workItem.target === creatorSession;
+    if (creatorSession && workItem.target && !selfAssigned) {
+      const meta = (workItem.metadata ?? {}) as Record<string, unknown>;
+      if (!isMessageRoute(meta[MESSAGE_ROUTE_CONSTANTS.PARENT_ROUTE_METADATA_KEY])) {
+        try {
+          const { currentRouteOf } = await import('../../services/orc/reply-destination.wiring.js');
+          const route = await currentRouteOf(creatorSession);
+          if (route) workItem = { ...workItem, metadata: { ...meta, [MESSAGE_ROUTE_CONSTANTS.PARENT_ROUTE_METADATA_KEY]: route } };
+        } catch {
+          // The parent route is a courtesy for the result relay: never block a delegation over it.
+        }
+      }
+    }
+    const addOptions = { creatorSession, ...(selfAssigned ? { inheritCreatorTurn: false } : {}) };
     let routed: RoutedDelegation | null = null;
     try {
       routed = await projectTicketWorkflow().routeDelegation({

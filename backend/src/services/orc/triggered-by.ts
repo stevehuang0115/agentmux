@@ -65,6 +65,14 @@ export function triggeredByPhrase(trigger: TurnTrigger | null, ctx: TriggeredByC
       if (trigger.rootKind === 'scheduled') return `${from} (from a scheduled task)`;
       return from;
     }
+    case 'delegated_result': {
+      // A result on work delegated for the owner, posted where the owner asked, needs no label.
+      const route = trigger.route;
+      if (route?.kind === 'owner' && route.conversationId === ctx.postedConversationId) return null;
+      const who = trigger.sender ?? trigger.textSender;
+      const from = who ? `${name(who)}'s result for work you delegated` : 'a result for work you delegated';
+      return route?.kind === 'owner' || trigger.rootKind === 'owner_message' ? `${from} (passing on your request)` : from;
+    }
     case 'dispatch':
     case 'scheduled': {
       const wi = ctx.workItem;

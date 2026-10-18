@@ -385,13 +385,55 @@ async function agentMessageSenderOf(target: string, req: Request): Promise<Agent
 		if (isOwnerCaller(req)) return null;
 		const sender = readAgentSessionHeader(req);
 		if (!sender || sender === target) return null;
-		// The orchestrator frames its own messages (it writes through /deliver,
-		// and what it passes on is often the owner's request).
+		// The orchestrator frames its own messages on this route.
 		if (sender === ORCHESTRATOR_SESSION_NAME) return null;
-		return await describeAgentSender(sender, (session) => StorageService.getInstance().findMemberBySessionName(session));
+		const found = await describeAgentSender(sender, (session) => StorageService.getInstance().findMemberBySessionName(session));
+		return found ? await withSenderRoute(found) : null;
 	} catch {
 		// The header is a courtesy: never block the delivery over it.
 		return null;
+	}
+}
+
+/**
+ * The sender header of an agent's `/deliver` message (`orchestrator/send-message`,
+ * crewly#1381 item 1): the orchestrator or a team member, never a WorkItem
+ * hand-over (the dispatch frames that) or the owner. The recipient's answer
+ * then goes back to the sender, not into the recipient's last owner thread.
+ *
+ * @param target - Receiving session
+ * @param req - The request (caller identity, body)
+ * @returns The sender, or null when the text goes as it is
+ */
+async function agentDeliverSenderOf(target: string, req: Request): Promise<AgentMessageSender | null> {
+	try {
+		if (req.body?.workItemId) return null;
+		if (isOwnerCaller(req)) return null;
+		const sender = readAgentSessionHeader(req);
+		if (!sender || sender === target) return null;
+		if (sender === ORCHESTRATOR_SESSION_NAME) return await withSenderRoute({ session: sender, name: 'Orc', team: 'Crewly orchestrator' });
+		const found = await describeAgentSender(sender, (session) => StorageService.getInstance().findMemberBySessionName(session));
+		return found ? await withSenderRoute(found) : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * The sender with the route it is answering (message-routing audit
+ * 2026-10-18): the owner thread or work item travels with the message.
+ *
+ * @param sender - The sender
+ * @returns The sender, with its route when it has one
+ */
+async function withSenderRoute(sender: AgentMessageSender): Promise<AgentMessageSender> {
+	try {
+		const { currentRouteOf } = await import('../../services/orc/reply-destination.wiring.js');
+		const route = await currentRouteOf(sender.session);
+		return route ? { ...sender, route } : sender;
+	} catch {
+		// The route is a courtesy here: the header still names the sender.
+		return sender;
 	}
 }
 
@@ -1153,7 +1195,9 @@ export async function deliverMessage(this: ApiContext, req: Request, res: Respon
 			return;
 		}
 		// Replaced below by the hand-over text for a local WorkItem hand-over.
-		let message: string = rawMessage;
+		// An agent's message names its sender and the route it carries.
+		const deliverSender = await agentDeliverSenderOf(sessionName, req);
+		let message: string = deliverSender ? wrapAgentMessage(rawMessage, deliverSender) : rawMessage;
 		// A paused team takes no messages from other agents (specs/2026-10-04-team-pause.md).
 		if (rejectMessageToPausedTeam(sessionName, req, res)) return;
 		// A message from one agent to another: the target now acts for whoever
