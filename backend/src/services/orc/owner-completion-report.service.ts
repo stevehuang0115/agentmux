@@ -130,6 +130,15 @@ export interface OwnerChain {
    * the item is marked verified (#1330), so answers count from here.
    */
   workDoneAt: number;
+  /**
+   * When the work started (earliest start, else creation, of a non-verify
+   * item, epoch ms). A teammate or delegatee usually posts the deliverable in
+   * the owner's thread and only then closes its item (crewly#1376): their
+   * posts count as the report from here.
+   */
+  workStartedAt: number;
+  /** Who the chain's work items were assigned to (sessions) */
+  workers: string[];
 }
 
 const ms = (iso: string | undefined): number => Date.parse(iso ?? '') || 0;
@@ -187,6 +196,8 @@ export function collectOwnerChains(items: readonly WorkItem[], handledThrough: R
       lastCreatedAt: Math.max(...sorted.map((w) => ms(w.createdAt))),
       finishedAt,
       workDoneAt: Math.min(finishedAt, Math.max(...(work.length ? work : sorted).map(handedOver))),
+      workStartedAt: Math.min(...(work.length ? work : sorted).map((w) => ms(w.startedAt) || ms(w.createdAt))),
+      workers: [...new Set(sorted.map((w) => w.target).filter((t): t is string => typeof t === 'string' && !!t))],
     });
   }
   return chains;
@@ -258,6 +269,10 @@ export interface ChainReportRecord {
   finishedAt: number;
   /** Answers posted after this count as the report (see {@link OwnerChain.workDoneAt}); older records lack it */
   answerFrom?: number;
+  /** Teammates' / delegatees' posts after this count as the report (crewly#1376); older records lack it */
+  workStartedAt?: number;
+  /** Sessions the chain's work items were assigned to (crewly#1376); older records lack it */
+  workers?: string[];
   /** Team work: the lead reports it in the team channel (crewly#1371) */
   leadReport?: LeadReport;
   /**
@@ -286,6 +301,8 @@ interface StoreShape {
   ended: Record<string, number>;
   /** Answer key → last agent answer there (epoch ms) */
   answers: Record<string, number>;
+  /** Answer key → agent session → its last post there (epoch ms), when the author is known (crewly#1376) */
+  answersBy: Record<string, Record<string, number>>;
 }
 
 /** Collaborators (all injectable). */
@@ -304,6 +321,8 @@ export interface OwnerCompletionReportDeps {
   notifyLead?: (agentSession: string, text: string) => Promise<boolean>;
   /** Display name of an agent */
   displayNameOf?: (session: string) => string;
+  /** The agent's teammates (sessions of every team it belongs to); their posts can be the report (crewly#1376) */
+  teammatesOf?: (session: string) => Promise<readonly string[]> | readonly string[];
   /** The app-comments command agents run (`bash <skills>/core/app-comments/execute.sh`) */
   appCommentsCmd?: string;
   /** Crewly home (store directory) */
@@ -351,9 +370,17 @@ export class OwnerCompletionReportService {
    *
    * @param key - Answer key (`slack:<ch>:<ts>`, `slack:<ch>`, `chat:<conv>[:<thread>]`, `app:<app>/<comment>`)
    * @param at - When (epoch ms)
+   * @param author - The agent session that posted, when known (also for posts made as the shared Crewly app on its behalf)
    */
-  noteAnswer(key: string, at: number = this.now()): void {
+  noteAnswer(key: string, at: number = this.now(), author?: string): void {
     if (!key) return;
+    if (author) {
+      const by = (this.store.answersBy[key] ??= {});
+      if (at > (by[author] ?? 0)) {
+        by[author] = at;
+        this.answersDirty = true;
+      }
+    }
     const before = this.store.answers[key] ?? 0;
     if (at <= before) return;
     this.store.answers[key] = at;
@@ -366,11 +393,12 @@ export class OwnerCompletionReportService {
    *
    * @param slackChannelId - Channel / DM
    * @param threadTs - Thread root, when in a thread
+   * @param author - The agent session that posted, when known
    */
-  noteSlackAnswer(slackChannelId: string, threadTs?: string): void {
+  noteSlackAnswer(slackChannelId: string, threadTs?: string, author?: string): void {
     if (!slackChannelId) return;
-    if (threadTs) this.noteAnswer(`slack:${slackChannelId}:${threadTs}`);
-    else this.noteAnswer(`slack:${slackChannelId}`);
+    if (threadTs) this.noteAnswer(`slack:${slackChannelId}:${threadTs}`, this.now(), author);
+    else this.noteAnswer(`slack:${slackChannelId}`, this.now(), author);
   }
 
   /**
@@ -388,11 +416,13 @@ export class OwnerCompletionReportService {
    *
    * @param conversationId - chat-v2 channel
    * @param chatThreadId - Thread, when in one
+   * @param author - The agent session that posted, when known
    */
-  noteChatAnswer(conversationId: string, chatThreadId?: string): void {
+  noteChatAnswer(conversationId: string, chatThreadId?: string, author?: string): void {
     if (!conversationId) return;
-    this.noteAnswer(`chat:${conversationId}`);
-    if (chatThreadId) this.noteAnswer(`chat:${conversationId}:${chatThreadId}`);
+    const at = this.now();
+    this.noteAnswer(`chat:${conversationId}`, at, author);
+    if (chatThreadId) this.noteAnswer(`chat:${conversationId}:${chatThreadId}`, at, author);
   }
 
   /**
@@ -486,6 +516,8 @@ export class OwnerCompletionReportService {
       lastCreatedAt: chain.lastCreatedAt,
       finishedAt: chain.finishedAt,
       answerFrom: chain.workDoneAt,
+      workStartedAt: chain.workStartedAt,
+      workers: chain.workers,
       ...(chain.leadReport ? { leadReport: chain.leadReport } : {}),
       stage: 'settling',
       closedSince: now,
@@ -521,11 +553,19 @@ export class OwnerCompletionReportService {
         record.deliverables = deliverableTexts(chain.items);
       }
       record.answerFrom = chain.workDoneAt;
+      record.workStartedAt = chain.workStartedAt;
+      record.workers = chain.workers;
     }
     // Where the owner asked; for team work the lead reports in the team channel instead (crewly#1371).
     const ownerPlace = await this.deps.resolvePlace(record.origin).catch(() => null);
     const place = record.leadReport ? this.teamChannelPlace(record.leadReport) : ownerPlace;
     if (this.answeredSince(record, place, record.answerFrom ?? record.finishedAt)) {
+      this.end(record, 'answered', now);
+      return;
+    }
+    const teamPost = await this.teamPostedDeliverable(record, place);
+    if (teamPost) {
+      this.log.info('A teammate or delegatee already posted the work in the owner\'s place; no report needed', { key: record.key, agent: record.responsible, by: teamPost });
       this.end(record, 'answered', now);
       return;
     }
@@ -592,6 +632,37 @@ export class OwnerCompletionReportService {
       ? record.workItemIds.map((id) => `${TEAM_LEAD_REPORT_CONSTANTS.WORK_ITEM_ANSWER_PREFIX}${id}`)
       : answerKeysOf(record.origin, place);
     return keys.some((k) => (this.store.answers[k] ?? 0) > since);
+  }
+
+  /**
+   * A post in the owner's place, after the work started, by an agent that
+   * did the chain's work or is on the responsible agent's team (crewly#1376):
+   * they deliver in the thread first and close their item after, so a post
+   * of theirs before the handover is the report. The responsible agent's own
+   * early posts (its "on it" ack) do not count; team work the lead reports in
+   * the team channel keeps its own rule (crewly#1371).
+   *
+   * @param record - Chain record
+   * @param place - Where the owner asked
+   * @returns The session that posted, or null
+   */
+  private async teamPostedDeliverable(record: ChainReportRecord, place: ReportPlace | null): Promise<string | null> {
+    if (record.leadReport || record.workStartedAt === undefined) return null;
+    const posts = answerKeysOf(record.origin, place).flatMap((k) =>
+      Object.entries(this.store.answersBy[k] ?? {}).filter(([who, at]) => who !== record.responsible && at > record.workStartedAt!),
+    );
+    if (!posts.length) return null;
+    const workers = new Set(record.workers ?? []);
+    const byWorker = posts.find(([who]) => workers.has(who));
+    if (byWorker) return byWorker[0];
+    let mates: readonly string[] = [];
+    try {
+      mates = (await this.deps.teammatesOf?.(record.responsible)) ?? [];
+    } catch {
+      /* unknown teams: only the chain's own workers count */
+    }
+    const teammates = new Set(mates);
+    return posts.find(([who]) => teammates.has(who))?.[0] ?? null;
   }
 
   /**
@@ -719,6 +790,7 @@ export class OwnerCompletionReportService {
     for (const [k, at] of Object.entries(this.store.answers)) {
       if (now - at > C.RECORD_TTL_MS) {
         delete this.store.answers[k];
+        delete this.store.answersBy[k];
         changed = true;
       }
     }
@@ -726,7 +798,7 @@ export class OwnerCompletionReportService {
   }
 
   private load(): StoreShape {
-    const fresh: StoreShape = { version: 1, since: this.now(), handledThrough: {}, active: {}, ended: {}, answers: {} };
+    const fresh: StoreShape = { version: 1, since: this.now(), handledThrough: {}, active: {}, ended: {}, answers: {}, answersBy: {} };
     try {
       if (!existsSync(this.file)) {
         this.store = fresh;
@@ -741,6 +813,7 @@ export class OwnerCompletionReportService {
         active: raw.active && typeof raw.active === 'object' ? raw.active : {},
         ended: raw.ended && typeof raw.ended === 'object' ? raw.ended : {},
         answers: raw.answers && typeof raw.answers === 'object' ? raw.answers : {},
+        answersBy: raw.answersBy && typeof raw.answersBy === 'object' ? raw.answersBy : {},
       };
     } catch (err) {
       this.log.warn('Owner completion report store unreadable; starting fresh', { error: err instanceof Error ? err.message : String(err) });

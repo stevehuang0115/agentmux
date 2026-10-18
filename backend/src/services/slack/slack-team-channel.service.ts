@@ -395,6 +395,26 @@ export function slackChannelNameFor(teamName: string, prefix = ''): string {
 }
 
 /**
+ * Whether a Slack thread's owner's machine provably received a room message:
+ * Cloud's delivery facts name it among the machines it pushed to, and Cloud
+ * has not marked that machine as unproven in the room. Without delivery
+ * facts (older Cloud builds) nothing is proven: the caller keeps the room's
+ * rules, so a message is never left with nobody (crewly#1376).
+ *
+ * @param room - Cloud's room presence for the message
+ * @param owner - The thread owner's roster entry
+ * @returns True when the owner's machine has the message
+ */
+export function threadOwnerMachineHasIt(
+  room: { delivery?: Pick<SlackRoomDelivery, 'targets'> },
+  owner: { instanceId: string; verified?: boolean },
+): boolean {
+  const targets = room.delivery?.targets;
+  if (!Array.isArray(targets) || targets.length === 0 || !owner.instanceId) return false;
+  return owner.verified !== false && targets.includes(owner.instanceId);
+}
+
+/**
  * The machine that owns an un-@'d message in a shared room, from Cloud's
  * presence snapshot alone — every machine computes the same answer from
  * the same snapshot (its own agents included, judged by the snapshot, not
@@ -2538,7 +2558,8 @@ export class SlackTeamChannelService {
       // stale or retired machine never answers. Every machine judges by the
       // same snapshot (its own agents included). A card's asker is the
       // exception: its machine's decision path takes the reply.
-      const live = !room || room.members.some((m) => localAgentSession(m.agentSession) === localAgentSession(agent.session) && m.awake);
+      const ownerMember = room?.members.find((m) => localAgentSession(m.agentSession) === localAgentSession(agent.session)) ?? null;
+      const live = !room || !!ownerMember?.awake;
       if (live || via === 'card') {
         if (agent.local) return { ...base, pinned: { session: agent.session, answeredBy: agent.session, name: agent.name, reason: 'thread-owner' } };
         // An awake asker's machine answers a card through the decision path —
@@ -2547,6 +2568,22 @@ export class SlackTeamChannelService {
         // asker that is not awake (its machine may be offline).
         const watch = !(via === 'card' && live);
         return { ...base, pinned: { session: null, answeredBy: agent.session, name: agent.name, reason: 'thread-owner', ...(watch ? watchFlags() : {}) } };
+      }
+      // The thread owner is asleep, but its machine provably has the message
+      // (Cloud pushed it there): that machine wakes it, and no agent of
+      // another machine answers by its own room rules (crewly#1376: the Air's
+      // Rex, not on the team, answered an un-@'d owner message in a thread
+      // Atlas on the Mac owned).
+      if (room && ownerMember && threadOwnerMachineHasIt(room, ownerMember)) {
+        if (agent.local && !isSessionPaused(agent.session)) {
+          return { ...base, pinned: { session: agent.session, answeredBy: agent.session, name: agent.name, reason: 'thread-owner' } };
+        }
+        if (!agent.local) {
+          // Waking takes a minute or two: the watcher here only tells the
+          // owner if nothing came, and never hands the message to our agents.
+          const watch = isWatcher || noteOnlyHere ? { watchHere: true as const, watchNoteOnly: true as const } : {};
+          return { ...base, pinned: { session: null, answeredBy: agent.session, name: agent.name, reason: 'thread-owner', ...watch } };
+        }
       }
       return ownsRoom ? base : deferToRoomOwner;
     } catch (err) {

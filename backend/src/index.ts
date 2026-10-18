@@ -7506,6 +7506,13 @@ void (async () => {
 						},
 					}),
 				displayNameOf: (session) => names.get(session) ?? session,
+				teammatesOf: async (session) => {
+					const teams = await this.storageService.getTeams().catch(() => []);
+					const sessions = teams
+						.filter((team) => (team.members ?? []).some((m) => m.sessionName === session))
+						.flatMap((team) => (team.members ?? []).map((m) => m.sessionName));
+					return sessions.filter((s): s is string => !!s);
+				},
 				appCommentsCmd: `bash ${skillsRoot}/core/app-comments/execute.sh`,
 			});
 			setOwnerCompletionReport(service);
@@ -7513,6 +7520,8 @@ void (async () => {
 			const slack = getSlackService();
 			slack.on('outbound', (post: { channelId: string; threadTs?: string; notAnAnswer?: boolean }) => wiring.onSlackOutboundPost(service, post));
 			slack.on('message', (message: { channelId: string; threadTs?: string; authorAgentSession?: string }) => wiring.onSlackInboundPost(service, message));
+			const { onAgentSlackPost } = await import('./services/messaging/owner-thread-sentinel.service.js');
+			onAgentSlackPost((post) => wiring.onAgentSlackPost(service, post));
 			service.start();
 			this.logger.info('Owner completion report started', { active: service.activeRecords.length });
 		} catch (error) {

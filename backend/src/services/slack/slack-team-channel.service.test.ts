@@ -28,6 +28,7 @@ import {
   isAssistantRoom,
   isDirectRequest,
   roomWatcherInstance,
+  threadOwnerMachineHasIt,
   roomTakeoverInstance,
   roomOwnerInstance,
   setSlackTeamChannelService,
@@ -4738,6 +4739,63 @@ describe('one responder per owner message (specs/2026-10-03-one-responder-per-me
       // Recorded for the reply gate: Aria answers this one.
       expect(chat.messages.find((m) => m.id === result!.message.id)?.metadata?.roomResponders).toEqual(['pa-aria']);
       service.stop();
+    });
+
+    describe('crewly#1376: an asleep thread owner whose machine has the message keeps the thread', () => {
+      const delivered = (owner: string) => ({ owner, targets: ['mac', 'air'], rule: 'thread' as const, reason: 'test' });
+      /** Atlas (this machine, no own bot) spoke last in the thread. */
+      const atlasThread = (): Promise<SlackThreadContext> =>
+        Promise.resolve({
+          kind: 'thread',
+          channelId: 'C1',
+          threadTs: '1001.0',
+          totalBefore: 2,
+          messages: [
+            { ts: '1001.0', text: '@Atlas 网站方案做个 PDF', isBot: false, authorName: 'Steve', userId: 'UOWNER' },
+            { ts: '1004.0', text: 'PDF 在这里', isBot: true, authorName: 'Atlas', usernameOverride: true, userId: 'UMASTER' },
+          ],
+        });
+
+      it('another machine\'s thread owner is asleep but has it: nobody here answers by the room rules; the watch here only notes', async () => {
+        service = buildService(async () => null, { resolveInstanceId: async () => 'mac' });
+        await setUpThread(service);
+        const result = await service.routeInbound(ownerReply({ text: '你再发一次', threadContext: ariaThread(), room: { ...sharedRoom({ aria: false }), delivery: delivered('mac') } }));
+        // Before: Ella (the room rules here) answered — the Air's Rex in the incident.
+        expect(prompts).toEqual([]);
+        expect(result!.dispatch?.contextOnly).toEqual([ATLAS, ELLA]);
+        expect([...unansweredOf(service).values()]).toEqual([expect.objectContaining({ noteOnly: true })]);
+        expect(chat.messages.find((m) => m.id === result!.message.id)?.metadata?.roomResponders).toEqual(['pa-aria']);
+        service.stop();
+      });
+
+      it('this machine\'s thread owner is asleep: it is woken here even when Cloud named another machine', async () => {
+        service = buildService(async () => null, { resolveInstanceId: async () => 'mac' });
+        await setUpThread(service);
+        await service.routeInbound(ownerReply({ text: '你再发一次', threadContext: atlasThread(), room: { ...sharedRoom({ atlas: false }), delivery: delivered('air') } }));
+        expect(prompts.map((p) => p.session)).toEqual([ATLAS]);
+        service.stop();
+      });
+
+      it('negative: without Cloud\'s delivery facts the owner\'s machine is not proven to have it — the room rules still apply', async () => {
+        service = buildService(async () => null, { resolveInstanceId: async () => 'mac' });
+        await setUpThread(service);
+        await service.routeInbound(ownerReply({ threadContext: ariaThread(), room: sharedRoom({ aria: false }) }));
+        expect(prompts.map((p) => p.session)).toEqual([ELLA]);
+        service.stop();
+      });
+
+      it('negative: the owner\'s machine was not pushed the message (or is unproven) — the room rules still apply', async () => {
+        service = buildService(async () => null, { resolveInstanceId: async () => 'mac' });
+        await setUpThread(service);
+        await service.routeInbound(
+          ownerReply({ threadContext: ariaThread(), room: { ...sharedRoom({ aria: false }), delivery: { owner: 'mac', targets: ['mac'], rule: 'thread' as const, reason: 'test' } } }),
+        );
+        expect(prompts.map((p) => p.session)).toEqual([ELLA]);
+        expect(threadOwnerMachineHasIt({ delivery: { targets: ['mac', 'air'] } }, { instanceId: 'air', verified: false })).toBe(false);
+        expect(threadOwnerMachineHasIt({ delivery: { targets: ['mac', 'air'] } }, { instanceId: 'air' })).toBe(true);
+        expect(threadOwnerMachineHasIt({}, { instanceId: 'air' })).toBe(false);
+        service.stop();
+      });
     });
 
     it('a decision asker that is not in this room, with the card still open, does not leave the message with nobody', async () => {

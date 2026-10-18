@@ -174,11 +174,24 @@ describe('findPriorRoomAnswer (reply gate)', () => {
     expect(findPriorRoomAnswer(t2, ELLA, names)).toMatchObject({ bySession: ATLAS });
   });
 
-  it('only an answer from the chosen responder holds; no recorded responders, interim notes and earlier answers never hold', () => {
-    expect(findPriorRoomAnswer([owner('q', [ATLAS]), said('ops-noah', 'chiming in')], ELLA, names)).toBeNull();
+  it('no recorded responders, interim notes and earlier answers never hold', () => {
     expect(findPriorRoomAnswer([row({ content: 'q' }), said(ATLAS, 'a')], ELLA, names)).toBeNull();
     expect(findPriorRoomAnswer([owner('q', [ATLAS]), said(ATLAS, 'on it (~5 min)', { metadata: { interim: true } })], ELLA, names)).toBeNull();
     expect(findPriorRoomAnswer([owner('q1', [ATLAS]), said(ATLAS, 'a1'), owner('q2', [ATLAS])], ELLA, names)).toBeNull();
+  });
+
+  it('crewly#1376: once any agent answered the owner\'s latest message, a non-responder\'s repeat is held (the chosen responder\'s answer is named first)', () => {
+    // 「你再发一次」: Rex (another machine) answered first; Sage must not answer again, Atlas (the thread owner) still may.
+    const rex = row({ senderId: 'Rex (agent)', content: 'Atlas 能再发一次吗', metadata: { remoteAgentSession: 'rednote-rex' } });
+    const t = [owner('你再发一次', [ATLAS]), rex];
+    expect(findPriorRoomAnswer(t, ELLA, names)).toMatchObject({ by: 'Rex', bySession: 'rednote-rex', byResponder: false });
+    expect(findPriorRoomAnswer(t, ATLAS, names)).toBeNull();
+    const t2 = [...t, said(ATLAS, '已重新发了 PDF')];
+    expect(findPriorRoomAnswer(t2, ELLA, names)).toMatchObject({ bySession: ATLAS });
+    expect(findPriorRoomAnswer(t2, ELLA, names)?.byResponder).toBeUndefined();
+    // An answer that asks this agent in does not hold it.
+    expect(findPriorRoomAnswer([owner('q', [ATLAS]), said('ops-noah', '@Ella can you take this?')], ELLA, names)).toBeNull();
+    expect(heldReplyMessage({ by: 'Rex', excerpt: 'x', byResponder: false })).toContain('Held, not posted: Rex already replied to the owner\'s latest message in this thread: "x"');
   });
 
   it('a chosen responder on another machine, recorded here, holds under its name', () => {
