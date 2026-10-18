@@ -101,3 +101,59 @@ describe('TurnTriggerTracker', () => {
 		expect(t.ownerAskedRecently('ella', 'conv-1', NOW + C.OWNER_ANSWER_WINDOW_MS + 1)).toBe(false);
 	});
 });
+
+describe('routes carried by agent messages and results (message-routing audit 2026-10-18)', () => {
+	const ROUTE = '{route: owner room-brief thread C0BRIEF01:1790856242.596149}';
+
+	it('an agent message header carries its route', () => {
+		const text = `[MESSAGE from Atlas (Think Tank) — a colleague, not the owner. Answer with send-message --to think-tank-atlas-b4e166f6; do not post it in an owner thread. It concerns x ${ROUTE}; Atlas answers the owner on it.]\nplease check`;
+		expect(classifyTurnTrigger(text)).toEqual({
+			triggerKind: 'agent_message',
+			route: { kind: 'owner', conversationId: 'room-brief', thread: 'C0BRIEF01:1790856242.596149' },
+		});
+	});
+
+	it('a [RESULT] relay is a delegated_result naming sender, work item and route', () => {
+		const text = `[RESULT] From sage-1a2b3c4d about WorkItem wi-abcdef "Note" (work you delegated while answering x ${ROUTE}. Give the owner …):\nNote is ready.`;
+		expect(classifyTurnTrigger(text)).toEqual({
+			triggerKind: 'delegated_result',
+			textSender: 'sage-1a2b3c4d',
+			workItemId: 'wi-abcdef',
+			route: { kind: 'owner', conversationId: 'room-brief', thread: 'C0BRIEF01:1790856242.596149' },
+		});
+	});
+
+	it('a token quoted in the body (not the header line) is not read as the route', () => {
+		const text = `[RESULT] From sage-1a2b3c4d (work you delegated):\nthe owner wrote ${ROUTE}`;
+		expect(classifyTurnTrigger(text).route).toBeUndefined();
+	});
+
+	it('a [TASK HANDOFF] is a dispatch of its work item', () => {
+		expect(classifyTurnTrigger('[TASK HANDOFF] from Atlas — WorkItem: wi-abcdef {route: work-item wi-abcdef}\n…')).toEqual(
+			expect.objectContaining({ triggerKind: 'dispatch', workItemId: 'wi-abcdef' }),
+		);
+	});
+
+	it('an owner chat message keeps its Slack thread', () => {
+		expect(classifyTurnTrigger('[CHAT:room-1] <steve@Ella>\n[SLACK-THREAD:C0ROOM001:1790000000.000100]\n\nhi')).toEqual(
+			expect.objectContaining({ triggerKind: 'owner_message', conversationId: 'room-1', thread: 'C0ROOM001:1790000000.000100' }),
+		);
+	});
+
+	it('routedTrigger keeps what the agent answers; a later reminder does not replace it', () => {
+		const t = new TurnTriggerTracker();
+		const NOW = 1_790_000_000_000;
+		t.noteDelivery('ella', '[CHAT:room-1] <steve@Ella>\n\nupdate the sheet', {}, NOW);
+		t.noteDelivery('ella', '[FOLLOW-UP TKT-187] still open', {}, NOW + 1000);
+		expect(t.trigger('ella', NOW + 2000)?.triggerKind).toBe('follow_up');
+		expect(t.routedTrigger('ella', NOW + 2000)).toEqual(expect.objectContaining({ triggerKind: 'owner_message', conversationId: 'room-1' }));
+		expect(t.routedTrigger('ella', NOW + C.FRESH_MS + 1)).toBeNull();
+	});
+
+	it('a delegated result is attributed to the delegate named in the text', () => {
+		const t = new TurnTriggerTracker();
+		const tr = t.noteDelivery('atlas', `[RESULT] From sage-1a2b3c4d about WorkItem wi-abcdef "Note" (x ${ROUTE}):\nok`, {}, 1000);
+		expect(tr).toEqual(expect.objectContaining({ triggerKind: 'delegated_result', sender: 'sage-1a2b3c4d' }));
+		expect(tr.route).toEqual({ kind: 'owner', conversationId: 'room-brief', thread: 'C0BRIEF01:1790856242.596149' });
+	});
+});

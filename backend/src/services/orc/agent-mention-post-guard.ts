@@ -8,13 +8,16 @@
  * a cost/timing report about another project, in the middle of the owner's
  * conversation.
  *
- * Conservative by construction — the post is refused only when ALL hold:
- *  - the poster's latest input is another agent's message (its turn was not
- *    prompted by this conversation);
+ * R6 of the message-routing audit (2026-10-18): agents never converse
+ * inside an owner thread, whatever prompted the post. The post is taken out
+ * of the thread (and delivered privately to the agents it addresses) when
+ * BOTH hold:
  *  - the owner wrote to the poster in this conversation recently (it is an
  *    owner thread, not an agents' room);
  *  - the text @-mentions someone, and every @-mention is a known agent (an
  *    unknown name or the owner keeps the post).
+ * Only the final consolidated answer, written to the owner, goes in the
+ * owner's thread.
  *
  * Pure decision; the lookups are injected.
  *
@@ -42,8 +45,8 @@ export interface AgentMentionPostInput {
 
 /** A refused post. */
 export interface MisdirectedAgentMention {
-  /** The agent whose message the poster is answering */
-  sender: string;
+  /** The agent whose message the poster is answering, when its latest input is one */
+  sender?: string;
   /** Agent sessions the post @-mentions */
   mentioned: string[];
   /** What the poster is told */
@@ -79,8 +82,8 @@ export function mentionedNames(text: string): string[] {
  */
 export function misdirectedAgentMention(input: AgentMentionPostInput): MisdirectedAgentMention | null {
   const { latest } = input;
-  if (latest?.kind !== 'agent' || !latest.sender || latest.sender === input.session) return null;
   if (!input.ownerAskedHere) return null;
+  const sender = latest?.kind === 'agent' && latest.sender && latest.sender !== input.session ? latest.sender : undefined;
   const names = mentionedNames(input.content);
   if (names.length === 0) return null;
   const mentioned: string[] = [];
@@ -89,13 +92,14 @@ export function misdirectedAgentMention(input: AgentMentionPostInput): Misdirect
     if (!agent || agent === input.session) return null;
     if (!mentioned.includes(agent)) mentioned.push(agent);
   }
-  const to = mentioned.includes(latest.sender) ? latest.sender : mentioned[0];
+  const to = sender && mentioned.includes(sender) ? sender : mentioned[0];
+  const from = sender ? `, your latest message came from ${sender} (another agent),` : '';
   return {
-    sender: latest.sender,
+    ...(sender ? { sender } : {}),
     mentioned,
     message:
-      `Not posted: this is the owner's thread, your latest message came from ${latest.sender} (another agent), ` +
-      `and your post only @-mentions agents. Send it to the agent instead: send-message --to ${to} "<your message>". ` +
-      'If the owner should read it, post it without the @-mention.',
+      `Not posted: this is the owner's thread${from} and your post only @-mentions agents. Agents do not talk to each other in the owner's thread. ` +
+      `Send it to the agent instead: send-message --to ${to} "<your message>". ` +
+      'Post in this thread only the final answer to the owner, without the @-mention.',
   };
 }

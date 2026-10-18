@@ -831,6 +831,8 @@ describe('ChatV2DispatcherService', () => {
       // Multi-agent threads must converge (owner, 2026-09-19): two rounds
       // each, the team leader writes the conclusion, then silence.
       expect(prompt).toContain('speaks at most two rounds');
+      // R6 (message-routing audit 2026-10-18): no agent-to-agent talk in an owner thread.
+      expect(prompt).toContain('agents do not talk to each other');
       expect(prompt).toContain('"Conclusion"');
     });
 

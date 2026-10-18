@@ -314,6 +314,12 @@ TASK_ID=$(echo "$POOL_RESULT" | jq -r '.data.id // .workItemId // empty' 2>/dev/
 # A refusal by the project-ticket rules (e.g. --ticket already being worked,
 # done, or unknown) means the delegation must NOT go out: stop here instead
 # of the deliver-anyway path below.
+if [ "$POOL_OK" != "true" ] && printf '%s' "$POOL_ERR" | grep -q 'owner_thread_unreadable'; then
+  REFUSAL=$(printf '%s' "$POOL_ERR" | grep 'owner_thread_unreadable' | tail -1 | jq -r '.details.error // empty' 2>/dev/null || true)
+  jq -n --arg error "${REFUSAL:-The --thread you named is not a thread Crewly can read}" --arg to "$TO" \
+    '{success: false, error: $error, to: $to, hint: "Nothing was delivered. Fix --thread and delegate again."}'
+  exit 1
+fi
 if [ "$POOL_OK" != "true" ] && printf '%s' "$POOL_ERR" | grep -q 'project_ticket_refused'; then
   REFUSAL=$(printf '%s' "$POOL_ERR" | grep 'project_ticket_refused' | tail -1 | jq -r '.details.error // empty' 2>/dev/null || true)
   jq -n --arg error "${REFUSAL:-Delegation refused by the project-ticket rules}" --arg to "$TO" --arg ticket "${PROJECT_TICKET:-}" \

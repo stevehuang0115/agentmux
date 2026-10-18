@@ -61,3 +61,18 @@ describe('agent-message-envelope', () => {
     });
   });
 });
+
+describe('agent-message-envelope — the route travels in the header (message-routing audit 2026-10-18)', () => {
+  it("names the sender's route as a token the recipient's harness reads back", () => {
+    const route = { kind: 'owner' as const, conversationId: 'room-brief', thread: 'C0BRIEF01:1790856242.596149' };
+    const wrapped = wrapAgentMessage('Please check the launch figures.', { ...ATLAS, route });
+    const header = wrapped.split('\n')[0];
+    expect(header).toContain('{route: owner room-brief thread C0BRIEF01:1790856242.596149}');
+    expect(header).toContain('Atlas answers the owner on it');
+    expect(parseAgentMessageSender(wrapped)).toBe(ATLAS.session);
+  });
+
+  it('no route → the header is unchanged', () => {
+    expect(formatAgentMessageHeader(ATLAS)).not.toContain('{route:');
+  });
+});

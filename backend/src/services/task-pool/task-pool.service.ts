@@ -239,6 +239,15 @@ export interface AddToPoolOptions {
    * owner's request (the ticket's own link already says which ticket it is).
    */
   ownerOriginOnly?: boolean;
+  /**
+   * Whether an item the creator assigns to ITSELF inherits the creator's
+   * current owner turn, owner context or current work's origin (default
+   * true for harness-made items). An agent's own `create-task` passes false:
+   * its item gets an owner place only when it names one
+   * (`--thread` / `--conversation`), never the creator's last owner thread
+   * (message-routing audit 2026-10-18).
+   */
+  inheritCreatorTurn?: boolean;
 }
 
 /**
@@ -840,7 +849,7 @@ export class TaskPoolService {
 
     // An owner-origin-only add (a ticket assignment) keeps its own links.
     if (!options.ownerOriginOnly) this.inferRequestIdFromTurn(workItem, options.creatorSession);
-    await this.inheritOrigin(workItem, options.creatorSession, options.ownerOriginOnly === true);
+    await this.inheritOrigin(workItem, options.creatorSession, options.ownerOriginOnly === true, options.inheritCreatorTurn !== false);
     await this.routeUntargeted(workItem, options.creatorSession);
     assignWorkItemTrace(workItem, options.creatorSession);
 
@@ -897,8 +906,8 @@ export class TaskPoolService {
    * @param creatorSession - The agent creating it, when known
    * @param ownerOnly - Stamp only an owner origin
    */
-  private async inheritOrigin(workItem: WorkItem, creatorSession?: string, ownerOnly = false): Promise<void> {
-    await this.inheritOriginOnly(workItem, creatorSession, ownerOnly);
+  private async inheritOrigin(workItem: WorkItem, creatorSession?: string, ownerOnly = false, inheritCreatorTurn = true): Promise<void> {
+    await this.inheritOriginOnly(workItem, creatorSession, ownerOnly, inheritCreatorTurn);
     await this.stampLeadReport(workItem, creatorSession);
   }
 
@@ -948,8 +957,9 @@ export class TaskPoolService {
    * @param workItem - The item about to be stored
    * @param creatorSession - The agent creating it, when known
    * @param ownerOnly - Stamp only an owner origin
+   * @param inheritCreatorTurn - A self-assigned item may take the creator's turn / context / current work origin
    */
-  private async inheritOriginOnly(workItem: WorkItem, creatorSession?: string, ownerOnly = false): Promise<void> {
+  private async inheritOriginOnly(workItem: WorkItem, creatorSession?: string, ownerOnly = false, inheritCreatorTurn = true): Promise<void> {
     try {
       const meta = (workItem.metadata ?? {}) as Record<string, unknown>;
       const parentId = [workItem.parentWorkItemId, meta.verifyOf, meta.sourceWorkItemId].find(
@@ -967,6 +977,12 @@ export class TaskPoolService {
         ? (await this.explicitOwnerOrigin(meta[TL_DELEGATION_CONSTANTS.OWNER_THREAD_FIELD], creator)) ??
           this.explicitOwnerConversation(meta[TL_DELEGATION_CONSTANTS.OWNER_CONVERSATION_FIELD], creator)
         : null;
+      if (!explicit && meta[TL_DELEGATION_CONSTANTS.OWNER_THREAD_FIELD] !== undefined && !isWorkItemOrigin(meta[WORK_ITEM_DESTINATION_CONSTANTS.METADATA_KEY])) {
+        this.logger.warn('WorkItem names an owner thread Crewly cannot read — it gets no owner origin from it', {
+          workItemId: workItem.id,
+          ownerThread: meta[TL_DELEGATION_CONSTANTS.OWNER_THREAD_FIELD],
+        });
+      }
       if (explicit?.kind === 'owner') {
         const askedAt = await this.ownerAskedAt(explicit, creator, now);
         if (isOwnerRequestTooOld(askedAt, now)) {
@@ -985,6 +1001,10 @@ export class TaskPoolService {
       let creatorWorkItem: WorkItem | null = null;
       let creatorDestination = null;
       let creatorOwnerContext: OwnerRequestContext | null = null;
+      if (!parent && creator && !delegation && !inheritCreatorTurn) {
+        this.logger.info('Self-assigned WorkItem names no owner place — it inherits none from its creator', { workItemId: workItem.id, creator });
+        return;
+      }
       if (!parent && creator && !delegation) {
         creatorWorkItem = currentWorkItemOf(await this.storage.getWorkItems(), creator);
         creatorDestination = planWorkDestination({
@@ -1024,6 +1044,21 @@ export class TaskPoolService {
   }
 
   /**
+   * Whether a delegation names an owner thread (`delegate-task --thread`)
+   * Crewly cannot read. Such a delegation is refused rather than created
+   * without the owner's place: Atlas's `<conversation>:<thread>` was dropped
+   * silently, and Kai's PDF went to the channel top level (2026-10-18).
+   *
+   * @param rawKey - `metadata.ownerThread`
+   * @param creator - The delegating agent, when known
+   * @returns True when a thread is named and unreadable
+   */
+  async isOwnerThreadUnreadable(rawKey: unknown, creator?: string): Promise<boolean> {
+    if (rawKey === undefined || rawKey === null || (typeof rawKey === 'string' && !rawKey.trim())) return false;
+    return !(await this.explicitOwnerOrigin(rawKey, creator).catch(() => null));
+  }
+
+  /**
    * The owner origin of an explicitly named Slack thread: the creator's own
    * turn origin when it is that thread (it knows the conversation), else the
    * conversation the Slack channel maps to.
@@ -1035,7 +1070,14 @@ export class TaskPoolService {
   private async explicitOwnerOrigin(rawKey: unknown, creator?: string): Promise<ReturnType<typeof ownerOriginFromThreadKey>> {
     const key = parseSlackThreadKey(rawKey);
     if (!key) {
-      if (typeof rawKey !== 'string' || !CHAT_MESSAGE_ID_RE.test(rawKey.trim()) || !this.chatMessageThreadLookup) return null;
+      if (typeof rawKey !== 'string') return null;
+      // `<conversation id>:<thread id>` — the `[CHAT:<id>]` conversation and
+      // the `--thread` id from a delegator's own reply command. Atlas passed
+      // exactly this (2026-10-18, #daily-info); it was not read, the work got
+      // no owner origin, and Kai's PDF went to the channel top level.
+      const pair = CHAT_CONVERSATION_THREAD_RE.exec(rawKey.trim());
+      if (pair) return this.chatThreadOwnerOrigin(pair[1], pair[2]);
+      if (!CHAT_MESSAGE_ID_RE.test(rawKey.trim()) || !this.chatMessageThreadLookup) return null;
       const found = await this.chatMessageThreadLookup(rawKey.trim()).catch(() => null);
       return found ? ownerOriginFromThreadKey(formatSlackThreadKey(found.slackChannelId, found.threadTs), found.conversationId) : null;
     }
@@ -1047,6 +1089,27 @@ export class TaskPoolService {
       conversationId = await this.slackThreadConversationLookup(key.slackChannelId, key.threadTs).catch(() => null);
     }
     return ownerOriginFromThreadKey(keyText, conversationId);
+  }
+
+  /**
+   * The owner origin of a chat conversation + thread pair. The thread's Slack
+   * place comes along when the chat message has one; a thread of another
+   * conversation contradicts the pair and gives nothing.
+   *
+   * @param conversationId - chat-v2 conversation id
+   * @param threadId - chat-v2 thread root message id in it
+   * @returns The origin, or null when the pair contradicts itself
+   */
+  private async chatThreadOwnerOrigin(conversationId: string, threadId: string): Promise<WorkItemOrigin | null> {
+    const found = this.chatMessageThreadLookup ? await this.chatMessageThreadLookup(threadId).catch(() => null) : null;
+    if (found && found.conversationId !== conversationId) {
+      this.logger.warn('Delegation named a thread of another conversation — not used', { conversationId, threadId, threadConversation: found.conversationId });
+      return null;
+    }
+    if (found) {
+      return { kind: 'owner', conversationId, slackChannelId: found.slackChannelId, threadTs: found.threadTs, chatThreadId: threadId };
+    }
+    return ownerOriginFromConversation(conversationId, threadId);
   }
 
   /**
@@ -4057,6 +4120,8 @@ function matchesFilters(wi: WorkItem, filters?: PoolFilters): boolean {
  */
 /** A chat-v2 message id (UUID). */
 const CHAT_MESSAGE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** `<chat conversation id>:<chat thread id>` — both UUIDs. */
+const CHAT_CONVERSATION_THREAD_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
 /**
  * Default {@link TaskPoolService.chatMessageThreadLookup}: the Slack thread a

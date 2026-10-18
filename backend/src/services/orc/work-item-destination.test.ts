@@ -301,7 +301,9 @@ describe('agent-initiated delegations (crewly#1357)', () => {
     expect(originOfWorkItem(item)).toEqual(origin);
     // Even a fresh owner turn of the member does not redirect the result to the owner once the item is its current work.
     const dest = planWorkDestination({ workItem: item, ownerOrigin: owner(NOW - 3 * HOUR), now: NOW });
-    expect(dest).toEqual({ kind: 'agent', sessionName: 'ella', reason: expect.stringContaining('delegated by ella on its own initiative') });
+    // The destination names the work item, so the result relay is about this one,
+    // not the delegate's newest item (message-routing audit 2026-10-18).
+    expect(dest).toEqual({ kind: 'agent', sessionName: 'ella', workItemId: 'x-prep', reason: expect.stringContaining('delegated by ella on its own initiative') });
   });
 
   it('a delegation made while answering the owner does NOT inherit that thread: the origin is the delegator (incident 15:47Z)', () => {

@@ -1,7 +1,17 @@
 import type { WorkItem } from '../../types/v2/work-item.types.js';
 import type { WorkDestinationDeps } from './work-item-destination.wiring.js';
 import type { ReplyResolverDeps } from './reply-destination-resolver.js';
-import { deliverReply, notDelivered, resetReplyDeliveryGuardForTesting, resolveSlackPlace, type ReplyDeliveryDeps } from './reply-destination.wiring.js';
+import {
+  checkLandedRoute,
+  deliverReply,
+  getRouteCheckStats,
+  internalCoordinationThread,
+  notDelivered,
+  resetReplyDeliveryGuardForTesting,
+  resetRouteCheckStatsForTesting,
+  resolveSlackPlace,
+  type ReplyDeliveryDeps,
+} from './reply-destination.wiring.js';
 import { AgentPromptReferenceService } from './agent-prompt-reference.service.js';
 
 function resolver(over: Partial<ReplyResolverDeps> = {}): ReplyResolverDeps {
@@ -70,12 +80,22 @@ describe('deliverReply', () => {
   });
 
   it('a hint that does not take it → error, never a guessed place (#1136)', async () => {
-    const deliver = jest.fn(async (i: { conversationId: string }) => (i.conversationId === 'room-ce' ? null : `msg-${i.conversationId}`));
+    const deliver = jest.fn(async (i: { conversationId: string }) => (i.conversationId === 'dm-owen' ? null : `msg-${i.conversationId}`));
     const d = deps({ deliverToConversation: deliver });
-    const r = await deliverReply({ session: 'owen', content: 'x', hints: { conversationId: 'room-ce' } }, d);
+    const r = await deliverReply({ session: 'owen', content: 'x', hints: { conversationId: 'dm-owen' } }, d);
     expect(r.ok).toBe(false);
     expect(!r.ok && r.error).toMatch(/NOT delivered/);
     expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  // Message-routing audit 2026-10-18: a Slack channel named without a thread
+  // used to be posted at its top level; it is refused before any post.
+  it('a Slack-channel conversation named without a thread is refused before posting', async () => {
+    const deliver = jest.fn(async (i: { conversationId: string }) => `msg-${i.conversationId}`);
+    const d = deps({ deliverToConversation: deliver });
+    const r = await deliverReply({ session: 'owen', content: 'x', hints: { conversationId: 'room-ce' } }, d);
+    expect(!r.ok && r.error).toMatch(/name the thread with --thread/);
+    expect(deliver).not.toHaveBeenCalled();
   });
 
   it('a --thread in a channel the sender is not in fails loudly instead of posting elsewhere (#1136)', async () => {
@@ -134,15 +154,18 @@ describe('deliverReply — CREW-335: a reply to a decision whose card has no cha
     expect(post).toHaveBeenCalledWith(expect.objectContaining({ target: 'C0CE00001', threadTs: '1791427303.380879' }));
   });
 
-  it('the Slack thread refuses too → a new top-level post in the room channel', async () => {
+  // Message-routing audit 2026-10-18: this used to retry as a new top-level
+  // post in the room channel — a guess the owner never asked for. Now the
+  // reply fails loudly and nothing is posted at the top level.
+  it('the Slack thread refuses too → not delivered, never a new top-level post', async () => {
     const post = jest.fn(async (r: { target: string; threadTs?: string }) => {
       if (r.threadTs) throw new Error('thread_not_found');
       return { channelId: r.target, messageTs: '9.9' };
     });
     const d = deps({ deliverToConversation: jest.fn(async () => null), workDestination: async () => work(post as never) }, decisionResolver);
     const r = await deliverReply({ session: 'nova', content: 'done', reference: { decisionId: 'D-457' } }, d);
-    expect(r.ok).toBe(true);
-    expect(post).toHaveBeenLastCalledWith(expect.objectContaining({ newTopLevel: true }));
+    expect(r.ok).toBe(false);
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ newTopLevel: true }));
   });
 
   it('a member whose post failed is not told it may not be a member, nor to run the command that just failed', async () => {
@@ -204,6 +227,27 @@ describe('resolveSlackPlace', () => {
   });
 });
 
+describe('internalCoordinationThread (R5: files follow reply-channel on internal threads)', () => {
+  const messages: Record<string, { id: string; channelId: string; threadId?: string; metadata?: Record<string, unknown> }> = {
+    'b4647c3f': { id: 'b4647c3f', channelId: 'room-video', metadata: { agentCoordinationInternal: 'local-only', slackThreadKey: 'C0VIDEO:1792177808.671549' } },
+    'reply-1': { id: 'reply-1', channelId: 'room-video', threadId: 'b4647c3f' },
+    'owner-1': { id: 'owner-1', channelId: 'room-video', metadata: { slackThreadTs: '1792177808.671549' } },
+  };
+  const d = () => deps({}, { getMessage: (id) => messages[id] ?? null });
+
+  it('an internal message, or a reply in its thread, is internal', async () => {
+    expect(await internalCoordinationThread('b4647c3f', d())).toBe('local-only');
+    expect(await internalCoordinationThread('reply-1', d())).toBe('local-only');
+  });
+
+  it('an owner thread, a Slack key, an unknown id or nothing is not', async () => {
+    expect(await internalCoordinationThread('owner-1', d())).toBeNull();
+    expect(await internalCoordinationThread('C0VIDEO:1792177808.671549', d())).toBeNull();
+    expect(await internalCoordinationThread('nope', d())).toBeNull();
+    expect(await internalCoordinationThread(undefined, d())).toBeNull();
+  });
+});
+
 describe('notDelivered', () => {
   it('formats the English error', () => {
     expect(notDelivered('why', 'reply --to m "<your message>"')).toBe('Your message was NOT delivered: why. Run: reply --to m "<your message>"');
@@ -222,7 +266,7 @@ describe('deliverReply — work delegated from the owner\'s DM with another agen
     status: 'running',
     createdAt: new Date().toISOString(),
     startedAt: new Date().toISOString(),
-    metadata: { origin: { kind: 'owner', conversationId: 'dm-atlas', slackChannelId: 'D0ATLAS01', threadTs: '1790000000.000100' } },
+    metadata: { delegatedBy: 'atlas', origin: { kind: 'owner', conversationId: 'dm-atlas', slackChannelId: 'D0ATLAS01', threadTs: '1790000000.000100' } },
   } as unknown as WorkItem;
 
   const r = {
@@ -234,19 +278,25 @@ describe('deliverReply — work delegated from the owner\'s DM with another agen
     lastDelivered: () => undefined,
   };
 
-  it('the member answers in its own DM with the owner, opened with the topic', async () => {
+  // Message-routing audit 2026-10-18: the member used to answer in its OWN
+  // DM with the owner — a place the owner did not ask in. The destination is
+  // the other agent's DM; the member cannot post there, so it is told to send
+  // the answer to the agent that delegated the work, which answers the owner.
+  it('the member is refused and told to send the answer to its delegator (never its own DM)', async () => {
     const deliver = jest.fn(async (i: { conversationId: string }) => (i.conversationId === 'dm-sage' ? 'msg-1' : null));
     const d = deps({ deliverToConversation: deliver }, r);
     const res = await deliverReply({ session: 'sage', content: 'Page B converts better.', reference: { workItemId: 'wi-7' } }, d);
-    expect(res.ok && res.conversationId).toBe('dm-sage');
-    expect(deliver).toHaveBeenLastCalledWith(expect.objectContaining({ conversationId: 'dm-sage', content: '*Re: Compare the two pricing pages*\nPage B converts better.' }));
+    expect(res.ok).toBe(false);
+    expect(!res.ok && res.error).toContain('send-message --to atlas');
+    expect(deliver).not.toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'dm-sage' }));
   });
 
-  it('a plain reply from current work takes the same path', async () => {
+  it('a plain reply from its one live work item is refused the same way', async () => {
     const deliver = jest.fn(async (i: { conversationId: string }) => (i.conversationId === 'dm-sage' ? 'msg-1' : null));
     const d = deps({ deliverToConversation: deliver }, r);
     const res = await deliverReply({ session: 'sage', content: 'Done.' }, d);
-    expect(res.ok && res.conversationId).toBe('dm-sage');
+    expect(res.ok).toBe(false);
+    expect(deliver).not.toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'dm-sage' }));
   });
 
   it('a team-channel destination is never swapped for a DM', async () => {
@@ -367,5 +417,85 @@ describe('deliverReply — answer to another agent\'s message (crewly#1375)', ()
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain('send-message --to think-tank-atlas-b4e166f6');
     expect(d.deliver).not.toHaveBeenCalled();
+  });
+});
+
+describe('route check: where a post landed vs the request it answers (message-routing audit 2026-10-18)', () => {
+  const askedInCe = { triggerKind: 'owner_message' as const, conversationId: 'room-ce', thread: 'C0CE00001:1790000000.000001', rootKind: 'owner_message' as const, viaAgents: [], at: Date.now() };
+
+  beforeEach(() => {
+    resetRouteCheckStatsForTesting();
+    resetReplyDeliveryGuardForTesting();
+  });
+
+  it('a post in another conversation than the answered request is counted as a mismatch', async () => {
+    const d = deps({ routedTrigger: () => askedInCe });
+    const outcome = await checkLandedRoute(
+      { session: 'owen', content: 'x' },
+      { ok: true, destination: { kind: 'conversation', conversationId: 'dm-owen', source: 'current-work', reason: 'r' }, conversationId: 'dm-owen' },
+      d,
+    );
+    expect(outcome).toBe('mismatch');
+    expect(getRouteCheckStats().mismatch).toBe(1);
+  });
+
+  it('a post in the thread of the answered request is a match', async () => {
+    const d = deps({ routedTrigger: () => askedInCe });
+    const outcome = await checkLandedRoute(
+      { session: 'owen', content: 'x' },
+      { ok: true, destination: { kind: 'conversation', conversationId: 'room-ce', thread: 'C0CE00001:1790000000.000001', source: 'route', reason: 'r' }, conversationId: 'room-ce' },
+      d,
+    );
+    expect(outcome).toBe('match');
+    expect(getRouteCheckStats()).toEqual({ match: 1, mismatch: 0, unknown: 0 });
+  });
+
+  it('a post addressed by an explicit reference is not checked', async () => {
+    const d = deps({ routedTrigger: () => askedInCe });
+    const outcome = await checkLandedRoute(
+      { session: 'owen', content: 'x', reference: { ticket: 'TKT-187' } },
+      { ok: true, destination: { kind: 'conversation', conversationId: 'dm-owen', source: 'ticket', reason: 'r' }, conversationId: 'dm-owen' },
+      d,
+    );
+    expect(outcome).toBeNull();
+    expect(getRouteCheckStats().mismatch).toBe(0);
+  });
+
+  it('deliverReply runs the check on every delivered bare reply', async () => {
+    const d = deps({ routedTrigger: () => askedInCe }, {
+      latestInput: () => ({ kind: 'owner', conversationId: 'room-ce', thread: 'C0CE00001:1790000000.000001', at: Date.now() }),
+      turnOrigin: () => ({ conversationId: 'room-ce', slackThreadKey: 'C0CE00001:1790000000.000001', receivedAt: Date.now() }),
+    });
+    const r = await deliverReply({ session: 'owen', content: 'answer' }, d);
+    expect(r.ok).toBe(true);
+    expect(d.deliver).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'room-ce', thread: 'C0CE00001:1790000000.000001' }));
+    expect(getRouteCheckStats().match).toBe(1);
+  });
+});
+
+describe('R8: the "Triggered by" line comes from the message being answered (message-routing audit 2026-10-18)', () => {
+  beforeEach(() => {
+    AgentPromptReferenceService.resetInstance();
+    resetReplyDeliveryGuardForTesting();
+  });
+
+  it("a reply to a work item asked in this conversation carries no line, though the agent's latest input is an owner message elsewhere", async () => {
+    const item = {
+      id: 'wi-ce-preview',
+      type: 'task',
+      owner: 'agent',
+      target: 'owen',
+      title: 'CE preview',
+      status: 'running',
+      metadata: { origin: { kind: 'owner', conversationId: 'room-ce', slackChannelId: 'C0CE00001', threadTs: '1790000000.000001' } },
+    } as unknown as WorkItem;
+    const elsewhere = { triggerKind: 'owner_message' as const, conversationId: 'dm-owen', rootKind: 'owner_message' as const, viaAgents: [], at: Date.now() };
+    const d = deps({ turnTrigger: () => elsewhere, ownerAskedEarlier: () => false }, { workItem: async (id) => (id === item.id ? item : null), poolItems: async () => [item] });
+    const r = await deliverReply({ session: 'owen', content: 'Preview: https://x', reference: { workItemId: 'wi-ce-preview' } }, d);
+    expect(r.ok).toBe(true);
+    const call = d.deliver.mock.calls[0][0] as { conversationId: string; content: string };
+    expect(call.conversationId).toBe('room-ce');
+    // Before: "Triggered by your message in another conversation" (the DM, which this does not answer).
+    expect(call.content).toBe('Preview: https://x');
   });
 });

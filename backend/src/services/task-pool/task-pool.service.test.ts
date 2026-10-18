@@ -228,6 +228,23 @@ describe('TaskPoolService', () => {
         expect((await service.getAllItems()).find((w) => w.id === review.id)!.metadata?.origin).toMatchObject({ kind: 'owner', conversationId: 'room-brief' });
       });
 
+      /**
+       * Message-routing audit 2026-10-18: an agent's own create-task used to
+       * inherit its last owner turn, so the work later answered in whatever
+       * thread the owner last wrote in. It inherits nothing unless it names
+       * the place (--thread / --conversation).
+       */
+      it("a self-assigned item from create-task (inheritCreatorTurn:false) does not take the creator's owner turn; a named thread is still used", async () => {
+        service.setTurnOriginLookup((s) => (s === 'atlas' ? ownerTurn : undefined));
+        const own = makeWorkItem({ target: 'atlas' });
+        await service.addToPool(own, { creatorSession: 'atlas', inheritCreatorTurn: false });
+        expect((await service.getAllItems()).find((w) => w.id === own.id)!.metadata?.origin).toBeUndefined();
+
+        const named = makeWorkItem({ target: 'atlas', metadata: { ownerThread: 'C0BRIEF:1790856242.596149' } });
+        await service.addToPool(named, { creatorSession: 'atlas', inheritCreatorTurn: false });
+        expect((await service.getAllItems()).find((w) => w.id === named.id)!.metadata?.origin).toMatchObject({ kind: 'owner', conversationId: 'room-brief', threadTs: '1790856242.596149' });
+      });
+
       it('no owner turn and no current work → self work gets no origin; an explicit origin is never replaced', async () => {
         service.setTurnOriginLookup(() => undefined);
         const plain = makeWorkItem({ target: 'atlas' });
@@ -268,6 +285,47 @@ describe('TaskPoolService', () => {
         const delegate = makeWorkItem({ target: 'vera', metadata: { delegatedBy: 'owen', ownerThread: 'fbecfa4b-3474-4c61-8a72-79cccb0d1941' } });
         await service.addToPool(delegate, { creatorSession: 'owen' });
         expect((await service.getAllItems())[0].metadata?.origin).toEqual({ kind: 'owner', conversationId: 'room-ce', slackChannelId: 'C0PROCE', threadTs: '1791379103.320929', receivedBy: 'owen' });
+      });
+
+      describe('an owner thread named as <conversation>:<chat thread> (Atlas → Kai, 2026-10-18)', () => {
+        const conv = '4c090d56-0e5c-4efe-a60f-102179761f67';
+        const thread = '2abe83ec-1643-4a0f-b8a2-be5350e726c4';
+
+        it('resolves to that thread\'s Slack place in that conversation', async () => {
+          service.setTurnOriginLookup(() => undefined);
+          service.setChatMessageThreadLookup(async (id) => (id === thread ? { slackChannelId: 'C0DAILY', threadTs: '1792300000.000100', conversationId: conv } : null));
+          const delegate = makeWorkItem({ target: 'kai', metadata: { delegatedBy: 'atlas', ownerThread: `${conv}:${thread}`, projectTicket: 'CREW-786' } });
+          await service.addToPool(delegate, { creatorSession: 'atlas' });
+          expect((await service.getAllItems())[0].metadata?.origin).toEqual(
+            expect.objectContaining({ kind: 'owner', conversationId: conv, slackChannelId: 'C0DAILY', threadTs: '1792300000.000100', chatThreadId: thread }),
+          );
+        });
+
+        it('a chat-only thread keeps the conversation and its thread', async () => {
+          service.setTurnOriginLookup(() => undefined);
+          service.setChatMessageThreadLookup(async () => null);
+          const delegate = makeWorkItem({ target: 'kai', metadata: { delegatedBy: 'atlas', ownerThread: `${conv}:${thread}` } });
+          await service.addToPool(delegate, { creatorSession: 'atlas' });
+          expect((await service.getAllItems())[0].metadata?.origin).toEqual(expect.objectContaining({ kind: 'owner', conversationId: conv, chatThreadId: thread }));
+        });
+
+        it('a thread of another conversation is not used', async () => {
+          service.setTurnOriginLookup(() => undefined);
+          service.setChatMessageThreadLookup(async () => ({ slackChannelId: 'C0OTHER', threadTs: '1.2', conversationId: 'room-other' }));
+          const delegate = makeWorkItem({ target: 'kai', metadata: { delegatedBy: 'atlas', ownerThread: `${conv}:${thread}` } });
+          await service.addToPool(delegate, { creatorSession: 'atlas' });
+          expect((await service.getAllItems())[0].metadata?.origin).not.toEqual(expect.objectContaining({ kind: 'owner' }));
+        });
+      });
+
+      it('isOwnerThreadUnreadable: true only for a named thread Crewly cannot read', async () => {
+        service.setChatMessageThreadLookup(async () => null);
+        expect(await service.isOwnerThreadUnreadable(undefined)).toBe(false);
+        expect(await service.isOwnerThreadUnreadable('  ')).toBe(false);
+        expect(await service.isOwnerThreadUnreadable('C0BRIEF:1790856242.596149')).toBe(false);
+        expect(await service.isOwnerThreadUnreadable('4c090d56-0e5c-4efe-a60f-102179761f67:2abe83ec-1643-4a0f-b8a2-be5350e726c4')).toBe(false);
+        expect(await service.isOwnerThreadUnreadable('garbage')).toBe(true);
+        expect(await service.isOwnerThreadUnreadable('fbecfa4b-3474-4c61-8a72-79cccb0d1941')).toBe(true);
       });
 
       it('an unreadable explicit thread falls back to normal inheritance (a delegation: the delegator)', async () => {

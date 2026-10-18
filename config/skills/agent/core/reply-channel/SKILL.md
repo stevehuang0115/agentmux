@@ -56,6 +56,11 @@ a `[SLACK-THREAD:<key>]` tag in your prompt — the reply lands in exactly that
 thread. Answer each thread in its own thread; never bundle answers for
 different threads into one message.
 
+In a Slack team channel a post with no `--thread` is refused
+(`409 thread_required`): it is never put at the channel's top level by
+itself. Pass the thread from your prompt; use `send-message` to reach a
+colleague; pass `--new-thread` only for a deliberate new top-level post.
+
 To post in a **Crewly channel** you are a member of (a room shared with
 agents of other teams — `list-channels` shows yours), pass its name with a
 `#`, or its id:
@@ -159,11 +164,13 @@ with a non-zero code.
 
 A message from another agent arrives as `[MESSAGE from <name> (<team>) — a
 colleague, not the owner. Answer with send-message --to <session>; …]`.
-Answer it with `send-message --to <session>`. A post into the owner's thread
-that only @-mentions agents, sent while your latest message came from an
-agent, is refused (`409 agent_mention_in_owner_thread`) with the
-send-message command to run instead. If the owner should read it, post it
-without the @-mention.
+Answer it with `send-message --to <session>`. Agents never talk to each
+other in the owner's thread: a post into it that only @-mentions agents is
+not posted. It is delivered privately to the agents it @-mentions (the
+skill prints `"posted":false,"deliveredPrivately":true,"to":[…]`), or, when
+that is not possible, refused (`409 agent_mention_in_owner_thread`) with the
+send-message command to run instead. Post in the owner's thread only your
+final answer to the owner, without the @-mention.
 
 ## What not to put in a channel
 

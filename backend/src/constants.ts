@@ -4685,6 +4685,33 @@ export const OWNER_HOOK_MESSAGE_CONSTANTS = {
 	KILL_SWITCH_ENV: 'CREWLY_OWNER_MESSAGE_VIA_HOOK',
 	/** Value of the kill switch that turns the feature off */
 	KILL_SWITCH_OFF_VALUE: 'off',
+	/**
+	 * Directory under CREWLY_HOME holding owner messages too long for the
+	 * note: the note points to the file instead of cutting the owner's text
+	 * (message-routing audit 2026-10-18, R0).
+	 */
+	OVERFLOW_DIR: 'runtime/owner-messages',
+	/** Characters of an overflowing owner message quoted in the note before the pointer */
+	OVERFLOW_PREVIEW_CHARS: 600,
+} as const;
+
+/**
+ * Every message carries its destination (message-routing audit 2026-10-18):
+ * the route token, the work-item field a delegation stamps, and the
+ * placeholder conversation of agent status reports that name none.
+ */
+export const MESSAGE_ROUTE_CONSTANTS = {
+	/** Opening of the route token in a delivered text (`{route: work-item <id>}`) */
+	TOKEN_OPEN: '{route: ',
+	/** WorkItem metadata key: the route of the input the delegator was answering when it delegated */
+	PARENT_ROUTE_METADATA_KEY: 'parentRoute',
+	/** Hops followed from a delegated item to the route its delegator answers */
+	MAX_ROUTE_HOPS: 4,
+	/**
+	 * Conversation id of an agent status report that names no conversation:
+	 * it is internal, never "the globally current conversation".
+	 */
+	AGENT_STATUS_CONVERSATION_ID: 'system:agent-status',
 } as const;
 
 /**
