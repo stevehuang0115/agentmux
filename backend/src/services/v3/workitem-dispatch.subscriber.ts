@@ -66,6 +66,7 @@ import { traceHarness, workItemTraceMarker } from '../trace/trace-recorder.js';
 import { noteScheduledTurn } from '../slack/slack-auto-working.service.js';
 import { originOfWorkItem } from '../orc/work-item-destination.js';
 import { internalAgentHeaders } from '../core/owner-auth.service.js';
+import { getTaskTimingService } from '../ai/self-improvement/task-timing.service.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -1086,6 +1087,7 @@ export class WorkItemDispatchSubscriber {
       ? workItem.title.substring(0, 77) + '...'
       : workItem.title;
     const trace = workItemTraceMarker(workItem);
+    const timing = this.timingBlockFor(workItem.target);
 
     return [
       '',
@@ -1100,9 +1102,26 @@ export class WorkItemDispatchSubscriber {
             `  (branch ${worktreeHint.branch}). cd there before editing; do not edit the shared checkout directly.`,
           ]
         : []),
+      ...(timing ? [`  ${timing}`] : []),
       '  Run poll-tasks to claim:',
       `    bash $AGENT_SKILLS_PATH/core/poll-tasks/execute.sh '{"sessionName":"${workItem.target}"}'`,
       '',
     ].join('\n');
+  }
+
+  /**
+   * The target's own task-timing summary (null without history or on a read
+   * error), so the ETA it gives for this item rests on its own medians.
+   *
+   * @param target - Worker session
+   * @returns Prompt line or null
+   */
+  private timingBlockFor(target: string | undefined): string | null {
+    if (!target) return null;
+    try {
+      return getTaskTimingService().getTimingBlock(target);
+    } catch {
+      return null;
+    }
   }
 }

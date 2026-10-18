@@ -49,11 +49,14 @@ Mark a task as complete with a summary of the work done. If the task has an outp
 | `evidence` | Yes* | Array of evidence entries — see **Evidence contract** below. *Required: refused without it (400 `evidence_required`), except a review `verdict` |
 | `absoluteTaskPath` | No | **Legacy (V1).** Still accepted so older callers keep working, but it does NOT identify a WorkItem |
 | `output` | No | Structured output object (required if task has an output schema) |
+| `taskKind` | No | What kind of task this was (`revision`, `new-build`, `new-capability`, `research`, `review`, or your own kebab-case word). Used for task timing; without it the kind named in `report-progress`, then the title, decides |
 | ~~`skipGates`~~ | **Rejected** | **Not supported.** This endpoint runs no quality gates, so there is nothing to skip. Passing it is a hard error. Use the `check-quality-gates` skill for gates. |
 
 **Any other field is an error.** The skill accepts only the fields in this table plus `verdict`/`feedback`/`checks` (reviews) and `taskId`/`artifacts`/`testResults`/`structured` (verification requests). An unknown field (for example `projectPath`, `skipGates`, `force`) stops the call before anything is sent, and the error names the field. Put extra results inside `output`.
 
-On success the skill prints **one JSON line** that always names the `workItemId`, plus the server's reply (`success`, `message`, any `warning`).
+On success the skill prints **one JSON line** that always names the `workItemId`, plus the server's reply (`success`, `message`, any `warning`, and `timing`).
+
+`timing` is how long this task took from claim to completion, against your ETA and your own median for that kind, e.g. `This was a 'revision'. You estimated 60 min; it took 18 min. Your median for 'revision' is 23 min (n=12).` When the gap is over 1.5x it asks you to record a learning (`record-learning`) if you see why. The record is kept automatically; you do not need to do anything else.
 
 ### Which WorkItem gets completed
 

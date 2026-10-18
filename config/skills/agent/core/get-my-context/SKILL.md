@@ -57,3 +57,5 @@ bash config/skills/agent/get-my-context/execute.sh '{"agentId":"dev-1","agentRol
 ## Output
 
 JSON with your accumulated context including past memories, learnings, project-specific knowledge, team SOPs, and relevant history.
+
+Once you have completed at least two tasks of a kind, `data.taskTimings` summarizes how long your own tasks took (median, fastest, slowest, n per kind) and how your ETAs compare. Base the ETAs you give on it.

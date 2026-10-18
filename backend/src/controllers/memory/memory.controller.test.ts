@@ -28,6 +28,11 @@ const mockRemember = jest.fn();
 const mockRecall = jest.fn();
 const mockRecordLearning = jest.fn();
 
+const mockGetTimingBlock = jest.fn<string | null, [string]>(() => null);
+jest.mock('../../services/ai/self-improvement/task-timing.service.js', () => ({
+  getTaskTimingService: () => ({ getTimingBlock: (agent: string) => mockGetTimingBlock(agent) }),
+}));
+
 jest.mock('../../services/memory/memory.service.js', () => ({
   MemoryService: {
     getInstance: () => ({
@@ -793,6 +798,17 @@ describe('MemoryController', () => {
       expect(payload.success).toBe(true);
       expect(payload.data).toHaveProperty('memories');
       expect(payload.data).not.toHaveProperty('knowledgeDocs');
+    });
+
+    it("includes the agent's task-timing summary only when it has history", async () => {
+      const req = { body: { agentId: 'dev-001', agentRole: 'developer', projectPath: '/p' } } as any;
+      await getMyContext(req, mockRes as any, mockNext);
+      expect((mockRes.json as jest.Mock).mock.calls[0][0].data).not.toHaveProperty('taskTimings');
+
+      mockGetTimingBlock.mockReturnValueOnce('Your own task times: revision median 23 min.');
+      await getMyContext(req, mockRes as any, mockNext);
+      expect(mockGetTimingBlock).toHaveBeenCalledWith('dev-001');
+      expect((mockRes.json as jest.Mock).mock.calls[1][0].data.taskTimings).toContain('revision median 23 min');
     });
 
     it('should return 400 when agentId is missing', async () => {

@@ -318,6 +318,16 @@ assert_contains "the server reply gains the WorkItem id" '"workItemId":"wi-full"
 LINE_COUNT="$(printf '%s\n' "$OUT" | grep -c '"workItemId":"wi-full"' || true)"
 assert_contains "the result is a single line" "1" "$LINE_COUNT"
 
+echo ""
+echo "--- taskKind is forwarded for task timing; the timing line is passed through ---"
+
+STUB_COMPLETE_RESPONSE='{"success":true,"timing":"This was a revision. It took 18 min."}' \
+  run_skill '{"workItemId":"wi-kind","sessionName":"dev-1","summary":"done","taskKind":"revision"}'
+assert_not_contains "taskKind is an accepted field" "does not accept" "$OUT"
+KIND_BODY="$(printf '%s' "$BODIES" | grep 'agentId' | head -1 || true)"
+assert_contains "taskKind rides inside result" "revision" "$(printf '%s' "$KIND_BODY" | jq -r '.result.taskKind // empty')"
+assert_contains "the timing line reaches the agent" '"timing":"This was a revision. It took 18 min."' "$(printf '%s' "$OUT" | tail -1)"
+
 rm -rf "$STUB_DIR"
 
 echo ""

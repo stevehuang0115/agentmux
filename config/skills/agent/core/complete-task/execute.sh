@@ -35,7 +35,7 @@ SUMMARY=$(printf '%s' "$INPUT" | jq -r '.summary // empty')
 # ignoring a field is the worst disposition: the caller believes it did
 # something, and nothing ever fails. So every field this skill does not use
 # fails loudly, with its name, before any request is sent.
-ALLOWED_FIELDS='["workItemId","absoluteTaskPath","sessionName","summary","output","evidence","verdict","feedback","checks","taskId","artifacts","testResults","structured"]'
+ALLOWED_FIELDS='["workItemId","absoluteTaskPath","sessionName","summary","output","evidence","verdict","feedback","checks","taskId","artifacts","testResults","structured","taskKind"]'
 SKIP_GATES=$(printf '%s' "$INPUT" | jq -r 'has("skipGates")')
 if [ "$SKIP_GATES" = "true" ]; then
   error_exit "skipGates is not supported by complete-task and never was — it was accepted and silently discarded. POST /task-pool/complete runs no quality gates, so there is nothing here to skip. Quality gates live behind the 'check-quality-gates' skill (POST /quality-gates/check); run or skip them there. Remove skipGates from this call."
@@ -45,6 +45,9 @@ if [ -n "$UNKNOWN_FIELDS" ]; then
   error_exit "complete-task does not accept: ${UNKNOWN_FIELDS}. Nothing was completed. Remove the field(s) and call again. Accepted fields: $(printf '%s' "$ALLOWED_FIELDS" | jq -r 'join(", ")'). Put structured results inside \"output\" and proof inside \"evidence\"."
 fi
 OUTPUT_JSON=$(printf '%s' "$INPUT" | jq -c '.output // empty')
+# Task timing: the kind of task this was (revision, new-build, ...). Optional:
+# the server falls back to the kind named in report-progress, then to the title.
+TASK_KIND=$(printf '%s' "$INPUT" | jq -r '.taskKind // empty')
 # Evidence contract (#873): "done" needs evidence. Each entry is one of
 #   {"type":"artifact","path":"<existing file, relative to the project/worktree, or https URL>"}
 #   {"type":"command","command":"<cmd>","exitCode":0,"outputTail":"<last lines>"}
@@ -183,6 +186,7 @@ BODY=$(jq -n \
   --arg feedback "$FEEDBACK" \
   --argjson evidence "${EVIDENCE_JSON:-null}" \
   --argjson checks "${CHECKS_JSON:-null}" \
+  --arg taskKind "$TASK_KIND" \
   '{
     agentId: $agentId,
     result: ({summary: $summary}
@@ -192,7 +196,8 @@ BODY=$(jq -n \
               + (if $verdict != "" then {verdict: $verdict} else {} end)
               + (if $feedback != "" then {feedback: $feedback} else {} end)
               + (if $evidence != null then {evidence: $evidence} else {} end)
-              + (if $checks != null then {checks: $checks} else {} end))
+              + (if $checks != null then {checks: $checks} else {} end)
+              + (if $taskKind != "" then {taskKind: $taskKind} else {} end))
   }')
 
 COMPLETE_RESPONSE=$(api_call POST "/task-pool/complete/${WORK_ITEM_ID}" "$BODY")
