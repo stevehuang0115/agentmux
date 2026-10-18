@@ -9622,3 +9622,34 @@ export const TICKET_HOLD_CONSTANTS = {
 	/** Max characters of a hold reason quoted in a message */
 	REASON_MAX_CHARS: 240,
 } as const;
+
+/**
+ * Task timing: per-agent records of how long completed tasks took, used to
+ * ground ETAs in the agent's own history (task-timing.service.ts).
+ */
+export const TASK_TIMING_CONSTANTS = {
+	/** File under ~/.crewly/agents/{session}/ */
+	FILE_NAME: 'task-timings.json',
+	/** Records kept per agent (oldest dropped first) */
+	MAX_RECORDS: 500,
+	/** A claim-to-completion span over this is waiting, not work: excluded from medians */
+	WORK_CAP_MINUTES: 24 * 60,
+	/** Kinds (and the ETA bias) need at least this many records to be shown */
+	MIN_SAMPLES: 2,
+	/** ETA/actual gap past which complete-task invites a learning */
+	GAP_RATIO: 1.5,
+	/** ETA/actual ratio within which ETAs read as "about right" */
+	BIAS_TOLERANCE: 1.25,
+	/** Largest ETA accepted, in minutes (7 days) */
+	ETA_MAX_MINUTES: 7 * 24 * 60,
+	/** Durations from this many minutes up are written in hours */
+	HOURS_FROM_MINUTES: 90,
+	/** Longest agent-supplied kind */
+	KIND_MAX_CHARS: 32,
+	/** Title characters stored per record */
+	TITLE_MAX_CHARS: 120,
+	/** WorkItem.metadata key holding the first ETA the agent stated */
+	ETA_METADATA_KEY: 'etaMinutes',
+	/** WorkItem.metadata key holding the agent-named task kind */
+	KIND_METADATA_KEY: 'taskKind',
+} as const;

@@ -25,6 +25,7 @@ import {
   setGiveUpRecoveryService,
   setClaimTargetWaker,
   handoffItem,
+  appendItemNote,
 } from './task-pool.controller.js';
 import { actingForOfCreator } from './task-pool.controller.js';
 import { ActingForService, setActingForForTesting } from '../../services/people/acting-for.service.js';
@@ -64,6 +65,13 @@ jest.mock('../../services/core/storage.service.js', () => ({
   StorageService: { getInstance: jest.fn() },
 }));
 
+// Task timing writes under $HOME; keep tests off the real store.
+const mockRecordCompletion = jest.fn().mockReturnValue(null);
+jest.mock('../../services/ai/self-improvement/task-timing.service.js', () => {
+  const actual = jest.requireActual('../../services/ai/self-improvement/task-timing.service.js');
+  return { ...actual, getTaskTimingService: () => ({ recordCompletion: (...args: unknown[]) => mockRecordCompletion(...args) }) };
+});
+
 const mockService = {
   getAvailableItems: jest.fn(),
   claimFromPool: jest.fn(),
@@ -78,6 +86,8 @@ const mockService = {
   completeItem: jest.fn(),
   findWorkItem: jest.fn(),
   setOutput: jest.fn(),
+  appendNote: jest.fn(),
+  patchMetadata: jest.fn(),
   addToPool: jest.fn(),
   getAllItems: jest.fn().mockResolvedValue([]),
   cancelQueued: jest.fn(),
@@ -922,6 +932,56 @@ describe('TaskPoolController', () => {
   // succeed, and the broken-shape rejection messages must be specific
   // enough to point a human caller at the fix.
   // ---------------------------------------------------------------------
+  describe('task timing', () => {
+    beforeEach(() => {
+      mockService.setOutput.mockResolvedValue(undefined);
+      mockService.completeItem.mockResolvedValue(undefined);
+      mockRecordCompletion.mockReset();
+    });
+
+    it('records the completion and returns the timing line', async () => {
+      const wi = { id: 'wi-t1', title: 'Revise EP03 subtitles', type: 'decision', startedAt: '2026-10-18T10:00:00.000Z', output: null };
+      mockService.findWorkItem.mockResolvedValue(wi);
+      mockRecordCompletion.mockReturnValue("This was a 'revision'. It took 18 min.");
+      const res = mockRes();
+      await completeItem(mockReq({ params: { workItemId: 'wi-t1' }, body: { agentId: 'dex', result: { summary: 'done', taskKind: 'revision' } } }), res);
+
+      expect(mockRecordCompletion).toHaveBeenCalledWith(expect.objectContaining({ agent: 'dex', workItem: wi, taskKind: 'revision' }));
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, timing: "This was a 'revision'. It took 18 min." }));
+    });
+
+    it('completes normally when timing recording throws', async () => {
+      mockService.findWorkItem.mockResolvedValue({ id: 'wi-t2', title: 'x', type: 'decision', startedAt: '2026-10-18T10:00:00.000Z' });
+      mockRecordCompletion.mockImplementation(() => { throw new Error('disk full'); });
+      const res = mockRes();
+      await completeItem(mockReq({ params: { workItemId: 'wi-t2' }, body: { agentId: 'dex', result: { summary: 'done' } } }), res);
+
+      const body = res.json.mock.calls[0][0];
+      expect(body.success).toBe(true);
+      expect(body.timing).toBeUndefined();
+    });
+
+    it('stores the first ETA and the named kind from a progress note', async () => {
+      mockService.appendNote.mockResolvedValue({ id: 'wi-t3', metadata: {} });
+      mockService.patchMetadata.mockResolvedValue({ id: 'wi-t3', metadata: { etaMinutes: 20, taskKind: 'revision' } });
+      const res = mockRes();
+      await appendItemNote(mockReq({ params: { workItemId: 'wi-t3' }, body: { author: 'dex', note: 'starting', etaMinutes: 20, taskKind: 'Revision' } }), res);
+
+      expect(mockService.patchMetadata).toHaveBeenCalledWith('wi-t3', 'etaMinutes', 20);
+      expect(mockService.patchMetadata).toHaveBeenCalledWith('wi-t3', 'taskKind', 'revision');
+    });
+
+    it('keeps an ETA already stated (the first one is measured)', async () => {
+      mockService.patchMetadata.mockReset();
+      mockService.appendNote.mockResolvedValue({ id: 'wi-t4', metadata: { etaMinutes: 20 } });
+      const res = mockRes();
+      await appendItemNote(mockReq({ params: { workItemId: 'wi-t4' }, body: { author: 'dex', note: 'later', etaMinutes: 90 } }), res);
+
+      expect(mockService.patchMetadata).not.toHaveBeenCalled();
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    });
+  });
+
   describe('completeItem (Hygiene #4 strict-shape lock)', () => {
     beforeEach(() => {
       mockService.findWorkItem.mockResolvedValue({ id: 'wi-h4', output: null });

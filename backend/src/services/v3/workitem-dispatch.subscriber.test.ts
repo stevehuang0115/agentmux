@@ -24,6 +24,11 @@ import type { Team } from '../../types/index.js';
 jest.mock('axios');
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 
+const mockGetTimingBlock = jest.fn<string | null, [string]>(() => null);
+jest.mock('../ai/self-improvement/task-timing.service.js', () => ({
+  getTaskTimingService: () => ({ getTimingBlock: (target: string) => mockGetTimingBlock(target) }),
+}));
+
 jest.mock('../core/logger.service.js', () => ({
   LoggerService: {
     getInstance: () => ({
@@ -720,6 +725,22 @@ describe('WorkItemDispatchSubscriber', () => {
       const body = mockedAxios.post.mock.calls[0][1] as { data: string };
       expect(body.data).toContain('bash $AGENT_SKILLS_PATH/core/poll-tasks/execute.sh');
       expect(body.data).toContain('"sessionName":"crewly-product-quinn-47ce967d"');
+    });
+
+    it("includes the target's own task-timing summary when it has history", async () => {
+      mockGetTimingBlock.mockImplementation((target) => (target === 'crewly-product-quinn-47ce967d' ? 'Your own task times: revision median 23 min (11 min–60 min, n=12).' : null));
+      const svc = WorkItemDispatchSubscriber.getInstance();
+      await svc.dispatchTo(makeWorkItem({ id: 'wi-eta', target: 'crewly-product-quinn-47ce967d' }));
+      const body = mockedAxios.post.mock.calls[0][1] as { data: string };
+      expect(body.data).toContain('  Your own task times: revision median 23 min');
+      mockGetTimingBlock.mockImplementation(() => null);
+    });
+
+    it('omits the timing summary when the target has no history', async () => {
+      const svc = WorkItemDispatchSubscriber.getInstance();
+      await svc.dispatchTo(makeWorkItem({ id: 'wi-noeta' }));
+      const body = mockedAxios.post.mock.calls[0][1] as { data: string };
+      expect(body.data).not.toContain('task times');
     });
   });
 
