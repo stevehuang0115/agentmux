@@ -85,7 +85,7 @@ export type ProjectTicketAccess = 'owner' | 'orchestrator' | 'lead' | 'member' |
 
 /** The subset of the task pool this service uses. */
 export interface ProjectTicketPool {
-  addToPool(workItem: WorkItem, options?: { creatorSession?: string; ownerOriginOnly?: boolean }): Promise<void>;
+  addToPool(workItem: WorkItem, options?: { creatorSession?: string; ownerOriginOnly?: boolean; inheritCreatorTurn?: boolean }): Promise<void>;
   claimSpecificItem(agentId: string, workItemId: string): Promise<{ workItem: WorkItem } | null>;
   findWorkItem(workItemId: string): Promise<WorkItem | null>;
   getAllItems(): Promise<WorkItem[]>;
@@ -170,7 +170,7 @@ interface StartWorkOptions {
   /** Use this WorkItem (a delegation) instead of building one from the ticket */
   prepared?: (t: ProjectTicket) => WorkItem;
   /** Passed through to the pool's add */
-  addOptions?: { creatorSession?: string; ownerOriginOnly?: boolean };
+  addOptions?: { creatorSession?: string; ownerOriginOnly?: boolean; inheritCreatorTurn?: boolean };
   /** Log lines written before the assignment line */
   logFirst?: string[];
 }

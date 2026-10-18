@@ -164,11 +164,13 @@ with a non-zero code.
 
 A message from another agent arrives as `[MESSAGE from <name> (<team>) — a
 colleague, not the owner. Answer with send-message --to <session>; …]`.
-Answer it with `send-message --to <session>`. A post into the owner's thread
-that only @-mentions agents, sent while your latest message came from an
-agent, is refused (`409 agent_mention_in_owner_thread`) with the
-send-message command to run instead. If the owner should read it, post it
-without the @-mention.
+Answer it with `send-message --to <session>`. Agents never talk to each
+other in the owner's thread: a post into it that only @-mentions agents is
+not posted. It is delivered privately to the agents it @-mentions (the
+skill prints `"posted":false,"deliveredPrivately":true,"to":[…]`), or, when
+that is not possible, refused (`409 agent_mention_in_owner_thread`) with the
+send-message command to run instead. Post in the owner's thread only your
+final answer to the owner, without the @-mention.
 
 ## What not to put in a channel
 

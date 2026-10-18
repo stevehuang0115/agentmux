@@ -78,6 +78,7 @@ jest.mock('../../constants.js', () => ({
 		AGENT_READY_TIMEOUT: 120000,
 	},
 	AGENT_MESSAGE_DELIVERY_CONSTANTS: jest.requireActual<typeof import('../../constants.js')>('../../constants.js').AGENT_MESSAGE_DELIVERY_CONSTANTS,
+	MESSAGE_ROUTE_CONSTANTS: jest.requireActual<typeof import('../../constants.js')>('../../constants.js').MESSAGE_ROUTE_CONSTANTS,
 	TERMINAL_CONTROLLER_CONSTANTS: {
 		DEFAULT_CAPTURE_LINES: 50,
 		MAX_CAPTURE_LINES: 500,
@@ -210,6 +211,12 @@ jest.mock('../../services/agent/fresh-task-conversation.service.js', () => ({
 		}),
 	},
 	freshConversationNote: (p: string) => `Fresh conversation for this task — your earlier work is in ${p} and your wiki; read them only if this task needs it.`,
+}));
+
+// The route an agent's message carries (message-routing audit 2026-10-18).
+const mockCurrentRouteOf = jest.fn<(session: string) => Promise<unknown>>(async () => null);
+jest.mock('../../services/orc/reply-destination.wiring.js', () => ({
+	currentRouteOf: (session: string) => mockCurrentRouteOf(session),
 }));
 
 // Direct WorkItem hand-over: the WorkItem lookup and the dispatcher's dedup key.
@@ -848,7 +855,13 @@ describe('TerminalController', () => {
 				await terminalController.deliverMessage.call(ctx as any, mockReq as Request, mockRes as Response);
 
 				expect(mockRes.status).toHaveBeenCalledWith(202);
-				expect(mockEnqueue).toHaveBeenCalledWith('crewly-marketing-dana-45506487', 'Are the nightly jobs set?');
+				// crewly#1381 item 1 / message-routing audit 2026-10-18: the orchestrator's
+				// /deliver message now names its sender (it used to arrive as bare text,
+				// so the answer went to the recipient's last owner thread).
+				expect(mockEnqueue).toHaveBeenCalledWith(
+					'crewly-marketing-dana-45506487',
+					expect.stringMatching(/^\[MESSAGE from Orc \(Crewly orchestrator\)[^\n]*send-message --to crewly-orc[^\n]*\]\nAre the nightly jobs set\?$/),
+				);
 				expect(wake).toHaveBeenCalledWith('crewly-marketing-dana-45506487');
 				expect(ctx.agentRegistrationService.sendMessageToAgent).not.toHaveBeenCalled();
 			});
@@ -1659,6 +1672,17 @@ describe('TerminalController', () => {
 				ctx.agentRegistrationService.holdIfMidTurn.mockResolvedValue(null);
 				await write({ 'x-agent-session': ATLAS }, { data: 'Thanks.', mode: 'message' });
 				expect(mockSession.write).toHaveBeenCalledWith(`\x1b[200~${HEADER}\nThanks.\x1b[201~`);
+			});
+
+			// Message-routing audit 2026-10-18: the route the sender is answering
+			// travels in the header, so the answer goes back along it.
+			it('the header carries the route the sender is answering', async () => {
+				ctx.agentRegistrationService.holdIfMidTurn.mockResolvedValue(null);
+				mockCurrentRouteOf.mockResolvedValueOnce({ kind: 'owner', conversationId: 'room-1', thread: 'C0A:1.2' });
+				await write({ 'x-agent-session': ATLAS }, { data: 'Thanks.', mode: 'message' });
+				const typed = String((mockSession.write as jest.Mock).mock.calls[0]?.[0]);
+				expect(typed).toContain("the owner's thread C0A:1.2 in conversation room-1 {route: owner room-1 thread C0A:1.2}");
+				expect(typed).toContain('Atlas answers the owner on it');
 			});
 
 			it('a message that already carries a harness envelope is not wrapped again', async () => {

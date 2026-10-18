@@ -11,7 +11,8 @@
  * @module services/orc/work-item-destination.wiring
  */
 
-import { WORK_ITEM_DESTINATION_CONSTANTS } from '../../constants.js';
+import { MESSAGE_ROUTE_CONSTANTS, WORK_ITEM_DESTINATION_CONSTANTS } from '../../constants.js';
+import { describeRoute, formatRouteToken, isMessageRoute, replyCommandFor, type MessageRoute } from './message-route.js';
 import type { WorkItem } from '../../types/v2/work-item.types.js';
 import type { TurnOrigin } from './orc-reply-route.service.js';
 import { parseSlackThreadKey } from '../slack/slack-thread-key.js';
@@ -111,9 +112,28 @@ export function getAgentMessenger(): AgentMessenger | null {
  * @param workItem - The work item, when known
  * @returns Message text
  */
-export function agentResultText(fromSession: string, text: string, workItem?: Pick<WorkItem, 'id' | 'title'> | null): string {
+export function agentResultText(fromSession: string, text: string, workItem?: Pick<WorkItem, 'id' | 'title' | 'metadata'> | null): string {
   const about = workItem ? ` about WorkItem ${workItem.id} "${shortTopic(workItem.title)}"` : '';
-  return `${WORK_ITEM_DESTINATION_CONSTANTS.AGENT_RESULT_TAG} From ${fromSession}${about} (work you delegated; the owner did not ask for it in a thread — decide yourself what, if anything, the owner hears):\n${text}`;
+  // The route the delegator was answering when it delegated travels back
+  // with the result, so its consolidated answer lands where that request
+  // came from (message-routing audit 2026-10-18).
+  const parent = parentRouteOf(workItem);
+  const why = parent
+    ? `work you delegated while answering ${describeRoute(parent)} ${formatRouteToken(parent)}. Give the owner the consolidated answer with: ${replyCommandFor(parent)} — or a bare reply`
+    : 'work you delegated; the owner did not ask for it in a thread — decide yourself what, if anything, the owner hears';
+  return `${WORK_ITEM_DESTINATION_CONSTANTS.AGENT_RESULT_TAG} From ${fromSession}${about} (${why}):\n${text}`;
+}
+
+/**
+ * The route a delegated work item carries back to its delegator
+ * (`metadata.parentRoute`, stamped at delegation).
+ *
+ * @param workItem - Work item
+ * @returns The route, or null
+ */
+export function parentRouteOf(workItem: Pick<WorkItem, 'metadata'> | null | undefined): MessageRoute | null {
+  const v = ((workItem?.metadata ?? {}) as Record<string, unknown>)[MESSAGE_ROUTE_CONSTANTS.PARENT_ROUTE_METADATA_KEY];
+  return isMessageRoute(v) ? v : null;
 }
 
 /**
@@ -176,8 +196,10 @@ export async function deliverToWorkDestination(
     }
     case 'agent': {
       if (!deps.messageAgent) return null;
-      const items = await deps.poolItems().catch(() => [] as WorkItem[]);
-      const workItem = currentWorkItemOf(items, session);
+      // The work item the answer is about — the one the destination names,
+      // never the replier's newest item.
+      const items = destination.workItemId ? await deps.poolItems().catch(() => [] as WorkItem[]) : [];
+      const workItem = destination.workItemId ? items.find((w) => w.id === destination.workItemId) ?? null : null;
       const taken = await deps.messageAgent(destination.sessionName, agentResultText(session, text, workItem));
       if (!taken) return null;
       return { kind: 'agent', agentSession: destination.sessionName, reason: destination.reason };

@@ -21,7 +21,7 @@ import {
 // architecture, only the import surface.
 import { sanitizeMessages, sanitizeMessage } from '../../services/chat/chat-sanitizer.service.js';
 import { getChatHighlightsService } from '../../services/chat/chat-highlights.service.js';
-import { ORCHESTRATOR_SESSION_NAME, ORC_STATUS_FORWARDING, OWNER_EVIDENCE_METADATA, SLACK_TYPING_CONSTANTS, SLACK_THREAD_KEY_CONSTANTS } from '../../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, ORC_STATUS_FORWARDING, MESSAGE_ROUTE_CONSTANTS, OWNER_EVIDENCE_METADATA, SLACK_TYPING_CONSTANTS, SLACK_THREAD_KEY_CONSTANTS } from '../../constants.js';
 import { extractSlackThreadKeys, formatSlackThreadKey, parseSlackThreadKey } from '../../services/slack/slack-thread-key.js';
 import { readAgentSessionHeader } from '../../utils/agent-caller.utils.js';
 import { getBoardActivity } from '../../services/board/board-activity.tracker.js';
@@ -1141,12 +1141,21 @@ export async function agentResponse(
     }
 
     if (!resolvedConversationId) {
-      const current = await chatService.getCurrentConversation();
-      if (current) {
-        resolvedConversationId = current.id;
+      // A team member's report that names no conversation is about its work
+      // item, never "whatever conversation is current" (message-routing audit
+      // 2026-10-18): the orchestrator's answer to it went into that unrelated
+      // conversation. Orchestrator and system posts keep the current one.
+      const agentReportConversation = await agentReportConversationOf(req, String(senderType || 'agent'), String(senderName ?? ''));
+      if (agentReportConversation) {
+        resolvedConversationId = agentReportConversation;
       } else {
-        const newConversation = await chatService.createNewConversation('Agent Chat');
-        resolvedConversationId = newConversation.id;
+        const current = await chatService.getCurrentConversation();
+        if (current) {
+          resolvedConversationId = current.id;
+        } else {
+          const newConversation = await chatService.createNewConversation('Agent Chat');
+          resolvedConversationId = newConversation.id;
+        }
       }
     }
 
@@ -1503,6 +1512,39 @@ export async function getConversations(
   } catch (error) {
     next(error);
   }
+}
+
+/**
+ * The conversation a team member's status report belongs to when it names
+ * none: the owner conversation of the work item it reports on, else the
+ * agent-status system conversation. Null for the orchestrator and for
+ * non-agent senders (they keep the current conversation).
+ *
+ * @param req - The agent-response request (body.workItemId)
+ * @param senderType - Declared sender type
+ * @param senderName - Declared sender name
+ * @returns A conversation id, or null
+ */
+export async function agentReportConversationOf(req: Request, senderType: string, senderName: string): Promise<string | null> {
+  if (senderType !== 'agent') return null;
+  const { isOrchestratorSender } = await import('../../services/orc/orc-delivery-enforcer.service.js');
+  if (isOrchestratorSender(senderName)) return null;
+  const header = readAgentSessionHeader(req);
+  if (header && isOrchestratorSender(header)) return null;
+  const workItemId = typeof req.body?.workItemId === 'string' ? req.body.workItemId : '';
+  if (workItemId) {
+    try {
+      const { TaskPoolService } = await import('../../services/task-pool/task-pool.service.js');
+      const { originOfWorkItem } = await import('../../services/orc/work-item-destination.js');
+      const items = await TaskPoolService.getInstance().getAllItems();
+      const wi = items.find((i) => i.id === workItemId);
+      const origin = wi ? originOfWorkItem(wi) : null;
+      if (origin?.kind === 'owner' && origin.conversationId) return origin.conversationId;
+    } catch {
+      // Fall through to the status conversation.
+    }
+  }
+  return MESSAGE_ROUTE_CONSTANTS.AGENT_STATUS_CONVERSATION_ID;
 }
 
 /**
@@ -1977,5 +2019,7 @@ export async function handleGetHighlights(
 export function clipForOrchestrator(content: string, conversationId: string): string {
   const max = ORC_STATUS_FORWARDING.MAX_FORWARD_CHARS;
   if (content.length <= max) return content;
-  return `${content.slice(0, max)}… [${content.length - max} more characters — full report in conversation ${conversationId}]`;
+  // An internal conversation (`system:…`) holds no copy of the report.
+  const where = conversationId.startsWith('system:') ? 'ask the sender for the full report' : `full report in conversation ${conversationId}`;
+  return `${content.slice(0, max)}… [${content.length - max} more characters — ${where}]`;
 }

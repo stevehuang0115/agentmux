@@ -155,13 +155,13 @@ describe('resolveReplyDestination — order', () => {
   it('5. an owner message delivered after the prompt wins (the prompt is no longer the last thing delivered)', async () => {
     const r = await resolveReplyDestination(
       { session: 'owen' },
-      deps({ tickets: [{ id: 'req-187', label: 'TKT-187', conversationId: 'room-ce', threadRootId: 'root-ce' }], prompt: { reference: { ticket: 'TKT-187' }, at: NOW - 30 * MIN, marker: '[FOLLOW-UP TKT-187]' }, origin: mktOrigin, lastDelivered: `[CHAT:room-mkt] <steve@Owen> huddle notes?` }),
+      deps({ tickets: [{ id: 'req-187', label: 'TKT-187', conversationId: 'room-ce', threadRootId: 'root-ce' }], prompt: { reference: { ticket: 'TKT-187' }, at: NOW - 30 * MIN, marker: '[FOLLOW-UP TKT-187]' }, origin: mktOrigin, lastDelivered: `[CHAT:room-mkt] <steve@Owen> huddle notes?`, latest: { kind: 'owner', conversationId: 'room-mkt', at: NOW - 1 * MIN } }),
     );
     expect(r.destination).toEqual(expect.objectContaining({ kind: 'conversation', conversationId: 'room-mkt', source: 'turn-origin' }));
   });
 
   it('6. an owner message from another conversation shown mid-turn: a bare reply is not guessed', async () => {
-    const r = await resolveReplyDestination({ session: 'owen' }, deps({ origin: mktOrigin, owes: true, surfaced: ['room-ce'] }));
+    const r = await resolveReplyDestination({ session: 'owen' }, deps({ origin: mktOrigin, owes: true, surfaced: ['room-ce'], latest: { kind: 'owner', conversationId: 'room-mkt', at: NOW - 1 * MIN } }));
     expect(r.destination.kind).toBe('unresolved');
     if (r.destination.kind === 'unresolved') {
       expect(r.destination.reason).toContain('room-ce');
@@ -171,16 +171,25 @@ describe('resolveReplyDestination — order', () => {
   });
 
   it('6. a mid-turn owner message in the same conversation does not block the turn-origin reply', async () => {
-    const r = await resolveReplyDestination({ session: 'owen' }, deps({ origin: mktOrigin, owes: true, surfaced: ['room-mkt'] }));
+    const r = await resolveReplyDestination({ session: 'owen' }, deps({ origin: mktOrigin, owes: true, surfaced: ['room-mkt'], latest: { kind: 'owner', conversationId: 'room-mkt', at: NOW - 1 * MIN } }));
     expect(r.destination).toEqual(expect.objectContaining({ kind: 'conversation', conversationId: 'room-mkt', source: 'turn-origin' }));
   });
 
-  it('6. an explicit conversation still goes through while a mid-turn owner message is open', async () => {
+  // Message-routing audit 2026-10-18: this used to name only the conversation
+  // and post at the Slack channel's top level. A Slack channel now needs its
+  // thread named (or the owner message being answered must be in it).
+  it('6. an explicit conversation and thread still go through while a mid-turn owner message is open', async () => {
     const r = await resolveReplyDestination(
-      { session: 'owen', hints: { conversationId: 'room-ce' } },
+      { session: 'owen', hints: { conversationId: 'room-ce', thread: `${PRO_CE}:${PRO_CE_TS}` } },
       deps({ origin: mktOrigin, owes: true, surfaced: ['room-ce'] }),
     );
-    expect(r.destination).toEqual(expect.objectContaining({ kind: 'conversation', conversationId: 'room-ce' }));
+    expect(r.destination).toEqual(expect.objectContaining({ kind: 'conversation', conversationId: 'room-ce', thread: `${PRO_CE}:${PRO_CE_TS}` }));
+  });
+
+  it('a Slack-channel conversation named without a thread is refused, never posted at the top level', async () => {
+    const r = await resolveReplyDestination({ session: 'owen', hints: { conversationId: 'room-ce' } }, deps({ origin: mktOrigin, owes: true, surfaced: ['room-ce'] }));
+    expect(r.destination.kind).toBe('unresolved');
+    if (r.destination.kind === 'unresolved') expect(r.destination.reason).toContain('name the thread with --thread');
   });
 
   it('5. a stale prompt never hijacks an owed answer: 10:00 owner question, 10:02 TKT-150 nudge → the bare reply answers the question', async () => {
@@ -194,17 +203,22 @@ describe('resolveReplyDestination — order', () => {
         lastDelivered: '[FOLLOW-UP TKT-150] You promised the owner…',
         owes: true,
         origin: q,
+        // The owner's question is the latest input that names what Owen answers
+        // (the nudge is not a routed input).
+        latest: { kind: 'owner', conversationId: 'room-mkt', at: NOW - 2 * MIN },
       }),
     );
     expect(r.destination).toEqual(expect.objectContaining({ kind: 'conversation', conversationId: 'room-mkt', source: 'turn-origin' }));
   });
 
+  // These fell to the owner DM before; there is no such guess any more
+  // (message-routing audit 2026-10-18): unused prompt → refused.
   it('5. a prompt reference without a marker, or recorded but not delivered last, is not used', async () => {
     const tickets = [{ id: 'req-150', label: 'TKT-150', conversationId: 'room-ce', threadRootId: 'root-150' }];
     const noMarker = await resolveReplyDestination({ session: 'owen' }, deps({ tickets, prompt: { reference: { ticket: 'TKT-150' }, at: NOW }, lastDelivered: '[FOLLOW-UP TKT-150] x' }));
-    expect(noMarker.destination).toEqual(expect.objectContaining({ source: 'owner-dm' }));
+    expect(noMarker.destination.kind).toBe('unresolved');
     const notLast = await resolveReplyDestination({ session: 'owen' }, deps({ tickets, prompt: { reference: { ticket: 'TKT-150' }, at: NOW, marker: '[FOLLOW-UP TKT-150]' }, lastDelivered: '[DECISION D-3] other' }));
-    expect(notLast.destination).toEqual(expect.objectContaining({ source: 'owner-dm' }));
+    expect(notLast.destination.kind).toBe('unresolved');
   });
 
   it('6. without references or hints: the current work (a scheduled item → its own destination)', async () => {
@@ -212,13 +226,44 @@ describe('resolveReplyDestination — order', () => {
     expect(r.destination).toEqual(expect.objectContaining({ kind: 'work', source: 'current-work', destination: expect.objectContaining({ kind: 'new-top-level', topic: 'daily digest' }) }));
   });
 
-  it('7. nothing at all → the owner DM; with no DM → a team-channel top-level post', async () => {
-    const dm = await resolveReplyDestination({ session: 'owen' }, deps());
-    expect(dm.destination).toEqual(expect.objectContaining({ kind: 'conversation', conversationId: 'dm-owen', source: 'owner-dm' }));
-    const none = await resolveReplyDestination({ session: 'owen' }, deps({ dm: null }));
-    expect(none.destination).toEqual(expect.objectContaining({ kind: 'work', destination: expect.objectContaining({ kind: 'new-top-level' }) }));
+  // Message-routing audit 2026-10-18 (R1/R2): "nothing at all" used to post
+  // in the owner DM, or at a team channel's top level with no DM. Both were
+  // guesses. Now the reply is refused with the ids that would work.
+  it('7. nothing at all → refused with the command to run, never the owner DM or a top-level post', async () => {
+    for (const w of [deps(), deps({ dm: null })]) {
+      const r = await resolveReplyDestination({ session: 'owen' }, w);
+      expect(r.destination.kind).toBe('unresolved');
+      if (r.destination.kind === 'unresolved') {
+        expect(r.destination.reason).toContain('nothing you were given names where this reply goes');
+        expect(r.destination.fix).toContain('reply --to <message id');
+      }
+    }
     const noDm = await resolveReplyDestination({ session: 'owen', noOwnerDm: true }, deps());
     expect(noDm.destination.kind).toBe('unresolved');
+  });
+
+  it('7. the owner\'s last thread is offered as a command, not used', async () => {
+    const r = await resolveReplyDestination({ session: 'owen' }, deps({ origin: mktOrigin }));
+    expect(r.destination.kind).toBe('unresolved');
+    if (r.destination.kind === 'unresolved') expect(r.destination.fix).toContain(`reply --conversation room-mkt --thread ${MKT}:1790890000.000100`);
+  });
+
+  it('7. several live work items and no input naming one → refused listing each id (never the newest)', async () => {
+    const a = wi({ id: 'wi-a', title: 'A', metadata: { origin: { kind: 'owner', conversationId: 'room-ce', slackChannelId: PRO_CE, threadTs: PRO_CE_TS } } });
+    const b = wi({ id: 'wi-b', title: 'B', startedAt: new Date(NOW - 1 * MIN).toISOString(), metadata: { origin: { kind: 'owner', conversationId: 'room-mkt', slackChannelId: MKT, threadTs: '1.0' } } });
+    const r = await resolveReplyDestination({ session: 'owen' }, deps({ items: [a, b] }));
+    expect(r.destination.kind).toBe('unresolved');
+    if (r.destination.kind === 'unresolved') {
+      expect(r.destination.reason).toContain('2 live work items');
+      expect(r.destination.fix).toContain('reply --work-item wi-a');
+      expect(r.destination.fix).toContain('reply --work-item wi-b');
+    }
+  });
+
+  it('7. one live work item with no origin → refused, never a top-level post', async () => {
+    const r = await resolveReplyDestination({ session: 'owen' }, deps({ items: [wi({ id: 'wi-bare' })] }));
+    expect(r.destination.kind).toBe('unresolved');
+    if (r.destination.kind === 'unresolved') expect(r.destination.reason).toContain('work item wi-bare names no conversation or thread');
   });
 });
 
@@ -264,7 +309,7 @@ describe('crewly#1375 — a newer input from someone else than the owner', () =>
   });
 
   it('explicit references and hints still win over the agent message', async () => {
-    const r = await resolveReplyDestination({ session: 'owen', hints: { conversationId: 'room-mkt' } }, deps({ origin: ownerAsked, latest: fromAtlas }));
+    const r = await resolveReplyDestination({ session: 'owen', hints: { conversationId: 'room-mkt', thread: `${MKT}:1790890000.000100` } }, deps({ origin: ownerAsked, latest: fromAtlas }));
     expect(r.destination).toEqual(expect.objectContaining({ kind: 'conversation', conversationId: 'room-mkt', source: 'hint' }));
   });
 
@@ -279,11 +324,23 @@ describe('crewly#1375 — a newer input from someone else than the owner', () =>
     if (r.destination.kind === 'unresolved') expect(r.destination.fix).toContain('reply --conversation room-mkt');
   });
 
-  it('a dispatch older than the owner message, or a reminder: the turn origin as before', async () => {
+  // Message-routing audit 2026-10-18: these fell back to the turn origin (the
+  // owner's last thread). Only the latest ROUTED input counts now: when the
+  // owner message is newer it is the latest input itself (first case), and a
+  // dispatch naming no work item, or a reminder, names no place: refused.
+  it('the owner message newer than a dispatch is the input answered; a dispatch or reminder naming nothing is refused', async () => {
+    const owner = await resolveReplyDestination({ session: 'owen' }, deps({ origin: ownerAsked, latest: { kind: 'owner', conversationId: 'room-mkt', at: NOW - 3 * MIN } }));
+    expect(owner.destination).toEqual(expect.objectContaining({ source: 'turn-origin', conversationId: 'room-mkt' }));
     const older = await resolveReplyDestination({ session: 'owen' }, deps({ origin: ownerAsked, latest: { kind: 'dispatch', at: NOW - 10 * MIN } }));
-    expect(older.destination).toEqual(expect.objectContaining({ source: 'turn-origin' }));
+    expect(older.destination.kind).toBe('unresolved');
     const other = await resolveReplyDestination({ session: 'owen' }, deps({ origin: ownerAsked, latest: { kind: 'other', at: NOW } }));
-    expect(other.destination).toEqual(expect.objectContaining({ source: 'turn-origin' }));
+    expect(other.destination.kind).toBe('unresolved');
+    if (other.destination.kind === 'unresolved') expect(other.destination.fix).toContain('reply --conversation room-mkt');
+  });
+
+  it('a dispatch naming its work item answers that item', async () => {
+    const r = await resolveReplyDestination({ session: 'owen' }, deps({ items: [followUp, cronItem], latest: { kind: 'dispatch', workItemId: 'fu-187', at: NOW - 1 * MIN } }));
+    expect(r.destination).toEqual(expect.objectContaining({ kind: 'conversation', conversationId: 'room-ce', thread: `${PRO_CE}:${PRO_CE_TS}` }));
   });
 });
 
@@ -423,5 +480,67 @@ describe('latestInputOf', () => {
     expect(latestInputOf({ ...base, triggerKind: 'scheduled' })).toEqual({ kind: 'dispatch', at: 5 });
     expect(latestInputOf({ ...base, triggerKind: 'redelivery' })).toEqual({ kind: 'other', at: 5 });
     expect(latestInputOf({ ...base, triggerKind: 'follow_up' })).toEqual({ kind: 'other', at: 5 });
+  });
+});
+
+// Message-routing audit 2026-10-18: every message carries its destination.
+// A delegate's [RESULT] and another agent's message carry the route of the
+// request they answer; the resolver follows it and never guesses.
+describe('routes carried by results and agent messages', () => {
+  const PIA = 'flopost-pia-1';
+  const ownerRoute = { kind: 'owner' as const, conversationId: 'room-ce', thread: `${PRO_CE}:${PRO_CE_TS}` };
+
+  it('a result carrying the owner route answers in that owner thread', async () => {
+    const r = await resolveReplyDestination(
+      { session: 'owen' },
+      deps({ origin: mktOrigin, latest: { kind: 'result', sender: PIA, at: NOW, route: ownerRoute } }),
+    );
+    expect(r.destination).toEqual(expect.objectContaining({ kind: 'conversation', conversationId: 'room-ce', thread: `${PRO_CE}:${PRO_CE_TS}`, source: 'route' }));
+  });
+
+  it('a result carrying a work-item route answers where that work item goes', async () => {
+    const r = await resolveReplyDestination(
+      { session: 'owen' },
+      deps({ items: [followUp], latest: { kind: 'result', sender: PIA, at: NOW, route: { kind: 'work-item', workItemId: 'fu-187' } } }),
+    );
+    expect(r.destination).toEqual(expect.objectContaining({ kind: 'conversation', conversationId: 'room-ce', source: 'route' }));
+  });
+
+  it('a result with no route is refused (it used to land in the owner\'s last thread)', async () => {
+    const r = await resolveReplyDestination({ session: 'owen' }, deps({ origin: mktOrigin, latest: { kind: 'result', sender: PIA, at: NOW } }));
+    expect(r.destination.kind).toBe('unresolved');
+    if (r.destination.kind === 'unresolved') {
+      expect(r.destination.reason).toContain(`${PIA}'s result`);
+      expect(r.destination.fix).toContain('reply --conversation room-mkt');
+    }
+  });
+
+  it('a result whose owner route the replier cannot post in is refused with send-message', async () => {
+    const r = await resolveReplyDestination(
+      { session: 'owen' },
+      deps({ members: { 'room-mkt': ['owen'] }, latest: { kind: 'result', sender: PIA, at: NOW, route: ownerRoute } }),
+    );
+    expect(r.destination.kind).toBe('unresolved');
+    if (r.destination.kind === 'unresolved') expect(r.destination.fix).toContain('send-message --to');
+  });
+
+  it('an agent message about the replier\'s own owner request: refused, naming both answers', async () => {
+    const r = await resolveReplyDestination(
+      { session: 'owen' },
+      deps({ latest: { kind: 'agent', sender: PIA, at: NOW, route: ownerRoute } }),
+    );
+    expect(r.destination.kind).toBe('unresolved');
+    if (r.destination.kind === 'unresolved') {
+      expect(r.destination.fix).toContain(`send-message --to ${PIA}`);
+      expect(r.destination.fix).toContain(`reply --conversation room-ce --thread ${PRO_CE}:${PRO_CE_TS}`);
+    }
+  });
+
+  it('an agent message about someone else\'s request goes back to that agent', async () => {
+    const r = await resolveReplyDestination(
+      { session: 'owen' },
+      deps({ members: {}, latest: { kind: 'agent', sender: PIA, at: NOW, route: ownerRoute } }),
+    );
+    expect(r.destination).toEqual(expect.objectContaining({ source: 'agent-message', destination: expect.objectContaining({ kind: 'agent', sessionName: PIA }) }));
   });
 });
