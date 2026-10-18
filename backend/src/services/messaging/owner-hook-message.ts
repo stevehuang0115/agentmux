@@ -56,13 +56,48 @@ export function buildOwnerHookNote(message: SurfacedOwnerMessage, maxChars: numb
  * posts and the owner's ping itself, so the agent saw only the thread's old
  * topics and answered something else (2026-10-08, #content-team).
  *
+ * The reply instructions after the `---` line can alone be longer than the
+ * room. Keeping only the end then kept those instructions and cut the
+ * message, which sits just before them: the agent told the owner their
+ * message arrived empty (2026-10-18, #awesome-videos). So the instructions
+ * get at most {@link REPLY_TAIL_SHARE} of the room (their start, which holds
+ * the reply command), and the message part is fitted into the rest.
+ *
  * @param data - The queued text
  * @param room - Characters available
  * @returns The text, whole or cut in the middle
  */
 export function fitKeepingNewest(data: string, room: number): string {
 	if (data.length <= room) return data;
-	const marker = '\n… (older part cut here to fit; the newest lines, the message itself and how to reply follow; read the full thread in its conversation before you answer)\n';
+	const split = data.lastIndexOf(REPLY_TAIL_SEPARATOR);
+	if (split > 0) {
+		const body = data.slice(0, split);
+		let tail = data.slice(split);
+		const tailRoom = Math.floor(room * REPLY_TAIL_SHARE);
+		if (tail.length > tailRoom) tail = `${tail.slice(0, Math.max(0, tailRoom - TAIL_CUT_MARKER.length))}${TAIL_CUT_MARKER}`;
+		return `${fitBody(body, room - tail.length)}${tail}`;
+	}
+	return fitBody(data, room);
+}
+
+/** Line that opens the reply instructions in a queued chat message */
+const REPLY_TAIL_SEPARATOR = '\n---\n';
+/** Most of the room the reply instructions may take when the message is cut */
+const REPLY_TAIL_SHARE = 0.35;
+/** Said where the reply instructions were cut */
+const TAIL_CUT_MARKER = '\n… (rest of the reply instructions cut to fit)';
+
+/**
+ * Fit text into `room` characters by cutting its older middle, keeping the
+ * first block and the end.
+ *
+ * @param data - The text
+ * @param room - Characters available
+ * @returns The text, whole or cut in the middle
+ */
+function fitBody(data: string, room: number): string {
+	if (data.length <= room) return data;
+	const marker = '\n… (older part cut here to fit; the newest lines and the message itself follow; read the full thread in its conversation before you answer)\n';
 	if (room <= marker.length + 20) return data.slice(data.length - Math.max(0, room));
 	const firstBreak = data.indexOf('\n\n');
 	const lead = firstBreak > 0 && firstBreak <= Math.floor(room / 4) ? data.slice(0, firstBreak) : '';
