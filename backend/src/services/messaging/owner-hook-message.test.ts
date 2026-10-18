@@ -228,6 +228,31 @@ describe('owner message at the next tool boundary', () => {
 			expect(note).toContain('older part cut here');
 		});
 
+		// 2026-10-18, #awesome-videos: the reply instructions alone filled the
+		// room, so the owner's question just before them was cut and the agent
+		// said the message arrived empty.
+		it('keeps the message itself when the reply instructions alone are longer than the room', () => {
+			const data = [
+				'[CHAT:room-1] <UOWNER@#awesome-videos>',
+				'',
+				'[Slack thread so far — oldest→newest]',
+				...Array.from({ length: 60 }, (_, i) => `  Pia [bot]: earlier lesson line ${i}`),
+				'[end of Slack thread]',
+				'',
+				'只有这三点要学吗？还有其他吗',
+				'',
+				'---',
+				'Reply with reply-channel --channel room-1 --thread t-1. ' + 'Rule text. '.repeat(500),
+				'Who is awake right now: Pia (awake)',
+			].join('\n');
+			const note = buildOwnerHookNote({ data, queuedAt: 1, surfaceCount: 1 }, 6000);
+			expect(note.length).toBeLessThanOrEqual(6000);
+			expect(note).toContain('[CHAT:room-1] <UOWNER@#awesome-videos>');
+			expect(note).toContain('只有这三点要学吗？还有其他吗');
+			expect(note).toContain('Reply with reply-channel --channel room-1 --thread t-1.');
+			expect(note).toContain('rest of the reply instructions cut');
+		});
+
 		it('joins notes owner-first within the ceiling, dropping one that does not fit', () => {
 			expect(joinHookNotes([null, undefined])).toBeNull();
 			expect(joinHookNotes(['owner', 'nudge'])).toBe('owner\n\nnudge');
