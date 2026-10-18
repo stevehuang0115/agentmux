@@ -51,6 +51,7 @@ work came from:
 | Your current work | Where the answer goes |
 |---|---|
 | a message from the owner | that conversation / Slack thread (DM, channel thread, Crewly chat / portal) |
+| a message from another agent (`[MESSAGE from <name> … send-message --to <session>]`) | back to that agent, agent-to-agent — never the owner's thread |
 | a project ticket | the ticket's thread in your team channel (started on the first post) |
 | a scheduled / triggered task | the trigger's destination, else a NEW top-level post in your team channel |
 | nothing in particular | a new top-level post in your team channel |
@@ -79,8 +80,15 @@ bash config/skills/agent/core/reply/execute.sh --decision D-12 "Going with optio
 Order the harness uses: the message you name → the ticket's thread (request
 ticket `TKT-…` or project ticket like `CE-7`) → the work item's origin → ids
 you passed (only if they name a conversation you are in, and a thread key's
-channel matches) → what the harness last prompted you about → where your
-current turn came from → your DM with the owner.
+channel matches) → the agent whose message is the latest thing you got →
+what the harness last prompted you about → where your current turn came
+from → your DM with the owner.
+
+When a bare reply could mean two places — another agent's message came in
+but you also owe the owner an answer, or a dispatch arrived after the
+owner's message — nothing is sent: you get `success: false` and both
+commands (`send-message --to <agent> …` or `reply --conversation <id> …`).
+Run the one you mean.
 
 To start a new topic yourself:
 

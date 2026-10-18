@@ -53,6 +53,7 @@ import { getCallerIdentity, isOwnerCaller } from '../../middleware/caller-identi
 import { pausedRefusalMessage, pausedTeamOfSession } from '../../services/team/team-pause.registry.js';
 import { noteTurnDelivery, withWorkItemTraceMarker } from '../../services/trace/trace-recorder.js';
 import { noteOutsideInput } from '../../services/session/input-ledger.js';
+import { describeAgentSender, wrapAgentMessage, type AgentMessageSender } from '../../services/messaging/agent-message-envelope.js';
 
 /** Logger instance for terminal controller */
 const logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('TerminalController');
@@ -368,6 +369,33 @@ export async function prepareWorkItemHandOver(
 }
 
 /**
+ * The sender of an agent-to-agent message written through this route
+ * (`send-message`), when its text should carry the sender header
+ * (crewly#1375). Null for the owner / dashboard, the orchestrator, raw
+ * keystrokes, WorkItem hand-overs, an agent writing to itself, and harness
+ * services that write with an agent badge but are not team members.
+ *
+ * @param target - Receiving session
+ * @param req - The request (caller identity, body)
+ * @returns The sender, or null when the text goes as it is
+ */
+async function agentMessageSenderOf(target: string, req: Request): Promise<AgentMessageSender | null> {
+	try {
+		if (req.body?.mode !== 'message' || req.body?.workItemId) return null;
+		if (isOwnerCaller(req)) return null;
+		const sender = readAgentSessionHeader(req);
+		if (!sender || sender === target) return null;
+		// The orchestrator frames its own messages (it writes through /deliver,
+		// and what it passes on is often the owner's request).
+		if (sender === ORCHESTRATOR_SESSION_NAME) return null;
+		return await describeAgentSender(sender, (session) => StorageService.getInstance().findMemberBySessionName(session));
+	} catch {
+		// The header is a courtesy: never block the delivery over it.
+		return null;
+	}
+}
+
+/**
  * A message from one agent to a team member whose session is down: queue it
  * and start the agent instead of answering 404 (#929).
  *
@@ -520,7 +548,14 @@ export async function writeToSession(this: unknown, req: Request, res: Response)
 		// is neither the owner nor an agent, and the recipient must not take it for either.
 		const caller = getCallerIdentity(req);
 		const fromScheduler = caller.kind === 'scheduler';
-		const rawDataStr = fromScheduler ? `[${caller.sender ?? 'scheduler:unknown'}] ${String(data)}` : String(data);
+		// Another agent's message names its sender and reply route (crewly#1375):
+		// the recipient must not take it for the owner, nor answer it in an owner thread.
+		const agentSender = !fromScheduler ? await agentMessageSenderOf(sessionName, req) : null;
+		const rawDataStr = fromScheduler
+			? `[${caller.sender ?? 'scheduler:unknown'}] ${String(data)}`
+			: agentSender
+				? wrapAgentMessage(String(data), agentSender)
+				: String(data);
 		const validation = validateTerminalInput(rawDataStr);
 		if (!validation.isValid) {
 			logger.warn('Terminal input validation failed', {

@@ -243,6 +243,57 @@ async function holdAlreadyAnsweredReply(req: Request, res: Response): Promise<bo
 }
 
 /**
+ * Refuse an agent's post into the owner's thread that only @-mentions other
+ * agents, when its turn came from another agent's message, not from this
+ * thread (crewly#1375): answer that agent with send-message instead. Never
+ * blocks a post because a lookup failed.
+ *
+ * @param req - The send request
+ * @param res - Response (written when refused)
+ * @returns True when the post was refused
+ */
+async function refuseAgentOnlyPostInOwnerThread(req: Request, res: Response): Promise<boolean> {
+  try {
+    const session = principalFromRequestSafe(req).agentSession;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const conversationId = req.params?.id ? String(req.params.id) : '';
+    if (!session || !conversationId || typeof body.content !== 'string' || !body.content.includes('@')) return false;
+    const [{ getTurnTriggerTracker }, { latestInputOf }, { misdirectedAgentMention }, { StorageService }] = await Promise.all([
+      import('../../services/trace/turn-trigger.js'),
+      import('../../services/orc/reply-destination-resolver.js'),
+      import('../../services/orc/agent-mention-post-guard.js'),
+      import('../../services/core/storage.service.js'),
+    ]);
+    const tracker = getTurnTriggerTracker();
+    const latest = latestInputOf(tracker.trigger(session));
+    if (latest?.kind !== 'agent') return false;
+    const teams = await StorageService.getInstance().getTeams().catch(() => []);
+    const byName = new Map<string, string>();
+    for (const team of teams) {
+      for (const m of team.members ?? []) {
+        if (m.name && m.sessionName) byName.set(m.name.toLowerCase(), m.sessionName);
+      }
+    }
+    const refusal = misdirectedAgentMention({
+      session,
+      content: body.content,
+      latest,
+      ownerAskedHere: tracker.ownerAskedRecently(session, conversationId),
+      agentByName: (name) => byName.get(name.toLowerCase()) ?? null,
+    });
+    if (!refusal) return false;
+    res.status(409).json({
+      success: false,
+      error: { code: 'agent_mention_in_owner_thread', message: refusal.message },
+      refused: true,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * {@link principalFromRequest} that never throws (post-ack paths).
  *
  * @param req - The request
@@ -608,6 +659,9 @@ export function createChatV2Controller(
       // in this channel's latest thread or a top-level post
       // (specs/2026-10-02-harness-owned-routing.md §1).
       if (await rerouteMismatchedAgentThread(req, res)) return;
+      // A post in the owner's thread that only talks to other agents, unprompted
+      // by that thread: it goes to the agent instead (crewly#1375).
+      if (await refuseAgentOnlyPostInOwnerThread(req, res)) return;
       // A colleague already answered the owner's latest message in this
       // thread: hold this one (specs/2026-10-03-one-responder-per-message.md §2).
       if (await holdAlreadyAnsweredReply(req, res)) return;

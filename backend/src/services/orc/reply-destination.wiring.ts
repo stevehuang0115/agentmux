@@ -16,6 +16,7 @@ import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
 import { AgentPromptReferenceService } from './agent-prompt-reference.service.js';
 import {
   fixCommand,
+  latestInputOf,
   resolveReplyDestination,
   type ReplyDestination,
   type ReplyHints,
@@ -83,6 +84,12 @@ export interface ReplyDeliveryDeps {
   currentTrace?: (session: string) => string | null;
   /** A conversation as the owner knows it (`#content-team`, `the DM with Ella`). Omitted: unnamed. */
   conversationPlace?: (conversationId: string) => string | null;
+  /**
+   * Send an agent's answer to another agent's message back to that agent
+   * (crewly#1375), as a message carrying the replier's sender header. True
+   * when taken. Omitted: the work-destination messenger is used as is.
+   */
+  answerAgent?: (fromSession: string, toSession: string, text: string) => Promise<boolean>;
 }
 
 /** What a delivery did. */
@@ -579,6 +586,12 @@ async function attempt(
     if (answeredReference && input.interim !== true) AgentPromptReferenceService.getInstance().clear(input.session);
     return { ok: true, destination: dest, messageId, conversationId: dest.conversationId };
   }
+  if (dest.source === 'agent-message' && dest.destination.kind === 'agent' && d.answerAgent) {
+    const to = dest.destination.sessionName;
+    const taken = await d.answerAgent(input.session, to, input.content).catch(() => false);
+    if (!taken) return { ok: false, destination: dest, error: notDelivered(`${dest.reason}: ${to} could not be reached`, `send-message --to ${to} "<your answer>"`) };
+    return { ok: true, destination: dest, agentSession: to };
+  }
   try {
     const wd = await d.workDestination();
     const posted = await deliverToWorkDestination(input.session, dest.destination, input.content, wd);
@@ -688,6 +701,37 @@ function logResolution(session: string, r: ReplyResolution): void {
     ...(d.kind !== 'unresolved' ? { source: d.source } : {}),
     reason: d.reason,
   });
+}
+
+/**
+ * The real {@link ReplyDeliveryDeps.answerAgent}: the answer goes to the
+ * other agent with the replier's sender header (so it can answer back), and
+ * the replier's open ask from that agent counts as answered.
+ *
+ * @param fromSession - Replying agent
+ * @param toSession - Agent whose message it answers
+ * @param text - Answer
+ * @returns True when the message was taken
+ */
+async function defaultAnswerAgent(fromSession: string, toSession: string, text: string): Promise<boolean> {
+  const [{ getAgentMessenger }, { describeAgentSender, wrapAgentMessage }, { StorageService }, { getAgentAskLedger }] = await Promise.all([
+    import('./work-item-destination.wiring.js'),
+    import('../messaging/agent-message-envelope.js'),
+    import('../core/storage.service.js'),
+    import('../messaging/agent-ask-ledger.service.js'),
+  ]);
+  const messenger = getAgentMessenger();
+  if (!messenger) return false;
+  const sender = (await describeAgentSender(fromSession, (s) => StorageService.getInstance().findMemberBySessionName(s))) ?? { session: fromSession };
+  const taken = await messenger(toSession, wrapAgentMessage(text, sender));
+  if (taken) {
+    try {
+      getAgentAskLedger()?.noteAnswered(fromSession, toSession);
+    } catch {
+      /* best effort */
+    }
+  }
+  return taken;
 }
 
 /**
@@ -812,6 +856,7 @@ export async function defaultReplyDeliveryDeps(): Promise<ReplyDeliveryDeps> {
       });
     },
     surfacedOwnerConversations: (session) => SubAgentMessageQueue.getInstance().surfacedUnansweredConversations(session),
+    latestInput: (session) => latestInputOf(getTurnTriggerTracker().trigger(session)),
     now: () => Date.now(),
   };
   const { deliverAgentReplyToConversation } = await import('../../controllers/chat/chat.controller.js');
@@ -820,6 +865,7 @@ export async function defaultReplyDeliveryDeps(): Promise<ReplyDeliveryDeps> {
     resolver,
     deliverToConversation: deliverAgentReplyToConversation,
     workDestination: defaultWorkDestinationDeps,
+    answerAgent: defaultAnswerAgent,
     priorRoomAnswer: async (input) => {
       const { getSlackTeamChannelService } = await import('../slack/slack-team-channel.service.js');
       return (await getSlackTeamChannelService()?.heldReplyFor(input)) ?? null;

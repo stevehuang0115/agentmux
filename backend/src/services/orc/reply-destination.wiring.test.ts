@@ -343,3 +343,29 @@ describe('chatConversationPlace', () => {
     expect(chatConversationPlace(null, 'c1')).toBeNull();
   });
 });
+
+describe('deliverReply — answer to another agent\'s message (crewly#1375)', () => {
+  beforeEach(() => {
+    AgentPromptReferenceService.resetInstance();
+    resetReplyDeliveryGuardForTesting();
+  });
+  const ownerTurn = { conversationId: 'room-ce', receivedAt: Date.now() - 180_000 };
+  const fromAtlas = () => ({ kind: 'agent' as const, sender: 'think-tank-atlas-b4e166f6', at: Date.now() - 60_000 });
+
+  it('goes back to the sender agent, not into the owner thread', async () => {
+    const answerAgent = jest.fn(async () => true);
+    const d = deps({ answerAgent }, { turnOrigin: () => ownerTurn, latestInput: fromAtlas, lastDelivered: () => undefined });
+    const r = await deliverReply({ session: 'flopost-pia-1', content: '(1) your note is half right' }, d);
+    expect(r).toEqual(expect.objectContaining({ ok: true, agentSession: 'think-tank-atlas-b4e166f6' }));
+    expect(answerAgent).toHaveBeenCalledWith('flopost-pia-1', 'think-tank-atlas-b4e166f6', '(1) your note is half right');
+    expect(d.deliver).not.toHaveBeenCalled();
+  });
+
+  it('a sender that cannot be reached is an error naming send-message', async () => {
+    const d = deps({ answerAgent: jest.fn(async () => false) }, { turnOrigin: () => ownerTurn, latestInput: fromAtlas, lastDelivered: () => undefined });
+    const r = await deliverReply({ session: 'flopost-pia-1', content: 'x' }, d);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain('send-message --to think-tank-atlas-b4e166f6');
+    expect(d.deliver).not.toHaveBeenCalled();
+  });
+});

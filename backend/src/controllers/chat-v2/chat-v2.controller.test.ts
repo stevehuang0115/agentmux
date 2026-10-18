@@ -36,6 +36,8 @@ import {
   type TicketIntakeService,
 } from '../../services/v3/ticket-intake.service.js';
 import type { ChatV2Gateway } from '../../websocket/chat-v2.gateway.js';
+import { StorageService } from '../../services/core/storage.service.js';
+import { setTurnTriggerTrackerForTesting, TurnTriggerTracker } from '../../services/trace/turn-trigger.js';
 
 // reply-channel with a Slack thread key from another channel
 // (specs/2026-10-02-harness-owned-routing.md): the Slack mapping and the
@@ -322,6 +324,51 @@ describe('chat-v2 controller (REST)', () => {
       expect(mockDeliverReply).toHaveBeenCalledTimes(2);
     } finally {
       mockTeamChannels.current = null;
+      service.close();
+    }
+  });
+
+  it('POST /api/chat/channels/:id/messages — an owner-thread post that only @s agents, after an agent message, is refused (crewly#1375)', async () => {
+    const { app, service } = buildApp();
+    const tracker = new TurnTriggerTracker();
+    setTurnTriggerTrackerForTesting(tracker);
+    const storage = jest.spyOn(StorageService, 'getInstance').mockReturnValue({
+      getTeams: async () => [{ id: 'tt', name: 'Think Tank', members: [{ name: 'Atlas', sessionName: 'think-tank-atlas-b4e166f6' }] }],
+    } as unknown as StorageService);
+    try {
+      const created = await request(app).post('/api/chat/channels').send({ agentSession: 'sess-a', name: 'Ch' });
+      const chId = created.body.data.id;
+      tracker.noteDelivery('sess-a', `[CHAT:${chId}] <owner@Pia> Shaw Brothers style video please`);
+      tracker.noteDelivery(
+        'sess-a',
+        '[MESSAGE from Atlas (Think Tank) — a colleague, not the owner. Answer with send-message --to think-tank-atlas-b4e166f6; do not post it in an owner thread.]\nThanks. Two things.',
+      );
+
+      const refused = await request(app)
+        .post(`/api/chat/channels/${chId}/messages`)
+        .set('X-Agent-Session', 'sess-a')
+        .send({ content: '@Atlas (1) your note is half right' });
+      expect(refused.status).toBe(409);
+      expect(refused.body).toMatchObject({ success: false, error: { code: 'agent_mention_in_owner_thread' } });
+      expect(refused.body.error.message).toContain('send-message --to think-tank-atlas-b4e166f6');
+
+      // Without an agent-only @-mention it is posted.
+      const plain = await request(app)
+        .post(`/api/chat/channels/${chId}/messages`)
+        .set('X-Agent-Session', 'sess-a')
+        .send({ content: 'The cut is rendering.' });
+      expect(plain.status).toBe(201);
+
+      // A turn that came from the owner again: the same post goes through.
+      tracker.noteDelivery('sess-a', `[CHAT:${chId}] <owner@Pia> ask Atlas`);
+      const prompted = await request(app)
+        .post(`/api/chat/channels/${chId}/messages`)
+        .set('X-Agent-Session', 'sess-a')
+        .send({ content: '@Atlas the owner asks for the numbers' });
+      expect(prompted.status).toBe(201);
+    } finally {
+      storage.mockRestore();
+      setTurnTriggerTrackerForTesting(null);
       service.close();
     }
   });

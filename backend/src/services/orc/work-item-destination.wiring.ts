@@ -94,6 +94,15 @@ export function setAgentMessenger(messenger: AgentMessenger | null): void {
 }
 
 /**
+ * The wired agent messenger (boot), or null.
+ *
+ * @returns Messenger
+ */
+export function getAgentMessenger(): AgentMessenger | null {
+  return agentMessenger;
+}
+
+/**
  * The text a delegating agent gets with a result for work it handed out:
  * tagged, naming the sender and the work item, so it knows what it answers.
  *
