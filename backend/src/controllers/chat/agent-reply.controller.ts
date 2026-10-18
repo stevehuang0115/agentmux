@@ -219,6 +219,8 @@ export function createAgentReplyHandler(deps: AgentReplyDeps = defaultDeps) {
             ...(delivery.messageId ? { messageId: delivery.messageId, conversationId: delivery.conversationId } : {}),
             ...(delivery.slackChannelId ? { slackChannelId: delivery.slackChannelId, messageTs: delivery.messageTs } : {}),
             ...(delivery.threadTs ? { threadTs: delivery.threadTs } : {}),
+            // An answer to another agent's message went back to it (crewly#1375).
+            ...(delivery.agentSession ? { agentSession: delivery.agentSession } : {}),
             destination: dest.kind === 'work' ? dest.destination.kind : 'conversation',
             via: dest.source,
           },

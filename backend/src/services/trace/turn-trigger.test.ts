@@ -73,6 +73,13 @@ describe('TurnTriggerTracker', () => {
 		});
 	});
 
+	it('the sender header names an agent message nobody noted (crewly#1375)', () => {
+		const text =
+			'[MESSAGE from Atlas (Think Tank) — a colleague, not the owner. Answer with send-message --to think-tank-atlas-b4e166f6; do not post it in an owner thread.]\n[TASK] quoted';
+		expect(classifyTurnTrigger(text).triggerKind).toBe('agent_message');
+		expect(t.noteDelivery('flopost-pia-1', text, {}, NOW)).toMatchObject({ triggerKind: 'agent_message', sender: 'think-tank-atlas-b4e166f6' });
+	});
+
 	it('a send is matched once; harness services are not agents', () => {
 		t.noteSender('lyra', 'Status check on the queued work item please', 'WorkItemDispatch', NOW);
 		expect(t.noteDelivery('lyra', 'Status check on the queued work item please', {}, NOW).triggerKind).toBe('system');

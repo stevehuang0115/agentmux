@@ -3,9 +3,11 @@ import type { TurnOrigin } from './orc-reply-route.service.js';
 import type { PromptReference } from './agent-prompt-reference.service.js';
 import {
   fixCommand,
+  latestInputOf,
   resolveReplyDestination,
   threadOfMessage,
   validateHints,
+  type LatestInput,
   type ReplyResolverDeps,
   type ResolverChatMessage,
   type ResolverDecision,
@@ -35,6 +37,7 @@ interface World {
   owes?: boolean;
   lastDelivered?: string;
   surfaced?: string[];
+  latest?: LatestInput | null;
 }
 
 function deps(w: World = {}): ReplyResolverDeps {
@@ -61,6 +64,7 @@ function deps(w: World = {}): ReplyResolverDeps {
     lastDelivered: () => w.lastDelivered,
     ownerDm: async () => (w.dm === undefined ? 'dm-owen' : w.dm),
     surfacedOwnerConversations: () => w.surfaced ?? [],
+    latestInput: () => w.latest ?? null,
     now: () => NOW,
   };
 }
@@ -218,6 +222,71 @@ describe('resolveReplyDestination — order', () => {
   });
 });
 
+// crewly#1375 (2026-10-18): Pia answered the owner's Shaw Brothers thread at
+// 11:53; Atlas then sent her a message; her bare `reply` resolved to
+// "turn-origin: the owner asked (no work item running)" — the owner's thread.
+describe('crewly#1375 — a newer input from someone else than the owner', () => {
+  const ATLAS = 'think-tank-atlas-b4e166f6';
+  const ownerAsked: TurnOrigin = { ...mktOrigin, receivedAt: NOW - 3 * MIN };
+  const fromAtlas: LatestInput = { kind: 'agent', sender: ATLAS, at: NOW - 1 * MIN };
+
+  it('a bare reply after an agent message goes back to that agent, not the owner thread', async () => {
+    const r = await resolveReplyDestination({ session: 'owen' }, deps({ origin: ownerAsked, latest: fromAtlas }));
+    expect(r.destination).toEqual(
+      expect.objectContaining({ kind: 'work', source: 'agent-message', destination: expect.objectContaining({ kind: 'agent', sessionName: ATLAS }) }),
+    );
+  });
+
+  it('owing the owner too: refused with both commands', async () => {
+    const r = await resolveReplyDestination({ session: 'owen' }, deps({ origin: ownerAsked, latest: fromAtlas, owes: true }));
+    expect(r.destination.kind).toBe('unresolved');
+    if (r.destination.kind === 'unresolved') {
+      expect(r.destination.fix).toContain(`send-message --to ${ATLAS}`);
+      expect(r.destination.fix).toContain('reply --conversation room-mkt');
+    }
+  });
+
+  it('an owner message shown mid-turn: refused as well', async () => {
+    const r = await resolveReplyDestination({ session: 'owen' }, deps({ origin: ownerAsked, latest: fromAtlas, surfaced: ['room-ce'] }));
+    expect(r.destination.kind).toBe('unresolved');
+  });
+
+  it('holding work whose answer goes elsewhere: refused with the work-item command', async () => {
+    const r = await resolveReplyDestination({ session: 'owen' }, deps({ latest: fromAtlas, items: [cronItem] }));
+    expect(r.destination.kind).toBe('unresolved');
+    if (r.destination.kind === 'unresolved') expect(r.destination.fix).toContain('reply --work-item cron-1');
+  });
+
+  it('work delegated by that same agent: the answer goes to it', async () => {
+    const delegated = wi({ id: 'wi-atlas', metadata: { origin: { kind: 'agent', sessionName: ATLAS } } });
+    const r = await resolveReplyDestination({ session: 'owen' }, deps({ latest: fromAtlas, items: [delegated] }));
+    expect(r.destination).toEqual(expect.objectContaining({ source: 'agent-message' }));
+  });
+
+  it('explicit references and hints still win over the agent message', async () => {
+    const r = await resolveReplyDestination({ session: 'owen', hints: { conversationId: 'room-mkt' } }, deps({ origin: ownerAsked, latest: fromAtlas }));
+    expect(r.destination).toEqual(expect.objectContaining({ kind: 'conversation', conversationId: 'room-mkt', source: 'hint' }));
+  });
+
+  it('an owner message after the agent message: the turn origin again', async () => {
+    const r = await resolveReplyDestination({ session: 'owen' }, deps({ origin: ownerAsked, latest: { kind: 'owner', at: NOW } }));
+    expect(r.destination).toEqual(expect.objectContaining({ conversationId: 'room-mkt', source: 'turn-origin' }));
+  });
+
+  it('a dispatch newer than the owner turn origin: no guess into the owner thread', async () => {
+    const r = await resolveReplyDestination({ session: 'owen' }, deps({ origin: ownerAsked, latest: { kind: 'dispatch', at: NOW - 1 * MIN } }));
+    expect(r.destination.kind).toBe('unresolved');
+    if (r.destination.kind === 'unresolved') expect(r.destination.fix).toContain('reply --conversation room-mkt');
+  });
+
+  it('a dispatch older than the owner message, or a reminder: the turn origin as before', async () => {
+    const older = await resolveReplyDestination({ session: 'owen' }, deps({ origin: ownerAsked, latest: { kind: 'dispatch', at: NOW - 10 * MIN } }));
+    expect(older.destination).toEqual(expect.objectContaining({ source: 'turn-origin' }));
+    const other = await resolveReplyDestination({ session: 'owen' }, deps({ origin: ownerAsked, latest: { kind: 'other', at: NOW } }));
+    expect(other.destination).toEqual(expect.objectContaining({ source: 'turn-origin' }));
+  });
+});
+
 describe('TKT-187 — Owen: reply-chat --thread <#pro-ce key>, no conversation', () => {
   it('lands in the #pro-ce thread, not the newer unrelated #crewly-marketing conversation', async () => {
     const r = await resolveReplyDestination(
@@ -291,5 +360,19 @@ describe('helpers', () => {
     expect(fixCommand({ decisionId: 'D-2' })).toBe('reply --decision D-2 "<your message>"');
     // No reference: a command the agent can run as is.
     expect(fixCommand()).toBe('reply "<your message>"');
+  });
+});
+
+describe('latestInputOf', () => {
+  const base = { rootKind: 'system' as const, viaAgents: [], at: 5 };
+  it('maps turn triggers to what routing cares about', () => {
+    expect(latestInputOf(null)).toBeNull();
+    expect(latestInputOf({ ...base, triggerKind: 'owner_message' })).toEqual({ kind: 'owner', at: 5 });
+    expect(latestInputOf({ ...base, triggerKind: 'agent_message', sender: 'a-1' })).toEqual({ kind: 'agent', sender: 'a-1', at: 5 });
+    expect(latestInputOf({ ...base, triggerKind: 'agent_message' })).toEqual({ kind: 'other', at: 5 });
+    expect(latestInputOf({ ...base, triggerKind: 'dispatch' })).toEqual({ kind: 'dispatch', at: 5 });
+    expect(latestInputOf({ ...base, triggerKind: 'scheduled' })).toEqual({ kind: 'dispatch', at: 5 });
+    expect(latestInputOf({ ...base, triggerKind: 'redelivery' })).toEqual({ kind: 'other', at: 5 });
+    expect(latestInputOf({ ...base, triggerKind: 'follow_up' })).toEqual({ kind: 'other', at: 5 });
   });
 });

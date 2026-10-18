@@ -1634,6 +1634,58 @@ describe('TerminalController', () => {
 			expect(mockRes.status).not.toHaveBeenCalledWith(202);
 		});
 
+		// crewly#1375: Pia got Atlas's message as bare text and answered it in
+		// the owner's thread. An agent's message now names its sender and route.
+		describe('an agent message carries its sender header (crewly#1375)', () => {
+			const ATLAS = 'think-tank-atlas-b4e166f6';
+			const HEADER =
+				'[MESSAGE from Atlas (Think Tank) — a colleague, not the owner. Answer with send-message --to think-tank-atlas-b4e166f6; do not post it in an owner thread.]';
+			beforeEach(() => {
+				(mockFindMemberBySessionName as jest.Mock<(name: string) => Promise<any>>).mockImplementation(async (name: string) =>
+					name === ATLAS ? { team: { id: 'tt', name: 'Think Tank', members: [] }, member: { name: 'Atlas', sessionName: ATLAS, role: 'developer', agentStatus: 'active' } } : null,
+				);
+			});
+			const write = (headers: Record<string, string>, body: Record<string, unknown>) => {
+				mockReq = { params: { sessionName: 'test-session' } as any, headers, body };
+				return terminalController.writeToSession.call(ctx, mockReq as Request, mockRes as Response);
+			};
+
+			it('a queued message keeps the header (it is part of the text)', async () => {
+				await write({ 'x-agent-session': ATLAS }, { data: 'Thanks. Two things.', mode: 'message' });
+				expect(ctx.agentRegistrationService.holdIfMidTurn).toHaveBeenCalledWith('test-session', `${HEADER}\nThanks. Two things.`);
+			});
+
+			it('an idle recipient gets the header typed in with the text', async () => {
+				ctx.agentRegistrationService.holdIfMidTurn.mockResolvedValue(null);
+				await write({ 'x-agent-session': ATLAS }, { data: 'Thanks.', mode: 'message' });
+				expect(mockSession.write).toHaveBeenCalledWith(`\x1b[200~${HEADER}\nThanks.\x1b[201~`);
+			});
+
+			it('a message that already carries a harness envelope is not wrapped again', async () => {
+				ctx.agentRegistrationService.holdIfMidTurn.mockResolvedValue(null);
+				await write({ 'x-agent-session': ATLAS }, { data: '[TASK] build it', mode: 'message' });
+				expect(mockSession.write).toHaveBeenCalledWith('\x1b[200~[TASK] build it\x1b[201~');
+			});
+
+			it('a harness service with an agent badge (not a member) is not wrapped', async () => {
+				ctx.agentRegistrationService.holdIfMidTurn.mockResolvedValue(null);
+				await write({ 'x-agent-session': 'workitem-dispatch' }, { data: 'notice', mode: 'message' });
+				expect(mockSession.write).toHaveBeenCalledWith('\x1b[200~notice\x1b[201~');
+			});
+
+			it('the owner (dashboard) is not wrapped', async () => {
+				ctx.agentRegistrationService.holdIfMidTurn.mockResolvedValue(null);
+				mockReq = markOwner({ params: { sessionName: 'test-session' } as any, headers: {}, body: { data: 'hello', mode: 'message' } } as Partial<Request>);
+				await terminalController.writeToSession.call(ctx, mockReq as Request, mockRes as Response);
+				expect(mockSession.write).toHaveBeenCalledWith('\x1b[200~hello\x1b[201~');
+			});
+
+			it('raw keystrokes (no message mode) are not wrapped', async () => {
+				await write({ 'x-agent-session': ATLAS }, { data: 'ls' });
+				expect(mockSession.write).toHaveBeenCalledWith('ls\r');
+			});
+		});
+
 		// A scheduled command (the backend's runner; CREW-312) is neither the
 		// owner nor an agent: its note is labelled and a busy recipient still queues it.
 		describe('from a scheduled command', () => {

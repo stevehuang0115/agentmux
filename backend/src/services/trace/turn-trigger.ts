@@ -18,6 +18,7 @@
 
 import { TURN_TRIGGER_CONSTANTS } from '../../constants.js';
 import { parseInboundOrigin } from '../orc/orc-reply-route.service.js';
+import { parseAgentMessageSender } from '../messaging/agent-message-envelope.js';
 
 const C = TURN_TRIGGER_CONSTANTS;
 
@@ -105,6 +106,8 @@ export function classifyTurnTrigger(text: string): ClassifiedTrigger {
 		}
 		return { triggerKind: 'restart', ...workItemOf(t) };
 	}
+	// Another agent's message opens with its sender header (crewly#1375).
+	if (parseAgentMessageSender(t)) return { triggerKind: 'agent_message' };
 	// An owner's chat message opens with its routing prefix; checked before
 	// the harness tags, which the owner's own text may quote.
 	const chat = parseInboundOrigin(t);
@@ -187,7 +190,8 @@ export class TurnTriggerTracker {
 	 */
 	noteDelivery(session: string, text: string, opts: { traceId?: string | null; sender?: string | null } = {}, now: number = Date.now()): TurnTrigger {
 		const classified = classifyTurnTrigger(text);
-		const sender = opts.sender || this.takeSender(session, text, now);
+		// The sender header names it even when the send was not noted here (crewly#1375).
+		const sender = opts.sender || this.takeSender(session, text, now) || parseAgentMessageSender(text);
 		const base: ClassifiedTrigger = sender && (classified.triggerKind === 'system' || classified.triggerKind === 'status')
 			? { triggerKind: 'agent_message' }
 			: classified;
