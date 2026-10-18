@@ -79,6 +79,7 @@ const mockService = {
   findWorkItem: jest.fn(),
   setOutput: jest.fn(),
   addToPool: jest.fn(),
+  isOwnerThreadUnreadable: jest.fn().mockResolvedValue(false),
   getAllItems: jest.fn().mockResolvedValue([]),
   cancelQueued: jest.fn(),
   updateItemStatus: jest.fn(),
@@ -1339,6 +1340,21 @@ describe('TaskPoolController', () => {
       expect(body.data.workItemId).toBe(addedWI.id);
       expect(body.data.id).toBe(addedWI.id);
       expect(body.data.status).toBe('queued');
+    });
+
+    it('refuses a delegation whose --thread Crewly cannot read, instead of dropping the owner place (2026-10-18)', async () => {
+      mockService.isOwnerThreadUnreadable.mockResolvedValueOnce(true);
+      const req = mockReq({
+        body: { type: 'delegate', owner: 'team_lead', target: 'crewly-product-leo', title: 'Assess', metadata: { delegatedBy: 'atlas', ownerThread: 'room:not-a-thread' } },
+      });
+      const res = mockRes();
+
+      await addItem(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json.mock.calls[0][0]).toEqual(expect.objectContaining({ success: false, code: 'owner_thread_unreadable' }));
+      expect(mockService.isOwnerThreadUnreadable).toHaveBeenCalledWith('room:not-a-thread', expect.anything());
+      expect(mockService.addToPool).not.toHaveBeenCalled();
     });
 
     describe('project tickets (delegation through tickets)', () => {

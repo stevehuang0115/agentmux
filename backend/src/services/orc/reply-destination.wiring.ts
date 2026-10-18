@@ -614,6 +614,31 @@ async function attempt(
 }
 
 /**
+ * Whether a chat thread is agent-to-agent coordination kept inside Crewly
+ * (crewly#1340): the message, or the root of its thread, carries
+ * `agentCoordinationInternal`. `reply-channel` keeps a post in such a thread
+ * internal; a file must not go to the Slack thread key stored on that
+ * message either (Pia's v3/v4 videos for Ella landed in Steve's thread,
+ * 2026-10-18).
+ *
+ * @param threadId - A chat message id (anything else is not internal)
+ * @param deps - Collaborators (default: the real ones)
+ * @returns Why the thread is internal, or null
+ */
+export async function internalCoordinationThread(threadId: unknown, deps?: ReplyDeliveryDeps): Promise<string | null> {
+  if (typeof threadId !== 'string' || !threadId.trim() || parseSlackThreadKey(threadId)) return null;
+  const d = deps ?? (await defaultReplyDeliveryDeps());
+  const { AGENT_COORDINATION_CONSTANTS } = await import('../../constants.js');
+  const reasonOf = (id: string | undefined): string | null => {
+    const v = id ? d.resolver.getMessage(id)?.metadata?.[AGENT_COORDINATION_CONSTANTS.INTERNAL_METADATA_KEY] : undefined;
+    return typeof v === 'string' && v ? v : null;
+  };
+  const msg = d.resolver.getMessage(threadId.trim());
+  if (!msg) return null;
+  return reasonOf(msg.id) ?? reasonOf(msg.threadId);
+}
+
+/**
  * The Slack place (channel + thread) the resolver gives, without posting —
  * for files and the `[DONE]` notice. Ticket threads that do not exist yet
  * yield their team channel only.

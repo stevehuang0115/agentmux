@@ -35,7 +35,7 @@ import {
 import { formatError } from '../../utils/format-error.js';
 import { TeamBudgetExceededError } from '../../services/budget/team-budget-gate.service.js';
 import { LoggerService } from '../../services/core/logger.service.js';
-import { ORCHESTRATOR_SESSION_NAME, PROJECT_TICKET_CONSTANTS, OPEN_ITEMS_CONSTANTS, PEOPLE_CONSTANTS, COMPLETION_EVIDENCE_CONSTANTS, TEAM_PAUSE_CONSTANTS } from '../../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, PROJECT_TICKET_CONSTANTS, TL_DELEGATION_CONSTANTS, OPEN_ITEMS_CONSTANTS, PEOPLE_CONSTANTS, COMPLETION_EVIDENCE_CONSTANTS, TEAM_PAUSE_CONSTANTS } from '../../constants.js';
 import { decideCompletion, decideReviewAccept, evidenceRequiredFor, resolveEvidenceEnforcementMode } from '../../services/task-pool/completion-evidence.service.js';
 import { readAgentSessionHeader, resolveTransitionActor } from '../../utils/agent-caller.utils.js';
 import { getTicketIntakeService } from '../../services/v3/ticket-intake.service.js';
@@ -505,6 +505,19 @@ export async function addItem(req: Request, res: Response): Promise<void> {
     const rejection = await maybeEnforceContract(workItem as unknown as Record<string, unknown>);
     if (rejection) {
       res.status(rejection.status).json(rejection.payload);
+      return;
+    }
+
+    // A named owner thread Crewly cannot read is refused, never dropped: the
+    // work would lose the owner's place and its answer would land elsewhere.
+    const namedOwnerThread = (workItem.metadata as Record<string, unknown> | undefined)?.[TL_DELEGATION_CONSTANTS.OWNER_THREAD_FIELD];
+    if (await getService().isOwnerThreadUnreadable(namedOwnerThread, delegatorOf(req, workItem))) {
+      logger.warn('Rejected WorkItem naming an unreadable owner thread', { target: workItem.target, ownerThread: namedOwnerThread });
+      res.status(400).json({
+        success: false,
+        code: 'owner_thread_unreadable',
+        error: `--thread ${String(namedOwnerThread)} is not a thread Crewly can read. Pass the [SLACK-THREAD:<key>] key of the owner's message, its chat message id, or <conversation id>:<chat thread id>; for a chat request without a thread use --conversation <id>. Nothing was delegated.`,
+      });
       return;
     }
 

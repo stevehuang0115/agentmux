@@ -491,21 +491,30 @@ async function delegatedSlackThread(
 }
 
 /**
- * The Slack thread of a conversation the agent's current work came from (an
- * owner origin in that conversation with a Slack thread).
+ * The Slack thread of a conversation the agent's open work came from (an
+ * owner origin in that conversation with a Slack thread). Only when that is
+ * ONE thread: with two pieces of work from different threads of the room,
+ * the newest is not a safe guess, and the caller fails loudly instead.
  *
  * @param session - Agent
  * @param conversationId - chat-v2 conversation
  * @param deps - Collaborators
- * @returns The thread, or null
+ * @returns The thread, or null when there is none or more than one
  */
 async function currentWorkThreadIn(session: string, conversationId: string, deps: ReplyResolverDeps): Promise<{ slackChannelId: string; threadTs: string } | null> {
   const items = await deps.poolItems().catch(() => [] as WorkItem[]);
-  const workItem = currentWorkItemOf(items, session);
-  const origin = workItem ? originOfWorkItem(workItem) : null;
-  if (origin?.kind !== 'owner' || origin.conversationId !== conversationId || !origin.slackChannelId || !origin.threadTs) return null;
-  return { slackChannelId: origin.slackChannelId, threadTs: origin.threadTs };
+  const threads = new Map<string, { slackChannelId: string; threadTs: string }>();
+  for (const wi of items) {
+    if (wi.target !== session || !OPEN_WORK_STATUSES.has(wi.status)) continue;
+    const origin = originOfWorkItem(wi);
+    if (origin?.kind !== 'owner' || origin.conversationId !== conversationId || !origin.slackChannelId || !origin.threadTs) continue;
+    threads.set(formatSlackThreadKey(origin.slackChannelId, origin.threadTs), { slackChannelId: origin.slackChannelId, threadTs: origin.threadTs });
+  }
+  return threads.size === 1 ? [...threads.values()][0] : null;
 }
+
+/** Work an agent still owes an answer for. */
+const OPEN_WORK_STATUSES: ReadonlySet<WorkItem['status']> = new Set<WorkItem['status']>(['queued', 'proposed', 'accepted', 'running', 'blocked', 'escalated']);
 
 /**
  * Whether a prompt reference may steer a bare reply: the agent owes the

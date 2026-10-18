@@ -771,7 +771,7 @@ router.post('/upload-image', async (req: Request, res: Response, next: NextFunct
  */
 router.post('/upload-file', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { channelId, filePath, filename, title, initialComment, threadTs, conversationId, senderSessionName } = req.body;
+    const { channelId, filePath, filename, title, initialComment, threadTs, conversationId, senderSessionName, allowNewThread } = req.body;
 
     if (!channelId || !filePath) {
       res.status(400).json({
@@ -844,6 +844,25 @@ router.post('/upload-file', async (req: Request, res: Response, next: NextFuncti
         return;
       }
       uploadChannel = place.slackChannelId;
+      uploadThread = place.threadTs;
+    }
+
+    // No thread: the file is never posted at the channel's top level as
+    // "Crewly" by default. The harness places it in the thread the caller's
+    // work answers, or the caller says it wants a new top-level post.
+    if (!uploadThread && allowNewThread !== true) {
+      const header = req.headers['x-agent-session'];
+      const session = typeof header === 'string' && header ? header : typeof senderSessionName === 'string' ? senderSessionName : '';
+      const { resolveSlackPlace } = await import('../../services/orc/reply-destination.wiring.js');
+      const place = session ? await resolveSlackPlace({ session, noOwnerDm: true }).catch(() => null) : null;
+      if (!place || place.slackChannelId !== channelId || !place.threadTs) {
+        res.status(409).json({
+          success: false,
+          code: 'thread_unresolved',
+          error: `File NOT sent: no thread named, and Crewly cannot tell which thread of ${String(channelId)} it answers. Pass --thread <ts> (or attach-file --work-item <id>); pass --allow-new-thread only for a deliberate new top-level post.`,
+        });
+        return;
+      }
       uploadThread = place.threadTs;
     }
 
@@ -1598,6 +1617,7 @@ const POST_ERROR_STATUS: Record<string, number> = {
   target_not_found: 404,
   slack_error: 502,
   thread_mismatch: 409,
+  thread_required: 409,
 };
 
 /**
@@ -1768,7 +1788,23 @@ router.post('/attach', async (req: Request, res: Response, next: NextFunction) =
     // (a thread key from another channel is never swapped for "the latest
     // thread" or a top-level post), then its prompt reference, turn origin
     // and current work.
-    const { resolveSlackPlace } = await import('../../services/orc/reply-destination.wiring.js');
+    const { resolveSlackPlace, internalCoordinationThread } = await import('../../services/orc/reply-destination.wiring.js');
+    // A thread of agent-to-agent coordination kept inside Crewly is never a
+    // Slack place, whatever Slack thread key its row carries: `reply-channel`
+    // keeps text there internal, and a file stays internal too (Pia's videos
+    // for Ella went to Steve's thread, 2026-10-18).
+    const internalReply = (id: unknown, why: string): void => {
+      res.status(409).json({
+        success: false,
+        code: 'internal_thread',
+        error: `File NOT sent: thread ${String(id)} is agent-to-agent coordination kept inside Crewly (${why}), so it is not posted to Slack. Give the agent the file path with send-message; to deliver it to the owner, name the work: --work-item <id> or --to <owner message id>.`,
+      });
+    };
+    const internal = await internalCoordinationThread(threadId).catch(() => null);
+    if (internal) {
+      internalReply(threadId, internal);
+      return;
+    }
     const { referenceOf } = await import('../chat/agent-reply.controller.js');
     const { formatSlackThreadKey } = await import('../../services/slack/slack-thread-key.js');
     const reference = referenceOf((req.body ?? {}) as Record<string, unknown>);
@@ -1784,6 +1820,15 @@ router.post('/attach', async (req: Request, res: Response, next: NextFunction) =
       });
     } catch {
       place = null;
+    }
+    // The resolver may have picked a chat thread itself (turn origin, work):
+    // an internal one is still not a Slack place.
+    const resolvedDest = place?.destination;
+    const resolvedChatThread = resolvedDest?.kind === 'conversation' ? resolvedDest.thread : undefined;
+    const resolvedInternal = resolvedChatThread && resolvedChatThread !== threadId ? await internalCoordinationThread(resolvedChatThread).catch(() => null) : null;
+    if (resolvedInternal) {
+      internalReply(resolvedChatThread, resolvedInternal);
+      return;
     }
     // The orchestrator's primary owner DM is neither a team channel nor an
     // agent DM: post there with the workspace bot (#1142).

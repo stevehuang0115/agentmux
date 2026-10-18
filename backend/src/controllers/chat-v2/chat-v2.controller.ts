@@ -201,6 +201,42 @@ async function attachAgentFiles(req: Request): Promise<AttachResult | null> {
 }
 
 /**
+ * Refuse an agent's post into a Slack team room that names no thread and
+ * does not ask for a new one (R7, 2026-10-18 audit): the Slack mirror would
+ * put it at the channel's top level. Ella's "@Rex …" for Steve's
+ * #crewly-marketing thread landed at the top of #awesome-videos that way.
+ * `newThread: true` (`reply-channel --new-thread`) is a deliberate new
+ * top-level post. Never blocks a post because a lookup failed.
+ *
+ * @param req - The send request
+ * @param res - Response (written when refused)
+ * @returns True when the post was refused
+ */
+async function refuseUnthreadedAgentPostInSlackRoom(req: Request, res: Response): Promise<boolean> {
+  try {
+    const session = principalFromRequestSafe(req).agentSession;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const conversationId = req.params?.id ? String(req.params.id) : '';
+    if (!session || !conversationId || body.newThread === true) return false;
+    if (typeof body.threadId === 'string' && body.threadId.trim()) return false;
+    const { getSlackTeamChannelService } = await import('../../services/slack/slack-team-channel.service.js');
+    const mapping = getSlackTeamChannelService()?.findByChatChannelId(conversationId);
+    if (!mapping) return false;
+    res.status(409).json({
+      success: false,
+      error: {
+        code: 'thread_required',
+        message: `Not posted: name the thread this answers (--thread <the message id or [SLACK-THREAD:<key>] from your prompt>). This room is Slack channel ${mapping.slackChannelName ?? mapping.slackChannelId}; a post with no thread would land at its top level. To reach a colleague use send-message; for a deliberate new top-level post pass --new-thread.`,
+      },
+      refused: true,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The reply gate (specs/2026-10-03-one-responder-per-message.md §2): an
  * agent posting in a Slack room thread where a different agent already
  * answered the owner's latest message gets `409 already_answered` with that
@@ -659,6 +695,8 @@ export function createChatV2Controller(
       // in this channel's latest thread or a top-level post
       // (specs/2026-10-02-harness-owned-routing.md §1).
       if (await rerouteMismatchedAgentThread(req, res)) return;
+      // No thread named in a Slack team room: never a silent top-level post (R7).
+      if (await refuseUnthreadedAgentPostInSlackRoom(req, res)) return;
       // A post in the owner's thread that only talks to other agents, unprompted
       // by that thread: it goes to the agent instead (crewly#1375).
       if (await refuseAgentOnlyPostInOwnerThread(req, res)) return;

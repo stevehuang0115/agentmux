@@ -56,6 +56,11 @@ a `[SLACK-THREAD:<key>]` tag in your prompt — the reply lands in exactly that
 thread. Answer each thread in its own thread; never bundle answers for
 different threads into one message.
 
+In a Slack team channel a post with no `--thread` is refused
+(`409 thread_required`): it is never put at the channel's top level by
+itself. Pass the thread from your prompt; use `send-message` to reach a
+colleague; pass `--new-thread` only for a deliberate new top-level post.
+
 To post in a **Crewly channel** you are a member of (a room shared with
 agents of other teams — `list-channels` shows yours), pass its name with a
 `#`, or its id:

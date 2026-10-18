@@ -1030,6 +1030,21 @@ export class TaskPoolService {
   }
 
   /**
+   * Whether a delegation names an owner thread (`delegate-task --thread`)
+   * Crewly cannot read. Such a delegation is refused rather than created
+   * without the owner's place: Atlas's `<conversation>:<thread>` was dropped
+   * silently, and Kai's PDF went to the channel top level (2026-10-18).
+   *
+   * @param rawKey - `metadata.ownerThread`
+   * @param creator - The delegating agent, when known
+   * @returns True when a thread is named and unreadable
+   */
+  async isOwnerThreadUnreadable(rawKey: unknown, creator?: string): Promise<boolean> {
+    if (rawKey === undefined || rawKey === null || (typeof rawKey === 'string' && !rawKey.trim())) return false;
+    return !(await this.explicitOwnerOrigin(rawKey, creator).catch(() => null));
+  }
+
+  /**
    * The owner origin of an explicitly named Slack thread: the creator's own
    * turn origin when it is that thread (it knows the conversation), else the
    * conversation the Slack channel maps to.

@@ -301,6 +301,16 @@ describe('TaskPoolService', () => {
         });
       });
 
+      it('isOwnerThreadUnreadable: true only for a named thread Crewly cannot read', async () => {
+        service.setChatMessageThreadLookup(async () => null);
+        expect(await service.isOwnerThreadUnreadable(undefined)).toBe(false);
+        expect(await service.isOwnerThreadUnreadable('  ')).toBe(false);
+        expect(await service.isOwnerThreadUnreadable('C0BRIEF:1790856242.596149')).toBe(false);
+        expect(await service.isOwnerThreadUnreadable('4c090d56-0e5c-4efe-a60f-102179761f67:2abe83ec-1643-4a0f-b8a2-be5350e726c4')).toBe(false);
+        expect(await service.isOwnerThreadUnreadable('garbage')).toBe(true);
+        expect(await service.isOwnerThreadUnreadable('fbecfa4b-3474-4c61-8a72-79cccb0d1941')).toBe(true);
+      });
+
       it('an unreadable explicit thread falls back to normal inheritance (a delegation: the delegator)', async () => {
         service.setTurnOriginLookup(() => ownerTurn);
         service.setSlackThreadConversationLookup(null);

@@ -373,6 +373,35 @@ describe('chat-v2 controller (REST)', () => {
     }
   });
 
+  it('POST /api/chat/channels/:id/messages — an agent post with no thread in a Slack team room is refused (409 thread_required) unless newThread (R7)', async () => {
+    const { app, service } = buildApp();
+    try {
+      const created = await request(app).post('/api/chat/channels').send({ agentSession: 'sess-a', name: 'Ch' });
+      const chId = created.body.data.id;
+      const root = await request(app).post(`/api/chat/channels/${chId}/messages`).send({ content: 'q' });
+      mockTeamChannels.current = {
+        findByChatChannelId: jest.fn((id: string) => (id === chId ? { chatChannelId: chId, slackChannelId: 'C0VIDEO', slackChannelName: 'awesome-videos' } : null)),
+        heldReplyFor: jest.fn(async () => null),
+      };
+
+      const refused = await request(app).post(`/api/chat/channels/${chId}/messages`).set('X-Agent-Session', 'sess-a').send({ content: '@Rex 再取一条小红书笔记' });
+      expect(refused.status).toBe(409);
+      expect(refused.body).toMatchObject({ success: false, refused: true, error: { code: 'thread_required' } });
+      expect(refused.body.error.message).toContain('--new-thread');
+
+      const threaded = await request(app).post(`/api/chat/channels/${chId}/messages`).set('X-Agent-Session', 'sess-a').send({ content: 'answer', threadId: root.body.data.id });
+      expect(threaded.status).toBe(201);
+      const deliberate = await request(app).post(`/api/chat/channels/${chId}/messages`).set('X-Agent-Session', 'sess-a').send({ content: 'Weekly digest', newThread: true });
+      expect(deliberate.status).toBe(201);
+      // The owner (no agent session) is never refused.
+      const owner = await request(app).post(`/api/chat/channels/${chId}/messages`).send({ content: 'hello' });
+      expect(owner.status).toBe(201);
+    } finally {
+      mockTeamChannels.current = null;
+      service.close();
+    }
+  });
+
   it('POST /api/chat/channels/:id/messages — a reply in a thread a colleague already answered is held (409 already_answered) unless addsNew (specs/2026-10-03-one-responder-per-message.md §2)', async () => {
     const { app, service } = buildApp();
     try {

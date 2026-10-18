@@ -1,7 +1,7 @@
 import type { WorkItem } from '../../types/v2/work-item.types.js';
 import type { WorkDestinationDeps } from './work-item-destination.wiring.js';
 import type { ReplyResolverDeps } from './reply-destination-resolver.js';
-import { deliverReply, notDelivered, resetReplyDeliveryGuardForTesting, resolveSlackPlace, type ReplyDeliveryDeps } from './reply-destination.wiring.js';
+import { deliverReply, internalCoordinationThread, notDelivered, resetReplyDeliveryGuardForTesting, resolveSlackPlace, type ReplyDeliveryDeps } from './reply-destination.wiring.js';
 import { AgentPromptReferenceService } from './agent-prompt-reference.service.js';
 
 function resolver(over: Partial<ReplyResolverDeps> = {}): ReplyResolverDeps {
@@ -201,6 +201,27 @@ describe('resolveSlackPlace', () => {
 
   it('noOwnerDm and nothing to go on → null', async () => {
     expect(await resolveSlackPlace({ session: 'owen', noOwnerDm: true }, deps())).toBeNull();
+  });
+});
+
+describe('internalCoordinationThread (R5: files follow reply-channel on internal threads)', () => {
+  const messages: Record<string, { id: string; channelId: string; threadId?: string; metadata?: Record<string, unknown> }> = {
+    'b4647c3f': { id: 'b4647c3f', channelId: 'room-video', metadata: { agentCoordinationInternal: 'local-only', slackThreadKey: 'C0VIDEO:1792177808.671549' } },
+    'reply-1': { id: 'reply-1', channelId: 'room-video', threadId: 'b4647c3f' },
+    'owner-1': { id: 'owner-1', channelId: 'room-video', metadata: { slackThreadTs: '1792177808.671549' } },
+  };
+  const d = () => deps({}, { getMessage: (id) => messages[id] ?? null });
+
+  it('an internal message, or a reply in its thread, is internal', async () => {
+    expect(await internalCoordinationThread('b4647c3f', d())).toBe('local-only');
+    expect(await internalCoordinationThread('reply-1', d())).toBe('local-only');
+  });
+
+  it('an owner thread, a Slack key, an unknown id or nothing is not', async () => {
+    expect(await internalCoordinationThread('owner-1', d())).toBeNull();
+    expect(await internalCoordinationThread('C0VIDEO:1792177808.671549', d())).toBeNull();
+    expect(await internalCoordinationThread('nope', d())).toBeNull();
+    expect(await internalCoordinationThread(undefined, d())).toBeNull();
   });
 });
 

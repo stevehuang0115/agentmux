@@ -380,6 +380,17 @@ describe('validateHints — a delegate outside the room (Kai, #daily-info, 2026-
     expect(v.ignored).toEqual([expect.objectContaining({ hint: 'conversation room-ce', why: 'not a conversation you are in' })]);
   });
 
+  it('two pieces of open work from different threads of the room: no guess (the newest is not picked)', async () => {
+    const second = wi({
+      id: 'wi-kai-2',
+      target: 'kai',
+      startedAt: new Date(NOW - MIN).toISOString(),
+      metadata: { origin: { kind: 'owner', conversationId: 'room-ce', slackChannelId: PRO_CE, threadTs: '1790900000.000200' } },
+    });
+    const d = { ...world(), poolItems: async () => [kaiWork, second], delegatedThread: async () => true };
+    expect((await validateHints('kai', { conversationId: 'room-ce' }, undefined, d)).destination).toBeNull();
+  });
+
   it('current work from another conversation does not steer a conversation-only hint', async () => {
     const other = wi({ id: 'wi-kai', target: 'kai', metadata: { origin: { kind: 'owner', conversationId: 'room-mkt', slackChannelId: MKT, threadTs: '1.2' } } });
     const d = { ...world(), poolItems: async () => [other], delegatedThread: async () => true };
