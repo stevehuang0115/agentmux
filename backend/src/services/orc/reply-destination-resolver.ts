@@ -437,11 +437,17 @@ export async function validateHints(
         ignored,
       };
     }
+    // Work delegated into this thread (the delegate is not in the room): the
+    // thread named by its chat id is the same Slack thread as its key (#1109).
+    if (msg && (!conv || msg.channelId === conv)) {
+      const delegated = await delegatedSlackThread(session, parseSlackThreadKey(threadOfMessage(msg, deps.slackChannelOfConversation(msg.channelId))), deps);
+      if (delegated) return { destination: delegated, ignored };
+    }
     ignored.push({ hint: `thread ${rawThread}`, why: !msg ? 'no such message' : msg.channelId !== conv && conv ? `that message is not in conversation ${conv}` : 'you are not in its conversation' });
     // A thread that is ANOTHER conversation's message contradicts the
     // conversation: neither is used. An unknown id only loses the thread.
     if (conv && msg) {
-      ignored.push({ hint: `conversation ${conv}`, why: 'its thread is in another conversation' });
+      ignored.push({ hint: `conversation ${conv}`, why: msg.channelId === conv ? 'you are not in that conversation' : 'its thread is in another conversation' });
       return { destination: null, ignored };
     }
     if (!conv) return { destination: null, ignored };
@@ -452,9 +458,53 @@ export async function validateHints(
       const thread = origin?.conversationId === conv ? origin.slackThreadKey ?? origin.chatThreadId : undefined;
       return { destination: { kind: 'conversation', conversationId: conv, ...(thread ? { thread } : {}), source: 'hint', reason: 'named its own conversation' }, ignored };
     }
+    // Not in the room, but the current work was delegated into one of its
+    // Slack threads: that thread, never the room's top level (2026-10-18:
+    // Kai's PDF for Steve's #daily-info thread was posted top level).
+    const workThread = await currentWorkThreadIn(session, conv, deps);
+    const delegated = await delegatedSlackThread(session, workThread, deps);
+    if (delegated) return { destination: delegated, ignored };
     ignored.push({ hint: `conversation ${conv}`, why: 'not a conversation you are in' });
   }
   return { destination: null, ignored };
+}
+
+/**
+ * The Slack thread a non-member may post in because its open work was
+ * delegated into it (#1109), as a destination.
+ *
+ * @param session - Agent
+ * @param key - The thread, if known
+ * @param deps - Collaborators
+ * @returns The Slack destination, or null when the thread was not delegated to the agent
+ */
+async function delegatedSlackThread(
+  session: string,
+  key: { slackChannelId: string; threadTs: string } | null,
+  deps: ReplyResolverDeps,
+): Promise<ReplyDestination | null> {
+  if (!key || !deps.delegatedThread) return null;
+  if (!(await deps.delegatedThread(session, key.slackChannelId, key.threadTs).catch(() => false))) return null;
+  const keyText = formatSlackThreadKey(key.slackChannelId, key.threadTs);
+  const reason = `Slack thread ${keyText} was delegated to you`;
+  return { kind: 'work', destination: { kind: 'slack', target: key.slackChannelId, threadTs: key.threadTs, reason }, source: 'hint', reason };
+}
+
+/**
+ * The Slack thread of a conversation the agent's current work came from (an
+ * owner origin in that conversation with a Slack thread).
+ *
+ * @param session - Agent
+ * @param conversationId - chat-v2 conversation
+ * @param deps - Collaborators
+ * @returns The thread, or null
+ */
+async function currentWorkThreadIn(session: string, conversationId: string, deps: ReplyResolverDeps): Promise<{ slackChannelId: string; threadTs: string } | null> {
+  const items = await deps.poolItems().catch(() => [] as WorkItem[]);
+  const workItem = currentWorkItemOf(items, session);
+  const origin = workItem ? originOfWorkItem(workItem) : null;
+  if (origin?.kind !== 'owner' || origin.conversationId !== conversationId || !origin.slackChannelId || !origin.threadTs) return null;
+  return { slackChannelId: origin.slackChannelId, threadTs: origin.threadTs };
 }
 
 /**

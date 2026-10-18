@@ -270,6 +270,37 @@ describe('TaskPoolService', () => {
         expect((await service.getAllItems())[0].metadata?.origin).toEqual({ kind: 'owner', conversationId: 'room-ce', slackChannelId: 'C0PROCE', threadTs: '1791379103.320929', receivedBy: 'owen' });
       });
 
+      describe('an owner thread named as <conversation>:<chat thread> (Atlas → Kai, 2026-10-18)', () => {
+        const conv = '4c090d56-0e5c-4efe-a60f-102179761f67';
+        const thread = '2abe83ec-1643-4a0f-b8a2-be5350e726c4';
+
+        it('resolves to that thread\'s Slack place in that conversation', async () => {
+          service.setTurnOriginLookup(() => undefined);
+          service.setChatMessageThreadLookup(async (id) => (id === thread ? { slackChannelId: 'C0DAILY', threadTs: '1792300000.000100', conversationId: conv } : null));
+          const delegate = makeWorkItem({ target: 'kai', metadata: { delegatedBy: 'atlas', ownerThread: `${conv}:${thread}`, projectTicket: 'CREW-786' } });
+          await service.addToPool(delegate, { creatorSession: 'atlas' });
+          expect((await service.getAllItems())[0].metadata?.origin).toEqual(
+            expect.objectContaining({ kind: 'owner', conversationId: conv, slackChannelId: 'C0DAILY', threadTs: '1792300000.000100', chatThreadId: thread }),
+          );
+        });
+
+        it('a chat-only thread keeps the conversation and its thread', async () => {
+          service.setTurnOriginLookup(() => undefined);
+          service.setChatMessageThreadLookup(async () => null);
+          const delegate = makeWorkItem({ target: 'kai', metadata: { delegatedBy: 'atlas', ownerThread: `${conv}:${thread}` } });
+          await service.addToPool(delegate, { creatorSession: 'atlas' });
+          expect((await service.getAllItems())[0].metadata?.origin).toEqual(expect.objectContaining({ kind: 'owner', conversationId: conv, chatThreadId: thread }));
+        });
+
+        it('a thread of another conversation is not used', async () => {
+          service.setTurnOriginLookup(() => undefined);
+          service.setChatMessageThreadLookup(async () => ({ slackChannelId: 'C0OTHER', threadTs: '1.2', conversationId: 'room-other' }));
+          const delegate = makeWorkItem({ target: 'kai', metadata: { delegatedBy: 'atlas', ownerThread: `${conv}:${thread}` } });
+          await service.addToPool(delegate, { creatorSession: 'atlas' });
+          expect((await service.getAllItems())[0].metadata?.origin).not.toEqual(expect.objectContaining({ kind: 'owner' }));
+        });
+      });
+
       it('an unreadable explicit thread falls back to normal inheritance (a delegation: the delegator)', async () => {
         service.setTurnOriginLookup(() => ownerTurn);
         service.setSlackThreadConversationLookup(null);

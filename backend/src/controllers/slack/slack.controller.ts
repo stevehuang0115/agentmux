@@ -1789,10 +1789,20 @@ router.post('/attach', async (req: Request, res: Response, next: NextFunction) =
     // agent DM: post there with the workspace bot (#1142).
     const { orcOwnerDmTarget } = await import('../../services/slack/orc-owner-dm-target.js');
     const orcDm = orcOwnerDmTarget(agentSession, { channelId, threadId });
-    if (!place && !orcDm && (threadId || reference || !channelId)) {
+    // No place the harness can stand behind: the file is NOT sent. It used to
+    // go to the channel's top level whenever a channel was named without a
+    // thread — Kai's PDF for Steve's #daily-info thread landed there as
+    // "Crewly" after his --thread was refused (2026-10-18).
+    if (!place && !orcDm) {
+      const why = reference
+        ? 'the reference you named does not resolve to a Slack thread'
+        : threadId
+          ? `thread ${String(threadId)} is not a thread of a conversation you are in, nor one your work was delegated into`
+          : `Crewly cannot tell which thread of ${String(channelId)} this file answers (you are not in that conversation and your current work names no thread there)`;
       res.status(409).json({
         success: false,
-        error: `File NOT sent: ${reference ? 'the reference you named does not resolve to a Slack thread' : `thread ${String(threadId)} is not a thread of a conversation you are in`}. Run attach-file again without --thread (the harness picks the thread), or name the ticket / message from your prompt with --ticket / --to.`,
+        code: 'thread_unresolved',
+        error: `File NOT sent: ${why}. Name what the file answers: --work-item <id from your [CREWLY-DISPATCH]>, --to <message id from your prompt> or --ticket <id>. It is never posted at the channel's top level instead.`,
       });
       return;
     }

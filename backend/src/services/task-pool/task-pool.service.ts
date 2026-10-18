@@ -967,6 +967,12 @@ export class TaskPoolService {
         ? (await this.explicitOwnerOrigin(meta[TL_DELEGATION_CONSTANTS.OWNER_THREAD_FIELD], creator)) ??
           this.explicitOwnerConversation(meta[TL_DELEGATION_CONSTANTS.OWNER_CONVERSATION_FIELD], creator)
         : null;
+      if (!explicit && meta[TL_DELEGATION_CONSTANTS.OWNER_THREAD_FIELD] !== undefined && !isWorkItemOrigin(meta[WORK_ITEM_DESTINATION_CONSTANTS.METADATA_KEY])) {
+        this.logger.warn('WorkItem names an owner thread Crewly cannot read — it gets no owner origin from it', {
+          workItemId: workItem.id,
+          ownerThread: meta[TL_DELEGATION_CONSTANTS.OWNER_THREAD_FIELD],
+        });
+      }
       if (explicit?.kind === 'owner') {
         const askedAt = await this.ownerAskedAt(explicit, creator, now);
         if (isOwnerRequestTooOld(askedAt, now)) {
@@ -1035,7 +1041,14 @@ export class TaskPoolService {
   private async explicitOwnerOrigin(rawKey: unknown, creator?: string): Promise<ReturnType<typeof ownerOriginFromThreadKey>> {
     const key = parseSlackThreadKey(rawKey);
     if (!key) {
-      if (typeof rawKey !== 'string' || !CHAT_MESSAGE_ID_RE.test(rawKey.trim()) || !this.chatMessageThreadLookup) return null;
+      if (typeof rawKey !== 'string') return null;
+      // `<conversation id>:<thread id>` — the `[CHAT:<id>]` conversation and
+      // the `--thread` id from a delegator's own reply command. Atlas passed
+      // exactly this (2026-10-18, #daily-info); it was not read, the work got
+      // no owner origin, and Kai's PDF went to the channel top level.
+      const pair = CHAT_CONVERSATION_THREAD_RE.exec(rawKey.trim());
+      if (pair) return this.chatThreadOwnerOrigin(pair[1], pair[2]);
+      if (!CHAT_MESSAGE_ID_RE.test(rawKey.trim()) || !this.chatMessageThreadLookup) return null;
       const found = await this.chatMessageThreadLookup(rawKey.trim()).catch(() => null);
       return found ? ownerOriginFromThreadKey(formatSlackThreadKey(found.slackChannelId, found.threadTs), found.conversationId) : null;
     }
@@ -1047,6 +1060,27 @@ export class TaskPoolService {
       conversationId = await this.slackThreadConversationLookup(key.slackChannelId, key.threadTs).catch(() => null);
     }
     return ownerOriginFromThreadKey(keyText, conversationId);
+  }
+
+  /**
+   * The owner origin of a chat conversation + thread pair. The thread's Slack
+   * place comes along when the chat message has one; a thread of another
+   * conversation contradicts the pair and gives nothing.
+   *
+   * @param conversationId - chat-v2 conversation id
+   * @param threadId - chat-v2 thread root message id in it
+   * @returns The origin, or null when the pair contradicts itself
+   */
+  private async chatThreadOwnerOrigin(conversationId: string, threadId: string): Promise<WorkItemOrigin | null> {
+    const found = this.chatMessageThreadLookup ? await this.chatMessageThreadLookup(threadId).catch(() => null) : null;
+    if (found && found.conversationId !== conversationId) {
+      this.logger.warn('Delegation named a thread of another conversation — not used', { conversationId, threadId, threadConversation: found.conversationId });
+      return null;
+    }
+    if (found) {
+      return { kind: 'owner', conversationId, slackChannelId: found.slackChannelId, threadTs: found.threadTs, chatThreadId: threadId };
+    }
+    return ownerOriginFromConversation(conversationId, threadId);
   }
 
   /**
@@ -4057,6 +4091,8 @@ function matchesFilters(wi: WorkItem, filters?: PoolFilters): boolean {
  */
 /** A chat-v2 message id (UUID). */
 const CHAT_MESSAGE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** `<chat conversation id>:<chat thread id>` — both UUIDs. */
+const CHAT_CONVERSATION_THREAD_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
 /**
  * Default {@link TaskPoolService.chatMessageThreadLookup}: the Slack thread a

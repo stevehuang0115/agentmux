@@ -349,6 +349,44 @@ describe('validateHints — agent ids are hints only', () => {
   });
 });
 
+describe('validateHints — a delegate outside the room (Kai, #daily-info, 2026-10-18)', () => {
+  const kaiWork = wi({
+    id: 'wi-kai',
+    target: 'kai',
+    metadata: { origin: { kind: 'owner', conversationId: 'room-ce', slackChannelId: PRO_CE, threadTs: PRO_CE_TS, chatThreadId: 'root-ce' } },
+  });
+  const delegatedTo = (who: string) => async (s: string, ch: string, ts: string) => s === who && ch === PRO_CE && ts === PRO_CE_TS;
+  const world = (extra: Partial<ReplyResolverDeps> = {}): ReplyResolverDeps => ({
+    ...deps({ messages: [{ id: 'root-ce', channelId: 'room-ce', metadata: { slackThreadTs: PRO_CE_TS } }], items: [kaiWork] }),
+    delegatedThread: delegatedTo('kai'),
+    ...extra,
+  });
+
+  it('a chat thread id of the delegated thread resolves to that Slack thread', async () => {
+    const v = await validateHints('kai', { conversationId: 'room-ce', thread: 'root-ce' }, undefined, world());
+    expect(v.destination).toEqual(expect.objectContaining({ kind: 'work', destination: expect.objectContaining({ kind: 'slack', target: PRO_CE, threadTs: PRO_CE_TS }) }));
+  });
+
+  it('the conversation alone resolves to the thread the current work came from, never its top level', async () => {
+    const v = await validateHints('kai', { conversationId: 'room-ce' }, undefined, world());
+    expect(v.destination).toEqual(expect.objectContaining({ kind: 'work', destination: expect.objectContaining({ target: PRO_CE, threadTs: PRO_CE_TS }) }));
+  });
+
+  it('an agent the thread was not delegated to stays unresolved', async () => {
+    const d = world({ delegatedThread: delegatedTo('someone-else') });
+    expect((await validateHints('kai', { conversationId: 'room-ce', thread: 'root-ce' }, undefined, d)).destination).toBeNull();
+    const v = await validateHints('kai', { conversationId: 'room-ce' }, undefined, d);
+    expect(v.destination).toBeNull();
+    expect(v.ignored).toEqual([expect.objectContaining({ hint: 'conversation room-ce', why: 'not a conversation you are in' })]);
+  });
+
+  it('current work from another conversation does not steer a conversation-only hint', async () => {
+    const other = wi({ id: 'wi-kai', target: 'kai', metadata: { origin: { kind: 'owner', conversationId: 'room-mkt', slackChannelId: MKT, threadTs: '1.2' } } });
+    const d = { ...world(), poolItems: async () => [other], delegatedThread: async () => true };
+    expect((await validateHints('kai', { conversationId: 'room-ce' }, undefined, d)).destination).toBeNull();
+  });
+});
+
 describe('helpers', () => {
   it('threadOfMessage prefers the Slack thread', () => {
     expect(threadOfMessage({ id: 'r', channelId: 'c', metadata: { slackThreadTs: '1.2' } }, 'C1')).toBe('C1:1.2');

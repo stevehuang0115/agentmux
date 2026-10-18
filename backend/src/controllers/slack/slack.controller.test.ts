@@ -1991,6 +1991,30 @@ describe('Slack Controller', () => {
       expect(attachFileForAgent).not.toHaveBeenCalled();
     });
 
+    it('a channel with no thread the harness can stand behind → 409 thread_unresolved, never the channel top level (Kai, 2026-10-18)', async () => {
+      const attachFileForAgent = jest.fn(async () => ({ ok: true, slackChannelId: 'C0DAILY', asAgentBot: false }));
+      mockTeamChannels.current = { attachFileForAgent };
+
+      const res = await request(app).post('/api/slack/attach').set('X-Agent-Session', 'kai').send({ channelId: 'room-daily', filePath: tmpFile });
+
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('thread_unresolved');
+      expect(res.body.error).toMatch(/--work-item/);
+      expect(attachFileForAgent).not.toHaveBeenCalled();
+    });
+
+    it('--work-item names the work the file delivers; the resolver places it in that work\'s thread', async () => {
+      const attachFileForAgent = jest.fn(async () => ({ ok: true, slackChannelId: 'C0DAILY', threadTs: '7.7', asAgentBot: false }));
+      mockTeamChannels.current = { attachFileForAgent, findBySlackChannelId: jest.fn(() => ({ chatChannelId: 'room-daily' })) };
+      mockResolveSlackPlace.mockResolvedValue({ slackChannelId: 'C0DAILY', threadTs: '7.7' });
+
+      const res = await request(app).post('/api/slack/attach').set('X-Agent-Session', 'kai').send({ workItemId: 'wi-393ff4b3', filePath: tmpFile });
+
+      expect(res.status).toBe(200);
+      expect(mockResolveSlackPlace).toHaveBeenCalledWith(expect.objectContaining({ reference: { workItemId: 'wi-393ff4b3' } }));
+      expect(attachFileForAgent).toHaveBeenCalledWith(expect.objectContaining({ chatChannelId: 'room-daily', threadId: 'C0DAILY:7.7', destination: { slackChannelId: 'C0DAILY', threadTs: '7.7' } }));
+    });
+
     it('a file in a thread counts as the agent\'s post there (the sentinel settles a promise it kept)', async () => {
       const noteAgentPost = jest.fn();
       setOwnerThreadSentinel({ noteAgentPost } as never);
