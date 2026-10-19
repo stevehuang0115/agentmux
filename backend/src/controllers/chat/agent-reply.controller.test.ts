@@ -419,6 +419,61 @@ describe('POST /api/chat/reply — work-item destinations (spec 2026-10-01 §6)'
     expect(res.statusCode).toBe(201);
   });
 
+  /**
+   * 2026-10-18 (NECINA): the owner's new channel post is already its own
+   * thread. An agent answering it with --new-thread opened a second thread,
+   * and the owner's post was noted as unanswered.
+   */
+  describe('--new-thread while the owner post is owed', () => {
+    function owe(threadTs: string, receivedAt = Date.now()) {
+      const watchdog = new OwnerMessageWatchdogService({ isBusy: () => false, nudge: async () => ({ outcome: 'sent' }), postNote: async () => true });
+      watchdog.track({
+        surface: 'slack',
+        slackChannelId: 'C0ROOM',
+        threadTs,
+        sourceTs: '1790000500.000100',
+        chatChannelId: 'room-1',
+        messageId: 'root-3',
+        responsible: 'ella',
+        recipients: ['ella'],
+        required: false,
+        text: 'can you plan a promo video from this?',
+        receivedAt,
+      });
+      setOwnerMessageWatchdog(watchdog);
+    }
+
+    it('the owner post is a new channel post → answered under it, no new thread', async () => {
+      owe('1790000500.000100');
+      const work = makeWorkDeps();
+      const { deps, deliver } = makeDeps({ workDestination: async () => work.wd });
+      const res = mockRes();
+      await createAgentReplyHandler(deps)(req({ content: 'On it — plan first.', newThread: 'Promo video plan' }), res, next);
+      expect(work.post).not.toHaveBeenCalled();
+      expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'room-1', thread: 'root-3' }));
+      expect(res.statusCode).toBe(201);
+    });
+
+    it('the owner message is a reply inside a thread → the new thread is opened', async () => {
+      owe('1790000400.000100');
+      const work = makeWorkDeps();
+      const { deps, deliver } = makeDeps({ workDestination: async () => work.wd });
+      const res = mockRes();
+      await createAgentReplyHandler(deps)(req({ content: 'Separate topic.', newThread: 'Wiki link audit' }), res, next);
+      expect(work.post).toHaveBeenCalledWith(expect.objectContaining({ newTopLevel: true }));
+      expect(deliver).not.toHaveBeenCalled();
+    });
+
+    it('the owner post is older than the window → the new thread is opened', async () => {
+      owe('1790000500.000100', Date.now() - 2 * 60 * 60 * 1000);
+      const work = makeWorkDeps();
+      const { deps } = makeDeps({ workDestination: async () => work.wd });
+      const res = mockRes();
+      await createAgentReplyHandler(deps)(req({ content: 'Separate topic.', newThread: 'Wiki link audit' }), res, next);
+      expect(work.post).toHaveBeenCalledWith(expect.objectContaining({ newTopLevel: true }));
+    });
+  });
+
   it('--new-thread with no team channel → 409', async () => {
     const { deps } = makeDeps({ workDestination: async () => makeWorkDeps({ teamChannel: null }).wd });
     const res = mockRes();

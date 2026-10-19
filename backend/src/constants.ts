@@ -2836,7 +2836,7 @@ export const AGENT_REPLY_CONSTANTS = {
 	 */
 	HINT_LINE:
 		'Reply: `{identity}bash config/skills/agent/core/reply/execute.sh "<your reply>"` (goes back where this message came from). ' +
-		'Answer where you were asked; a new topic goes in a new thread (`--new-thread "<title>"`). ' +
+		'Answer where you were asked; a new topic goes in a new thread (`--new-thread "<title>"`), but a new post of the owner is already its own thread: answer under it. ' +
 		'No answer needed: `{identity}bash config/skills/agent/core/reply/execute.sh --none`.',
 } as const;
 
@@ -7924,6 +7924,12 @@ export const REPLY_ROUTING_CONSTANTS = {
 	DELIVERS_TICKET_METADATA_KEY: 'deliversTicket',
 	/** The Slack DM mirror keeps reply affinity to another surface only while the owner's turn there is this recent (ms) */
 	DM_AFFINITY_FRESH_MS: 30 * 60 * 1000,
+	/**
+	 * `reply --new-thread` while the agent still owes an answer to the owner's
+	 * own new channel post this recent (ms): the answer goes under that post
+	 * instead of opening a second thread (2026-10-18, NECINA request).
+	 */
+	OWNER_ROOT_POST_ANSWER_WINDOW_MS: 60 * 60 * 1000,
 	/** Request ticket ids (`TKT-187`) */
 	REQUEST_TICKET_PATTERN: /^TKT-(\d+)$/i,
 	/** Project ticket ids (`CE-7`, `APP-12`) */
