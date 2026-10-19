@@ -2836,7 +2836,7 @@ export const AGENT_REPLY_CONSTANTS = {
 	 */
 	HINT_LINE:
 		'Reply: `{identity}bash config/skills/agent/core/reply/execute.sh "<your reply>"` (goes back where this message came from). ' +
-		'Answer where you were asked; a new topic goes in a new thread (`--new-thread "<title>"`). ' +
+		'Answer where you were asked; a new topic goes in a new thread (`--new-thread "<title>"`), but a new post of the owner is already its own thread: answer under it. ' +
 		'No answer needed: `{identity}bash config/skills/agent/core/reply/execute.sh --none`.',
 } as const;
 
@@ -4685,6 +4685,33 @@ export const OWNER_HOOK_MESSAGE_CONSTANTS = {
 	KILL_SWITCH_ENV: 'CREWLY_OWNER_MESSAGE_VIA_HOOK',
 	/** Value of the kill switch that turns the feature off */
 	KILL_SWITCH_OFF_VALUE: 'off',
+	/**
+	 * Directory under CREWLY_HOME holding owner messages too long for the
+	 * note: the note points to the file instead of cutting the owner's text
+	 * (message-routing audit 2026-10-18, R0).
+	 */
+	OVERFLOW_DIR: 'runtime/owner-messages',
+	/** Characters of an overflowing owner message quoted in the note before the pointer */
+	OVERFLOW_PREVIEW_CHARS: 600,
+} as const;
+
+/**
+ * Every message carries its destination (message-routing audit 2026-10-18):
+ * the route token, the work-item field a delegation stamps, and the
+ * placeholder conversation of agent status reports that name none.
+ */
+export const MESSAGE_ROUTE_CONSTANTS = {
+	/** Opening of the route token in a delivered text (`{route: work-item <id>}`) */
+	TOKEN_OPEN: '{route: ',
+	/** WorkItem metadata key: the route of the input the delegator was answering when it delegated */
+	PARENT_ROUTE_METADATA_KEY: 'parentRoute',
+	/** Hops followed from a delegated item to the route its delegator answers */
+	MAX_ROUTE_HOPS: 4,
+	/**
+	 * Conversation id of an agent status report that names no conversation:
+	 * it is internal, never "the globally current conversation".
+	 */
+	AGENT_STATUS_CONVERSATION_ID: 'system:agent-status',
 } as const;
 
 /**
@@ -4938,6 +4965,13 @@ export const ROOM_RESPONDER_CONSTANTS = {
 	DECISION_MEMO_MAX: 200,
 	/** Thread rows the reply gate reads (newest) */
 	GATE_THREAD_SCAN: 200,
+	/**
+	 * An agent post into a room thread where the owner last wrote longer ago
+	 * than this (ms) is refused: the owner reads it with no context. It goes
+	 * in a new thread that says what it follows up on (2026-10-19: Ella's
+	 * week-3 Reddit summary landed in a 3-week-old, 80-message thread).
+	 */
+	STALE_OWNER_THREAD_MS: 3 * 24 * 60 * 60 * 1000,
 	/** Characters of the existing answer shown when a reply is held */
 	GATE_EXCERPT_CHARS: 300,
 	/** Pause before the one retry of a Slack thread read that failed */
@@ -7897,6 +7931,12 @@ export const REPLY_ROUTING_CONSTANTS = {
 	DELIVERS_TICKET_METADATA_KEY: 'deliversTicket',
 	/** The Slack DM mirror keeps reply affinity to another surface only while the owner's turn there is this recent (ms) */
 	DM_AFFINITY_FRESH_MS: 30 * 60 * 1000,
+	/**
+	 * `reply --new-thread` while the agent still owes an answer to the owner's
+	 * own new channel post this recent (ms): the answer goes under that post
+	 * instead of opening a second thread (2026-10-18, NECINA request).
+	 */
+	OWNER_ROOT_POST_ANSWER_WINDOW_MS: 60 * 60 * 1000,
 	/** Request ticket ids (`TKT-187`) */
 	REQUEST_TICKET_PATTERN: /^TKT-(\d+)$/i,
 	/** Project ticket ids (`CE-7`, `APP-12`) */

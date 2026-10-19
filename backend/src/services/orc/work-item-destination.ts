@@ -108,8 +108,8 @@ export type WorkDestination =
   | { kind: 'slack'; target: string; threadTs?: string; topic?: string; reason: string }
   /** A new top-level post in the agent's (or the work's) team channel */
   | { kind: 'new-top-level'; teamId?: string; topic?: string; reason: string }
-  /** An internal message to the agent that delegated the work */
-  | { kind: 'agent'; sessionName: string; reason: string };
+  /** An internal message to the agent that delegated the work (`workItemId`: the work it answers) */
+  | { kind: 'agent'; sessionName: string; workItemId?: string; reason: string };
 
 /** Statuses in which a work item is the agent's current work. */
 const CURRENT_STATUSES: ReadonlySet<WorkItemStatus> = new Set<WorkItemStatus>(['running', 'accepted']);
@@ -473,7 +473,7 @@ export function planWorkDestination(input: WorkDestinationInput): WorkDestinatio
       };
     }
     case 'agent':
-      return { kind: 'agent', sessionName: origin.sessionName, reason: `work item ${workItem.id} was delegated by ${origin.sessionName} on its own initiative` };
+      return { kind: 'agent', sessionName: origin.sessionName, workItemId: workItem.id, reason: `work item ${workItem.id} was delegated by ${origin.sessionName} on its own initiative` };
   }
 }
 

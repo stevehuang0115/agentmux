@@ -19,10 +19,17 @@
  * and the harness reads the sender back from it ({@link parseAgentMessageSender})
  * to route a bare `reply` to that agent.
  *
+ * The header also carries the sender's route — the owner message or work
+ * item the sender is answering (message-route.ts) — so the destination of
+ * the original request travels across every agent hop
+ * (message-routing audit 2026-10-18).
+ *
  * Pure helpers; the member lookup is injected.
  *
  * @module services/messaging/agent-message-envelope
  */
+
+import { describeRoute, formatRouteToken, type MessageRoute } from '../orc/message-route.js';
 
 /** Opening of the header. */
 export const AGENT_MESSAGE_HEADER_PREFIX = '[MESSAGE from ';
@@ -47,6 +54,8 @@ export interface AgentMessageSender {
   name?: string;
   /** Team display name, when known */
   team?: string;
+  /** What the sender is answering (owner message / work item), carried to the recipient */
+  route?: MessageRoute;
 }
 
 /**
@@ -81,9 +90,12 @@ export function formatAgentMessageHeader(sender: AgentMessageSender): string {
   const name = sender.name?.trim() || sender.session;
   const team = sender.team?.trim();
   const who = team && team !== name ? `${name} (${team})` : name;
+  const route = sender.route
+    ? ` It concerns ${describeRoute(sender.route)} ${formatRouteToken(sender.route)}; ${name} answers the owner on it.`
+    : '';
   return (
     `${AGENT_MESSAGE_HEADER_PREFIX}${who} — a colleague, not the owner. ` +
-    `Answer with send-message --to ${sender.session}; do not post it in an owner thread.]`
+    `Answer with send-message --to ${sender.session}; do not post it in an owner thread.${route}]`
   );
 }
 

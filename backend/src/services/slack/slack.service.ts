@@ -186,7 +186,8 @@ interface FileUploadOptions {
    * The agent's cosmetic identity, used when it has no bot of its own. An
    * image is then uploaded privately and posted in a message under this
    * name/icon (an image block), instead of arriving from the workspace app
-   * as "Crewly". Other files keep the plain upload.
+   * as "Crewly". Any other file is uploaded privately and its permalink
+   * posted under this name/icon in the same thread.
    */
   persona?: { username: string; iconEmoji?: string; iconUrl?: string };
 }
@@ -479,6 +480,18 @@ export interface SlackOutboundPost {
 export function uploadedFileId(result: unknown): string | undefined {
   const first = (result as { files?: Array<{ id?: string; files?: Array<{ id?: string }> }> } | undefined)?.files?.[0];
   return first?.files?.[0]?.id ?? first?.id ?? undefined;
+}
+
+/**
+ * The permalink from a `files.uploadV2` result (same nesting as
+ * {@link uploadedFileId}).
+ *
+ * @param result - `files.uploadV2` result
+ * @returns The first file's permalink, if any
+ */
+export function uploadedFilePermalink(result: unknown): string | undefined {
+  const first = (result as { files?: Array<{ permalink?: string; files?: Array<{ permalink?: string }> }> } | undefined)?.files?.[0];
+  return first?.files?.[0]?.permalink ?? first?.permalink ?? undefined;
 }
 
 export class SlackService extends EventEmitter {
@@ -2659,10 +2672,17 @@ export class SlackService extends EventEmitter {
    * @throws Error if the client is not initialized or upload fails
    */
   async uploadFile(options: FileUploadOptions): Promise<{ fileId?: string }> {
+    // `files.uploadV2` cannot carry a username or icon (a Slack API limit),
+    // so an agent without its own bot would arrive as the workspace app
+    // ("Crewly"). Post the file under the agent's name instead: an image in
+    // an image block, any other file (Kai's PDF, 2026-10-18) as its
+    // permalink. Either falls back to the plain upload in the same thread.
+    const isImage = PERSONA_IMAGE_EXT.test(options.filename || options.filePath);
     const asPersona =
-      !options.botToken && options.persona && PERSONA_IMAGE_EXT.test(options.filename || options.filePath)
-        ? await this.uploadImageAsPersona(options).catch((err) => {
-            this.logger.warn('Image post under the agent identity failed — uploading as the workspace app', {
+      !options.botToken && options.persona
+        ? await (isImage ? this.uploadImageAsPersona(options) : this.uploadFileAsPersona(options)).catch((err) => {
+            this.logger.warn('File post under the agent identity failed — uploading as the workspace app', {
+              kind: isImage ? 'image' : 'file',
               error: err instanceof Error ? err.message : String(err),
             });
             return null;
@@ -2671,6 +2691,42 @@ export class SlackService extends EventEmitter {
     const result = asPersona ?? (await this.uploadWithRetry(options, SLACK_FILE_UPLOAD_CONSTANTS));
     this.emitOutbound({ channelId: options.channelId, threadTs: options.threadTs, notAnAnswer: false, kind: 'file' });
     return result;
+  }
+
+  /**
+   * Upload a (non-image) file privately, then post its permalink in a
+   * message under the agent's name/icon. Slack shows the file in that
+   * message and shares it with the channel. Throws on any failure; the
+   * caller falls back to the plain upload.
+   *
+   * @param options - Upload options with `persona`
+   * @returns The uploaded file id
+   */
+  private async uploadFileAsPersona(options: FileUploadOptions): Promise<{ fileId?: string }> {
+    if (!this.client || !options.persona) throw new Error('Slack client not initialized');
+    const filename = options.filename || basename(options.filePath);
+    const uploaded = await this.client.files.uploadV2({
+      file: createReadStream(options.filePath),
+      filename,
+      ...(options.title ? { title: options.title } : {}),
+    });
+    const fileId = uploadedFileId(uploaded);
+    const permalink = uploadedFilePermalink(uploaded);
+    if (!fileId || !permalink) throw new Error('private upload returned no file id or permalink');
+    const { username, iconEmoji, iconUrl } = options.persona;
+    const link = `<${permalink}|${(options.title || filename).replace(/[<>|]/g, '')}>`;
+    await this.client.chat.postMessage({
+      channel: options.channelId,
+      text: options.initialComment ? `${options.initialComment}\n${link}` : link,
+      ...(options.threadTs ? { thread_ts: options.threadTs } : {}),
+      unfurl_links: true,
+      unfurl_media: true,
+      username,
+      ...(iconEmoji ? { icon_emoji: iconEmoji } : iconUrl ? { icon_url: iconUrl } : {}),
+    });
+    this.status.messagesSent++;
+    this.recordDeliveryOutcome(options.channelId, null);
+    return { fileId };
   }
 
   /**

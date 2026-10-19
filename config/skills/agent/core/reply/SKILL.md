@@ -44,6 +44,9 @@ bash config/skills/agent/core/reply/execute.sh "EFT 表改好了，附件是新�
 ```
 
 **Answer where you were asked; a new topic goes in a new thread.**
+A new post the owner made in a channel is already its own thread: answer
+under it (a plain `reply`), never with `--new-thread`; if you do pass
+`--new-thread` then, the harness still puts the answer under the owner's post.
 
 The harness knows what you are working on and sends your answer where that
 work came from:

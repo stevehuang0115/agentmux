@@ -118,7 +118,7 @@ export interface SlackAgentPostResult {
 export type SlackMentionLinker = (text: string, channelId: string) => Promise<string>;
 
 /** Reasons a post can be refused, for HTTP mapping. */
-export type SlackAgentPostErrorCode = 'validation' | 'not_connected' | 'target_not_found' | 'slack_error' | 'thread_mismatch';
+export type SlackAgentPostErrorCode = 'validation' | 'not_connected' | 'target_not_found' | 'slack_error' | 'thread_mismatch' | 'thread_required';
 
 /** Structured failure. */
 export class SlackAgentPostError extends Error {
@@ -215,22 +215,35 @@ export class SlackAgentPostService {
     // agent naming a colleague here never notified them (2026-09-25).
     const text = await this.linkMentions(rawText, channelId);
 
-    // An agent that owes an answer here (a "working on it…" placeholder is up,
-    // or timed out) and posts without naming a thread is answering: put it in
-    // that thread and take the placeholder down. Ella answered the owner's
-    // in-thread question with this skill and it landed top-level, next to a
-    // "⏱ still working" that never went away (2026-09-25).
+    // A post that names no thread is never put into a thread by guess, and
+    // never lands at a channel's top level unasked (R7, 2026-10-18 audit).
+    // It used to go into the agent's oldest open "working on it…" thread of
+    // the channel (Ella, 2026-09-25), else top level — Ella's "@Rex …" for a
+    // #crewly-marketing ask landed at the top of #awesome-videos. Now: an
+    // owed thread is named back to the agent, and a channel post needs
+    // --thread or --new-topic. A DM may still start a new message.
+    if (!req.threadTs && !req.newTopLevel) {
+      const owedHere = this.deps.typing?.findOwed(agentSession, channelId, {
+        maxAgeMs: SLACK_TYPING_CONSTANTS.UNTHREADED_ANSWER_MAX_AGE_MS,
+      }) ?? null;
+      if (owedHere?.threadTs) {
+        throw new SlackAgentPostError(
+          'thread_required',
+          `Not posted: you owe an answer in thread ${channelId}:${owedHere.threadTs}. Pass --thread ${channelId}:${owedHere.threadTs} to answer it there, or --new-topic for a new top-level message.`,
+        );
+      }
+      if (!channelId.startsWith('D')) {
+        throw new SlackAgentPostError(
+          'thread_required',
+          `Not posted: name the thread this answers (--thread <[SLACK-THREAD:<key>] from your prompt>), or pass --new-topic for a deliberate new top-level message in ${channelId}. A post with neither is never placed by guess.`,
+        );
+      }
+    }
     // A post that names its thread, where a placeholder is up, is that
-    // thread's answer too: it replaces the placeholder rather than landing
+    // thread's answer: it replaces the placeholder rather than landing
     // beside it (2026-09-28).
     const namedKey = req.threadTs ? { agentSession, slackChannelId: channelId, threadTs: req.threadTs } : null;
-    const owed = namedKey
-      ? (this.deps.typing?.owes?.(namedKey) ? namedKey : null)
-      : req.newTopLevel
-        ? null
-        : this.deps.typing?.findOwed(agentSession, channelId, {
-          maxAgeMs: SLACK_TYPING_CONSTANTS.UNTHREADED_ANSWER_MAX_AGE_MS,
-        }) ?? null;
+    const owed = namedKey && this.deps.typing?.owes?.(namedKey) ? namedKey : null;
     if (owed) {
       // The caller gets the ts of the message that carries its text, as for
       // any other post: an empty ts made scheduled runs treat a successful

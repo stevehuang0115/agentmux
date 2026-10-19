@@ -12,7 +12,7 @@
 
 import { getOwnerCompletionReport } from '../../services/orc/owner-completion-report.service.js';
 import type { Request, Response, NextFunction } from 'express';
-import { ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, REPLY_ROUTING_CONSTANTS } from '../../constants.js';
 import { readAgentSessionHeader } from '../../utils/agent-caller.utils.js';
 import { OrcReplyRouteService } from '../../services/orc/orc-reply-route.service.js';
 import { isStatusReport, planAgentReply, type AgentReplyPlan } from '../../services/orc/agent-reply-target.js';
@@ -24,7 +24,7 @@ import {
 import { deliverReply, type DeliverReplyInput, type ReplyDelivery } from '../../services/orc/reply-destination.wiring.js';
 import type { ReplyReference } from '../../services/orc/agent-prompt-reference.service.js';
 import { parseSlackThreadKey } from '../../services/slack/slack-thread-key.js';
-import { getOwnerMessageWatchdog } from '../../services/messaging/owner-message-watchdog.service.js';
+import { getOwnerMessageWatchdog, type OwnerMessageEntry } from '../../services/messaging/owner-message-watchdog.service.js';
 import { AgentPostLog } from '../../services/messaging/queue-priority.js';
 import { reportOwnerThreadAgentPost } from '../../services/messaging/owner-thread-sentinel.service.js';
 import { reportAgentPostForFollowThrough } from '../../services/agent/follow-through.service.js';
@@ -111,6 +111,35 @@ export function referenceOf(body: Record<string, unknown>): ReplyReference | und
 }
 
 /**
+ * The owner's own new channel post this agent still owes an answer to.
+ *
+ * Such a post is already its own thread. An agent that answers it with
+ * `--new-thread` (the owner's request looked like "a new topic") would open a
+ * second thread next to it, and the post would read as unanswered
+ * (2026-10-18: Pia answered the NECINA request in a thread of her own; the
+ * owner's post got only Crewly's "hasn't replied" note).
+ *
+ * @param session - The replying agent
+ * @param now - Current time (epoch ms)
+ * @returns The newest such post still owed, or null
+ */
+export function ownerRootPostOwed(session: string, now: number = Date.now()): OwnerMessageEntry | null {
+  const owed = getOwnerMessageWatchdog()?.owedBy(session) ?? [];
+  const roots = owed.filter(
+    (e) =>
+      e.surface === 'slack' &&
+      e.responsible === session &&
+      !!e.messageId &&
+      !!e.sourceTs &&
+      !!e.slackChannelId &&
+      !e.slackChannelId.startsWith('D') &&
+      (e.threadTs ?? e.sourceTs) === e.sourceTs &&
+      now - e.receivedAt <= REPLY_ROUTING_CONSTANTS.OWNER_ROOT_POST_ANSWER_WINDOW_MS,
+  );
+  return roots.at(-1) ?? null;
+}
+
+/**
  * Build the handler.
  *
  * @param deps - Collaborators (defaults to the real ones)
@@ -154,8 +183,13 @@ export function createAgentReplyHandler(deps: AgentReplyDeps = defaultDeps) {
       const isOrchestrator = session === ORCHESTRATOR_SESSION_NAME;
       const newThread = typeof body.newThread === 'string' ? body.newThread.trim() : '';
 
+      // `reply --new-thread` while the owner's own new post is still owed:
+      // the answer goes under that post, not into a second thread.
+      const owedRoot = newThread && !none && !isOrchestrator ? ownerRootPostOwed(session) : null;
+      if (owedRoot) logger.info('New thread asked for while the owner post is owed — answering under that post', { session, title: newThread, ref: owedRoot.key });
+
       // `reply --new-thread "<title>"`: an agent-initiated new topic.
-      if (newThread && !none) {
+      if (newThread && !none && !owedRoot) {
         const delivered = isOrchestrator ? null : await postNewThread(session, newThread, content, await deps.workDestination());
         if (!delivered) {
           res.status(409).json({
@@ -175,7 +209,7 @@ export function createAgentReplyHandler(deps: AgentReplyDeps = defaultDeps) {
       // when they validate, then what the harness last prompted it about,
       // its turn origin / current work, and its owner DM.
       if (!isOrchestrator && !none && !isStatusReport(content)) {
-        const reference = referenceOf(body);
+        const reference = owedRoot?.messageId ? { messageId: owedRoot.messageId } : referenceOf(body);
         const delivery = await deps.deliverReply({
           session,
           content,

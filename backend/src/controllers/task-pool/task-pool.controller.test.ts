@@ -41,6 +41,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { markOwner, ownerAuthHeaders } from '../../middleware/caller-identity.testing.js';
 import { notePausedTeam, resetTeamPauseRegistryForTesting } from '../../services/team/team-pause.registry.js';
+import * as replyWiring from '../../services/orc/reply-destination.wiring.js';
 // Express types used for mock helpers below
 
 // ---------------------------------------------------------------------------
@@ -89,6 +90,7 @@ const mockService = {
   appendNote: jest.fn(),
   patchMetadata: jest.fn(),
   addToPool: jest.fn(),
+  isOwnerThreadUnreadable: jest.fn().mockResolvedValue(false),
   getAllItems: jest.fn().mockResolvedValue([]),
   cancelQueued: jest.fn(),
   updateItemStatus: jest.fn(),
@@ -1401,6 +1403,21 @@ describe('TaskPoolController', () => {
       expect(body.data.status).toBe('queued');
     });
 
+    it('refuses a delegation whose --thread Crewly cannot read, instead of dropping the owner place (2026-10-18)', async () => {
+      mockService.isOwnerThreadUnreadable.mockResolvedValueOnce(true);
+      const req = mockReq({
+        body: { type: 'delegate', owner: 'team_lead', target: 'crewly-product-leo', title: 'Assess', metadata: { delegatedBy: 'atlas', ownerThread: 'room:not-a-thread' } },
+      });
+      const res = mockRes();
+
+      await addItem(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json.mock.calls[0][0]).toEqual(expect.objectContaining({ success: false, code: 'owner_thread_unreadable' }));
+      expect(mockService.isOwnerThreadUnreadable).toHaveBeenCalledWith('room:not-a-thread', expect.anything());
+      expect(mockService.addToPool).not.toHaveBeenCalled();
+    });
+
     describe('project tickets (delegation through tickets)', () => {
       const routeDelegation = jest.fn();
       beforeEach(() => {
@@ -1500,6 +1517,49 @@ describe('TaskPoolController', () => {
 
     describe('ticket loop', () => {
       afterEach(() => setTicketIntakeService(null));
+
+      describe('routes (message-routing audit 2026-10-18)', () => {
+        const route = { kind: 'owner' as const, conversationId: 'room-brief', thread: 'C0BRIEF01:1790856242.596149' };
+        let spy: jest.SpyInstance;
+        beforeEach(() => {
+          spy = jest.spyOn(replyWiring, 'currentRouteOf').mockResolvedValue(route);
+        });
+        afterEach(() => spy.mockRestore());
+
+        it("a delegation carries the delegator's current route as metadata.parentRoute", async () => {
+          const req = mockReq({
+            headers: { 'x-agent-session': 'think-tank-atlas-b4e166f6' },
+            body: { type: 'delegate', owner: 'team_lead', target: 'crewly-product-leo', title: 'Starship note' },
+          });
+          await addItem(req, mockRes());
+          expect(spy).toHaveBeenCalledWith('think-tank-atlas-b4e166f6');
+          expect(mockService.addToPool.mock.calls[0][0].metadata.parentRoute).toEqual(route);
+          expect(mockService.addToPool.mock.calls[0][1]).toEqual({ creatorSession: 'think-tank-atlas-b4e166f6' });
+        });
+
+        it("a self-assigned item gets no parent route and does not inherit the creator's turn", async () => {
+          const req = mockReq({
+            headers: { 'x-agent-session': 'crewly-product-leo' },
+            body: { type: 'delegate', owner: 'team_lead', target: 'crewly-product-leo', title: 'My own follow-up' },
+          });
+          await addItem(req, mockRes());
+          expect(spy).not.toHaveBeenCalled();
+          expect(mockService.addToPool.mock.calls[0][0].metadata?.parentRoute).toBeUndefined();
+          expect(mockService.addToPool.mock.calls[0][1]).toEqual({ creatorSession: 'crewly-product-leo', inheritCreatorTurn: false });
+        });
+
+        it('a route lookup failure never blocks the delegation', async () => {
+          spy.mockRejectedValueOnce(new Error('boom'));
+          const req = mockReq({
+            headers: { 'x-agent-session': 'think-tank-atlas-b4e166f6' },
+            body: { type: 'delegate', owner: 'team_lead', target: 'crewly-product-leo', title: 'Starship note' },
+          });
+          const res = mockRes();
+          await addItem(req, res);
+          expect(res.status).toHaveBeenCalledWith(201);
+          expect(mockService.addToPool.mock.calls[0][0].metadata?.parentRoute).toBeUndefined();
+        });
+      });
 
       it('passes the calling agent to addToPool so it can link the turn’s ticket', async () => {
         const req = mockReq({

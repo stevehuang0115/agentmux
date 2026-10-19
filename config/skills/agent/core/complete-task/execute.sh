@@ -141,9 +141,17 @@ fi
 if [ -z "$WORK_ITEM_ID" ] && [ -n "$TASK_ID" ]; then
   error_exit "Nothing was completed: you passed taskId '${TASK_ID}' but no 'workItemId', and this skill does not guess which WorkItem you meant. Pass 'workItemId' (find it with GET /api/task-pool/items?target=${SESSION_NAME}) and call again."
 fi
+# The pool lookup only stands in for an explicit id when exactly ONE WorkItem
+# is running: with several, picking the first closed the wrong one and sent
+# its result to the wrong place (message-routing audit 2026-10-18).
 if [ -z "$WORK_ITEM_ID" ]; then
   POOL_RESP=$(api_call_full GET "/task-pool/items?status=running&target=${SESSION_NAME}" 2>/dev/null || echo '{}')
-  WORK_ITEM_ID=$(echo "$POOL_RESP" | jq -r '.workItems[0].id // .data[0].id // empty' 2>/dev/null || true)
+  RUNNING_IDS=$(echo "$POOL_RESP" | jq -r '(.workItems // .data // [])[]?.id // empty' 2>/dev/null || true)
+  RUNNING_COUNT=$(printf '%s\n' "$RUNNING_IDS" | grep -c . || true)
+  if [ "${RUNNING_COUNT:-0}" -gt 1 ]; then
+    error_exit "Nothing was completed: ${RUNNING_COUNT} WorkItems are running for '${SESSION_NAME}' ($(printf '%s' "$RUNNING_IDS" | tr '\n' ' ' | sed 's/ *$//')) and this skill does not guess which one you finished. Pass 'workItemId' with one of them and call again."
+  fi
+  WORK_ITEM_ID=$(printf '%s\n' "$RUNNING_IDS" | head -n1)
 fi
 
 # Neither an explicit `workItemId` nor the pool lookup produced a target.
