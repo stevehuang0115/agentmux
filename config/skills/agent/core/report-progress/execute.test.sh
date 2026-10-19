@@ -41,7 +41,8 @@ export PATH="$STUB_DIR:$PATH"
 run_skill() {
   CURL_BODY_LOG="$(mktemp)"; export CURL_BODY_LOG
   OUT="$(bash "$SCRIPT_DIR/execute.sh" "$1" </dev/null 2>&1)" || true
-  BODY="$(head -1 "$CURL_BODY_LOG")"
+  # The shared lib sends a skill-start telemetry request first; the note is the one with an author.
+  BODY="$(grep '"author"' "$CURL_BODY_LOG" | head -1 || true)"
   rm -f "$CURL_BODY_LOG"
 }
 
