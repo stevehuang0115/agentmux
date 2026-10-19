@@ -68,6 +68,7 @@ import { isDriveModeRow } from '../drive/drive-row.utils.js';
 import {
   buildRoomAgentDirectory,
   findPriorRoomAnswer,
+  lastOwnerMessageAt,
   threadOwnerFromSlack,
   type PriorRoomAnswer,
   type SlackThreadOwner,
@@ -2708,6 +2709,38 @@ export class SlackTeamChannelService {
       .filter((m) => !isLocal(localAgentSession(m.agentSession)))
       .map((m) => ({ session: m.agentSession, name: m.displayName }));
     return { readable: true, owner: threadOwnerFromSlack(ctx, buildRoomAgentDirectory({ local, remote })) };
+  }
+
+  /**
+   * The owner thread an agent is about to post into has gone quiet: the
+   * owner last wrote in it longer ago than STALE_OWNER_THREAD_MS. A post
+   * there reads with no context (2026-10-19, Ella's Reddit summary).
+   *
+   * @param input - Conversation and the thread the agent named (message id or Slack thread key)
+   * @param now - Current time (epoch ms)
+   * @returns When the owner last wrote there, or null when the thread is fresh, not a room thread, or the owner never wrote in it
+   */
+  async staleOwnerThread(input: { conversationId: string; thread?: string | null }, now: number = Date.now()): Promise<{ lastOwnerAt: number } | null> {
+    try {
+      await this.load();
+      const mapping = (this.store?.mappings ?? []).find((m) => m.chatChannelId === input.conversationId);
+      const raw = input.thread?.trim();
+      if (!mapping || !raw || !this.deps.chat.listThreadForBridge) return null;
+      let rootId: string | undefined;
+      const named = this.deps.chat.getMessageForBridge(raw);
+      if (named && named.channelId === input.conversationId) rootId = named.threadId ?? named.id;
+      const key = parseSlackThreadKey(raw);
+      if (!rootId && key && key.slackChannelId === mapping.slackChannelId) {
+        rootId = this.deps.chat.findSlackThreadRoot(input.conversationId, key.threadTs)?.id;
+      }
+      if (!rootId) return null;
+      const lastOwnerAt = lastOwnerMessageAt(this.deps.chat.listThreadForBridge(input.conversationId, rootId));
+      if (lastOwnerAt === null || now - lastOwnerAt <= ROOM_RESPONDER_CONSTANTS.STALE_OWNER_THREAD_MS) return null;
+      return { lastOwnerAt };
+    } catch {
+      // A backstop: never block a post because the lookup failed.
+      return null;
+    }
   }
 
   /**

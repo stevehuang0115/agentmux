@@ -238,6 +238,44 @@ async function refuseUnthreadedAgentPostInSlackRoom(req: Request, res: Response)
 }
 
 /**
+ * Refuse an agent's post into a Slack room thread the owner has not written
+ * in for days (STALE_OWNER_THREAD_MS): it would surface in an old thread
+ * with no context. 2026-10-19: a 3-week-old reminder put Ella's Reddit
+ * summary into an 80-message thread whose owner turns were weeks old. The
+ * agent posts it as a new thread whose first line says what it follows up
+ * on. Interim notes pass. Never blocks a post because a lookup failed.
+ *
+ * @param req - The send request
+ * @param res - Response (written when refused)
+ * @returns True when the post was refused
+ */
+async function refusePostInStaleOwnerThread(req: Request, res: Response): Promise<boolean> {
+  try {
+    const session = principalFromRequestSafe(req).agentSession;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const conversationId = req.params?.id ? String(req.params.id) : '';
+    if (!session || !conversationId || body.newThread === true || body.interim === true) return false;
+    if (typeof body.threadId !== 'string' || !body.threadId.trim()) return false;
+    const { getSlackTeamChannelService } = await import('../../services/slack/slack-team-channel.service.js');
+    const teamChannels = getSlackTeamChannelService();
+    const stale = typeof teamChannels?.staleOwnerThread === 'function' ? await teamChannels.staleOwnerThread({ conversationId, thread: body.threadId }) : null;
+    if (!stale) return false;
+    const since = new Date(stale.lastOwnerAt).toISOString().slice(0, 10);
+    res.status(409).json({
+      success: false,
+      error: {
+        code: 'stale_owner_thread',
+        message: `Not posted: the owner last wrote in this thread on ${since}; a post there now reads with no context. Post it as a new thread in this room (--new-thread), and make its first line say what it follows up on (what was agreed then, and when).`,
+      },
+      refused: true,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The reply gate (specs/2026-10-03-one-responder-per-message.md §2): an
  * agent posting in a Slack room thread where a different agent already
  * answered the owner's latest message gets `409 already_answered` with that
@@ -773,6 +811,8 @@ export function createChatV2Controller(
       if (await refuseAgentOnlyPostInOwnerThread(req, res, resolveDeps().dispatcher)) return;
       // A colleague already answered the owner's latest message in this
       // thread: hold this one (specs/2026-10-03-one-responder-per-message.md §2).
+      // A thread the owner has not written in for days: a new thread instead.
+      if (await refusePostInStaleOwnerThread(req, res)) return;
       if (await holdAlreadyAnsweredReply(req, res)) return;
       // Files an agent attached (`--file`) or mentioned by path travel as Cloud
       // handoffs; their marker lines are appended to the text before it is stored.

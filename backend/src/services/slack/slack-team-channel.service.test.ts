@@ -5087,6 +5087,20 @@ describe('one responder per owner message (specs/2026-10-03-one-responder-per-me
       service.stop();
     });
 
+    it('staleOwnerThread: a thread the owner last wrote in days ago is stale; a fresh one, an unknown room or thread is not', async () => {
+      service = buildService(async () => null);
+      const roomId = await setUpThread(service);
+      const reply = await service.routeInbound(ownerReply());
+      const root = reply!.message.threadId!;
+      const ownerAt = Math.max(...chat.listThreadForBridge!(roomId, root).filter((m) => m.senderType === 'user').map((m) => m.createdAt));
+      const day = 24 * 60 * 60 * 1000;
+      expect(await service.staleOwnerThread({ conversationId: roomId, thread: root }, ownerAt + day)).toBeNull();
+      expect(await service.staleOwnerThread({ conversationId: roomId, thread: root }, ownerAt + 4 * day)).toEqual({ lastOwnerAt: ownerAt });
+      expect(await service.staleOwnerThread({ conversationId: 'not-a-room', thread: root }, ownerAt + 4 * day)).toBeNull();
+      expect(await service.staleOwnerThread({ conversationId: roomId, thread: 'no-such-message' }, ownerAt + 4 * day)).toBeNull();
+      service.stop();
+    });
+
     it('never holds the member the lead handed the owner\'s thread to (crewly#1083)', async () => {
       const delegatedInThread = jest.fn(async (session: string) => session === ELLA);
       service = buildService(async () => null, { delegatedInThread });

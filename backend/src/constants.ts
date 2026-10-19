@@ -4965,6 +4965,13 @@ export const ROOM_RESPONDER_CONSTANTS = {
 	DECISION_MEMO_MAX: 200,
 	/** Thread rows the reply gate reads (newest) */
 	GATE_THREAD_SCAN: 200,
+	/**
+	 * An agent post into a room thread where the owner last wrote longer ago
+	 * than this (ms) is refused: the owner reads it with no context. It goes
+	 * in a new thread that says what it follows up on (2026-10-19: Ella's
+	 * week-3 Reddit summary landed in a 3-week-old, 80-message thread).
+	 */
+	STALE_OWNER_THREAD_MS: 3 * 24 * 60 * 60 * 1000,
 	/** Characters of the existing answer shown when a reply is held */
 	GATE_EXCERPT_CHARS: 300,
 	/** Pause before the one retry of a Slack thread read that failed */
