@@ -17,6 +17,7 @@ import { LearningAccumulationService } from '../../services/memory/learning-accu
 import { UserProfileService } from '../../services/memory/user-profile.service.js';
 import { MemorySupersessionService } from '../../services/memory/memory-supersession.service.js';
 import { LoggerService } from '../../services/core/logger.service.js';
+import { getTaskTimingService } from '../../services/ai/self-improvement/task-timing.service.js';
 
 const logger = LoggerService.getInstance().createComponentLogger('MemoryController');
 
@@ -552,7 +553,7 @@ export async function recordFailure(req: Request, res: Response, next: NextFunct
  * This provides a single-call context briefing for agent startup or task transitions.
  *
  * @param req - Express request with body: { agentId, agentRole, projectPath }
- * @param res - Express response returning { success, data: { memories, goals, focus, dailyLog, learnings } }
+ * @param res - Express response returning { success, data: { memories, goals, focus, dailyLog, learnings, taskTimings? } }
  * @param next - Express next function for error propagation
  *
  * @example
@@ -598,6 +599,15 @@ export async function getMyContext(req: Request, res: Response, next: NextFuncti
       learningService.getFailures(projectPath, LEARNING_TAIL_CHARS),
     ]);
 
+    // The agent's own task-timing summary (null without history), so its
+    // ETAs rest on how long its tasks actually took.
+    let taskTimings: string | null = null;
+    try {
+      taskTimings = getTaskTimingService().getTimingBlock(String(agentId));
+    } catch {
+      taskTimings = null;
+    }
+
     logger.debug('Agent context retrieved via REST', { agentId, agentRole, projectPath });
 
     res.json({
@@ -611,6 +621,7 @@ export async function getMyContext(req: Request, res: Response, next: NextFuncti
           successes,
           failures,
         },
+        ...(taskTimings ? { taskTimings } : {}),
       },
     });
   } catch (error) {

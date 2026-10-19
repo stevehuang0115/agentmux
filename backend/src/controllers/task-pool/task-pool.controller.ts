@@ -36,7 +36,7 @@ import { formatError } from '../../utils/format-error.js';
 import { TeamBudgetExceededError } from '../../services/budget/team-budget-gate.service.js';
 import { LoggerService } from '../../services/core/logger.service.js';
 import { isMessageRoute } from '../../services/orc/message-route.js';
-import { MESSAGE_ROUTE_CONSTANTS, ORCHESTRATOR_SESSION_NAME, PROJECT_TICKET_CONSTANTS, TL_DELEGATION_CONSTANTS, OPEN_ITEMS_CONSTANTS, PEOPLE_CONSTANTS, COMPLETION_EVIDENCE_CONSTANTS, TEAM_PAUSE_CONSTANTS } from '../../constants.js';
+import { MESSAGE_ROUTE_CONSTANTS, ORCHESTRATOR_SESSION_NAME, PROJECT_TICKET_CONSTANTS, TL_DELEGATION_CONSTANTS, OPEN_ITEMS_CONSTANTS, PEOPLE_CONSTANTS, COMPLETION_EVIDENCE_CONSTANTS, TEAM_PAUSE_CONSTANTS, TASK_TIMING_CONSTANTS } from '../../constants.js';
 import { decideCompletion, decideReviewAccept, evidenceRequiredFor, resolveEvidenceEnforcementMode } from '../../services/task-pool/completion-evidence.service.js';
 import { readAgentSessionHeader, resolveTransitionActor } from '../../utils/agent-caller.utils.js';
 import { getTicketIntakeService } from '../../services/v3/ticket-intake.service.js';
@@ -55,6 +55,7 @@ import { getActingFor } from '../../services/people/acting-for.service.js';
 import { pausedRefusalMessage, pausedTeamById, pausedTeamOfSession } from '../../services/team/team-pause.registry.js';
 import { isOwnerCaller } from '../../middleware/caller-identity.middleware.js';
 import { findDuplicateWorkItem } from '../../utils/duplicate-creation.utils.js';
+import { getTaskTimingService, normalizeTaskKind, parseEtaMinutes } from '../../services/ai/self-improvement/task-timing.service.js';
 
 const logger = LoggerService.getInstance().createComponentLogger('TaskPoolController');
 
@@ -1159,9 +1160,35 @@ export async function completeItem(req: Request, res: Response): Promise<void> {
     // NOTE: Request status cascade is handled by V3DataService.onTaskCompleted
     // via the EventBus — no duplicate cascade needed here.
 
-    res.json({ success: true, message: `WorkItem ${workItemId} completed`, ...giveUpFields(outcome), ...warningFields });
+    const timing = existing ? recordCompletionTiming(existing, actor.session ?? agentId, result?.['taskKind']) : null;
+    res.json({
+      success: true,
+      message: `WorkItem ${workItemId} completed`,
+      ...giveUpFields(outcome),
+      ...warningFields,
+      ...(timing ? { timing } : {}),
+    });
   } catch (error) {
     handleServiceError(res, error);
+  }
+}
+
+/**
+ * Record how long a completed WorkItem took (claim to completion) in the
+ * worker's task-timing history and return the one-line reflection for the
+ * complete-task response. Never fails the completion.
+ *
+ * @param workItem - The item as it was before completion (carries startedAt)
+ * @param agent - The worker session
+ * @param taskKind - Kind the worker named on completion, if any
+ * @returns The reflection line, or null
+ */
+function recordCompletionTiming(workItem: WorkItem, agent: string, taskKind: unknown): string | null {
+  try {
+    return getTaskTimingService().recordCompletion({ agent, workItem, taskKind });
+  } catch (err) {
+    logger.warn('Failed to record task timing (non-fatal)', { workItemId: workItem.id, error: formatError(err) });
+    return null;
   }
 }
 
@@ -1834,7 +1861,10 @@ export async function handoffItem(req: Request, res: Response): Promise<void> {
  * both of which appended progress lines to the `.md` task body. With v1
  * retired, notes accumulate under `WorkItem.metadata.notes[]`.
  *
- * Body: `{ author: string, note: string }`.
+ * Body: `{ author: string, note: string, etaMinutes?: number, taskKind?: string }`.
+ * `etaMinutes` is stored as `metadata.etaMinutes` only when none is set yet
+ * (the first ETA is the one task timing measures); `taskKind` replaces
+ * `metadata.taskKind`.
  *
  * @param req - Express request
  * @param res - 200 `{ success, data: WorkItem }` | 404 | 400
@@ -1857,7 +1887,18 @@ export async function appendItemNote(req: Request, res: Response): Promise<void>
       res.status(404).json({ success: false, error: `WorkItem not found: ${workItemId}` });
       return;
     }
-    res.json({ success: true, data: updated });
+    // Task timing: the first ETA an agent states is the one its estimate
+    // bias is measured against; a named kind overrides the title classifier.
+    const eta = parseEtaMinutes(req.body?.etaMinutes);
+    const kind = normalizeTaskKind(req.body?.taskKind);
+    let latest = updated;
+    if (eta !== undefined && parseEtaMinutes(updated.metadata?.[TASK_TIMING_CONSTANTS.ETA_METADATA_KEY]) === undefined) {
+      latest = (await getService().patchMetadata(workItemId, TASK_TIMING_CONSTANTS.ETA_METADATA_KEY, eta)) ?? latest;
+    }
+    if (kind !== undefined) {
+      latest = (await getService().patchMetadata(workItemId, TASK_TIMING_CONSTANTS.KIND_METADATA_KEY, kind)) ?? latest;
+    }
+    res.json({ success: true, data: latest });
   } catch (error) {
     res.status(500).json({ success: false, error: formatError(error) });
   }
