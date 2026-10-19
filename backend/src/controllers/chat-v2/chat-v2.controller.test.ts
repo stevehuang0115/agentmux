@@ -489,6 +489,43 @@ describe('chat-v2 controller (REST)', () => {
     }
   });
 
+  it('POST /api/chat/channels/:id/messages — an agent post in a thread the owner has not written in for days is refused (409 stale_owner_thread) unless newThread or interim', async () => {
+    const { app, service } = buildApp();
+    try {
+      const created = await request(app).post('/api/chat/channels').send({ agentSession: 'sess-a', name: 'Ch' });
+      const chId = created.body.data.id;
+      const root = await request(app).post(`/api/chat/channels/${chId}/messages`).send({ content: 'q' });
+      const staleOwnerThread = jest.fn(async () => ({ lastOwnerAt: Date.parse('2026-09-29T19:49:10Z') }));
+      mockTeamChannels.current = { findByChatChannelId: jest.fn(() => null), heldReplyFor: jest.fn(async () => null), staleOwnerThread };
+
+      const refused = await request(app)
+        .post(`/api/chat/channels/${chId}/messages`)
+        .set('X-Agent-Session', 'sess-a')
+        .send({ content: 'Week-3 summary', threadId: root.body.data.id });
+      expect(refused.status).toBe(409);
+      expect(refused.body).toMatchObject({ success: false, refused: true, error: { code: 'stale_owner_thread' } });
+      expect(refused.body.error.message).toContain('2026-09-29');
+      expect(refused.body.error.message).toContain('--new-thread');
+      expect(staleOwnerThread).toHaveBeenCalledWith({ conversationId: chId, thread: root.body.data.id });
+
+      const interim = await request(app)
+        .post(`/api/chat/channels/${chId}/messages`)
+        .set('X-Agent-Session', 'sess-a')
+        .send({ content: 'on it', threadId: root.body.data.id, interim: true });
+      expect(interim.status).toBe(201);
+
+      staleOwnerThread.mockResolvedValueOnce(null as never);
+      const fresh = await request(app)
+        .post(`/api/chat/channels/${chId}/messages`)
+        .set('X-Agent-Session', 'sess-a')
+        .send({ content: 'answer', threadId: root.body.data.id });
+      expect(fresh.status).toBe(201);
+    } finally {
+      mockTeamChannels.current = null;
+      service.close();
+    }
+  });
+
   it('POST /api/chat/channels/:id/messages — 413 on oversize body', async () => {
     const { app, service } = buildApp();
     try {

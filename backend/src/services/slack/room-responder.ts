@@ -208,6 +208,21 @@ function addresses(m: ChatMessageDTO, session: string, name: string | undefined)
 }
 
 /**
+ * When the owner last wrote in a room thread.
+ *
+ * @param thread - The thread's rows, oldest first
+ * @returns Epoch ms of the owner's newest row, or null when the owner never wrote in it
+ */
+export function lastOwnerMessageAt(thread: readonly ChatMessageDTO[]): number | null {
+  let latest: number | null = null;
+  for (const m of thread) {
+    if (m.senderType !== 'user' || agentWriterOf(m)) continue;
+    if (latest === null || m.createdAt > latest) latest = m.createdAt;
+  }
+  return latest;
+}
+
+/**
  * The reply gate (specs/2026-10-03-one-responder-per-message.md §2). A post
  * is held only when ALL of these hold:
  *

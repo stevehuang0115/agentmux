@@ -10,6 +10,7 @@ import {
   findPriorRoomAnswer,
   heldReplyMessage,
   isDecisionCardText,
+  lastOwnerMessageAt,
   sameAgentName,
   threadOwnerFromSlack,
 } from './room-responder.js';
@@ -204,5 +205,31 @@ describe('findPriorRoomAnswer (reply gate)', () => {
     expect(text).toContain('Held, not posted: Atlas, the agent answering the owner');
     expect(text).toContain('Post with --adds-new if you have something new, or if you were asked.');
     expect(text).not.toContain('--none');
+  });
+});
+
+describe('lastOwnerMessageAt', () => {
+  const row = (o: Partial<ChatMessageDTO>): ChatMessageDTO => ({
+    id: `r${o.createdAt}`,
+    channelId: 'huddle-1',
+    seq: o.createdAt ?? 0,
+    senderType: 'user',
+    senderId: 'steve',
+    content: 'x',
+    contentType: 'markdown',
+    createdAt: 0,
+    attachments: [],
+    mentions: [],
+    ...o,
+  });
+
+  it('the owner\'s newest row, not agents\' later posts', () => {
+    const t = [row({ createdAt: 10 }), row({ createdAt: 20 }), row({ createdAt: 30, senderType: 'agent', senderId: 'crewly-marketing-ella' })];
+    expect(lastOwnerMessageAt(t)).toBe(20);
+  });
+
+  it('null when the owner never wrote in the thread', () => {
+    expect(lastOwnerMessageAt([row({ createdAt: 5, senderType: 'agent', senderId: 'ella' })])).toBeNull();
+    expect(lastOwnerMessageAt([])).toBeNull();
   });
 });
