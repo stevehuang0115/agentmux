@@ -194,15 +194,17 @@ describe('AppCommentRoomService', () => {
     expect(rows).toHaveLength(0);
   });
 
-  it('an agent\'s app-comments reply / resolve is written into the room thread as that agent (the Slack mirror posts it as its bot)', async () => {
+  it('an agent\'s app-comments reply / reopen is written into the room thread as that agent (the Slack mirror posts it as its bot)', async () => {
     const svc = make();
     expect(await svc.agentReplied(APP, 'c1', KAI, 'no thread yet')).toBe(false);
     await svc.deliver({ appId: APP, appName: 'A', room: ROOM_REF, comments: [change('add', thread())] });
     expect(await svc.agentReplied(APP, 'c1', KAI, 'Fixed the date')).toBe(true);
     expect(await svc.statusChanged(APP, 'c1', KAI, 'resolve')).toBe(true);
+    expect(await svc.statusChanged(APP, 'c1', KAI, 'reopen')).toBe(true);
+    // A resolve adds no row: the reply already said it is done (2026-10-19 audit).
     expect(rows.slice(1).map((r) => [r.senderType, r.senderId, r.threadId, r.content, (r.metadata as { source: string }).source])).toEqual([
       ['agent', KAI, 'm1', 'Fixed the date', 'app-comment'],
-      ['agent', KAI, 'm1', '✅ Resolved in the app.', 'app-comment'],
+      ['agent', KAI, 'm1', '↩️ Reopened in the app.', 'app-comment'],
     ]);
   });
 

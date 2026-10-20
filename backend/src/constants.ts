@@ -7818,6 +7818,13 @@ export const OWNER_COMPLETION_REPORT_CONSTANTS = {
 	 * the harness posts one line for it (ms) (crewly#1357)
 	 */
 	NUDGE_GRACE_MS: 30 * 60_000,
+	/**
+	 * A post of the responsible agent itself in the owner's place counts as its
+	 * report when it came this long after the work started (earlier ones are
+	 * its "on it" ack). Owen delivered and explained, closed his item two hours
+	 * later, and the owner then got an empty "Owen 把你要的事做完了" (2026-10-19 audit) (ms)
+	 */
+	OWN_POST_AS_REPORT_AFTER_MS: 10 * 60_000,
 	/** Chains whose first item is older than this are never reported (ms) */
 	MAX_CHAIN_AGE_MS: 14 * 24 * 60 * 60_000,
 	/** Finished chain records are forgotten after this long (ms) */

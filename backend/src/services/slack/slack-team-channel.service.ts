@@ -68,6 +68,7 @@ import { isDriveModeRow } from '../drive/drive-row.utils.js';
 import {
   buildRoomAgentDirectory,
   findPriorRoomAnswer,
+  ownAppCommentAnswer,
   lastOwnerMessageAt,
   threadOwnerFromSlack,
   type PriorRoomAnswer,
@@ -2777,7 +2778,7 @@ export class SlackTeamChannelService {
       const nameFor = (s: string): string | undefined =>
         local.find((m) => m.sessionName === s)?.name ??
         this.lastRooms.get(mapping.slackChannelId)?.members.find((m) => localAgentSession(m.agentSession) === s)?.displayName;
-      return findPriorRoomAnswer(thread, input.agentSession, nameFor);
+      return ownAppCommentAnswer(thread, input.agentSession, nameFor(input.agentSession)) ?? findPriorRoomAnswer(thread, input.agentSession, nameFor);
     } catch {
       // The gate is a backstop: never block a reply because it failed.
       return null;

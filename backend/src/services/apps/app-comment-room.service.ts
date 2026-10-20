@@ -341,7 +341,10 @@ export class AppCommentRoomService {
   }
 
   /**
-   * An agent resolved / reopened with app-comments: one line in the room thread.
+   * An agent resolved / reopened with app-comments. A reopen is one line in
+   * the room thread; a resolve is handled without one (its reply already said
+   * it is done; the owner read "✅ Resolved in the app." as one more post,
+   * 2026-10-19 audit).
    *
    * @returns True when the comment has a room thread
    */
@@ -349,7 +352,7 @@ export class AppCommentRoomService {
     await this.deps.links.load();
     const link = this.deps.links.linkOf(appId, commentId);
     if (!link?.room || !link.chatChannelId || !link.chatRootId) return false;
-    this.agentRow(link, agent, action === 'resolve' ? '✅ Resolved in the app.' : '↩️ Reopened in the app.');
+    if (action === 'reopen') this.agentRow(link, agent, '↩️ Reopened in the app.');
     return true;
   }
 

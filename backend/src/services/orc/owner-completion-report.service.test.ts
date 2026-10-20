@@ -445,6 +445,16 @@ describe('OwnerCompletionReportService', () => {
       expect(deliver).not.toHaveBeenCalled();
     });
 
+    it('the responsible agent\'s own post well after the work started was its delivery: no empty "done" line (Owen, 2026-10-19)', async () => {
+      const svc = make();
+      items = chain();
+      now = T0 + 20 * MIN;
+      svc.noteSlackAnswer('C0C30RWA17W', '1792277474.023779', 'atlas');
+      await runOut(svc);
+      expect(postFallback).not.toHaveBeenCalled();
+      expect(svc.activeRecords).toHaveLength(0);
+    });
+
     it('negative: the responsible agent\'s own "on it", an outsider\'s post, or a post before the work started do not count', async () => {
       const svc = make({ teammatesOf: () => ['atlas', 'sage'] });
       items = chain();
