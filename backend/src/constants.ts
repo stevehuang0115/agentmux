@@ -5852,6 +5852,14 @@ export const CLOUD_CONSTANTS = {
 	},
 	/** API version prefix for all cloud endpoints */
 	API_VERSION: '/v1',
+	/**
+	 * Ask Cloud for a successor refresh token (`rotate: true`) once the one we
+	 * hold expires within this. Refresh tokens live 30 days and were never
+	 * renewed, so every machine went deaf 30 days after login (steamfun-ops,
+	 * 2026-10-19). Rotating only near the end keeps copies of the same token
+	 * (portal pairing) working until then — they would die at expiry anyway (ms).
+	 */
+	REFRESH_ROTATE_WITHIN_MS: 7 * 24 * 60 * 60 * 1000,
 	/** Cloud API endpoints */
 	ENDPOINTS: {
 		/** Authentication and token verification (matches crewly-auth /api/cloud/validate) */
