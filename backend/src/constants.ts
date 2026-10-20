@@ -5860,6 +5860,8 @@ export const CLOUD_CONSTANTS = {
 	 * (portal pairing) working until then — they would die at expiry anyway (ms).
 	 */
 	REFRESH_ROTATE_WITHIN_MS: 7 * 24 * 60 * 60 * 1000,
+	/** How many rotated-away refresh tokens the client remembers so a stale copy can never be put back */
+	RETIRED_REFRESH_TOKENS_KEPT: 5,
 	/** Cloud API endpoints */
 	ENDPOINTS: {
 		/** Authentication and token verification (matches crewly-auth /api/cloud/validate) */
