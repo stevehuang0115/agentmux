@@ -130,7 +130,7 @@ describe('detectStuckWorkItems', () => {
     const oldStart = new Date(Date.now() - 700_000).toISOString();
     const wi = makeWorkItem({
       status: 'running',
-      type: 'project_task',
+      type: 'check',
       target: 'agent-alive',
       startedAt: oldStart,
       retryCount: 0,
@@ -153,11 +153,11 @@ describe('detectStuckWorkItems', () => {
 
   it('should detect timed-out WorkItems even with active agents', () => {
     const oldStart = new Date(Date.now() - 700_000).toISOString(); // 11+ min ago
-    // type='project_task' falls back to the default 600_000ms timeout;
-    // 'delegate' / 'review' / 'confirm' have per-type overrides that would
-    // skip this case (see DEFAULT_PER_TYPE_TIMEOUT_MS).
+    // type='check' falls back to the default 600_000ms timeout;
+    // 'delegate' / 'review' / 'project_task' / 'confirm' have per-type
+    // overrides that would skip this case (see DEFAULT_PER_TYPE_TIMEOUT_MS).
     const wi = makeWorkItem({
-      type: 'project_task',
+      type: 'check',
       status: 'running',
       target: 'agent-1',
       startedAt: oldStart,
@@ -282,6 +282,23 @@ describe('detectStuckWorkItems', () => {
     // Override default 10min → 10s for project_task; the 30s-old WI should now timeout.
     const { stuckIds } = detectStuckWorkItems([wi], agentMap, 600_000, { project_task: 10_000 });
     expect(stuckIds).toContain(wi.id);
+  });
+
+  it('gives a project task 4 h, not the 10 min default (CE-415 failed three times while Vera worked on it)', () => {
+    const agentMap = makeAgentMap([['agent-1', { status: 'active' }]]);
+    const at = (agoMs: number) => makeWorkItem({ type: 'project_task', status: 'running', target: 'agent-1', startedAt: new Date(Date.now() - agoMs).toISOString() });
+    expect(detectStuckWorkItems([at(60 * 60_000)], agentMap, 600_000).stuckIds).toHaveLength(0);
+    const late = at(4 * 60 * 60_000 + 60_000);
+    expect(detectStuckWorkItems([late], agentMap, 600_000).stuckIds).toContain(late.id);
+  });
+
+  it('does not time out an item whose claim lease is live (renewed while its holder works)', () => {
+    const wi = makeWorkItem({ type: 'check', status: 'running', target: 'agent-1', startedAt: new Date(Date.now() - 700_000).toISOString() });
+    const agentMap = makeAgentMap([['agent-1', { status: 'active' }]]);
+    const claim = createTaskClaim({ workItemId: wi.id, agentId: 'agent-1' });
+    expect(detectStuckWorkItems([wi], agentMap, 600_000, undefined, [claim]).stuckIds).toHaveLength(0);
+    const lapsed: TaskClaim = { ...claim, leaseExpiresAt: new Date(Date.now() - 1000).toISOString() };
+    expect(detectStuckWorkItems([wi], agentMap, 600_000, undefined, [lapsed]).stuckIds).toContain(wi.id);
   });
 });
 
