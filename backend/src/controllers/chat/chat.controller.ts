@@ -8,6 +8,8 @@
  */
 
 import type { Request, Response, NextFunction } from 'express';
+import { AgentPromptReferenceService } from '../../services/orc/agent-prompt-reference.service.js';
+import { placeOrcPostInDecisionThread } from '../../services/orc/orc-post-placement.js';
 import {
   getChatService,
   MessageValidationError,
@@ -902,6 +904,23 @@ export function pickCompletionThreads<T extends { channelId: string; threadTs: s
 }
 
 /**
+ * Collaborators of {@link placeOrcPostInDecisionThread} for the orchestrator.
+ * The decision and thread lookups load the reply resolver only when a decision is named.
+ *
+ * @returns The deps
+ */
+function orcDecisionPlacementDeps(): import('../../services/orc/orc-post-placement.js').OrcDecisionPlacementDeps {
+  let loaded: Promise<import('../../services/orc/reply-destination-resolver.js').ReplyResolverDeps> | null = null;
+  const resolver = () => (loaded ??= import('../../services/orc/reply-destination.wiring.js').then(async (m) => (await m.defaultReplyDeliveryDeps()).resolver));
+  return {
+    promptReference: () => AgentPromptReferenceService.getInstance().get(ORCHESTRATOR_SESSION_NAME),
+    lastDelivered: () => OrcReplyRouteService.getInstance().getLastDelivered(ORCHESTRATOR_SESSION_NAME),
+    decision: async (id) => (await resolver()).decision(id),
+    conversationOfSlackThread: async (slackChannelId, threadTs) => (await resolver()).conversationOfSlackThread(slackChannelId, threadTs),
+  };
+}
+
+/**
  * Conversation and thread of an orchestrator post (see
  * `services/orc/orc-post-placement.ts`). Looks up the work item and the
  * orchestrator's owner DM lazily; never throws (a failed lookup leaves the
@@ -1041,7 +1060,21 @@ export async function agentResponse(
     const isOrchestratorPost = agentHeader && !headerContradictsSender
       ? agentHeader === ORCHESTRATOR_SESSION_NAME
       : senderType === 'orchestrator' || isOrcName(String(senderName));
-    if (isOrchestratorPost) {
+    // An answer to an owner decision goes in the card's thread (D-890, 2026-10-19).
+    const decisionPlace = isOrchestratorPost && !isAgentStatusMarker(String(content))
+      ? await placeOrcPostInDecisionThread(
+          { session: ORCHESTRATOR_SESSION_NAME, crossPost: req.body?.crossPost === true, ...(typeof req.body?.decisionId === 'string' && req.body.decisionId ? { decisionId: req.body.decisionId } : {}) },
+          orcDecisionPlacementDeps(),
+        ).catch(() => null)
+      : null;
+    if (decisionPlace) {
+      if (decisionPlace.conversationId !== conversationId) {
+        logger.info('Orchestrator answer to a decision placed in the card thread', { decisionId: decisionPlace.decisionId, requestedConversationId: conversationId, conversationId: decisionPlace.conversationId });
+      }
+      resolvedConversationId = decisionPlace.conversationId;
+      conversationIdWasExplicit = true;
+      slackThreadKey = decisionPlace.thread;
+    } else if (isOrchestratorPost) {
       const route = OrcReplyRouteService.getInstance().resolveConversationReply(
         ORCHESTRATOR_SESSION_NAME,
         typeof conversationId === 'string' && conversationId ? conversationId : undefined,
