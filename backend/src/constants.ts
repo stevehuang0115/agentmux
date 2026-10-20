@@ -4657,6 +4657,8 @@ export const SUB_AGENT_QUEUE_CONSTANTS = {
 	 * Kai and Sage for 9 h). One retry loop per agent, so a sweep never piles up.
 	 */
 	QUEUED_WAKE_SWEEP_MS: 15 * 60 * 1000,
+	/** Longest gap the sweep's per-agent backoff grows to, for a start that keeps failing */
+	QUEUED_WAKE_SWEEP_MAX_BACKOFF_MS: 4 * 60 * 60 * 1000,
 	/** Maximum messages per agent before dropping oldest */
 	MAX_QUEUE_SIZE: 50,
 	/** Failed delivery attempts (send failed or threw) before a queued message is reported undeliverable */
