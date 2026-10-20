@@ -241,7 +241,9 @@ export class TurnTriggerTracker {
 			: rest;
 		let trigger: TurnTrigger;
 		if ((base.triggerKind === 'agent_message' || base.triggerKind === 'delegated_result') && sender) {
-			const up = this.trigger(sender, now);
+			// The sender's turn names the root only while it is recent (an old turn is likely unrelated).
+			const latest = this.trigger(sender, now);
+			const up = latest && now - latest.at <= C.CHAIN_LINK_MS ? latest : null;
 			const via = [...(up?.viaAgents ?? []), sender].filter((s, i, a) => a.indexOf(s) === i).slice(-C.MAX_VIA_AGENTS);
 			trigger = {
 				...base,

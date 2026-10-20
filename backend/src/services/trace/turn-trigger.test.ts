@@ -73,6 +73,18 @@ describe('TurnTriggerTracker', () => {
 		});
 	});
 
+	it("an old turn of the sender is not the root (message audit 2026-10-20)", () => {
+		t.noteDelivery('ella', '[CHAT:conv-1] <o@#x> go', {}, NOW);
+		const later = NOW + C.CHAIN_LINK_MS + 1;
+		t.noteSender('lyra', 'Unrelated question about the logo colours', 'ella', later);
+		expect(t.noteDelivery('lyra', 'Unrelated question about the logo colours', {}, later)).toMatchObject({
+			triggerKind: 'agent_message',
+			sender: 'ella',
+			rootKind: 'agent_message',
+			viaAgents: ['ella'],
+		});
+	});
+
 	it('the sender header names an agent message nobody noted (crewly#1375)', () => {
 		const text =
 			'[MESSAGE from Atlas (Think Tank) — a colleague, not the owner. Answer with send-message --to think-tank-atlas-b4e166f6; do not post it in an owner thread.]\n[TASK] quoted';

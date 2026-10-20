@@ -7977,6 +7977,12 @@ export const TURN_TRIGGER_CONSTANTS = {
 	SENDER_MATCH_MS: 24 * 60 * 60 * 1000,
 	/** A post into a conversation where the owner wrote to the agent this recently is an answer: no line (ms) */
 	OWNER_ANSWER_WINDOW_MS: 30 * 60 * 1000,
+	/**
+	 * An agent message inherits its sender's trigger (root, hand-off chain) only
+	 * when the sender's turn started this recently: an older turn is likely
+	 * about something else (message audit 2026-10-20) (ms)
+	 */
+	CHAIN_LINK_MS: 30 * 60 * 1000,
 	/** Agent-to-agent sends remembered per target */
 	MAX_SENDERS_PER_TARGET: 20,
 	/** Characters of a sent text used to recognise it in the delivered prompt */
@@ -7987,6 +7993,10 @@ export const TURN_TRIGGER_CONSTANTS = {
 	MAX_VIA_AGENTS: 4,
 	/** Characters of a work-item title quoted in the line */
 	MAX_TITLE_CHARS: 60,
+	/** Internal ids dropped from a quoted title: decisions (`D-228`) and tickets (`CE-397`; short `GPT-4`-like names kept) */
+	INTERNAL_ID_PATTERN: /\b(?:D-\d+|[A-Z][A-Z0-9]{1,9}-\d{2,})\b/g,
+	/** A leading `[tag]` on a title (`[crewly-daily-metrics] …`), dropped */
+	LEADING_TAG_PATTERN: /^\s*\[[^\]]{1,60}\]\s*/,
 	/** Opening of the rendered line (Slack mrkdwn / chat markdown italics) */
 	LINE_PREFIX: '_↳ Triggered by ',
 	/** Closing of the rendered line */
