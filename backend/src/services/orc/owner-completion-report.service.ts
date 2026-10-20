@@ -610,6 +610,11 @@ export class OwnerCompletionReportService {
         // One nudge, then the grace period; the harness posts one plain line.
         const nudgedAt = Math.max(record.askedAt ?? 0, record.remindedAt ?? 0, record.finishedAt);
         if (now - nudgedAt < C.NUDGE_GRACE_MS || !place) return;
+        if (!record.leadReport && this.ownDeliveryPosted(record, place)) {
+          this.log.info('The agent already posted in the owner\'s place after starting the work; no harness line', { key: record.key, agent: record.responsible });
+          this.end(record, 'answered', now);
+          return;
+        }
         const language = await this.languageOf(record, ownerPlace);
         const text = record.leadReport
           ? this.leadFallbackText(record, record.leadReport, chain?.items ?? [], language)
@@ -632,6 +637,21 @@ export class OwnerCompletionReportService {
       ? record.workItemIds.map((id) => `${TEAM_LEAD_REPORT_CONSTANTS.WORK_ITEM_ANSWER_PREFIX}${id}`)
       : answerKeysOf(record.origin, place);
     return keys.some((k) => (this.store.answers[k] ?? 0) > since);
+  }
+
+  /**
+   * Whether the responsible agent itself posted in the owner's place well after
+   * the work started (OWN_POST_AS_REPORT_AFTER_MS): that post was its delivery,
+   * and a harness "done" line after it says nothing new.
+   *
+   * @param record - Chain record
+   * @param place - Where the owner asked
+   * @returns True when such a post exists
+   */
+  private ownDeliveryPosted(record: ChainReportRecord, place: ReportPlace | null): boolean {
+    if (record.workStartedAt === undefined) return false;
+    const after = record.workStartedAt + C.OWN_POST_AS_REPORT_AFTER_MS;
+    return answerKeysOf(record.origin, place).some((k) => (this.store.answersBy[k]?.[record.responsible] ?? 0) > after);
   }
 
   /**

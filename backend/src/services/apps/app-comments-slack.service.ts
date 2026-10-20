@@ -307,15 +307,19 @@ export class AppCommentsSlackService {
     });
   }
 
-  /** An agent resolved / reopened the comment in the app: one short line in the thread. */
+  /**
+   * An agent reopened the comment in the app: one short line in the thread.
+   * A resolve posts nothing: the agent's reply already said it is done, and a
+   * "Resolved by …" line after it was one more post for the owner to read (2026-10-19 audit).
+   */
   statusChanged(appId: string, commentId: string, by: string, action: 'resolve' | 'reopen'): Promise<void> {
-    if (this.off()) return Promise.resolve();
+    if (this.off() || action === 'resolve') return Promise.resolve();
     return this.enqueue(async () => {
       await this.load();
       const link = this.linkOf(appId, commentId);
       if (!link || link.room || !link.channel) return;
       const name = esc(this.deps.nameOf?.(by) ?? by);
-      await this.postIn(link, action === 'resolve' ? `✅ Resolved by ${name}.` : `↩️ Reopened by ${name}.`);
+      await this.postIn(link, `↩️ Reopened by ${name}.`);
     });
   }
 

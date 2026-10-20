@@ -308,6 +308,8 @@ export function createAgentReplyHandler(deps: AgentReplyDeps = defaultDeps) {
             // The thread and work item the post answers: the harness places it there.
             ...(requestedThread ? { slackThread: requestedThread } : {}),
             ...(typeof body.workItemId === 'string' && body.workItemId ? { workItemId: body.workItemId } : {}),
+            // `reply --decision D-12`: the card's thread (D-890, 2026-10-19).
+            ...(typeof body.decision === 'string' && body.decision ? { decisionId: body.decision } : {}),
           };
           await deps.agentResponse(req, res, next);
           return;

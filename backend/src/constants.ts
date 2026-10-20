@@ -4649,6 +4649,16 @@ export const SUB_AGENT_QUEUE_CONSTANTS = {
 	BOOT_QUEUED_WAKE_DELAY_MS: 60_000,
 	/** At most one such wake per agent in this window, so a crashing agent is not relaunched in a loop (ms) */
 	QUEUED_WAKE_COOLDOWN_MS: 10 * 60 * 1000,
+	/**
+	 * Every this often, start agents that are down with messages queued for
+	 * them. A start deferred by the slot cap is retried for hours, but a retry
+	 * that ended (6 h passed, or the agent was down before the boot sweep)
+	 * left colleague messages stranded until the next restart (2026-10-19:
+	 * Kai and Sage for 9 h). One retry loop per agent, so a sweep never piles up.
+	 */
+	QUEUED_WAKE_SWEEP_MS: 15 * 60 * 1000,
+	/** Longest gap the sweep's per-agent backoff grows to, for a start that keeps failing */
+	QUEUED_WAKE_SWEEP_MAX_BACKOFF_MS: 4 * 60 * 60 * 1000,
 	/** Maximum messages per agent before dropping oldest */
 	MAX_QUEUE_SIZE: 50,
 	/** Failed delivery attempts (send failed or threw) before a queued message is reported undeliverable */
@@ -7808,6 +7818,13 @@ export const OWNER_COMPLETION_REPORT_CONSTANTS = {
 	 * the harness posts one line for it (ms) (crewly#1357)
 	 */
 	NUDGE_GRACE_MS: 30 * 60_000,
+	/**
+	 * A post of the responsible agent itself in the owner's place counts as its
+	 * report when it came this long after the work started (earlier ones are
+	 * its "on it" ack). Owen delivered and explained, closed his item two hours
+	 * later, and the owner then got an empty "Owen 把你要的事做完了" (2026-10-19 audit) (ms)
+	 */
+	OWN_POST_AS_REPORT_AFTER_MS: 10 * 60_000,
 	/** Chains whose first item is older than this are never reported (ms) */
 	MAX_CHAIN_AGE_MS: 14 * 24 * 60 * 60_000,
 	/** Finished chain records are forgotten after this long (ms) */

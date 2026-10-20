@@ -102,6 +102,8 @@ export interface AgentHealth {
  *
  * Defaults:
  *   - `delegate`, `review` — 4h (these supervise long-running coordination)
+ *   - `project_task`       — 4h (a ticket's work: CE-415 failed three times
+ *     at 10 min while Vera was still on it, 2026-10-19)
  *   - `confirm`            — Number.POSITIVE_INFINITY (waits for user; never timeout)
  *   - everything else      — falls back to the caller-provided default
  *
@@ -110,6 +112,7 @@ export interface AgentHealth {
 export const DEFAULT_PER_TYPE_TIMEOUT_MS: Partial<Record<WorkItem['type'], number>> = {
   delegate: 4 * 60 * 60 * 1000,
   review: 4 * 60 * 60 * 1000,
+  project_task: 4 * 60 * 60 * 1000,
   confirm: Number.POSITIVE_INFINITY,
 };
 
@@ -146,7 +149,7 @@ function resolveTimeoutForType(
  * @param timeoutMs - Default running timeout (default: 10 min); per-type overrides
  *                   in {@link DEFAULT_PER_TYPE_TIMEOUT_MS} apply on top of this
  * @param timeoutOverrides - Optional caller-supplied per-type overrides
- * @param claims - Active claims; an item with an unexpired lease is not blocked for a dead agent
+ * @param claims - Active claims; an item with an unexpired lease is neither blocked for a dead agent nor timed out
  * @returns Array of corrections and affected WorkItem IDs
  */
 export function detectStuckWorkItems(
@@ -177,7 +180,9 @@ export function detectStuckWorkItems(
     const effectiveTimeoutMs = resolveTimeoutForType(wi.type, timeoutMs, timeoutOverrides);
     const isTimedOut = Number.isFinite(effectiveTimeoutMs) && (now - startedAt) > effectiveTimeoutMs;
 
-    if (isAgentDead && liveLeaseItems.has(wi.id)) continue;
+    // A live lease also means progress: the lease is only renewed while its
+    // holder is visibly working, so the timeout runs from the last renewal.
+    if (liveLeaseItems.has(wi.id)) continue;
 
     if (isAgentDead) {
       const newStatus: WorkItemStatus = wi.retryCount < wi.maxRetries ? 'blocked' : 'failed';

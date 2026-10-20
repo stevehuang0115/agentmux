@@ -2496,10 +2496,12 @@ void (async () => {
 				// (specs/2026-10-08-owner-thread-sentinel.md).
 				// … and so is an agent the owner spoke to in the last two hours, answered
 				// or not: evicting it loses the conversation the owner is in (crewly#1344).
-				owesOwnerThread: (name) =>
+				// Both soft reasons lapse after SOFT_KEEP_MAX_IDLE_MS idle: the owner
+				// conversation resumes when the owner writes again (2026-10-19: Ella waited 2 h 38 min).
+				owesOwnerThread: (name, idleMs) =>
 					getOwnerThreadSentinel()?.owesOwner(name) === true ||
-					getOwnerThreadSentinel()?.ownerActiveRecently(name) === true ||
-					getFollowThrough()?.holdsIntent(name) === true,
+					(idleMs < RESOURCE_MODE_CONSTANTS.SOFT_KEEP_MAX_IDLE_MS &&
+						(getOwnerThreadSentinel()?.ownerActiveRecently(name) === true || getFollowThrough()?.holdsIntent(name) === true)),
 				onStoppedForSlot: (name) => {
 					reportOwnerThreadBlocking(name, { kind: 'stopped', why: 'slot' });
 					// Same hook as every other stop path: what it owes goes back to the queue and it is brought back.
@@ -4836,6 +4838,8 @@ void (async () => {
 			// Starts the staggered restore queue; it drains in the background.
 			await this.autoRestoreAgentSessionsIfEnabled();
 			this.wakeQueuedAgentsAfterBoot();
+			const queuedWakeSweep = setInterval(() => this.wakeQueuedAgents(), SUB_AGENT_QUEUE_CONSTANTS.QUEUED_WAKE_SWEEP_MS);
+			queuedWakeSweep.unref?.();
 
 			// Re-deliver interrupted turns now that their agents are coming back.
 			// Background: the orchestrator may take minutes to register.
@@ -7127,6 +7131,8 @@ void (async () => {
 	 */
 	/** Last time a session was woken for queued messages (loop guard). */
 	private readonly queuedWakeAt = new Map<string, number>();
+	/** Periodic queued-wake sweep: wakes per agent since it was last seen up, for the backoff */
+	private readonly sweepWakes = new Map<string, { count: number; at: number }>();
 
 	/**
 	 * Start the unanswered-owner-message watchdog and feed it what the owner
@@ -7800,6 +7806,31 @@ void (async () => {
 	 * (with its messages persisted) was never started again (Pia, 2026-10-16).
 	 */
 	private wakeQueuedAgentsAfterBoot(): void {
+		this.wakeQueuedAgents({ boot: true });
+	}
+
+	/**
+	 * Start every agent that has messages queued for it and is not running,
+	 * being restored, owner-stopped or on a paused team. Runs once after boot
+	 * and then every QUEUED_WAKE_SWEEP_MS. Never throws.
+	 *
+	 * @param opts - `boot`: the one-off sweep after boot (paced with the restore queue)
+	 */
+	private wakeQueuedAgents(opts: { boot?: boolean } = {}): void {
+		this.wakeQueuedAgentsNow(opts).catch((err) => {
+			this.logger.warn('Could not sweep agents with queued messages', { error: err instanceof Error ? err.message : String(err) });
+		});
+	}
+
+	/**
+	 * Body of {@link wakeQueuedAgents} (may throw). A periodic sweep skips an
+	 * agent with no local team member (renamed, deleted, moved away), and backs
+	 * off per agent — the gap doubles with each wake that did not bring it up
+	 * (QUEUED_WAKE_SWEEP_MS, then 2x, 4x … up to QUEUED_WAKE_SWEEP_MAX_BACKOFF_MS)
+	 * — so a start that keeps failing is not relaunched four times an hour.
+	 */
+	private async wakeQueuedAgentsNow(opts: { boot?: boolean }): Promise<void> {
+		const { sweepWakeDue } = await import('./services/messaging/deferred-start-retry.js');
 		const restoreQueue = getRestoreQueue();
 		const backend = getSessionBackendSync();
 		const registration = this.apiController.agentRegistrationService;
@@ -7815,9 +7846,27 @@ void (async () => {
 					!backend?.sessionExists(name) &&
 					!registration.getInProcessRuntime(name),
 			);
-		if (sessions.length === 0) return;
-		this.logger.info('Starting agents that were down with messages queued for them', { sessions });
-		for (const name of sessions) this.retryStartWhileQueued(name, SUB_AGENT_QUEUE_CONSTANTS.BOOT_QUEUED_WAKE_DELAY_MS, { boot: true });
+		if (opts.boot) {
+			if (sessions.length === 0) return;
+			this.logger.info('Starting agents that were down with messages queued for them', { sessions, boot: true });
+			for (const name of sessions) this.retryStartWhileQueued(name, SUB_AGENT_QUEUE_CONSTANTS.BOOT_QUEUED_WAKE_DELAY_MS, { boot: true });
+			return;
+		}
+		// Up again (or nothing queued any more): its backoff starts over.
+		const down = new Set(sessions);
+		for (const name of this.sweepWakes.keys()) if (!down.has(name)) this.sweepWakes.delete(name);
+		const now = Date.now();
+		const due: string[] = [];
+		for (const name of sessions) {
+			const prev = this.sweepWakes.get(name);
+			if (!sweepWakeDue(prev, now)) continue;
+			if (!(await this.storageService.findMemberBySessionName(name).catch(() => null))) continue;
+			this.sweepWakes.set(name, { count: (prev?.count ?? 0) + 1, at: now });
+			due.push(name);
+		}
+		if (due.length === 0) return;
+		this.logger.info('Starting agents that were down with messages queued for them', { sessions: due, boot: false });
+		for (const name of due) this.retryStartWhileQueued(name, 0);
 	}
 
 	/**
