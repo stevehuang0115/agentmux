@@ -11,6 +11,7 @@ import {
   heldReplyMessage,
   isDecisionCardText,
   lastOwnerMessageAt,
+  ownAppCommentAnswer,
   sameAgentName,
   threadOwnerFromSlack,
 } from './room-responder.js';
@@ -122,6 +123,27 @@ describe('threadOwnerFromSlack', () => {
     expect(threadOwnerFromSlack(thread([msg('100.0', 'hi')]), dir)).toBeNull();
     expect(threadOwnerFromSlack(null, dir)).toBeNull();
     expect(threadOwnerFromSlack({ ...thread([atlas('1', 'a')]), kind: 'channel' }, dir)).toBeNull();
+  });
+});
+
+describe('ownAppCommentAnswer (Lyra answered #16 in the app and again in the thread, 2026-10-19)', () => {
+  let seq = 0;
+  const row = (o: Partial<ChatMessageDTO>): ChatMessageDTO => ({
+    id: `a${++seq}`, channelId: 'room', seq, senderType: 'user', senderId: 'steve', content: 'x', contentType: 'markdown', createdAt: seq, attachments: [], mentions: [], ...o,
+  });
+  const LYRA = 'crewly-marketing-lyra';
+  const appRow = (session: string, content: string) => row({ senderType: 'agent', senderId: session, content, metadata: { source: 'app-comment', appComment: { appId: 'a', commentId: 'c' } } });
+
+  it('holds a reply after the agent\'s own app-comments answer to the owner\'s latest message', () => {
+    const t = [row({ content: '💬 Comment on #16' }), appRow(LYRA, '已改（#16 现在是新版）')];
+    expect(ownAppCommentAnswer(t, LYRA, 'Lyra')).toMatchObject({ by: 'Lyra', own: true, excerpt: '已改（#16 现在是新版）' });
+    expect(heldReplyMessage(ownAppCommentAnswer(t, LYRA)!)).toMatch(/you already answered .* with app-comments/);
+  });
+
+  it('does not hold after a new owner message, for another agent, or for an ordinary thread reply', () => {
+    expect(ownAppCommentAnswer([row({}), appRow(LYRA, 'done'), row({ content: '再短一点' })], LYRA)).toBeNull();
+    expect(ownAppCommentAnswer([row({}), appRow(LYRA, 'done')], 'crewly-marketing-ella')).toBeNull();
+    expect(ownAppCommentAnswer([row({}), row({ senderType: 'agent', senderId: LYRA, content: 'done' })], LYRA)).toBeNull();
   });
 });
 

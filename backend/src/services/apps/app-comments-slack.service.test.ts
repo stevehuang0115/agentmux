@@ -103,7 +103,7 @@ describe('AppCommentsSlackService', () => {
     expect(posts).toHaveLength(1);
   });
 
-  it('agent reply, resolve and reopen go into the thread; unknown comments are ignored', async () => {
+  it('agent reply and reopen go into the thread, a resolve posts nothing; unknown comments are ignored', async () => {
     const svc = make();
     await svc.mirrorOwnerComments('ella', 'app1', 'A', [addChange()]);
     await svc.agentReplied('app1', 'c1', 'ella', 'Done in v5 <b>');
@@ -114,7 +114,6 @@ describe('AppCommentsSlackService', () => {
     expect(posts.slice(1).map((p) => [p.agentSession, p.threadTs, p.text])).toEqual([
       ['ella', '100.1', 'Done in v5 &lt;b&gt;'],
       ['ella', '100.1', '*KAI:* me too'],
-      ['ella', '100.1', '✅ Resolved by ELLA.'],
       ['ella', '100.1', '↩️ Reopened by ELLA.'],
     ]);
   });
