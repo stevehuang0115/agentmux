@@ -367,6 +367,15 @@ describe('deliverReply — "Triggered by" provenance (agent-provenance audit 202
     expect(call.metadata.triggeredBy.label).toBeUndefined();
   });
 
+  it('no line when the owner wrote in the posted thread recently, to anyone (message audit 2026-10-20)', async () => {
+    const seen: Array<[string, string]> = [];
+    const d = deps({ turnTrigger: () => reminder, ownerWroteInThread: (c, t) => (seen.push([c, t]), true) });
+    await deliverReply({ session: 'owen', content: 'preview: https://x', reference: { ticket: 'TKT-187' } }, d);
+    expect(seen).toHaveLength(1);
+    expect(seen[0][0]).toBe('room-ce');
+    expect((d.deliver.mock.calls[0][0] as { content: string }).content).toBe('preview: https://x');
+  });
+
   it('an interim note carries no line', async () => {
     const d = deps({ turnTrigger: () => reminder });
     await deliverReply({ session: 'owen', content: 'on it', interim: true, reference: { ticket: 'TKT-187' } }, d);
@@ -377,6 +386,34 @@ describe('deliverReply — "Triggered by" provenance (agent-provenance audit 202
     const d = deps({ turnTrigger: () => null });
     await deliverReply({ session: 'owen', content: 'preview: https://x', reference: { ticket: 'TKT-187' } }, d);
     expect(d.deliver).toHaveBeenCalledWith(expect.objectContaining({ content: 'preview: https://x', metadata: { deliversTicket: 'TKT-187' } }));
+  });
+});
+
+describe('ownerWroteInThreadRecently', () => {
+  const NOW = 1_800_000_000_000;
+  const rows = (ownerAt: number) => [
+    { senderType: 'agent', createdAt: NOW - 1000 },
+    { senderType: 'user', createdAt: ownerAt },
+  ];
+  const chat = (ownerAt: number) => ({
+    getChannelForBridge: () => null,
+    getMessageForBridge: (id: string) => (id === 'reply-1' ? { id: 'reply-1', channelId: 'c1', threadId: 'root-1' } : null),
+    findSlackThreadRoot: (_c: string, ts: string) => (ts === '1760000000.000100' ? { id: 'root-1' } : null),
+    listThreadForBridge: (c: string, root: string) => (c === 'c1' && root === 'root-1' ? rows(ownerAt) : []),
+  });
+
+  it('finds the thread by a message id or a Slack thread key', async () => {
+    const { ownerWroteInThreadRecently } = await import('./reply-destination.wiring.js');
+    expect(ownerWroteInThreadRecently(chat(NOW - 60_000), 'c1', 'reply-1', NOW)).toBe(true);
+    expect(ownerWroteInThreadRecently(chat(NOW - 60_000), 'c1', 'C0CE00001:1760000000.000100', NOW)).toBe(true);
+    expect(ownerWroteInThreadRecently(chat(NOW - 60_000), 'c2', 'reply-1', NOW)).toBe(false);
+    expect(ownerWroteInThreadRecently(null, 'c1', 'reply-1', NOW)).toBe(false);
+  });
+
+  it('only a recent owner row counts', async () => {
+    const { ownerWroteInThreadRecently } = await import('./reply-destination.wiring.js');
+    const { TURN_TRIGGER_CONSTANTS } = await import('../../constants.js');
+    expect(ownerWroteInThreadRecently(chat(NOW - TURN_TRIGGER_CONSTANTS.OWNER_ANSWER_WINDOW_MS - 1), 'c1', 'reply-1', NOW)).toBe(false);
   });
 });
 

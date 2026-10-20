@@ -1,6 +1,6 @@
 import type { WorkItem } from '../../types/v2/work-item.types.js';
 import type { TurnTrigger } from '../trace/turn-trigger.js';
-import { triggeredByLine, triggeredByMetadata, triggeredByPhrase, withTriggeredByLine } from './triggered-by.js';
+import { shortTitle, triggeredByLine, triggeredByMetadata, triggeredByPhrase, withTriggeredByLine } from './triggered-by.js';
 
 const ELLA = 'crewly-marketing-ella-e6a6b8ea';
 const LYRA = 'content-team-lyra-1a2b3c4d';
@@ -28,9 +28,9 @@ describe('triggeredByPhrase', () => {
 		expect(triggeredByPhrase(trig({ triggerKind: 'follow_up' }), { postedConversationId: 'c1', ownerAskedHere: true })).toBeNull();
 	});
 
-	it('agent messages, with the chain and its root', () => {
+	it('agent messages name only the writer, with the root', () => {
 		expect(triggeredByPhrase(trig({ triggerKind: 'agent_message', sender: ELLA, viaAgents: [ELLA], rootKind: 'owner_message' }), {})).toBe("Ella's message (passing on your request)");
-		expect(triggeredByPhrase(trig({ triggerKind: 'agent_message', sender: LYRA, viaAgents: [ELLA, LYRA], rootKind: 'agent_message' }), {})).toBe('a hand-off Ella → Lyra');
+		expect(triggeredByPhrase(trig({ triggerKind: 'agent_message', sender: LYRA, viaAgents: [ELLA, LYRA], rootKind: 'agent_message' }), {})).toBe("Lyra's message"); // the chain stays in the record, not the line
 		expect(triggeredByPhrase(trig({ triggerKind: 'agent_message', sender: 'crewly-orc', viaAgents: ['crewly-orc'], rootKind: 'scheduled' }), {})).toBe("Orc's message (from a scheduled task)");
 	});
 
@@ -47,6 +47,13 @@ describe('triggeredByPhrase', () => {
 		expect(triggeredByPhrase(trig({ triggerKind: 'follow_up', ticket: 'TKT-12' }), {})).toBe('an automatic reminder of something promised to you'); // no ticket id: tickets are internal
 		expect(triggeredByPhrase(trig({ triggerKind: 'redelivery' }), {})).toBe('an automatic reminder of queued work');
 		expect(triggeredByPhrase(trig({ triggerKind: 'restart' }), {})).toBe('a Crewly restart (resuming interrupted work)');
+	});
+
+	it('quoted titles drop internal ids and a leading tag (message audit 2026-10-20)', () => {
+		expect(shortTitle('CE 周报（Steve D-228 批准，周一晚 10 点）')).toBe('CE 周报（Steve 批准，周一晚 10 点）');
+		expect(shortTitle('[crewly-daily-metrics] 22:00 ET run the nightly post')).toBe('22:00 ET run the nightly post');
+		expect(shortTitle('Fix CE-397 checkout (D-12)')).toBe('Fix checkout');
+		expect(shortTitle('Compare GPT-4 and Claude')).toBe('Compare GPT-4 and Claude');
 	});
 
 	it('no line for an unrecognised prompt or no trigger', () => {

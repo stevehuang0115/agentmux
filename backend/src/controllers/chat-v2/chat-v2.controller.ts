@@ -465,7 +465,8 @@ async function agentPostProvenance(req: Request): Promise<{ content: string; tri
     const body = (req.body ?? {}) as Record<string, unknown>;
     if (!session || typeof body.content !== 'string' || !req.params?.id) return null;
     const { provenanceForAgentPost } = await import('../../services/orc/reply-destination.wiring.js');
-    return await provenanceForAgentPost({ session, conversationId: req.params.id, content: body.content, interim: body.interim === true });
+    const thread = typeof body.threadId === 'string' && body.threadId.trim() ? body.threadId.trim() : undefined;
+    return await provenanceForAgentPost({ session, conversationId: req.params.id, content: body.content, interim: body.interim === true, ...(thread ? { thread } : {}) });
   } catch {
     return null;
   }

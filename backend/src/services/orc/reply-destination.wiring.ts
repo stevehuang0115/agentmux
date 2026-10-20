@@ -89,6 +89,12 @@ export interface ReplyDeliveryDeps {
    */
   ownerAskedEarlier?: (session: string, conversationId: string) => boolean;
   /**
+   * The owner wrote in this thread recently (to anyone): a post there is part
+   * of the owner's conversation and gets no "Triggered by" line (message
+   * audit 2026-10-20). Omitted: no.
+   */
+  ownerWroteInThread?: (conversationId: string, thread: string) => boolean;
+  /**
    * The latest trigger that names what the agent answers (turn-trigger.ts
    * `routedTrigger`), for the route check. Omitted: no check.
    */
@@ -534,13 +540,16 @@ async function delegatorOfWork(input: DeliverReplyInput, d: ReplyDeliveryDeps): 
  * @param input - Agent, text, interim flag
  * @param postedConversationId - Conversation the post lands in (undefined: a Slack place outside chat)
  * @param d - Collaborators
+ * @param answering - The work item the post names, when it names one
+ * @param thread - The thread the post lands in, when it lands in one
  * @returns Metadata and the text to post, or null when no trigger is known
  */
 async function provenanceOf(
   input: Pick<DeliverReplyInput, 'session' | 'content' | 'interim'>,
   postedConversationId: string | undefined,
-  d: Pick<ReplyDeliveryDeps, 'resolver' | 'turnTrigger' | 'ownerAskedRecently' | 'ownerAskedEarlier' | 'currentTrace' | 'conversationPlace'>,
+  d: Pick<ReplyDeliveryDeps, 'resolver' | 'turnTrigger' | 'ownerAskedRecently' | 'ownerAskedEarlier' | 'ownerWroteInThread' | 'currentTrace' | 'conversationPlace'>,
   answering?: { workItemId?: string },
+  thread?: string,
 ): Promise<{ metadata: Record<string, unknown>; content?: string } | null> {
   try {
     const trigger = triggerOfAnsweredInput(input.session, d, answering);
@@ -552,7 +561,8 @@ async function provenanceOf(
     const answersOwnerHere =
       !!postedConversationId &&
       ((d.ownerAskedRecently?.(input.session, postedConversationId) ?? false) ||
-        (trigger.triggerKind === 'owner_message' && trigger.conversationId !== postedConversationId && (d.ownerAskedEarlier?.(input.session, postedConversationId) ?? false)));
+        (trigger.triggerKind === 'owner_message' && trigger.conversationId !== postedConversationId && (d.ownerAskedEarlier?.(input.session, postedConversationId) ?? false)) ||
+        (!!thread && (d.ownerWroteInThread?.(postedConversationId, thread) ?? false)));
     const phrase = triggeredByPhrase(trigger, {
       ...(postedConversationId ? { postedConversationId } : {}),
       ownerAskedHere: answersOwnerHere,
@@ -593,17 +603,17 @@ function triggerOfAnsweredInput(session: string, d: Pick<ReplyDeliveryDeps, 'tur
  * {@link deliverReply}: the record to store and the text with the
  * "Triggered by" line when one is shown. Never throws.
  *
- * @param input - Agent, conversation, text, interim flag
+ * @param input - Agent, conversation, text, interim flag, thread
  * @param deps - Collaborators (default: the real ones)
  * @returns The text to store and the record, if any
  */
 export async function provenanceForAgentPost(
-  input: { session: string; conversationId: string; content: string; interim?: boolean },
-  deps?: Pick<ReplyDeliveryDeps, 'resolver' | 'turnTrigger' | 'ownerAskedRecently' | 'ownerAskedEarlier' | 'currentTrace' | 'conversationPlace'>,
+  input: { session: string; conversationId: string; content: string; interim?: boolean; thread?: string },
+  deps?: Pick<ReplyDeliveryDeps, 'resolver' | 'turnTrigger' | 'ownerAskedRecently' | 'ownerAskedEarlier' | 'ownerWroteInThread' | 'currentTrace' | 'conversationPlace'>,
 ): Promise<{ content: string; triggeredBy?: Record<string, unknown> }> {
   try {
     const d = deps ?? (await defaultReplyDeliveryDeps());
-    const p = await provenanceOf({ session: input.session, content: input.content, interim: input.interim }, input.conversationId, d);
+    const p = await provenanceOf({ session: input.session, content: input.content, interim: input.interim }, input.conversationId, d, undefined, input.thread);
     if (!p) return { content: input.content };
     const record = p.metadata[TURN_TRIGGER_CONSTANTS.METADATA_KEY] as Record<string, unknown> | undefined;
     return { content: p.content ?? input.content, ...(record ? { triggeredBy: record } : {}) };
@@ -632,7 +642,13 @@ async function attempt(
   const deliversTicket = ticket ? { [REPLY_ROUTING_CONSTANTS.DELIVERS_TICKET_METADATA_KEY]: ticket } : undefined;
   const answeredReference = dest.source === 'prompt' || dest.source === 'ticket' || dest.source === 'decision' || dest.source === 'work-item' || dest.source === 'message';
   const answeredWorkItem = dest.source === 'work-item' ? input.reference?.workItemId : dest.source === 'prompt' ? prompt?.workItemId : undefined;
-  const provenance = await provenanceOf(input, dest.kind === 'conversation' ? dest.conversationId : undefined, d, answeredWorkItem ? { workItemId: answeredWorkItem } : undefined);
+  const provenance = await provenanceOf(
+    input,
+    dest.kind === 'conversation' ? dest.conversationId : undefined,
+    d,
+    answeredWorkItem ? { workItemId: answeredWorkItem } : undefined,
+    dest.kind === 'conversation' ? dest.thread : undefined,
+  );
   const metadata = { ...(deliversTicket ?? {}), ...(provenance?.metadata ?? {}) };
   if (provenance?.content !== undefined) input = { ...input, content: provenance.content };
   if (dest.kind === 'conversation') {
@@ -987,15 +1003,44 @@ export async function defaultReplyDeliveryDeps(): Promise<ReplyDeliveryDeps> {
     turnTrigger: (session) => getTurnTriggerTracker().trigger(session),
     ownerAskedRecently: (session, conversationId) => getTurnTriggerTracker().ownerAskedRecently(session, conversationId),
     ownerAskedEarlier: (session, conversationId) => getTurnTriggerTracker().ownerAskedWithin(session, conversationId, TURN_TRIGGER_CONSTANTS.FRESH_MS),
+    ownerWroteInThread: (conversationId, thread) => ownerWroteInThreadRecently(chatLookup, conversationId, thread),
     routedTrigger: (session) => getTurnTriggerTracker().routedTrigger(session),
     currentTrace: (session) => getTraceContext().currentTrace(session),
     conversationPlace: (id) => chatConversationPlace(chatLookup, id),
   };
 }
 
-/** The chat-v2 lookups {@link chatConversationPlace} uses. */
+/** The chat-v2 lookups {@link chatConversationPlace} and {@link ownerWroteInThreadRecently} use. */
 interface ChatChannelLookup {
   getChannelForBridge(id: string): { name: string; type?: string; agentSession?: string } | null;
+  getMessageForBridge?(id: string): { id: string; channelId: string; threadId?: string } | null;
+  findSlackThreadRoot?(channelId: string, slackThreadTs: string): { id: string } | null;
+  listThreadForBridge?(channelId: string, rootId: string): Array<{ senderType: string; createdAt: number }>;
+}
+
+/**
+ * Whether the owner wrote in a thread (a chat message id or a Slack thread
+ * key) within {@link TURN_TRIGGER_CONSTANTS.OWNER_ANSWER_WINDOW_MS}. Never throws.
+ *
+ * @param chat - chat-v2 lookups, or null
+ * @param conversationId - chat-v2 channel id
+ * @param thread - Chat message id or `<slackChannel>:<threadTs>`
+ * @param now - Clock (epoch ms)
+ * @returns True when a user row in the thread is that recent
+ */
+export function ownerWroteInThreadRecently(chat: ChatChannelLookup | null, conversationId: string, thread: string, now: number = Date.now()): boolean {
+  try {
+    if (!chat?.listThreadForBridge) return false;
+    const named = chat.getMessageForBridge?.(thread);
+    let rootId = named && named.channelId === conversationId ? (named.threadId ?? named.id) : undefined;
+    const key = rootId ? null : parseSlackThreadKey(thread);
+    if (!rootId && key) rootId = chat.findSlackThreadRoot?.(conversationId, key.threadTs)?.id;
+    if (!rootId) return false;
+    const since = now - TURN_TRIGGER_CONSTANTS.OWNER_ANSWER_WINDOW_MS;
+    return chat.listThreadForBridge(conversationId, rootId).some((m) => m.senderType === 'user' && m.createdAt >= since);
+  } catch {
+    return false;
+  }
 }
 
 /**
