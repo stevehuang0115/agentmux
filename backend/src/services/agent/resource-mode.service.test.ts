@@ -566,6 +566,24 @@ describe('owner threads (specs/2026-10-08-owner-thread-sentinel.md)', () => {
 		expect(told).toEqual(['kai']);
 	});
 
+	it('passes each agent\'s idle time, so a soft keep can lapse after SOFT_KEEP_MAX_IDLE_MS (Ella, 2026-10-19)', async () => {
+		const svc = ResourceModeService.getInstance();
+		const stopped: string[] = [];
+		const seen: Array<[string, number]> = [];
+		let list = [agent('atlas', RESOURCE_MODE_CONSTANTS.SOFT_KEEP_MAX_IDLE_MS + 60_000)];
+		svc.setDeps({
+			limits: async () => ({ maxRunning: 1, idleTimeoutMinutes: 10 }),
+			listRunning: async () => list,
+			hasOwnerMessage: () => false,
+			owesOwnerThread: (n, idleMs) => { seen.push([n, idleMs]); return idleMs < RESOURCE_MODE_CONSTANTS.SOFT_KEEP_MAX_IDLE_MS; },
+			stopAgent: async (n) => { stopped.push(n); list = list.filter((r) => r.sessionName !== n); },
+		});
+		await enter(svc);
+		expect(await svc.requestStart('new', false)).toBe(true);
+		expect(seen[0]?.[1]).toBeGreaterThanOrEqual(RESOURCE_MODE_CONSTANTS.SOFT_KEEP_MAX_IDLE_MS);
+		expect(stopped).toEqual(['atlas']);
+	});
+
 	it('never frees a slot from an owing agent: the waiter waits (Pia, 2026-10-12)', async () => {
 		const { svc, stopped, told } = makeOwing([agent('atlas', 9e6), agent('busy', 1e5, true)], ['atlas']);
 		await enter(svc);
