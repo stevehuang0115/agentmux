@@ -7,6 +7,7 @@
 import {
   CloudClientService,
   decodeJwtExp,
+  refreshTokenExpiresWithin,
   type PersistedCloudConfig,
 } from './cloud-client.service.js';
 import { CLOUD_CONSTANTS } from '../../constants.js';
@@ -976,6 +977,47 @@ describe('CloudClientService', () => {
 
       expect(ok).toBe(true);
       expect(service.getRelayToken()).toBe('relay-original');
+    });
+  });
+
+  describe('refresh-token renewal near expiry (steamfun-ops 2026-10-19)', () => {
+    const jwtWithExp = (expMs: number): string =>
+      `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify({ type: 'refresh', exp: Math.floor(expMs / 1000) })).toString('base64url')}.s`;
+
+    it('refreshTokenExpiresWithin reads exp; unreadable tokens are not near expiry', () => {
+      const now = Date.now();
+      expect(refreshTokenExpiresWithin(jwtWithExp(now + 3 * 86_400_000), 7 * 86_400_000, now)).toBe(true);
+      expect(refreshTokenExpiresWithin(jwtWithExp(now - 1000), 7 * 86_400_000, now)).toBe(true);
+      expect(refreshTokenExpiresWithin(jwtWithExp(now + 20 * 86_400_000), 7 * 86_400_000, now)).toBe(false);
+      expect(refreshTokenExpiresWithin('not-a-jwt', 7 * 86_400_000, now)).toBe(false);
+    });
+
+    it('asks to rotate within the window and persists the successor', async () => {
+      mockFetch.mockResolvedValueOnce(mockResponse({ tier: 'pro' }));
+      await service.connect(CLOUD_URL, TOKEN);
+      service.setRefreshToken(jwtWithExp(Date.now() + 2 * 86_400_000));
+      mockWriteFile.mockClear();
+      mockFetch.mockResolvedValueOnce(mockResponse({ success: true, accessToken: 'new-access', refreshToken: 'successor-rt' }));
+
+      expect(await service.tryRefreshToken()).toBe(true);
+      const body = JSON.parse((mockFetch.mock.calls.at(-1)![1] as { body: string }).body) as { rotate?: boolean };
+      expect(body.rotate).toBe(true);
+      expect(service.getRefreshToken()).toBe('successor-rt');
+      const written = JSON.parse(mockWriteFile.mock.calls.at(-1)![1] as string) as PersistedCloudConfig;
+      expect(written.refreshToken).toBe('successor-rt');
+    });
+
+    it('does not ask to rotate a token far from expiry', async () => {
+      mockFetch.mockResolvedValueOnce(mockResponse({ tier: 'pro' }));
+      await service.connect(CLOUD_URL, TOKEN);
+      const far = jwtWithExp(Date.now() + 25 * 86_400_000);
+      service.setRefreshToken(far);
+      mockFetch.mockResolvedValueOnce(mockResponse({ success: true, accessToken: 'new-access' }));
+
+      expect(await service.tryRefreshToken()).toBe(true);
+      const body = JSON.parse((mockFetch.mock.calls.at(-1)![1] as { body: string }).body) as { rotate?: boolean };
+      expect(body.rotate).toBeUndefined();
+      expect(service.getRefreshToken()).toBe(far);
     });
   });
 

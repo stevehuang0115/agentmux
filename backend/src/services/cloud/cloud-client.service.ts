@@ -736,20 +736,26 @@ export class CloudClientService {
       const cloudRefreshUrl = `${cloudUrl}/api/cloud/refresh`;
       let newAccessToken: string | null = null;
       let relayToken: string | null = null;
+      const rotate = refreshTokenExpiresWithin(this.refreshToken, CLOUD_CONSTANTS.REFRESH_ROTATE_WITHIN_MS);
 
       try {
         const response = await fetch(cloudRefreshUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refreshToken: this.refreshToken }),
+          body: JSON.stringify({ refreshToken: this.refreshToken, ...(rotate ? { rotate: true } : {}) }),
           signal: AbortSignal.timeout(10_000),
         });
 
         if (response.ok) {
-          const data = await response.json() as { success?: boolean; accessToken?: string; relayToken?: string };
+          const data = await response.json() as { success?: boolean; accessToken?: string; relayToken?: string; refreshToken?: string };
           if (data.success && data.accessToken) {
             newAccessToken = data.accessToken;
             relayToken = data.relayToken ?? null;
+            // A successor refresh token (sliding expiry) when we asked to rotate; persisted below.
+            if (typeof data.refreshToken === 'string' && data.refreshToken) {
+              this.refreshToken = data.refreshToken;
+              this.logger.info('Refresh token renewed via Cloud (was near expiry)');
+            }
             this.logger.info('Token refreshed via Cloud auth service');
           }
         }
@@ -1035,4 +1041,18 @@ export class CloudClientService {
       }).catch(() => {});
     }
   }
+}
+
+/**
+ * Whether a JWT refresh token expires within `withinMs` (unreadable or
+ * missing `exp`: no).
+ *
+ * @param token - The refresh token
+ * @param withinMs - Window
+ * @param now - Clock (epoch ms)
+ * @returns True when it expires within the window (or already has)
+ */
+export function refreshTokenExpiresWithin(token: string | null, withinMs: number, now: number = Date.now()): boolean {
+  const exp = decodeJwtExp(token);
+  return exp !== null && exp * 1000 - now <= withinMs;
 }
