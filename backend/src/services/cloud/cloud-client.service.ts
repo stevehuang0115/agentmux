@@ -152,6 +152,13 @@ export class CloudClientService {
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   /** Guard to prevent concurrent refresh attempts */
   private refreshInProgress = false;
+  /**
+   * Refresh tokens Cloud has retired by rotating them for a successor. Kept in
+   * memory only. A caller that still holds one (a stale copy read before the
+   * rotation) must never put it back: Cloud rejects it, so every later refresh
+   * would fail and the user would have to log in again.
+   */
+  private retiredRefreshTokens: string[] = [];
   /** Callbacks invoked when the access token is refreshed */
   private tokenRefreshCallbacks: Array<(newToken: string) => void> = [];
   /**
@@ -242,7 +249,7 @@ export class CloudClientService {
 
     this.cloudUrl = cloudUrl;
     this.token = token;
-    this.refreshToken = refreshToken || this.refreshToken;
+    this.refreshToken = this.acceptIncomingRefreshToken(refreshToken) || this.refreshToken;
     this.tier = (resolvedTier as CloudTier) || CLOUD_CONSTANTS.TIERS.FREE;
     this.connectionStatus = CLOUD_CONSTANTS.CONNECTION_STATUS.CONNECTED;
     this.lastSyncAt = new Date().toISOString();
@@ -271,6 +278,35 @@ export class CloudClientService {
   }
 
   /**
+   * Remember a refresh token that Cloud has replaced with a successor.
+   *
+   * @param retired - The refresh token that was just rotated away
+   */
+  private retireRefreshToken(retired: string | null): void {
+    if (!retired || this.retiredRefreshTokens.includes(retired)) return;
+    this.retiredRefreshTokens.push(retired);
+    if (this.retiredRefreshTokens.length > CLOUD_CONSTANTS.RETIRED_REFRESH_TOKENS_KEPT) this.retiredRefreshTokens.shift();
+  }
+
+  /**
+   * Decide which refresh token a connect call may store: the one it was given,
+   * unless that one was already rotated away in this process. A rotation can
+   * therefore never be undone by a stale copy (startup restore, the connect
+   * endpoint, the Google auth endpoints).
+   *
+   * @param incoming - Refresh token the caller passed in (may be undefined)
+   * @returns The token to store, or undefined to keep the current one
+   */
+  private acceptIncomingRefreshToken(incoming?: string | null): string | undefined {
+    if (!incoming) return undefined;
+    if (this.retiredRefreshTokens.includes(incoming)) {
+      this.logger.warn('Ignored a stale Cloud refresh token that was already rotated; keeping the current one');
+      return undefined;
+    }
+    return incoming;
+  }
+
+  /**
    * Connect using a locally verified JWT (no remote API call needed).
    *
    * Used when the JWT was issued by this same instance or the JWT secret
@@ -285,7 +321,7 @@ export class CloudClientService {
   connectLocal(cloudUrl: string, token: string, tier: CloudTier, refreshToken?: string): void {
     this.cloudUrl = cloudUrl;
     this.token = token;
-    this.refreshToken = refreshToken || this.refreshToken;
+    this.refreshToken = this.acceptIncomingRefreshToken(refreshToken) || this.refreshToken;
     this.tier = tier || CLOUD_CONSTANTS.TIERS.FREE;
     this.connectionStatus = CLOUD_CONSTANTS.CONNECTION_STATUS.CONNECTED;
     this.lastSyncAt = new Date().toISOString();
@@ -618,7 +654,9 @@ export class CloudClientService {
    * @param refreshToken - Refresh token string
    */
   setRefreshToken(refreshToken: string): void {
-    this.refreshToken = refreshToken;
+    const accepted = this.acceptIncomingRefreshToken(refreshToken);
+    if (!accepted) return;
+    this.refreshToken = accepted;
     // Re-persist config with the new refresh token
     this.persistConfig().catch(() => {});
     this.logger.debug('Refresh token stored');
@@ -737,6 +775,7 @@ export class CloudClientService {
       let newAccessToken: string | null = null;
       let relayToken: string | null = null;
       const rotate = refreshTokenExpiresWithin(this.refreshToken, CLOUD_CONSTANTS.REFRESH_ROTATE_WITHIN_MS);
+      let rotated = false;
 
       try {
         const response = await fetch(cloudRefreshUrl, {
@@ -753,7 +792,10 @@ export class CloudClientService {
             relayToken = data.relayToken ?? null;
             // A successor refresh token (sliding expiry) when we asked to rotate; persisted below.
             if (typeof data.refreshToken === 'string' && data.refreshToken) {
+              // The old token is retired at Cloud now: remember it so no stale copy can put it back.
+              this.retireRefreshToken(this.refreshToken);
               this.refreshToken = data.refreshToken;
+              rotated = true;
               this.logger.info('Refresh token renewed via Cloud (was near expiry)');
             }
             this.logger.info('Token refreshed via Cloud auth service');
@@ -761,6 +803,17 @@ export class CloudClientService {
         }
       } catch {
         this.logger.debug('Cloud refresh unavailable, falling back to local refresh');
+      }
+
+      // Persist the successor at once. Cloud has already retired the old refresh
+      // token, so if the process stopped before the normal persist below, the
+      // file would hold a dead token and the next start could not refresh.
+      if (rotated) {
+        await this.persistConfig().catch((err) => {
+          this.logger.warn('Failed to persist the renewed Cloud refresh token', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
       }
 
       // Fallback: local refresh (requires CREWLY_JWT_SECRET to match Cloud)

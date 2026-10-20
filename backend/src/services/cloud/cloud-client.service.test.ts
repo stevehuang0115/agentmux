@@ -1021,6 +1021,97 @@ describe('CloudClientService', () => {
     });
   });
 
+  describe('a rotated refresh token can never be undone by a stale copy', () => {
+    const jwtWithExp = (expMs: number): string =>
+      `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify({ type: 'refresh', exp: Math.floor(expMs / 1000) })).toString('base64url')}.s`;
+
+    /** Connect, hold a near-expiry refresh token and rotate it; returns the old and the new one. */
+    async function rotate(): Promise<{ stale: string; successor: string }> {
+      mockFetch.mockResolvedValueOnce(mockResponse({ tier: 'pro' }));
+      await service.connect(CLOUD_URL, TOKEN);
+      const stale = jwtWithExp(Date.now() + 2 * 86_400_000);
+      service.setRefreshToken(stale);
+      mockFetch.mockResolvedValueOnce(mockResponse({ success: true, accessToken: 'new-access', refreshToken: 'successor-rt' }));
+      expect(await service.tryRefreshToken()).toBe(true);
+      expect(service.getRefreshToken()).toBe('successor-rt');
+      return { stale, successor: 'successor-rt' };
+    }
+
+    const flushPromises = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+    const lastWritten = (): PersistedCloudConfig => JSON.parse(mockWriteFile.mock.calls.at(-1)![1] as string) as PersistedCloudConfig;
+
+    it('connectLocal with the retired token keeps the successor in the client and on disk (the 1.20.372 startup bug)', async () => {
+      const { stale, successor } = await rotate();
+      mockWriteFile.mockClear();
+      service.connectLocal(CLOUD_URL, 'new-access', 'pro', stale);
+      await flushPromises();
+      expect(service.getRefreshToken()).toBe(successor);
+      expect(lastWritten().refreshToken).toBe(successor);
+    });
+
+    it('setRefreshToken and connect with the retired token are ignored too', async () => {
+      const { stale, successor } = await rotate();
+      mockWriteFile.mockClear();
+      service.setRefreshToken(stale);
+      await flushPromises();
+      expect(service.getRefreshToken()).toBe(successor);
+      expect(mockWriteFile).not.toHaveBeenCalled();
+      mockFetch.mockResolvedValueOnce(mockResponse({ tier: 'pro' }));
+      await service.connect(CLOUD_URL, TOKEN, stale);
+      expect(service.getRefreshToken()).toBe(successor);
+    });
+
+    it('the hourly refresh path keeps the successor and rotates again from it, not from the stale token', async () => {
+      const { stale, successor } = await rotate();
+      service.connectLocal(CLOUD_URL, 'new-access', 'pro', stale);
+      mockFetch.mockResolvedValueOnce(mockResponse({ success: true, accessToken: 'newer-access' }));
+      expect(await service.tryRefreshToken()).toBe(true);
+      const body = JSON.parse((mockFetch.mock.calls.at(-1)![1] as { body: string }).body) as { refreshToken: string };
+      expect(body.refreshToken).toBe(successor);
+      expect(service.getRefreshToken()).toBe(successor);
+    });
+
+    it('the successor is persisted at once, even if the rest of the refresh fails afterwards', async () => {
+      mockFetch.mockResolvedValueOnce(mockResponse({ tier: 'pro' }));
+      await service.connect(CLOUD_URL, TOKEN);
+      service.setRefreshToken(jwtWithExp(Date.now() + 2 * 86_400_000));
+      await flushPromises();
+      mockWriteFile.mockClear();
+      // Everything after the rotation fails (the normal persist at the end is never reached).
+      jest.spyOn(service as unknown as { scheduleTokenRefresh: () => void }, 'scheduleTokenRefresh').mockImplementation(() => {
+        throw new Error('boom after rotation');
+      });
+      mockFetch.mockResolvedValueOnce(mockResponse({ success: true, accessToken: 'new-access', refreshToken: 'successor-rt' }));
+      expect(await service.tryRefreshToken()).toBe(false);
+      expect(mockWriteFile).toHaveBeenCalledTimes(1);
+      expect(lastWritten().refreshToken).toBe('successor-rt');
+      expect(service.getRefreshToken()).toBe('successor-rt');
+    });
+
+    it('does not log the token value', async () => {
+      const warn = jest.spyOn((service as unknown as { logger: { warn: (...a: unknown[]) => void } }).logger, 'warn');
+      const { stale } = await rotate();
+      service.connectLocal(CLOUD_URL, 'new-access', 'pro', stale);
+      expect(warn).toHaveBeenCalled();
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(stale);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('successor-rt');
+    });
+
+    it('no rotation: connectLocal with a different refresh token still replaces it (a fresh login is not blocked)', async () => {
+      mockFetch.mockResolvedValueOnce(mockResponse({ tier: 'pro' }));
+      await service.connect(CLOUD_URL, TOKEN);
+      service.setRefreshToken('old-login-rt');
+      service.connectLocal(CLOUD_URL, 'tok', 'pro', 'new-login-rt');
+      expect(service.getRefreshToken()).toBe('new-login-rt');
+    });
+
+    it('no rotation: an unrotated token passed again is accepted (old behaviour unchanged)', async () => {
+      service.connectLocal(CLOUD_URL, 'tok', 'pro', 'same-rt');
+      service.connectLocal(CLOUD_URL, 'tok2', 'pro', 'same-rt');
+      expect(service.getRefreshToken()).toBe('same-rt');
+    });
+  });
+
   describe('getRefreshToken', () => {
     it('returns the refresh token set via connectLocal and null after disconnect', async () => {
       service.connectLocal(CLOUD_URL, TOKEN, 'pro' as any, 'rt-12345');
