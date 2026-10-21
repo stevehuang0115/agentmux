@@ -8648,6 +8648,10 @@ export const EXPERIMENT_CONSTANTS = {
 	/** A check-in whose process read (or send) failed is retried after this, doubling up to the max */
 	CHECK_IN_RETRY_MIN_MS: 30 * 60 * 1000,
 	CHECK_IN_RETRY_MAX_MS: 24 * 60 * 60 * 1000,
+	/** A supervisor session name (#1026): what an agent session name looks like */
+	SUPERVISOR_PATTERN: /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/,
+	/** Statuses in which a card's supervisor and creator may read its autopilot project (access ends when measured or cancelled) */
+	SUPERVISION_STATUSES: ['planned', 'running'] as readonly string[],
 } as const;
 
 /**

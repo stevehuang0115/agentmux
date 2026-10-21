@@ -119,6 +119,34 @@ describe('trace.controller', () => {
 			await request(app).get(`/api/traces/${plain}/metrics`).expect(200);
 		});
 
+		it('an experiment supervisor reads its project\'s traces with its label, and nothing else (#1026)', async () => {
+			const other = start('request', 'Other project');
+			store.tag(other, { autopilot: { projectId: 'p-other', day: '2026-10-03' }, labels: ['feed'] });
+			const supervisionFor = jest.fn(async (p: string, caller: { session?: string }) => {
+				if (p !== 'p-ce') return null;
+				if (caller.session === 'atlas') return { labels: ['feed'] };
+				if (caller.session === 'sage') return { labels: null };
+				return null;
+			});
+			TicketAutopilotService.setInstance({ canReadProjectTraces: check, supervisionFor } as unknown as TicketAutopilotService);
+			// Allowed: the project's traces with the supervised label (one trace, the list, the project filter).
+			await request(owned).get(`/api/traces/${a}`).set('X-Agent-Session', 'atlas').expect(200);
+			await request(owned).get(`/api/traces/${a}/timeline`).set('X-Agent-Session', 'atlas').expect(200);
+			expect(await ids('autopilotProject=p-ce', 'atlas')).toEqual([a]);
+			expect(await ids('autopilotProject=p-ce&label=feed', 'atlas')).toEqual([a]);
+			expect(await ids('', 'atlas')).toEqual([a, plain].sort());
+			// An unlabelled card: every trace of the project.
+			expect(await ids('autopilotProject=p-ce', 'sage')).toEqual([a, b].sort());
+			await request(owned).get(`/api/traces/${b}`).set('X-Agent-Session', 'sage').expect(200);
+			// Denied: another label, another project, cross-project tag filters, strangers.
+			await request(owned).get(`/api/traces/${b}`).set('X-Agent-Session', 'atlas').expect(403);
+			await request(owned).get(`/api/traces/${other}`).set('X-Agent-Session', 'atlas').expect(403);
+			await request(owned).get(`/api/traces/${other}`).set('X-Agent-Session', 'sage').expect(403);
+			await request(owned).get('/api/traces?autopilotProject=p-other').set('X-Agent-Session', 'atlas').expect(403);
+			await request(owned).get('/api/traces?label=feed').set('X-Agent-Session', 'atlas').expect(403);
+			await request(owned).get(`/api/traces/${a}`).set('X-Agent-Session', 'stranger').expect(403);
+		});
+
 		it('the plain list leaves out tagged rows the caller may not read; by-ref hides their summary', async () => {
 			expect(await ids('', 'stranger')).toEqual([plain]);
 			expect(await ids('', 'helper-zed')).toEqual([a, plain].sort());
