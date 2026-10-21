@@ -107,6 +107,9 @@ import { RequestCascadeSubscriber } from './services/v3/request-cascade.subscrib
 import { setRequestServiceEventBus, RequestService } from './services/v3/request.service.js';
 import { OwnerReceiptService, setOwnerReceiptService } from './services/v3/owner-receipt/owner-receipt.service.js';
 import { agentNameIndexOf, createSlackOwnerSender, startOwnerReceiptSchedule, teamIndexOf, teamLeadIndexOf } from './services/v3/owner-receipt/owner-receipt.boot.js';
+import { createPullsWeeklyLoader } from './services/v3/owner-receipt/owner-pulls-weekly.loader.js';
+import { getTraceAnalysis } from './services/trace/trace-analysis.service.js';
+import { getTraceStore } from './services/trace/trace-store.js';
 import { IntakeOutcomeLog } from './services/v3/ticket-intake-log.js';
 import { getSlackService } from './services/slack/slack.service.js';
 import { getSlackTypingPlaceholderService } from './services/slack/slack-typing-placeholder.service.js';
@@ -800,6 +803,20 @@ export class CrewlyServer {
 					loadAgentNameIndex: async () => agentNameIndexOf(await StorageService.getInstance().getTeams()),
 					sender: createSlackOwnerSender(() => getSlackService()),
 					readIntakeLog: () => intakeOutcomeLog.read(),
+					// #1387: once a week, how often agents pulled the owner in.
+					loadPullsWeekly: createPullsWeeklyLoader({
+						listDecisions: async () => {
+							const { DecisionService } = await import('./services/decisions/decision.service.js');
+							return (await DecisionService.getInstance()?.list('all')) ?? [];
+						},
+						listRequests: () => RequestService.getInstance().listAll(),
+						loadTeamIndex: async () => teamIndexOf(await StorageService.getInstance().getTeams()),
+						loadTeamNameById: async () => new Map((await StorageService.getInstance().getTeams()).map((t) => [t.id, t.name])),
+						listTraceTouches: async (since, limit) => {
+							const rows = await getTraceAnalysis().withMetrics(getTraceStore().list({ since, limit }));
+							return rows.map((r) => ({ createdAt: r.root.createdAt, ownerTouches: r.metrics?.ownerTouches ?? 0 }));
+						},
+					}),
 				});
 				setOwnerReceiptService(receipt);
 				// #856 follow-up: while the receipt is off, show the owner one real
