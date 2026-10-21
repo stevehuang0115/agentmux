@@ -29,7 +29,9 @@
 // was made against the current base head (or the PR is not behind); and no check really failed
 // (a job that never started because GitHub billing/spending limits stopped it counts as absent).
 // Anything else is blocked as before, and the message says what is missing. The record is a file
-// the agent could write by hand: a speed bump, not a boundary. A PR more than
+// the agent could write by hand: a speed bump, not a boundary. A repo with "codePrs": true also
+// accepts a PR with non-content files, but only with a TL marker for the same head SHA written by
+// `record-tl-verification` (a team leader other than the session that ran the gate). A PR more than
 // CREWLY_GUARD_MERGE_MAX_BEHIND commits behind is still blocked.
 //
 // Coverage limits: an interpreter one-liner (python -c, node -e), a command built at
@@ -37,7 +39,7 @@
 // double quotes are NOT seen. A speed bump, not a boundary (same as control-plane-guard).
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -273,7 +275,9 @@ function judgeLocalGate(pr, slug, api, base, behind, realFailures, dir) {
 	}
 	if (files.length === 0 || files.length >= FILES_CAP) return { ok: false, why: `the PR file list is empty or too long to check (${files.length})` };
 	const outside = [...new Set(files.flatMap(([f, prev]) => [f, prev]).filter(Boolean).filter((f) => !matchers.some((re) => re.test(f))))];
-	if (outside.length > 0) {
+	// A code PR (a file outside contentPaths) needs the repo's opt-in `codePrs` plus a TL marker below.
+	const codePr = outside.length > 0;
+	if (codePr && entry.codePrs !== true) {
 		return { ok: false, why: `not content-only, non-content files: ${outside.slice(0, 5).join(', ')}${outside.length > 5 ? `, +${outside.length - 5} more` : ''}` };
 	}
 	const file = join(LOCAL_GATES_DIR, slug.replace('/', '__'), `pr-${pr.number}-${pr.headRefOid}.json`);
@@ -296,7 +300,32 @@ function judgeLocalGate(pr, slug, api, base, behind, realFailures, dir) {
 		}
 		if (rec.baseSha !== baseHead) return { ok: false, why: `stale: the record was made against ${String(rec.baseSha).slice(0, 10)} but ${base} is now at ${baseHead.slice(0, 10)} (re-run record-local-gate)` };
 	}
-	return { ok: true, note: `local gate accepted for PR #${pr.number} in place of CI: record ${file} (head ${String(pr.headRefOid).slice(0, 10)}, exit 0, finished ${rec.finishedAt ?? '?'}, ${files.length} content file(s))` };
+	let tl = '';
+	if (codePr) {
+		const dir2 = join(LOCAL_GATES_DIR, slug.replace('/', '__'));
+		const markerFix = `a team leader runs record-tl-verification --repo ${slug} --pr ${pr.number} --summary "<what you checked>"`;
+		const markerFile = join(dir2, `pr-${pr.number}-${pr.headRefOid}.tl.json`);
+		if (!existsSync(markerFile)) {
+			let other = [];
+			try {
+				other = readdirSync(dir2).filter((f) => f.startsWith(`pr-${pr.number}-`) && f.endsWith('.tl.json'));
+			} catch {
+				other = [];
+			}
+			return { ok: false, why: other.length > 0 ? `the TL verification marker is for another commit, not ${String(pr.headRefOid).slice(0, 10)} (${markerFix})` : `code PR (${outside.slice(0, 3).join(', ')}${outside.length > 3 ? ', ...' : ''}): no TL verification marker at ${String(pr.headRefOid).slice(0, 10)} (${markerFix})` };
+		}
+		let marker;
+		try {
+			marker = JSON.parse(readFileSync(markerFile, 'utf8'));
+		} catch {
+			return { ok: false, why: `the TL verification marker ${markerFile} is unreadable (${markerFix})` };
+		}
+		if (marker?.sha !== pr.headRefOid) return { ok: false, why: `the TL verification marker is for another commit (${markerFix})` };
+		if (typeof marker.verifier !== 'string' || marker.verifier === '') return { ok: false, why: 'the TL verification marker names no verifier' };
+		if (marker.verifier === rec.recordedBy) return { ok: false, why: `the TL verification marker was written by the session that ran the gate (${marker.verifier}); another team leader must verify` };
+		tl = `; TL verified by ${marker.verifier} (gate run by ${rec.recordedBy ?? '?'}): ${String(marker.summary ?? '').slice(0, 120)}`;
+	}
+	return { ok: true, note: `local gate accepted for PR #${pr.number} in place of CI: record ${file} (head ${String(pr.headRefOid).slice(0, 10)}, exit 0, finished ${rec.finishedAt ?? '?'}, ${files.length} ${codePr ? 'file(s), code PR' : 'content file(s)'})${tl}` };
 }
 
 /** @returns {string|null} why `gh pr merge <rest>` is not a verified merge, or null. */

@@ -351,4 +351,84 @@ process.exit(3);
 		expect(r.status).toBe(0);
 		expect(r.stdout).not.toContain('local gate');
 	});
+
+	describe('code PRs in a repo with codePrs (CREW-839)', () => {
+		const code = [['src/app.ts', ''], ['content/blog/a.md', '']];
+		const codeEnv = () => gateEnv({ gate: ['true'], contentPaths: ['content/blog/**/*.md'], codePrs: true });
+		/** Writes a TL marker the way record-tl-verification does. */
+		function marker(over: Record<string, unknown> = {}, name = `pr-42-${SHA}.tl.json`): void {
+			const dir = join(home, 'local-gates', 'o__r');
+			mkdirSync(dir, { recursive: true });
+			writeFileSync(join(dir, name), JSON.stringify({ sha: SHA, verifier: 'tl-sam', summary: 'read the diff', ...over }));
+		}
+
+		it('allows a code PR with a green record and a TL marker, and names both sessions', () => {
+			record({ recordedBy: 'dev-max' });
+			marker();
+			const r = merge(fakeGh({ files: code }), codeEnv());
+			expect(r.status).toBe(0);
+			expect(r.stdout).toContain('code PR');
+			expect(r.stdout).toContain('TL verified by tl-sam (gate run by dev-max): read the diff');
+		});
+
+		it('blocks a code PR with a record but no TL marker', () => {
+			record();
+			const r = merge(fakeGh({ files: code }), codeEnv());
+			expect(r.status).toBe(2);
+			expect(r.stderr).toContain('no TL verification marker at abc');
+			expect(r.stderr).toContain('record-tl-verification --repo o/r --pr 42');
+			expect(r.stderr).toContain('src/app.ts');
+		});
+
+		it('blocks a code PR whose marker is for another commit', () => {
+			record();
+			marker({ sha: 'other' }, 'pr-42-other.tl.json');
+			expect(merge(fakeGh({ files: code }), codeEnv()).stderr).toContain('marker is for another commit, not abc');
+			marker({ sha: 'other' }); // right file name, wrong content
+			expect(merge(fakeGh({ files: code }), codeEnv()).stderr).toContain('marker is for another commit');
+		});
+
+		it('blocks a code PR with a marker but no passing record', () => {
+			marker();
+			expect(merge(fakeGh({ files: code }), codeEnv()).stderr).toContain('no local-gate record at abc');
+			record({ exitCode: 1 });
+			expect(merge(fakeGh({ files: code }), codeEnv()).stderr).toContain('failed (exit 1)');
+		});
+
+		it('blocks a marker written by the session that ran the gate', () => {
+			record({ recordedBy: 'tl-sam' });
+			marker();
+			const r = merge(fakeGh({ files: code }), codeEnv());
+			expect(r.status).toBe(2);
+			expect(r.stderr).toContain('another team leader must verify');
+		});
+
+		it('blocks a marker that names no verifier', () => {
+			record();
+			marker({ verifier: '' });
+			expect(merge(fakeGh({ files: code }), codeEnv()).stderr).toContain('names no verifier');
+		});
+
+		it('keeps blocking a code PR in a repo without codePrs, with a marker and record in place', () => {
+			record();
+			marker();
+			const r = merge(fakeGh({ files: code }));
+			expect(r.status).toBe(2);
+			expect(r.stderr).toContain('non-content files: src/app.ts');
+		});
+
+		it('still blocks a code PR when a check really failed, even with record and marker', () => {
+			record();
+			marker();
+			const r = merge(fakeGh({ files: code, steps: 4, note: 'Process completed with exit code 1.' }), codeEnv());
+			expect(r.status).toBe(2);
+			expect(r.stderr).toContain('a check really failed');
+		});
+
+		it('leaves the content-only path as it was: no marker needed, codePrs or not', () => {
+			record();
+			expect(merge(fakeGh({}), codeEnv()).status).toBe(0);
+			expect(merge(fakeGh({})).status).toBe(0);
+		});
+	});
 });
