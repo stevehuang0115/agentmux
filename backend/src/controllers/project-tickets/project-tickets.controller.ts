@@ -39,6 +39,7 @@ import { DecisionError, DecisionService } from '../../services/decisions/decisio
 import { getTicketThreadStore, slackArchiveLink } from '../../services/decisions/ticket-thread-store.js';
 import { defaultLeadShareDigest } from '../../services/tl-delegation/lead-share.wiring.js';
 import * as path from 'path';
+import { TriggerEngine } from '../../services/v3/trigger-engine.service.js';
 
 /**
  * The wired workflow service; builds the default one from the process
@@ -55,6 +56,8 @@ export function projectTicketWorkflow(): ProjectTicketWorkflowService {
       directory: StorageService.getInstance(),
       // A stopped assignee is started through the normal member-start path.
       wakeAssignee: createHttpAssigneeWaker(),
+      // The routine nudge (#1034) skips a ticket a schedule already names.
+      listTriggers: () => TriggerEngine.getInstance().list(),
     });
     ProjectTicketWorkflowService.setInstance(wf);
   }
