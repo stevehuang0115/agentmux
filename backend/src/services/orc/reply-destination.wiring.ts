@@ -981,7 +981,8 @@ export async function defaultReplyDeliveryDeps(): Promise<ReplyDeliveryDeps> {
     surfacedOwnerConversations: (session) => SubAgentMessageQueue.getInstance().surfacedUnansweredConversations(session),
     // What the agent answers: the latest input that names it, not a reminder
     // or notice delivered since (message-routing audit 2026-10-18).
-    latestInput: (session) => latestInputOf(getTurnTriggerTracker().routedTrigger(session)),
+    // An agent message already answered with send-message is not (crewly#1381).
+    latestInput: (session) => latestInputOf(getTurnTriggerTracker().openRoutedTrigger(session)),
     now: () => Date.now(),
   };
   const { deliverAgentReplyToConversation } = await import('../../controllers/chat/chat.controller.js');
@@ -1004,7 +1005,7 @@ export async function defaultReplyDeliveryDeps(): Promise<ReplyDeliveryDeps> {
     ownerAskedRecently: (session, conversationId) => getTurnTriggerTracker().ownerAskedRecently(session, conversationId),
     ownerAskedEarlier: (session, conversationId) => getTurnTriggerTracker().ownerAskedWithin(session, conversationId, TURN_TRIGGER_CONSTANTS.FRESH_MS),
     ownerWroteInThread: (conversationId, thread) => ownerWroteInThreadRecently(chatLookup, conversationId, thread),
-    routedTrigger: (session) => getTurnTriggerTracker().routedTrigger(session),
+    routedTrigger: (session) => getTurnTriggerTracker().openRoutedTrigger(session),
     currentTrace: (session) => getTraceContext().currentTrace(session),
     conversationPlace: (id) => chatConversationPlace(chatLookup, id),
   };

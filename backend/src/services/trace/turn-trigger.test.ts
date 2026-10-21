@@ -162,6 +162,33 @@ describe('routes carried by agent messages and results (message-routing audit 20
 		expect(t.routedTrigger('ella', NOW + C.FRESH_MS + 1)).toBeNull();
 	});
 
+	// crewly#1381 item 3: Pia answered Atlas with send-message; a later bare
+	// reply must not go back to Atlas for the next 6 hours.
+	it('an agent message answered with send-message is no longer what a bare reply answers', () => {
+		const t = new TurnTriggerTracker();
+		const NOW = 1_790_000_000_000;
+		const ATLAS = 'think-tank-atlas-b4e166f6';
+		t.noteDelivery('pia', `[MESSAGE from Atlas (Think Tank) — a colleague, not the owner. Answer with send-message --to ${ATLAS}; do not post it in an owner thread.]\nwhat were the timings?`, {}, NOW);
+		expect(t.openRoutedTrigger('pia', NOW + 1)).toEqual(expect.objectContaining({ triggerKind: 'agent_message', sender: ATLAS }));
+		// Writing to someone else answers nothing.
+		t.noteAnsweredAgent('pia', 'ops-luna-11111111', NOW + 2);
+		expect(t.openRoutedTrigger('pia', NOW + 3)?.sender).toBe(ATLAS);
+		t.noteAnsweredAgent('pia', ATLAS, NOW + 4);
+		expect(t.openRoutedTrigger('pia', NOW + 5)).toBeNull();
+		// The route it carried still travels with Pia's messages.
+		expect(t.routedTrigger('pia', NOW + 5)?.sender).toBe(ATLAS);
+		// A new message from Atlas is open again.
+		t.noteDelivery('pia', `[MESSAGE from Atlas (Think Tank) — a colleague, not the owner. Answer with send-message --to ${ATLAS}; do not post it in an owner thread.]\none more`, {}, NOW + 6);
+		expect(t.openRoutedTrigger('pia', NOW + 7)?.sender).toBe(ATLAS);
+	});
+
+	it('writing to an agent does not close an owner message', () => {
+		const t = new TurnTriggerTracker();
+		t.noteDelivery('pia', '[CHAT:room-1] <steve@Pia>\n\nask Atlas and tell me', {}, 1000);
+		t.noteAnsweredAgent('pia', 'think-tank-atlas-b4e166f6', 2000);
+		expect(t.openRoutedTrigger('pia', 3000)).toEqual(expect.objectContaining({ triggerKind: 'owner_message', conversationId: 'room-1' }));
+	});
+
 	it('a delegated result is attributed to the delegate named in the text', () => {
 		const t = new TurnTriggerTracker();
 		const tr = t.noteDelivery('atlas', `[RESULT] From sage-1a2b3c4d about WorkItem wi-abcdef "Note" (x ${ROUTE}):\nok`, {}, 1000);

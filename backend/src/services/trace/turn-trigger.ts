@@ -202,6 +202,8 @@ export class TurnTriggerTracker {
 	private readonly sends = new Map<string, PendingSend[]>();
 	/** Per session: conversation id → when the owner last wrote to it there */
 	private readonly ownerAsks = new Map<string, Map<string, number>>();
+	/** Per session: its routed agent message that it already answered with send-message (crewly#1381) */
+	private readonly answered = new Map<string, TurnTrigger>();
 
 	/**
 	 * Note that `sender` asked to write `text` to `target` (the terminal write
@@ -317,6 +319,41 @@ export class TurnTriggerTracker {
 	}
 
 	/**
+	 * `session` wrote to `recipient` (send-message / deliver). When its routed
+	 * input is `recipient`'s agent message, that message is answered: a later
+	 * bare `reply` no longer goes back to `recipient` (crewly#1381 item 3).
+	 * The route it carried still travels with the agent's messages
+	 * ({@link routedTrigger} is unchanged).
+	 *
+	 * @param session - Agent that wrote
+	 * @param recipient - Agent it wrote to
+	 * @param now - Clock (epoch ms)
+	 */
+	noteAnsweredAgent(session: string, recipient: string, now: number = Date.now()): void {
+		if (!session || !recipient || session === recipient) return;
+		const t = this.routedTrigger(session, now);
+		if (t?.triggerKind === 'agent_message' && t.sender === recipient) this.answered.set(session, t);
+	}
+
+	/**
+	 * {@link routedTrigger}, unless it is an agent message the session already
+	 * answered with send-message ({@link noteAnsweredAgent}): what a bare
+	 * `reply` still answers.
+	 *
+	 * @param session - Agent session
+	 * @param now - Clock (epoch ms)
+	 * @returns The trigger, or null
+	 */
+	openRoutedTrigger(session: string, now: number = Date.now()): TurnTrigger | null {
+		const t = this.routedTrigger(session, now);
+		if (!t) {
+			this.answered.delete(session);
+			return null;
+		}
+		return this.answered.get(session) === t ? null : t;
+	}
+
+	/**
 	 * The trigger of `session`'s current turn, while fresh.
 	 *
 	 * @param session - Agent session
@@ -339,6 +376,7 @@ export class TurnTriggerTracker {
 		this.routed.clear();
 		this.sends.clear();
 		this.ownerAsks.clear();
+		this.answered.clear();
 	}
 
 	/**

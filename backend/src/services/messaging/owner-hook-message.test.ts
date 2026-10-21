@@ -343,6 +343,23 @@ describe('owner message at the next tool boundary', () => {
 			expect(ownerHookNoteFor(AGENT, {}, queue)).toContain('owner in the DM');
 			expect(ownerHookNoteFor(AGENT, {}, queue)).toBeNull();
 		});
+
+		// crewly#1381 item 2: what the hook hands over is the agent's latest input.
+		it('ownerHookNoteFor records the handed-over text as a delivery; a failure there does not drop the note', () => {
+			const noted: Array<[string, string]> = [];
+			const overflow = () => null;
+			queue.enqueue(AGENT, 'owner in the DM', { queueMeta: DM });
+			expect(ownerHookNoteFor(AGENT, {}, queue, C.MAX_CONTEXT_CHARS, overflow, (s, t) => noted.push([s, t]))).toContain('owner in the DM');
+			expect(noted).toEqual([[AGENT, 'owner in the DM']]);
+			// Nothing handed over: nothing recorded.
+			expect(ownerHookNoteFor(AGENT, {}, queue, C.MAX_CONTEXT_CHARS, overflow, (s, t) => noted.push([s, t]))).toBeNull();
+			expect(noted).toHaveLength(1);
+			queue.enqueue('other-agent', 'second owner message', { queueMeta: DM });
+			const boom = () => {
+				throw new Error('tracker down');
+			};
+			expect(ownerHookNoteFor('other-agent', {}, queue, C.MAX_CONTEXT_CHARS, overflow, boom)).toContain('second owner message');
+		});
 	});
 
 	describe('answersConversation', () => {

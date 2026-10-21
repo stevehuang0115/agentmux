@@ -2133,6 +2133,20 @@ describe('noteAgentToAgent (issue #968)', () => {
 		getTurnTriggerTracker().reset();
 	});
 
+	// crewly#1381 item 3: answering the agent whose message is open closes it.
+	it('closes the sender\'s open message from the target, so a later bare reply is not sent back', async () => {
+		const { getTurnTriggerTracker } = await import('../../services/trace/turn-trigger.js');
+		getTurnTriggerTracker().reset();
+		const callerUtils = await import('../../utils/agent-caller.utils.js');
+		const spy = jest.spyOn(callerUtils, 'readAgentSessionHeader').mockReturnValue('flopost-pia-1a2b3c4d');
+		getTurnTriggerTracker().noteDelivery('flopost-pia-1a2b3c4d', '[MESSAGE from Atlas (Think Tank) — a colleague, not the owner. Answer with send-message --to think-tank-atlas-b4e166f6; do not post it in an owner thread.]\ntimings?');
+		expect(getTurnTriggerTracker().openRoutedTrigger('flopost-pia-1a2b3c4d')?.sender).toBe('think-tank-atlas-b4e166f6');
+		terminalController.noteAgentToAgent('think-tank-atlas-b4e166f6', { headers: { 'x-agent-session': 'flopost-pia-1a2b3c4d' }, body: { mode: 'message', data: '83 s was the cold start' } });
+		expect(getTurnTriggerTracker().openRoutedTrigger('flopost-pia-1a2b3c4d')).toBeNull();
+		spy.mockRestore();
+		getTurnTriggerTracker().reset();
+	});
+
 	// 2026-10-07: Lyra got the owner's app comment and handed it to Ella by message.
 	it('hands the sender\'s owner request to the target', async () => {
 		const { getOwnerRequestContext, resetOwnerRequestContext } = await import('../../services/orc/owner-request-context.js');

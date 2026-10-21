@@ -16,6 +16,8 @@ import type { OwnerDecision } from '../../types/decision.types.js';
 import { readProjectTicketLink } from '../../types/project-ticket.types.js';
 import { formatTicketNumber } from '../../types/v2/ticket.types.js';
 import { getTraceContext } from './trace-context.service.js';
+import { getTurnTriggerTracker } from './turn-trigger.js';
+import { getAgentAskLedger } from '../messaging/agent-ask-ledger.service.js';
 import { notifyRequest } from '../usage-ledger/ledger-hooks.js';
 import { appendTraceMarker, formatTraceMarker, skillLabel } from './trace-markers.js';
 import { TERMINAL_INPUT_MAX_LENGTH } from '../../utils/security.js';
@@ -91,6 +93,25 @@ export function ensureTraceForSession(session: string | null | undefined): strin
  */
 export function noteTurnDelivery(session: string, text: string, runtime: string = 'pty'): string | null {
 	return safely(() => getTraceContext().noteTurnDelivery(session, text, runtime), null);
+}
+
+/**
+ * A message handed to a busy agent mid-turn, as a tool-boundary hook note
+ * (PostToolUse `additionalContext`). It is now the latest input the agent
+ * answers, so the turn-trigger tracker records it as a delivery would; the
+ * turn's run trace does not change, because the turn is still the one it was
+ * (crewly#1381 item 2).
+ *
+ * @param session - Agent session
+ * @param text - Exactly what the note handed over (the queued text)
+ */
+export function noteMidTurnDelivery(session: string, text: string): void {
+	safely(() => {
+		if (!session || typeof text !== 'string' || text.length === 0) return;
+		const trigger = getTurnTriggerTracker().noteDelivery(session, text, { traceId: getTraceContext().currentTrace(session) });
+		// Another agent's message: remember it, as a delivery does.
+		if (trigger.triggerKind === 'agent_message' && trigger.sender) getAgentAskLedger()?.noteDelivered(session, trigger.sender, text);
+	}, undefined);
 }
 
 /**
