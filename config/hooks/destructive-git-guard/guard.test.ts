@@ -1,5 +1,5 @@
 import { spawnSync } from 'child_process';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -185,5 +185,170 @@ process.exit(3);
 		expect(merge(gh, 'gh pr view 42').status).toBe(0);
 		expect(merge(gh, 'gh pr merge 42 --disable-auto').status).toBe(0);
 		expect(merge(gh, undefined, { CREWLY_GUARD_MERGE_CHECK: '0' }).status).toBe(0);
+	});
+});
+
+describe('local gate for repos whose CI cannot run (CREW-837)', () => {
+	const BASE_AT = '2026-10-17T10:00:00Z';
+	const AFTER = '2026-10-17T11:00:00Z';
+	const SHA = 'abc';
+	const BASE_SHA = 'base111';
+	/** The check GitHub reports when billing stopped the job: FAILURE, never started. */
+	const unstarted = { __typename: 'CheckRun', name: 'test', status: 'COMPLETED', conclusion: 'FAILURE', completedAt: AFTER, detailsUrl: 'https://github.com/o/r/actions/runs/1/job/77' };
+	let home: string;
+
+	/** Writes the gates config (entry for o/r) and returns env pointing the guard at it. */
+	function gateEnv(entry: unknown = { gate: ['true'], contentPaths: ['content/blog/**/*.md'] }): NodeJS.ProcessEnv {
+		const cfg = join(cwd, 'local-gates.json');
+		writeFileSync(cfg, JSON.stringify({ 'o/r': entry }));
+		return { CREWLY_GUARD_LOCAL_GATES: cfg, CREWLY_HOME: home };
+	}
+
+	/** Records a local-gate run for PR 42 the way record-local-gate writes it. */
+	function record(over: Record<string, unknown> = {}, name = `pr-42-${SHA}.json`): string {
+		const dir = join(home, 'local-gates', 'o__r');
+		mkdirSync(dir, { recursive: true });
+		const file = join(dir, name);
+		writeFileSync(file, JSON.stringify({ sha: SHA, baseRef: 'main', baseSha: BASE_SHA, command: 'true', exitCode: 0, finishedAt: AFTER, ...over }));
+		return file;
+	}
+
+	/**
+	 * A fake `gh` for a PR in o/r. `files` are [filename, previous_filename] pairs;
+	 * `steps`/`note` describe the job behind the check's detailsUrl.
+	 */
+	function fakeGh(opts: { checks?: unknown[]; behind?: number; files?: string[][]; steps?: number; note?: string; baseSha?: string }): string {
+		const file = join(cwd, 'fake-gh.js');
+		const pr = { number: 42, url: 'https://github.com/o/r/pull/42', baseRefName: 'main', headRefOid: SHA, statusCheckRollup: opts.checks ?? [unstarted] };
+		const files = (opts.files ?? [['content/blog/a.md', ''], ['content/blog/zh/a.md', '']]).map((f) => f.join('\t')).join('\n');
+		writeFileSync(
+			file,
+			`#!/usr/bin/env node
+const a = process.argv.slice(2);
+const out = (s) => { process.stdout.write(s); process.exit(0); };
+if (a[0] === 'pr' && a[1] === 'view') out(${JSON.stringify(JSON.stringify(pr))});
+const p = a[0] === 'api' ? a.find((x) => x.startsWith('repos/')) || '' : '';
+if (p.includes('/compare/main...${SHA}')) out('${opts.behind ?? 0}');
+if (p.endsWith('/commits/main') && a.includes('.sha')) out('${opts.baseSha ?? BASE_SHA}');
+if (p.endsWith('/commits/main')) out('${BASE_AT}');
+if (p.endsWith('/pulls/42/files')) out(${JSON.stringify(files)});
+if (p.endsWith('/actions/jobs/77')) out('${opts.steps ?? 0}');
+if (p.endsWith('/check-runs/77/annotations')) out(${JSON.stringify(opts.note ?? 'The job was not started because recent account payments have failed or your spending limit needs to be increased.')});
+process.exit(3);
+`,
+		);
+		chmodSync(file, 0o755);
+		return file;
+	}
+
+	beforeEach(() => {
+		home = mkdtempSync(join(tmpdir(), 'dgg-home-'));
+	});
+	afterEach(() => rmSync(home, { recursive: true, force: true }));
+
+	const merge = (gh: string, env: NodeJS.ProcessEnv = gateEnv()) => run('gh pr merge 42 --squash', 'Bash', { CREWLY_GUARD_GH: gh, ...env });
+
+	it('allows a content-only PR with a green local record, and names the record used', () => {
+		const file = record();
+		const r = merge(fakeGh({}));
+		expect(r.status).toBe(0);
+		expect(r.stdout).toContain('local gate accepted for PR #42');
+		expect(r.stdout).toContain(file);
+		expect(r.stdout).toContain('2 content file(s)');
+	});
+
+	it('allows when there is no CI run at all and the PR is behind but the record matches the base head', () => {
+		record();
+		expect(merge(fakeGh({ checks: [], behind: 2 })).status).toBe(0);
+	});
+
+	it('blocks a content-only PR with no record', () => {
+		const r = merge(fakeGh({}));
+		expect(r.status).toBe(2);
+		expect(r.stderr).toContain('CI is not green');
+		expect(r.stderr).toContain('local gate: no local-gate record at abc');
+		expect(r.stderr).toContain('record-local-gate --repo o/r --pr 42');
+	});
+
+	it('blocks when the record is for another commit', () => {
+		record({ sha: 'other' }, 'pr-42-zzz.json'); // a record for another head: not found at abc
+		expect(merge(fakeGh({})).stderr).toContain('no local-gate record at abc');
+		record({ sha: 'other' }); // right file name, wrong content
+		expect(merge(fakeGh({})).stderr).toContain('for another commit');
+	});
+
+	it('blocks when the recorded gate failed', () => {
+		record({ exitCode: 1 });
+		const r = merge(fakeGh({}));
+		expect(r.status).toBe(2);
+		expect(r.stderr).toContain('failed (exit 1)');
+	});
+
+	it('blocks when one changed file is not content, and lists it', () => {
+		record();
+		const r = merge(fakeGh({ files: [['content/blog/a.md', ''], ['src/app.ts', '']] }));
+		expect(r.status).toBe(2);
+		expect(r.stderr).toContain('non-content files: src/app.ts');
+	});
+
+	it('blocks a rename out of a non-content path into content', () => {
+		record();
+		const r = merge(fakeGh({ files: [['content/blog/a.md', 'src/app.ts']] }));
+		expect(r.status).toBe(2);
+		expect(r.stderr).toContain('src/app.ts');
+	});
+
+	it('blocks when the repo has no local-gates entry', () => {
+		record();
+		const cfg = join(cwd, 'other.json');
+		writeFileSync(cfg, JSON.stringify({ 'x/y': { gate: ['true'], contentPaths: ['**'] } }));
+		const r = merge(fakeGh({}), { CREWLY_GUARD_LOCAL_GATES: cfg, CREWLY_HOME: home });
+		expect(r.status).toBe(2);
+		expect(r.stderr).toContain('no local-gates entry for o/r');
+	});
+
+	it('blocks a stale record when the base moved and the PR is behind', () => {
+		record();
+		const r = merge(fakeGh({ behind: 2, baseSha: 'base222' }));
+		expect(r.status).toBe(2);
+		expect(r.stderr).toContain('stale');
+		expect(r.stderr).toContain('base222');
+	});
+
+	it('blocks a check that really failed, even with a green record', () => {
+		record();
+		const r = merge(fakeGh({ steps: 4, note: 'Process completed with exit code 1.' }));
+		expect(r.status).toBe(2);
+		expect(r.stderr).toContain('a check really failed (test)');
+	});
+
+	it('treats a failed check with steps but a "not started" note as a real failure', () => {
+		record();
+		expect(merge(fakeGh({ steps: 3 })).status).toBe(2);
+	});
+
+	it('fails closed when a failed check cannot be inspected', () => {
+		record();
+		const bare = { ...unstarted, detailsUrl: '' };
+		expect(merge(fakeGh({ checks: [bare] })).status).toBe(2);
+	});
+
+	it('does not relax a PR that is too far behind', () => {
+		record();
+		expect(merge(fakeGh({ behind: 12 })).stderr).toContain('12 commits behind main');
+	});
+
+	it('leaves a code PR with red CI blocked exactly as before (no local record can help)', () => {
+		record();
+		const red = { ...unstarted, detailsUrl: '' };
+		const r = merge(fakeGh({ checks: [red], files: [['src/app.ts', '']] }));
+		expect(r.status).toBe(2);
+		expect(r.stderr).toContain('CI is not green on PR #42 (test)');
+	});
+
+	it('leaves green CI allowed as before, without touching the local gate', () => {
+		const r = merge(fakeGh({ checks: [{ __typename: 'CheckRun', name: 'test', status: 'COMPLETED', conclusion: 'SUCCESS', completedAt: AFTER }], files: [['src/app.ts', '']] }));
+		expect(r.status).toBe(0);
+		expect(r.stdout).not.toContain('local gate');
 	});
 });

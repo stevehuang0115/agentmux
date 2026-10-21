@@ -22,11 +22,25 @@
 // The check asks GitHub through `gh` (CREWLY_GUARD_GH overrides the binary); when it cannot
 // ask, the merge is blocked. CREWLY_GUARD_MERGE_CHECK=0 turns it off.
 //
+// Local gate (private repos whose CI cannot run): a merge that CI would block (a check not green,
+// or none to show the merge works) is accepted when ALL of: the repo has an entry in
+// local-gates.json; every changed file (and every renamed-from path) matches that entry's
+// contentPaths; `record-local-gate` recorded exitCode 0 for exactly the PR head SHA; the record
+// was made against the current base head (or the PR is not behind); and no check really failed
+// (a job that never started because GitHub billing/spending limits stopped it counts as absent).
+// Anything else is blocked as before, and the message says what is missing. The record is a file
+// the agent could write by hand: a speed bump, not a boundary. A PR more than
+// CREWLY_GUARD_MERGE_MAX_BEHIND commits behind is still blocked.
+//
 // Coverage limits: an interpreter one-liner (python -c, node -e), a command built at
 // runtime ($VAR, base64, a script the agent writes then runs) and `$(...)` inside
 // double quotes are NOT seen. A speed bump, not a boundary (same as control-plane-guard).
 
 import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const PREFIX = 'destructive-git-guard:';
 const PROTECTED_BRANCHES = new Set(['main', 'master']);
@@ -183,6 +197,108 @@ function checkState(c) {
 	return { name, green: done && GREEN.has(String(c.conclusion || '').toUpperCase()), at: c.completedAt || c.startedAt };
 }
 
+
+/** Repos with a local-gate path (config next to this file; CREWLY_GUARD_LOCAL_GATES overrides). */
+const LOCAL_GATES_FILE = process.env.CREWLY_GUARD_LOCAL_GATES || join(dirname(fileURLToPath(import.meta.url)), 'local-gates.json');
+/** Where `record-local-gate` writes its records. */
+const LOCAL_GATES_DIR = join(process.env.CREWLY_HOME || join(homedir(), '.crewly'), 'local-gates');
+/** GitHub's own wording for a job that never started because of billing or the spending limit. */
+const NOT_STARTED_RE = /was not started because/i;
+/** The files endpoint stops at 3000 files; a PR that large is not a content PR. */
+const FILES_CAP = 3000;
+
+/** Glob (`**` crosses directories, `*` does not) to an anchored RegExp. */
+function globToRegExp(glob) {
+	let re = '';
+	for (let i = 0; i < glob.length; i += 1) {
+		const c = glob[i];
+		if (c === '*' && glob[i + 1] === '*') {
+			if (glob[i + 2] === '/') {
+				re += '(?:.*/)?';
+				i += 2;
+			} else {
+				re += '.*';
+				i += 1;
+			}
+		} else if (c === '*') re += '[^/]*';
+		else re += c.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+	}
+	return new RegExp(`^${re}$`);
+}
+
+/** The local-gates entry for `slug` (owner/name), or null (no file, bad file, no entry). */
+function localGateEntry(slug) {
+	try {
+		const entry = JSON.parse(readFileSync(LOCAL_GATES_FILE, 'utf8'))?.[slug];
+		if (!entry || !Array.isArray(entry.contentPaths) || entry.contentPaths.length === 0) return null;
+		return entry;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * True when a CI check did not run at all: a finished job with no steps whose annotation says GitHub
+ * never started it (billing / spending limit). Anything else non-green, including a check we cannot
+ * inspect, is a real failure (fail closed). Two cheap `gh api` calls, only for non-green checks.
+ */
+function checkNeverRan(c, api, dir) {
+	try {
+		const m = /\/actions\/runs\/\d+\/job\/(\d+)/.exec(String(c.detailsUrl || ''));
+		if (!m || c.__typename === 'StatusContext' || String(c.status || '').toUpperCase() !== 'COMPLETED') return false;
+		if (Number(gh(['api', `${api}/actions/jobs/${m[1]}`, '--jq', '.steps | length'], dir)) !== 0) return false;
+		return NOT_STARTED_RE.test(gh(['api', `${api}/check-runs/${m[1]}/annotations`, '--jq', '[.[].message] | join("\n")'], dir));
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * May this merge go ahead on a recorded local green run instead of CI?
+ * @returns {{ok: true, note: string} | {ok: false, why: string}}
+ */
+function judgeLocalGate(pr, slug, api, base, behind, realFailures, dir) {
+	const entry = localGateEntry(slug);
+	if (!entry) return { ok: false, why: `no local-gates entry for ${slug}` };
+	if (realFailures.length > 0) return { ok: false, why: `a check really failed (${realFailures.slice(0, 5).join(', ')}); a local run does not override it` };
+	const matchers = entry.contentPaths.map(globToRegExp);
+	let files;
+	try {
+		files = gh(['api', '--paginate', `${api}/pulls/${pr.number}/files`, '--jq', '.[] | [.filename, (.previous_filename // "")] | @tsv'], dir)
+			.split('\n')
+			.filter(Boolean)
+			.map((l) => l.split('\t'));
+	} catch {
+		return { ok: false, why: 'could not list the PR files to check it is content-only' };
+	}
+	if (files.length === 0 || files.length >= FILES_CAP) return { ok: false, why: `the PR file list is empty or too long to check (${files.length})` };
+	const outside = [...new Set(files.flatMap(([f, prev]) => [f, prev]).filter(Boolean).filter((f) => !matchers.some((re) => re.test(f))))];
+	if (outside.length > 0) {
+		return { ok: false, why: `not content-only, non-content files: ${outside.slice(0, 5).join(', ')}${outside.length > 5 ? `, +${outside.length - 5} more` : ''}` };
+	}
+	const file = join(LOCAL_GATES_DIR, slug.replace('/', '__'), `pr-${pr.number}-${pr.headRefOid}.json`);
+	const fix = `run record-local-gate --repo ${slug} --pr ${pr.number}`;
+	if (!existsSync(file)) return { ok: false, why: `no local-gate record at ${String(pr.headRefOid).slice(0, 10)} (${fix})` };
+	let rec;
+	try {
+		rec = JSON.parse(readFileSync(file, 'utf8'));
+	} catch {
+		return { ok: false, why: `the local-gate record ${file} is unreadable (${fix})` };
+	}
+	if (rec?.sha !== pr.headRefOid) return { ok: false, why: `the local-gate record is for another commit (${fix})` };
+	if (rec.exitCode !== 0) return { ok: false, why: `the local gate at ${String(pr.headRefOid).slice(0, 10)} failed (exit ${rec.exitCode})` };
+	if (behind > 0) {
+		let baseHead;
+		try {
+			baseHead = gh(['api', `${api}/commits/${encodeURIComponent(base)}`, '--jq', '.sha'], dir);
+		} catch {
+			return { ok: false, why: `could not read the head of ${base} to check the record is not stale` };
+		}
+		if (rec.baseSha !== baseHead) return { ok: false, why: `stale: the record was made against ${String(rec.baseSha).slice(0, 10)} but ${base} is now at ${baseHead.slice(0, 10)} (re-run record-local-gate)` };
+	}
+	return { ok: true, note: `local gate accepted for PR #${pr.number} in place of CI: record ${file} (head ${String(pr.headRefOid).slice(0, 10)}, exit 0, finished ${rec.finishedAt ?? '?'}, ${files.length} content file(s))` };
+}
+
 /** @returns {string|null} why `gh pr merge <rest>` is not a verified merge, or null. */
 function judgePrMerge(rest, dir) {
 	if (!MERGE_CHECK_ON || rest.includes('--disable-auto')) return null;
@@ -217,17 +333,31 @@ function judgePrMerge(rest, dir) {
 	if (!Number.isFinite(behind)) return `could not compare PR #${pr.number} with ${base} on GitHub`;
 	const n = pr.number;
 	if (behind > MERGE_MAX_BEHIND) return `PR #${n} is ${behind} commits behind ${base} (more than ${MERGE_MAX_BEHIND}); its CI did not run on what the merge would produce`;
-	const checks = (Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup : []).map(checkState);
-	const notGreen = checks.filter((c) => !c.green).map((c) => c.name);
-	if (notGreen.length > 0) return `CI is not green on PR #${n} (${notGreen.slice(0, 5).join(', ')})`;
-	if (behind > 0) {
-		if (checks.length === 0) return `PR #${n} is ${behind} commit(s) behind ${base} and has no CI run to show the merge result works`;
-		const latest = Math.max(...checks.map((c) => Date.parse(c.at || '')).filter((t) => Number.isFinite(t)));
-		if (!Number.isFinite(latest) || (Number.isFinite(baseAt) && latest < baseAt)) {
-			return `PR #${n}'s latest CI run predates the head of ${base} (the PR is ${behind} commit(s) behind)`;
+	const rollup = Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup : [];
+	const checks = rollup.map((c) => ({ ...checkState(c), raw: c }));
+	const notGreen = checks.filter((c) => !c.green);
+	// A CI-state problem (not the behind-limit above): the local gate may stand in for CI.
+	let ciReason = null;
+	let realFailures = [];
+	if (notGreen.length > 0) {
+		ciReason = `CI is not green on PR #${n} (${notGreen.slice(0, 5).map((c) => c.name).join(', ')})`;
+		realFailures = notGreen.filter((c) => !checkNeverRan(c.raw, api, dir)).map((c) => c.name);
+	} else if (behind > 0) {
+		if (checks.length === 0) ciReason = `PR #${n} is ${behind} commit(s) behind ${base} and has no CI run to show the merge result works`;
+		else {
+			const latest = Math.max(...checks.map((c) => Date.parse(c.at || '')).filter((t) => Number.isFinite(t)));
+			if (!Number.isFinite(latest) || (Number.isFinite(baseAt) && latest < baseAt)) {
+				ciReason = `PR #${n}'s latest CI run predates the head of ${base} (the PR is ${behind} commit(s) behind)`;
+			}
 		}
 	}
-	return null;
+	if (ciReason === null) return null;
+	const local = judgeLocalGate({ number: n, headRefOid: pr.headRefOid }, `${m[1]}/${m[2]}`, api, base, behind, realFailures, dir);
+	if (local.ok) {
+		process.stdout.write(`${PREFIX} ${local.note}\n`);
+		return null;
+	}
+	return `${ciReason}; local gate: ${local.why}`;
 }
 
 let checked = 0;
