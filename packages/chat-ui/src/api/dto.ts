@@ -62,6 +62,10 @@ export interface ChannelDTO {
   projectId?: string;
   /** Phase B — for `type='dm'`, the target member's id. */
   targetMemberId?: string;
+  /** Owner read marker (#1400); absent on older servers. */
+  lastReadSeq?: number;
+  /** Unread messages past the marker; absent on older servers. */
+  unreadCount?: number;
 }
 
 /** Wire shape for messages. */
@@ -136,6 +140,7 @@ export type WireWebsocketEvent =
       type: 'presence';
       payload: { agentSession: string; status: WirePresenceStatus; lastSeenAt?: number | null };
     }
+  | { type: 'read_state'; payload: { channelId: string; lastReadSeq: number; unreadCount: number } }
   | { type: 'pong'; ts: number }
   | { type: 'error'; code: string; message: string };
 
@@ -206,6 +211,8 @@ export function channelFromDTO(dto: ChannelDTO): Channel {
     teamId: dto.teamId,
     projectId: dto.projectId,
     targetMemberId: dto.targetMemberId,
+    lastReadSeq: dto.lastReadSeq,
+    unreadCount: dto.unreadCount,
   };
 }
 
@@ -303,6 +310,26 @@ export function wsEventFromWire(wire: unknown): ChatWebsocketEvent | null {
       agentSession: payload.agentSession,
       status: translatePresence(payload.status as WirePresenceStatus),
       lastSeen: msToIso(payload.lastSeenAt ?? null),
+    };
+  }
+
+  if (w.type === 'read_state') {
+    const payload = (
+      wire as { payload?: { channelId?: unknown; lastReadSeq?: unknown; unreadCount?: unknown } }
+    ).payload;
+    if (
+      !payload ||
+      typeof payload.channelId !== 'string' ||
+      typeof payload.lastReadSeq !== 'number' ||
+      typeof payload.unreadCount !== 'number'
+    ) {
+      return null;
+    }
+    return {
+      type: 'read_state',
+      channelId: payload.channelId,
+      lastReadSeq: payload.lastReadSeq,
+      unreadCount: payload.unreadCount,
     };
   }
 

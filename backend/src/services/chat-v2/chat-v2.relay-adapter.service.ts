@@ -500,6 +500,24 @@ export class ChatV2RelayAdapter {
         }
         return this.serializeMessage(message, fromDevice);
       }
+      case 'markChannelRead': {
+        const seq = p['seq'];
+        return this.service.markChannelRead(
+          this.requireString(p, 'channelId'),
+          principal,
+          seq === undefined || seq === null ? undefined : (seq as number),
+        );
+      }
+      case 'markChannelUnread': {
+        return this.service.markChannelUnread(
+          this.requireString(p, 'channelId'),
+          principal,
+          p['seq'] as number,
+        );
+      }
+      case 'getUnread': {
+        return this.service.getUnreadSummary(principal);
+      }
       default: {
         // Unreachable given CHAT_RPC_METHODS check above, but TypeScript
         // exhaustiveness check needs the explicit throw.

@@ -1168,6 +1168,7 @@ function makeChannel(overrides: Partial<ChatChannelDTO> = {}): ChatChannelDTO {
     createdAt: 0,
     agentPresence: { status: 'online', lastSeenAt: null },
     type: 'dm',
+    lastReadSeq: 0, unreadCount: 0,
     ...overrides,
   };
 }
@@ -1514,6 +1515,76 @@ describe('chat-v2 agent messages with files (automatic cross-machine hand-off)',
       expect(res.status).toBe(201);
       expect(res.body.data.content).toBe('look at /Users/me/a.pdf');
       expect(mockHandoff.attachToMessage).not.toHaveBeenCalled();
+    } finally {
+      service.close();
+    }
+  });
+});
+
+describe('chat-v2 read state (#1400)', () => {
+  const principal = { userId: 'dev-user-001', source: 'oss' as const };
+
+  /** A channel with `n` unread agent messages. */
+  function seed(service: ChatV2Service, n: number): string {
+    const ch = service.createChannel({ agentSession: 'sam', name: 'Sam', principal });
+    for (let i = 0; i < n; i++) {
+      service.recordTurn({ channelId: ch.id, senderType: 'agent', senderId: 'sam', content: `m${i}`, metadata: { source: 'slack' } });
+    }
+    return ch.id;
+  }
+
+  it('GET /channels and /channels/:id carry lastReadSeq + unreadCount', async () => {
+    const { app, service } = buildApp();
+    try {
+      const id = seed(service, 2);
+      const list = await request(app).get('/api/chat/channels');
+      expect(list.body.data.channels[0]).toMatchObject({ id, lastReadSeq: 0, unreadCount: 2 });
+      const one = await request(app).get(`/api/chat/channels/${id}`);
+      expect(one.body.data).toMatchObject({ lastReadSeq: 0, unreadCount: 2 });
+    } finally {
+      service.close();
+    }
+  });
+
+  it('POST /channels/:id/read is forward-only and defaults to the last message', async () => {
+    const { app, service } = buildApp();
+    try {
+      const id = seed(service, 3);
+      const first = await request(app).post(`/api/chat/channels/${id}/read`).send({});
+      expect(first.status).toBe(200);
+      expect(first.body.data).toEqual({ channelId: id, lastReadSeq: 3, unreadCount: 0 });
+      const back = await request(app).post(`/api/chat/channels/${id}/read`).send({ seq: 1 });
+      expect(back.body.data.lastReadSeq).toBe(3);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('POST /channels/:id/unread moves the marker to seq - 1 and validates seq', async () => {
+    const { app, service } = buildApp();
+    try {
+      const id = seed(service, 3);
+      await request(app).post(`/api/chat/channels/${id}/read`).send({});
+      const res = await request(app).post(`/api/chat/channels/${id}/unread`).send({ seq: 2 });
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ channelId: id, lastReadSeq: 1, unreadCount: 2 });
+      expect((await request(app).post(`/api/chat/channels/${id}/unread`).send({})).status).toBe(400);
+      expect((await request(app).post(`/api/chat/channels/${id}/unread`).send({ seq: 0 })).status).toBe(400);
+      expect((await request(app).post('/api/chat/channels/nope/read').send({})).status).toBe(404);
+    } finally {
+      service.close();
+    }
+  });
+
+  it('GET /unread totals only channels with unread', async () => {
+    const { app, service } = buildApp();
+    try {
+      const a = seed(service, 2);
+      const b = seed(service, 1);
+      await request(app).post(`/api/chat/channels/${b}/read`).send({});
+      const res = await request(app).get('/api/chat/unread');
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ total: 2, channels: [{ channelId: a, lastReadSeq: 0, unreadCount: 2 }] });
     } finally {
       service.close();
     }

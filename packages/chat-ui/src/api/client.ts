@@ -26,6 +26,8 @@ import type {
   Message,
   AgentPresence,
   ChatWebsocketEvent,
+  ChannelReadState,
+  UnreadSummary,
 } from '../types/chat.types';
 import {
   channelFromDTO,
@@ -77,6 +79,18 @@ export interface ChatApiClient {
   listMessages(channelId: string, opts?: { cursor?: string; limit?: number }): Promise<MessagePage>;
   sendMessage(channelId: string, input: SendMessageInput): Promise<Message>;
   getAgentPresence(agentId: string): Promise<AgentPresence>;
+  /**
+   * Owner read state (#1400). Optional so transports that predate it (and the
+   * Cloud portal's relay client until it adds them) keep satisfying the
+   * contract; callers must check before use.
+   *
+   * `markChannelRead` is forward-only (`seq` omitted = everything);
+   * `markChannelUnread` sets the marker to `seq - 1` and may move backward.
+   */
+  markChannelRead?(channelId: string, seq?: number): Promise<ChannelReadState>;
+  markChannelUnread?(channelId: string, seq: number): Promise<ChannelReadState>;
+  /** Total unread plus the channels that have any. */
+  getUnread?(): Promise<UnreadSummary>;
   subscribeToChannel(
     channelId: string,
     onEvent: (event: ChatWebsocketEvent) => void,
@@ -390,6 +404,24 @@ export class HttpChatApiClient implements ChatApiClient {
     if (!confirmed.clientMessageId) confirmed.clientMessageId = clientMessageId;
     this.emitLocal(channelId, { type: 'message', channelId, message: confirmed });
     return confirmed;
+  }
+
+  async markChannelRead(channelId: string, seq?: number): Promise<ChannelReadState> {
+    return this.request<ChannelReadState>(
+      `/api/chat/channels/${encodeURIComponent(channelId)}/read`,
+      { method: 'POST', body: JSON.stringify(seq === undefined ? {} : { seq }) },
+    );
+  }
+
+  async markChannelUnread(channelId: string, seq: number): Promise<ChannelReadState> {
+    return this.request<ChannelReadState>(
+      `/api/chat/channels/${encodeURIComponent(channelId)}/unread`,
+      { method: 'POST', body: JSON.stringify({ seq }) },
+    );
+  }
+
+  async getUnread(): Promise<UnreadSummary> {
+    return this.request<UnreadSummary>('/api/chat/unread');
   }
 
   async getAgentPresence(agentId: string): Promise<AgentPresence> {

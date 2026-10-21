@@ -285,6 +285,9 @@ describe('cloud-sync.types', () => {
         'listHuddleMembers',
         'listMessages',
         'sendMessage',
+        'markChannelRead',
+        'markChannelUnread',
+        'getUnread',
       ]);
     });
   });

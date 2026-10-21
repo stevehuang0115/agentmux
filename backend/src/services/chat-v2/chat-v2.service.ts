@@ -14,6 +14,7 @@ import type { ChatV2Config } from './config.js';
 import { ChannelStore } from './sqlite/channel.store.js';
 import { EventEmitter } from 'events';
 import { MessageStore } from './sqlite/message.store.js';
+import { ReadStateStore } from './sqlite/read-state.store.js';
 import { redactOpenLinkTokens } from '../apps/app-open-link.js';
 import { CHAT_SEARCH_CONSTANTS, TURN_TRIGGER_CONSTANTS } from '../../constants.js';
 import { openChatDatabase, type ChatDatabase } from './sqlite/chat-db.js';
@@ -43,6 +44,8 @@ import {
   type ChatMessageListResult,
   type ChatMessageRow,
   type ChatPrincipal,
+  type ChatReadStateDTO,
+  type ChatUnreadSummaryDTO,
   type ChatSenderType,
   type ChatTimelineItemDTO,
   type ChatTimelineResult,
@@ -334,6 +337,7 @@ export class ChatV2Service extends EventEmitter {
   private readonly db: ChatDatabase;
   private readonly channels: ChannelStore;
   private readonly messages: MessageStore;
+  private readonly readState: ReadStateStore;
   private readonly outbox: CloudOutboxStore;
   private presence: ChatV2ServiceOptions['getPresence'];
   private readonly validateTeamMembership: ChatV2ServiceOptions['validateTeamMembership'];
@@ -347,6 +351,7 @@ export class ChatV2Service extends EventEmitter {
     this.db = options.db ?? openChatDatabase({ dbPath: options.config.storage.dbPath });
     this.channels = new ChannelStore(this.db);
     this.messages = new MessageStore(this.db);
+    this.readState = new ReadStateStore(this.db);
     this.outbox = new CloudOutboxStore(this.db);
     this.presence = options.getPresence ?? DEFAULT_PRESENCE;
     this.validateTeamMembership = options.validateTeamMembership;
@@ -1926,6 +1931,7 @@ export class ChatV2Service extends EventEmitter {
     // clients. The legacy ChatService.EventEmitter contract is now
     // owned by chat-v2 directly.
     this.emit('chat_message', dto);
+    this.syncReadStateAfterMessage(dto, senderType === 'user' && !agentAuthoredAsUser);
     return dto;
   }
 
@@ -2053,6 +2059,7 @@ export class ChatV2Service extends EventEmitter {
     // on idempotent retries.
     if (!deduped) {
       this.emit('chat_message', dto);
+      this.syncReadStateAfterMessage(dto, input.senderType === 'user');
     }
     return { message: dto, deduped };
   }
@@ -2274,6 +2281,96 @@ export class ChatV2Service extends EventEmitter {
   }
 
   // -------------------------------------------------------------------------
+  // Read state (#1400) — the owner's per-message unread, synced to all clients
+  // -------------------------------------------------------------------------
+
+  /**
+   * Mark a channel read up to `seq` (default: everything). Forward-only.
+   * Emits `read_state` so every connected client converges.
+   *
+   * @param channelId - Channel id
+   * @param principal - Auth principal (must be able to read the channel)
+   * @param seq - Read up to this seq; omit for the channel's last message
+   * @returns The new marker and unread count
+   * @throws {ChatError} `validation_error` (400) on a non-integer / negative seq,
+   *   `channel_not_found` (404)
+   */
+  markChannelRead(channelId: string, principal: ChatPrincipal, seq?: number): ChatReadStateDTO {
+    this.requireReadableChannel(channelId, principal);
+    if (seq !== undefined) this.assertSeq(seq, 0);
+    const state = this.readState.markRead(channelId, seq, new Date(this.now()).toISOString());
+    this.emit('read_state', state);
+    return state;
+  }
+
+  /**
+   * Mark the message at `seq` unread (marker = `seq - 1`, may move backward) so
+   * the owner can keep it for later, even after replying.
+   *
+   * @param channelId - Channel id
+   * @param principal - Auth principal (must be able to read the channel)
+   * @param seq - `seq` of the message to mark unread (>= 1)
+   * @returns The new marker and unread count
+   * @throws {ChatError} `validation_error` (400) on a missing / invalid seq,
+   *   `channel_not_found` (404)
+   */
+  markChannelUnread(channelId: string, principal: ChatPrincipal, seq: number): ChatReadStateDTO {
+    this.requireReadableChannel(channelId, principal);
+    this.assertSeq(seq, 1);
+    const state = this.readState.markUnread(channelId, seq, new Date(this.now()).toISOString());
+    this.emit('read_state', state);
+    return state;
+  }
+
+  /**
+   * Unread summary across every channel the caller sees in the conversation
+   * list (own + bridged, not archived). Only channels with unread are listed.
+   *
+   * @param principal - Auth principal
+   * @returns Total unread and the per-channel breakdown
+   */
+  getUnreadSummary(principal: ChatPrincipal): ChatUnreadSummaryDTO {
+    const ids = [
+      ...this.channels.listByOwner(principal.userId, { limit: 100 }),
+      ...this.channels.listBridged({ limit: 200 }),
+    ].map((r) => r.id);
+    const channels = this.readState.listUnread([...new Set(ids)]);
+    return { total: channels.reduce((n, c) => n + c.unreadCount, 0), channels };
+  }
+
+  /** Validate a seq argument: integer, >= `min`. */
+  private assertSeq(seq: unknown, min: number): asserts seq is number {
+    if (typeof seq !== 'number' || !Number.isInteger(seq) || seq < min) {
+      throw new ChatError(
+        CHAT_ERROR_CODES.VALIDATION,
+        400,
+        `seq must be an integer >= ${min}`,
+      );
+    }
+  }
+
+  /**
+   * Keep the read marker in step with a freshly persisted message: the owner's
+   * own message advances it (forward-only); a message that counts as unread
+   * announces the raised count. Both emit `read_state`. Never throws — read
+   * state must not fail a message write.
+   *
+   * @param dto - The persisted message
+   * @param ownerAuthored - True when the owner (not an agent writing as the owner) sent it
+   */
+  private syncReadStateAfterMessage(dto: ChatMessageDTO, ownerAuthored: boolean): void {
+    try {
+      if (ownerAuthored) {
+        this.emit('read_state', this.readState.markRead(dto.channelId, dto.seq));
+      } else if (dto.senderType !== 'user' && dto.contentType !== 'system_note') {
+        this.emit('read_state', this.readState.get(dto.channelId));
+      }
+    } catch {
+      /* best-effort: the badge self-heals on the next list/unread fetch */
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // DTO mappers
   // -------------------------------------------------------------------------
 
@@ -2286,6 +2383,7 @@ export class ChatV2Service extends EventEmitter {
     const channelType = row.type ?? 'dm';
     const presenceSource = channelType === 'dm' ? row.agent_session : '';
     const presence = (this.presence ?? DEFAULT_PRESENCE)(presenceSource);
+    const readState = this.readState.get(row.id);
     return {
       id: row.id,
       agentSession: row.agent_session,
@@ -2302,6 +2400,8 @@ export class ChatV2Service extends EventEmitter {
       teamId: row.team_id ?? undefined,
       projectId: row.project_id ?? undefined,
       targetMemberId: row.target_member_id ?? undefined,
+      lastReadSeq: readState.lastReadSeq,
+      unreadCount: readState.unreadCount,
       // Phase B-2: huddle channels surface their roster inline so the
       // Portal can render member avatars without a second round-trip.
       // Non-huddle rows leave this undefined.

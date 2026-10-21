@@ -89,6 +89,26 @@ export interface Channel {
    * rows, always undefined.
    */
   targetMemberId?: string;
+  /**
+   * The owner's read marker (#1400): messages with `seq <= lastReadSeq` are
+   * read. Absent on servers that predate server-side unread.
+   */
+  lastReadSeq?: number;
+  /** Unread messages past `lastReadSeq` (agent messages only). */
+  unreadCount?: number;
+}
+
+/** A channel's read marker + unread count (REST body, relay RPC result, WS frame). */
+export interface ChannelReadState {
+  channelId: string;
+  lastReadSeq: number;
+  unreadCount: number;
+}
+
+/** `GET /api/chat/unread` / `getUnread`: only channels with unread are listed. */
+export interface UnreadSummary {
+  total: number;
+  channels: ChannelReadState[];
 }
 
 /** Body for `POST /api/chat/channels`. */
@@ -268,6 +288,8 @@ export interface MessagePage {
  *                domain-translated `Message`. Optimistic pending records
  *                emitted by the local client before HTTP 201 land here too.
  * - `presence` — agent liveness flip on the bound channel.
+ * - `read_state` — the owner's read marker / unread count for a channel
+ *                changed (read, mark-unread, or a new message raised it).
  * - `pong`     — JSON heartbeat reply from the server. Consumers do not
  *                normally observe this; it is surfaced for tests + custom
  *                liveness UIs.
@@ -277,5 +299,6 @@ export interface MessagePage {
 export type ChatWebsocketEvent =
   | { type: 'message'; channelId: string; message: Message }
   | { type: 'presence'; agentSession: string; status: AgentPresenceStatus; lastSeen?: string }
+  | { type: 'read_state'; channelId: string; lastReadSeq: number; unreadCount: number }
   | { type: 'pong'; ts: number }
   | { type: 'error'; code: string; message: string };

@@ -37,6 +37,7 @@ function makeChannel(overrides: Partial<ChatChannelDTO> = {}): ChatChannelDTO {
     // Phase A — `type` is required on the wire from A1 onward; default
     // legacy DM channels in fixtures.
     type: 'dm',
+    lastReadSeq: 0, unreadCount: 0,
     ...overrides,
   };
 }
@@ -1577,6 +1578,7 @@ describe('ChatV2DispatcherService', () => {
           lastMessageAt: null,
           agentPresence: { status: 'online', lastSeenAt: null },
           type: 'huddle',
+          lastReadSeq: 0, unreadCount: 0,
           ...overrides,
         };
       }
@@ -1994,6 +1996,7 @@ describe('one responder per owner message (specs/2026-10-03-one-responder-per-me
     lastMessageAt: null,
     agentPresence: { status: 'online', lastSeenAt: null },
     type: 'huddle',
+    lastReadSeq: 0, unreadCount: 0,
   };
   const members = ['think-tank-atlas', 'crewly-marketing-ella', 'ops-noah'];
   const names: Record<string, string> = { 'think-tank-atlas': 'Atlas', 'crewly-marketing-ella': 'Ella', 'ops-noah': 'Noah' };
@@ -2224,6 +2227,7 @@ describe('activate-on-send holds the message before the start (steamfun-ops 2026
     createdAt: 1,
     agentPresence: { status: 'online', lastSeenAt: null },
     type: 'huddle',
+    lastReadSeq: 0, unreadCount: 0,
   });
 
   it('a restart while the agent is starting does not lose the message: it is restored and delivered at register', async () => {

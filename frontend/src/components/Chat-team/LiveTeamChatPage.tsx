@@ -28,8 +28,10 @@
  * Chat): a quiet conversation list (Pinned · DMs · Channels · Group chats,
  * names + unread dots, long sections folded behind "N more"), quiet message
  * chrome (details on hover / "⋯"), a one-line composer, and on phones a
- * list ⇄ conversation switch. Opening a conversation marks it seen
- * (`markChatSeen`, the per-browser read state behind the Chat badge).
+ * list ⇄ conversation switch. Unread is the owner's server-side read state
+ * (specs/chat-unread.md, #1400): opening a conversation marks it read, a
+ * "Mark unread" action on a message keeps it for later, and the same state is
+ * shared with the Chat badge, the Cloud portal and the phone.
  *
  * @module components/Chat-team/LiveTeamChatPage
  */
@@ -51,6 +53,7 @@ import {
   type ChatApiClient,
   type ChatApiError,
   type Channel,
+  type ChannelReadState,
   type ChatPresenceStatus,
   type ConversationGroup,
   type ConversationRow,
@@ -69,37 +72,13 @@ import { CreateGroupModal } from './CreateGroupModal';
 import { ChannelSettingsModal } from './ChannelSettingsModal';
 import { ChatConversationList } from './ChatConversationList';
 import { usePinnedChats } from '../../hooks/usePinnedChats';
-import { markChatSeen, readChatSeen, type ChatSeenRecord } from '../../hooks/useChatUnreadCount';
+import { useChatReadState } from '../../hooks/useChatReadState';
 import { ORCHESTRATOR_SESSION } from '../../utils/team-chat.utils';
 import { channelsService, type ChannelsApi, type CrewlyChannel } from '../../services/channels.service';
 import { setVisibleInterval } from '../../utils/visible-interval';
 
 /** How often the conversation list is re-read so unread dots stay current (ms). */
 export const CHAT_LIST_POLL_MS = 30_000;
-
-/**
- * Whether a conversation has messages the owner has not seen.
- *
- * `baselineAll` is when Chat was last open before this visit (the badge's
- * record, read before the badge marks everything seen); `seenAt` is when this
- * conversation was last open. Before any record exists (first visit in this
- * browser) nothing is unread, matching the badge.
- *
- * @param lastMessageAt - ISO time of the conversation's last message
- * @param seenAt - When this conversation was last open (ms), if ever
- * @param baselineAll - When Chat was last open (ms), if ever
- * @returns True when there is something new
- */
-export function isConversationUnread(
-  lastMessageAt: string | undefined,
-  seenAt: number | undefined,
-  baselineAll: number | undefined,
-): boolean {
-  if (baselineAll === undefined || !lastMessageAt) return false;
-  const at = Date.parse(lastMessageAt);
-  if (Number.isNaN(at)) return false;
-  return at > Math.max(baselineAll, seenAt ?? 0);
-}
 
 /**
  * Landing identifier. The dedicated workspace rail was removed in favour of a
@@ -185,12 +164,6 @@ export interface LiveTeamChatPageProps {
    */
   onEnsureDm?: (agentSession: string) => Promise<string>;
   /**
-   * The Chat "seen" record as it was before this visit (the host reads it
-   * before the nav badge marks Chat seen). Drives the per-conversation
-   * unread dots. Defaults to the current record.
-   */
-  seenBaseline?: ChatSeenRecord;
-  /**
    * Crewly channels API (rooms of agents from any team, matched to Slack).
    * Defaults to `/api/channels`; injectable for tests.
    */
@@ -217,7 +190,6 @@ export function LiveTeamChatPage({
   directoryAgents = [],
   teams = [],
   onEnsureDm,
-  seenBaseline,
   channelsApi,
 }: LiveTeamChatPageProps): JSX.Element {
   return (
@@ -233,7 +205,6 @@ export function LiveTeamChatPage({
         directoryAgents={directoryAgents}
         teams={teams}
         onEnsureDm={onEnsureDm}
-        seenBaseline={seenBaseline}
         channelsApi={channelsApi ?? channelsService}
       />
     </ChatAPIProvider>
@@ -250,7 +221,6 @@ interface BodyProps {
   directoryAgents: DirectoryAgentEntry[];
   teams: ChatTeam[];
   onEnsureDm?: (agentSession: string) => Promise<string>;
-  seenBaseline?: ChatSeenRecord;
   channelsApi: ChannelsApi;
 }
 
@@ -294,7 +264,6 @@ function LiveTeamChatPageBody({
   directoryAgents,
   teams,
   onEnsureDm,
-  seenBaseline,
   channelsApi,
 }: BodyProps): JSX.Element {
   const { channels, loading: channelsLoading, error: channelsError, refresh } = useChannels();
@@ -316,10 +285,6 @@ function LiveTeamChatPageBody({
   const [showChannelSettings, setShowChannelSettings] = useState(false);
   // Phones show the list OR the conversation; md and up show both.
   const [mobileView, setMobileView] = useState<'list' | 'conversation'>('conversation');
-  // Read state: the record from before this visit + conversations opened now.
-  const [baseline] = useState<ChatSeenRecord>(() => seenBaseline ?? readChatSeen());
-  const [seen, setSeen] = useState<ChatSeenRecord>(() => ({ ...(seenBaseline ?? readChatSeen()) }));
-
   // Re-read the list now and then so unread dots and ordering stay current
   // (useChannels loads once).
   useEffect(() => {
@@ -601,41 +566,31 @@ function LiveTeamChatPageBody({
   }, [activeConversationRowId, orcChannelId, slackChannelIds]);
   const mergeChannelKey = mergeChannelIds ? mergeChannelIds.join('|') : '';
 
-  // Last activity of a row; the orchestrator's includes its merged Slack threads.
-  const lastActivityOf = useCallback(
-    (row: ConversationRow): string | undefined => {
-      if (row.id !== orcChannelId || slackChannelIds.length === 0) return row.lastMessageAt;
-      const times = [row.lastMessageAt, ...allDmRows.filter((r) => r.id.startsWith(SLACK_ID_PREFIX)).map((r) => r.lastMessageAt)]
-        .filter((t): t is string => !!t)
-        .sort();
-      return times[times.length - 1];
-    },
-    [orcChannelId, slackChannelIds, allDmRows],
-  );
-
-  const isUnread = useCallback(
-    (row: ConversationRow): boolean =>
-      row.id !== resolvedConversationId &&
-      isConversationUnread(lastActivityOf(row), seen[row.id], baseline.all),
-    [resolvedConversationId, lastActivityOf, seen, baseline],
-  );
-
-  // Opening a conversation (and new messages while it is open) marks it seen.
-  const activeLastAt = activeConversation ? lastActivityOf(activeConversation) : undefined;
-  useEffect(() => {
-    if (!resolvedConversationId || resolvedConversationId.startsWith(VIRTUAL_DM_PREFIX)) return;
-    const now = Date.now();
-    const ids = [resolvedConversationId, ...(mergeChannelKey ? mergeChannelKey.split('|') : [])];
-    for (const id of ids) markChatSeen(id, now);
-    setSeen((prev) => {
-      const next = { ...prev };
-      for (const id of ids) next[id] = now;
-      return next;
-    });
-  }, [resolvedConversationId, activeLastAt, mergeChannelKey]);
-
   // With nothing open (empty workspace, still loading), phones show the list.
   const view = activeConversation ? mobileView : 'list';
+
+  // Server-side read state. The orchestrator conversation covers its merged
+  // Slack thread channels too; a virtual directory row has no channel yet.
+  const idsOf = useCallback(
+    (id: string): string[] => (id === orcChannelId && slackChannelIds.length > 0 ? [id, ...slackChannelIds] : [id]),
+    [orcChannelId, slackChannelIds],
+  );
+  const openConversationId =
+    view === 'conversation' && resolvedConversationId && !resolvedConversationId.startsWith(VIRTUAL_DM_PREFIX)
+      ? resolvedConversationId
+      : null;
+  const { unreadCountOf, unreadAfterSeq, applyReadState, markUnread } = useChatReadState({
+    client,
+    channels,
+    ready: !channelsLoading,
+    openId: openConversationId,
+    idsOf,
+  });
+  const isUnread = useCallback((row: ConversationRow): boolean => unreadCountOf(row.id) > 0, [unreadCountOf]);
+  const handleMarkUnread = useCallback(
+    (message: Message) => void markUnread(message.channelId, message.seq),
+    [markUnread],
+  );
 
   return (
     <div
@@ -651,6 +606,7 @@ function LiveTeamChatPageBody({
         activeConversationId={resolvedConversationId}
         onSelectConversation={(row) => void handleSelectConversation(row)}
         isUnread={isUnread}
+        unreadCountOf={(row) => unreadCountOf(row.id)}
         isPinned={(row) => pinnedChats.isPinned(pinKeyOf(row))}
         onTogglePin={(row) => pinnedChats.toggle(pinKeyOf(row))}
         onNewGroup={() => setShowCreateGroup(true)}
@@ -673,6 +629,9 @@ function LiveTeamChatPageBody({
         onTogglePin={() => activeConversation && pinnedChats.toggle(pinKeyOf(activeConversation))}
         onBack={() => setMobileView('list')}
         onManageChannel={managedChannel ? () => setShowChannelSettings(true) : undefined}
+        unreadAfterSeq={unreadAfterSeq}
+        onMarkUnread={handleMarkUnread}
+        onReadState={applyReadState}
       />
 
       {showChannelSettings && managedChannel && (
@@ -726,6 +685,12 @@ interface RightPanelProps {
   onBack: () => void;
   /** Crewly channels: open the channel settings (rename, members) */
   onManageChannel?: () => void;
+  /** Where the "Unread" divider goes in the open conversation (null: none) */
+  unreadAfterSeq: number | null;
+  /** "Mark unread" on a message */
+  onMarkUnread: (message: Message) => void;
+  /** Live read-state frames for the open conversation's channels */
+  onReadState: (state: ChannelReadState) => void;
 }
 
 /** Header / chrome props every conversation view shares. */
@@ -736,6 +701,9 @@ function LiveTeamChatRightPanel({
   mentionables,
   mergeChannelIds,
   mentionsAsSessions = false,
+  unreadAfterSeq,
+  onMarkUnread,
+  onReadState,
   ...chrome
 }: RightPanelProps): JSX.Element {
   // No conversation selected — happens on first render of an empty workspace.
@@ -760,6 +728,9 @@ function LiveTeamChatRightPanel({
         mentionables={mentionables}
         channelIds={mergeChannelIds}
         chrome={chrome}
+        unreadAfterSeq={unreadAfterSeq}
+        onMarkUnread={onMarkUnread}
+        onReadState={onReadState}
       />
     );
   }
@@ -769,6 +740,9 @@ function LiveTeamChatRightPanel({
       mentionables={mentionables}
       mentionsAsSessions={mentionsAsSessions}
       chrome={chrome}
+      unreadAfterSeq={unreadAfterSeq}
+      onMarkUnread={onMarkUnread}
+      onReadState={onReadState}
     />
   );
 }
@@ -779,16 +753,24 @@ function SingleChannelConversationPanel({
   mentionables,
   mentionsAsSessions,
   chrome,
+  unreadAfterSeq,
+  onMarkUnread,
+  onReadState,
 }: {
   conversation: ConversationRow;
   mentionables: MentionTarget[];
   mentionsAsSessions: boolean;
   chrome: ChromeProps;
+  unreadAfterSeq: number | null;
+  onMarkUnread: (message: Message) => void;
+  onReadState: (state: ChannelReadState) => void;
 }): JSX.Element {
-  const { messages, agentThinking, hasMore, loadMore } = useMessages(conversation.id);
+  const { messages, agentThinking, hasMore, loadMore } = useMessages(conversation.id, { onReadState });
   return (
     <ConversationView
       mentionsAsSessions={mentionsAsSessions}
+      unreadAfterSeq={unreadAfterSeq}
+      onMarkUnread={onMarkUnread}
       chrome={chrome}
       conversation={conversation}
       mentionables={mentionables}
@@ -811,15 +793,23 @@ function MergedConversationPanel({
   mentionables,
   channelIds,
   chrome,
+  unreadAfterSeq,
+  onMarkUnread,
+  onReadState,
 }: {
   conversation: ConversationRow;
   mentionables: MentionTarget[];
   channelIds: string[];
   chrome: ChromeProps;
+  unreadAfterSeq: number | null;
+  onMarkUnread: (message: Message) => void;
+  onReadState: (state: ChannelReadState) => void;
 }): JSX.Element {
-  const { messages, agentThinking, hasMore, loadMore } = useMergedMessages(channelIds);
+  const { messages, agentThinking, hasMore, loadMore } = useMergedMessages(channelIds, { onReadState });
   return (
     <ConversationView
+      unreadAfterSeq={unreadAfterSeq}
+      onMarkUnread={onMarkUnread}
       chrome={chrome}
       conversation={conversation}
       mentionables={mentionables}
@@ -874,6 +864,8 @@ function ConversationView({
   onLoadMore,
   chrome,
   mentionsAsSessions = false,
+  unreadAfterSeq = null,
+  onMarkUnread,
 }: {
   conversation: ConversationRow;
   mentionables: MentionTarget[];
@@ -884,6 +876,10 @@ function ConversationView({
   chrome: ChromeProps;
   /** Huddle-shaped mentions: agent session names instead of member ids */
   mentionsAsSessions?: boolean;
+  /** Where the "Unread" divider goes (null: none) */
+  unreadAfterSeq?: number | null;
+  /** "Mark unread" on a message */
+  onMarkUnread?: (message: Message) => void;
 }): JSX.Element {
   const { send, error: sendError, reset: resetSendError } = useSendMessage();
 
@@ -1043,6 +1039,9 @@ function ConversationView({
           variant="quiet"
           hideReplies={!searching}
           onReplyInThread={handleOpenThread}
+          onMarkUnread={onMarkUnread}
+          unreadAfterSeq={searching ? null : unreadAfterSeq}
+          unreadDividerLabel="Unread"
           messages={shownMessages}
           agentThinking={agentThinking && !searching}
           hasMore={hasMore}

@@ -263,6 +263,8 @@ class FakeChat extends EventEmitter {
       lastMessageAt: null,
       agentPresence: { status: 'online', lastSeenAt: null },
       type: 'huddle',
+      lastReadSeq: 0,
+      unreadCount: 0,
     };
     this.channels.set(id, dto);
     this.members.set(id, new Set(args.memberSessions));

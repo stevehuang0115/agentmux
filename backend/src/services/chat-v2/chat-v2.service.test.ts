@@ -2541,4 +2541,114 @@ describe('ChatV2Service', () => {
       });
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Read state (#1400)
+  // -------------------------------------------------------------------------
+
+  describe('read state', () => {
+    const asAgent = (channelId: string, content = 'hi') =>
+      service.sendMessage({ channelId, principal: agentPrincipal, content, attachments: [] });
+    const asOwner = (channelId: string, content = 'q') =>
+      service.sendMessage({ channelId, principal: owner, content, attachments: [] });
+
+    it('a new channel starts at marker 0 and DTOs carry lastReadSeq/unreadCount', () => {
+      const ch = createSam();
+      expect(ch.lastReadSeq).toBe(0);
+      expect(ch.unreadCount).toBe(0);
+      asAgent(ch.id);
+      asAgent(ch.id);
+      expect(service.getChannel(ch.id, owner)).toMatchObject({ lastReadSeq: 0, unreadCount: 2 });
+      expect(service.listChannels({ principal: owner })[0]).toMatchObject({ unreadCount: 2 });
+    });
+
+    it('markChannelRead is forward-only and emits read_state', () => {
+      const ch = createSam();
+      asAgent(ch.id);
+      const m2 = asAgent(ch.id);
+      const frames: unknown[] = [];
+      service.on('read_state', (f) => frames.push(f));
+      expect(service.markChannelRead(ch.id, owner)).toEqual({
+        channelId: ch.id,
+        lastReadSeq: m2.seq,
+        unreadCount: 0,
+      });
+      expect(service.markChannelRead(ch.id, owner, 1).lastReadSeq).toBe(m2.seq);
+      expect(frames).toHaveLength(2);
+    });
+
+    it('markChannelUnread moves the marker back to seq - 1', () => {
+      const ch = createSam();
+      asAgent(ch.id);
+      const m2 = asAgent(ch.id);
+      service.markChannelRead(ch.id, owner);
+      expect(service.markChannelUnread(ch.id, owner, m2.seq)).toEqual({
+        channelId: ch.id,
+        lastReadSeq: 1,
+        unreadCount: 1,
+      });
+    });
+
+    it('rejects an invalid seq', () => {
+      const ch = createSam();
+      expect(() => service.markChannelUnread(ch.id, owner, 0)).toThrow(ChatError);
+      expect(() => service.markChannelUnread(ch.id, owner, undefined as unknown as number)).toThrow(ChatError);
+      expect(() => service.markChannelRead(ch.id, owner, -1)).toThrow(ChatError);
+      expect(() => service.markChannelRead(ch.id, owner, 1.5)).toThrow(ChatError);
+    });
+
+    it('does not let another user touch the marker', () => {
+      const ch = createSam();
+      expect(() => service.markChannelRead(ch.id, otherUser)).toThrow(ChatError);
+    });
+
+    it('excludes the owner own messages and system notes from the count', () => {
+      const ch = createSam();
+      asOwner(ch.id);
+      service.recordTurn({
+        channelId: ch.id,
+        senderType: 'system',
+        senderId: 'system',
+        content: 'note',
+        contentType: 'system_note',
+        metadata: { source: 'slack' },
+      });
+      expect(service.getChannel(ch.id, owner).unreadCount).toBe(0);
+    });
+
+    it('the owner sending advances the marker (forward-only) and emits', () => {
+      const ch = createSam();
+      asAgent(ch.id);
+      asAgent(ch.id);
+      const frames: Array<{ lastReadSeq: number; unreadCount: number }> = [];
+      service.on('read_state', (f) => frames.push(f));
+      const sent = asOwner(ch.id);
+      expect(service.getChannel(ch.id, owner)).toMatchObject({ lastReadSeq: sent.seq, unreadCount: 0 });
+      expect(frames.at(-1)).toMatchObject({ lastReadSeq: sent.seq, unreadCount: 0 });
+      // The owner can still keep an older agent message unread after replying.
+      service.markChannelUnread(ch.id, owner, 2);
+      expect(service.getChannel(ch.id, owner)).toMatchObject({ lastReadSeq: 1, unreadCount: 1 });
+    });
+
+    it('an agent message raises the count and emits read_state', () => {
+      const ch = createSam();
+      const frames: Array<{ unreadCount: number }> = [];
+      service.on('read_state', (f) => frames.push(f));
+      asAgent(ch.id);
+      expect(frames.at(-1)).toMatchObject({ channelId: ch.id, unreadCount: 1 });
+    });
+
+    it('getUnreadSummary lists only channels with unread and totals them', () => {
+      const a = createSam();
+      const b = service.createChannel({ agentSession: 'sess-a', name: 'B', principal: owner });
+      asAgent(a.id);
+      asAgent(a.id);
+      asAgent(b.id);
+      service.markChannelRead(b.id, owner);
+      expect(service.getUnreadSummary(owner)).toEqual({
+        total: 2,
+        channels: [{ channelId: a.id, lastReadSeq: 0, unreadCount: 2 }],
+      });
+    });
+  });
 });

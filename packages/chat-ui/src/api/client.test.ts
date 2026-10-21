@@ -297,6 +297,38 @@ describe('HttpChatApiClient', () => {
   });
 });
 
+describe('HttpChatApiClient — read state (#1400)', () => {
+  const ok = (data: unknown): Response =>
+    ({ ok: true, status: 200, json: async () => ({ success: true, data }) }) as unknown as Response;
+
+  const build = (fetchMock: ReturnType<typeof vi.fn>) =>
+    new HttpChatApiClient({ backendURL: 'http://h', fetchImpl: fetchMock as unknown as typeof fetch });
+
+  it('markChannelRead POSTs {} when seq is omitted and {seq} otherwise', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(ok({ channelId: 'c 1', lastReadSeq: 3, unreadCount: 0 }));
+    const client = build(fetchMock);
+    expect(await client.markChannelRead('c 1')).toEqual({ channelId: 'c 1', lastReadSeq: 3, unreadCount: 0 });
+    expect(fetchMock.mock.calls[0][0]).toBe('http://h/api/chat/channels/c%201/read');
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'POST', body: '{}' });
+    await client.markChannelRead('c 1', 2);
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({ body: '{"seq":2}' });
+  });
+
+  it('markChannelUnread POSTs the seq of the message to keep unread', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(ok({ channelId: 'c1', lastReadSeq: 1, unreadCount: 2 }));
+    await build(fetchMock).markChannelUnread('c1', 2);
+    expect(fetchMock.mock.calls[0][0]).toBe('http://h/api/chat/channels/c1/unread');
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'POST', body: '{"seq":2}' });
+  });
+
+  it('getUnread GETs the summary', async () => {
+    const summary = { total: 2, channels: [{ channelId: 'c1', lastReadSeq: 0, unreadCount: 2 }] };
+    const fetchMock = vi.fn().mockResolvedValue(ok(summary));
+    expect(await build(fetchMock).getUnread()).toEqual(summary);
+    expect(fetchMock.mock.calls[0][0]).toBe('http://h/api/chat/unread');
+  });
+});
+
 describe('HttpChatApiClient — WebSocket subscription', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   const successEnvelope = <T>(data: T) => ({ success: true as const, data });
