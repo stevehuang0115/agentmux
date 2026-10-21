@@ -266,6 +266,8 @@ export const TICKET_AUTOPILOT_CONSTANTS = {
 	SELF_REVIEW_GOAL_MAX_CHARS: 800,
 	/** A self-review older than this is not shown in the evening digest */
 	SELF_REVIEW_DIGEST_MAX_AGE_MS: 24 * 60 * 60 * 1000,
+	/** Added to the budget-paused notice when no spend cap covers the team (`<team>` is replaced) */
+	NO_TEAM_CAP_NOTE: 'This budget only pauses the autopilot: no spend cap is set for <team>, so its other work (scheduled tasks, follow-ups after a task) is not stopped. Reply `set team cap for <team> to 50M` to stop it all at a limit.',
 	/** Stop reasons (why the autopilot is not producing work), most decisive first */
 	STOP_REASONS: ['paused', 'budget_reached', 'system_error', 'stalled_work', 'waiting_on_owner', 'no_ideas', 'daily_replan_cap', 'waiting_for_replan'] as readonly string[],
 	/** Failed project WorkItems this recent count as a system error (ms) */
