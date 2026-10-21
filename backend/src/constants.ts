@@ -7683,6 +7683,13 @@ export const OPEN_ITEMS_CONSTANTS = {
 	 * (crewly#1369 gap 2).
 	 */
 	OWNER_QUESTION_DUE_MS: 24 * 60 * 60 * 1000,
+	/**
+	 * An open commitment to the owner keeps its agent from an idle stop for at
+	 * most this long after it was made (ms). Under memory pressure the agent is
+	 * stopped anyway and the stall watcher's promise ladder wakes it to report
+	 * (crewly#1386). Older promises must not pin memory.
+	 */
+	IDLE_HOLD_MAX_AGE_MS: 24 * 60 * 60 * 1000,
 	/** Child WorkItems created this long before the promise still count as what it waits on (ms) */
 	CHILD_LOOKBACK_MS: 30 * 60 * 1000,
 	/** ...and this long after it — the agent promises, then delegates (ms). Later work is a new topic. */
@@ -8254,6 +8261,17 @@ export const STALL_WATCHER_CONSTANTS = {
 	 */
 	BACKGROUND_RUN_PATTERN:
 		/开跑|已经在跑|在跑了|跑起来了|在渲染|渲染中|正在渲染|正在生成|生成中|子任务在做|子\s*agent\s*在(?:做|跑)|后台(?:在)?跑|后台(?:在)?(?:做|生成|渲染)|已经启动|启动了(?:渲染|生成|任务|流程)|\bkicked off\b|\bstarted (?:the|a|another) (?:run|render|job|batch|build|export|background|sub-?agent)\b|\bis rendering\b|\brendering now\b|\brunning in the background\b|\brunning now\b|\blaunched (?:a|the|another) (?:run|render|job|batch|build|sub-?agent)\b|\bspun up (?:a|the) (?:sub-?agent|run|job)\b/iu,
+	/**
+	 * An agent saying it submitted jobs to an outside generator that runs them on
+	 * its own (Flow / Veo renders, a generation batch): registered even with no
+	 * duration, expected back after RUN_DEFAULT_ESTIMATE_MS (crewly#1386). Needs
+	 * ASYNC_JOB_NOUN_PATTERN in the same sentence ("提交了 PR" is not a run).
+	 */
+	SUBMITTED_JOB_PATTERN: /已经提交|已提交|提交了|提交到|\bsubmitted\b|\bqueued\b|\benqueued\b/iu,
+	/** What a submitted async job is: a render or generation on an outside tool */
+	ASYNC_JOB_NOUN_PATTERN: /\bFlow\b|\bVeo\b|\bSora\b|\bKling\b|\bRunway\b|Midjourney|渲染|片段|视频|镜头|\bclips?\b|\brenders?\b|\bgenerations?\b|\bvideos?\b/iu,
+	/** "等它跑完" / "让它们跑完" / "once they are done": waiting for a run to finish, not a report that it did */
+	RUN_AWAITED_PATTERN: /(?:让|等|待)[^，,。；;！!]{0,8}?(?:跑完|渲染完|生成完|做完|出来)|\b(?:once|when|until|after) (?:it|they|these|those|the \w+(?: \w+)?) (?:are |is )?(?:done|finished|ready|completed?)\b/giu,
 	/** A later post by the same agent in the thread that reports the run finished or failed */
 	RUN_FINISHED_PATTERN:
 		/跑完|渲染完|生成完|做好了|做完了|完成了|搞定|出来了|好了[，,。！!]|失败|挂了|报错|出错|中断|没跑完|跑崩|\bdone\b|\bfinished\b|\bcompleted\b|\bfailed\b|\bcrashed\b|\berrored\b|\baborted\b|\bready\b|\bhere (?:it|they) (?:is|are)\b|\battached\b/iu,
