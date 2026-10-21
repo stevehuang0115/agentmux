@@ -164,7 +164,7 @@ The owner can hold a voice meeting with one agent. Cloud runs it and the voice s
   - the agenda;
   - up to 10 wiki pages, found by BM25 over the team name, the role and the agenda topics.
 - **Clean text.** Every text field is made speakable. Harness tags (`[SLACK-THREAD:…]`, `[Drive mode …]`) are removed, secrets are masked and long text is clipped.
-- **Size.** The pack is kept under about 30k tokens. To fit, the machine drops wiki pages first, then the oldest messages, then cuts the handover.
+- **Size.** The pack is kept under about 15k tokens, since it sits in the Live system instruction and is billed on every turn. To fit, the machine drops wiki pages first, then the oldest messages, then cuts the handover.
 - **Agenda.** At most 15 topics `{threadRef, topic, state, lastAt, where, recent}`:
   - `waiting_on_owner`: an open decision card of this agent. The topic's thread is the card's Slack thread.
   - `question`: the agent's last message in the thread asks the owner something.

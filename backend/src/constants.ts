@@ -9175,8 +9175,12 @@ export const MEETING_CONSTANTS = {
 	/** Live wiki search: hits returned at most, and their length */
 	WIKI_HITS_MAX: 5,
 	WIKI_HIT_MAX_CHARS: 700,
-	/** Whole pack: token budget (estimate: CJK 1 a character, else 4 characters a token) */
-	PACK_MAX_TOKENS: 30_000,
+	/**
+	 * Whole pack: token budget (estimate: CJK 1 a character, else 4 characters a token).
+	 * The pack sits in the Live system instruction and is billed on every turn,
+	 * so it stays small enough to leave room for the conversation.
+	 */
+	PACK_MAX_TOKENS: 15_000,
 	/** A write-back's longest text (characters) */
 	WRITE_BACK_MAX_CHARS: 1500,
 	/** New-topic threads remembered per session + topic (so a second write-back reuses the thread) */
