@@ -392,3 +392,28 @@ describe('agentPresenceFromDTO', () => {
     expect(p.lastSeen).toBeUndefined();
   });
 });
+
+describe('read state (#1400)', () => {
+  it('channelFromDTO carries lastReadSeq + unreadCount (and tolerates older servers)', () => {
+    const base: ChannelDTO = {
+      id: 'c',
+      agentSession: 's',
+      name: 'n',
+      createdAt: 0,
+      agentPresence: { status: 'online', lastSeenAt: null },
+    };
+    expect(channelFromDTO({ ...base, lastReadSeq: 4, unreadCount: 2 })).toMatchObject({ lastReadSeq: 4, unreadCount: 2 });
+    expect(channelFromDTO(base).unreadCount).toBeUndefined();
+  });
+
+  it('wsEventFromWire translates a read_state frame', () => {
+    expect(
+      wsEventFromWire({ type: 'read_state', payload: { channelId: 'c1', lastReadSeq: 3, unreadCount: 1 } }),
+    ).toEqual({ type: 'read_state', channelId: 'c1', lastReadSeq: 3, unreadCount: 1 });
+  });
+
+  it('wsEventFromWire drops a malformed read_state frame', () => {
+    expect(wsEventFromWire({ type: 'read_state', payload: { channelId: 'c1' } })).toBeNull();
+    expect(wsEventFromWire({ type: 'read_state' })).toBeNull();
+  });
+});

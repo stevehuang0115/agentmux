@@ -779,6 +779,70 @@ describe('ChatV2RelayAdapter', () => {
   // Lifecycle
   // -------------------------------------------------------------------------
 
+  // -------------------------------------------------------------------------
+  // Read state RPCs (#1400)
+  // -------------------------------------------------------------------------
+
+  describe('read state RPCs', () => {
+    const principal = { userId: 'dev-user-001', source: 'oss' as const };
+
+    /** Run one RPC and return the (single) response payload. */
+    async function rpc(method: ChatRequestPayload['method'], params?: Record<string, unknown>): Promise<ChatResponsePayload> {
+      cloudSync.outbound.length = 0;
+      cloudSync.emitInbound(buildRequestMsg('portal-1', { id: `r-${method}`, method, params }));
+      await flushMicrotasks();
+      return cloudSync.outbound[0].payload as ChatResponsePayload;
+    }
+
+    function seed(n: number): string {
+      const ch = service.createChannel({ agentSession: 'sam', name: 'Sam', principal });
+      for (let i = 0; i < n; i++) {
+        service.recordTurn({ channelId: ch.id, senderType: 'agent', senderId: 'sam', content: `m${i}`, metadata: { source: 'slack' } });
+      }
+      return ch.id;
+    }
+
+    it('getUnread returns the total and per-channel breakdown', async () => {
+      const id = seed(2);
+      const r = await rpc('getUnread', {});
+      expect(r.error).toBeUndefined();
+      expect(r.result).toEqual({ total: 2, channels: [{ channelId: id, lastReadSeq: 0, unreadCount: 2 }] });
+    });
+
+    it('markChannelRead is forward-only and seq is optional', async () => {
+      const id = seed(3);
+      expect((await rpc('markChannelRead', { channelId: id })).result).toEqual({ channelId: id, lastReadSeq: 3, unreadCount: 0 });
+      expect((await rpc('markChannelRead', { channelId: id, seq: 1 })).result).toMatchObject({ lastReadSeq: 3 });
+    });
+
+    it('markChannelUnread moves the marker to seq - 1', async () => {
+      const id = seed(3);
+      await rpc('markChannelRead', { channelId: id });
+      expect((await rpc('markChannelUnread', { channelId: id, seq: 2 })).result).toEqual({
+        channelId: id,
+        lastReadSeq: 1,
+        unreadCount: 2,
+      });
+    });
+
+    it('returns validation errors for a missing channelId or a bad seq', async () => {
+      const id = seed(1);
+      expect((await rpc('markChannelRead', {})).error?.code).toBe('validation_error');
+      expect((await rpc('markChannelUnread', { channelId: id })).error?.code).toBe('validation_error');
+    });
+
+    it('forwards a read_state broadcast to Portal as a chat_event', async () => {
+      await rpc('listChannels');
+      cloudSync.outbound.length = 0;
+      const frame = { type: 'read_state', payload: { channelId: 'c1', lastReadSeq: 4, unreadCount: 0 } };
+      gateway.fire('c1', frame);
+      await flushMicrotasks();
+      expect(cloudSync.outbound).toHaveLength(1);
+      expect(cloudSync.outbound[0].type).toBe('chat_event');
+      expect(cloudSync.outbound[0].payload).toEqual({ channelId: 'c1', event: frame });
+    });
+  });
+
   it('start is idempotent — calling twice does not double-subscribe', async () => {
     adapter.start(); // already started in beforeEach
     cloudSync.emitInbound(

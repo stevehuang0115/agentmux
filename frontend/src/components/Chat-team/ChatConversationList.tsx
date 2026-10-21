@@ -44,6 +44,8 @@ export interface ChatConversationListProps {
   onSelectConversation(row: ConversationRow): void;
   /** Whether a row has messages the owner has not seen */
   isUnread(row: ConversationRow): boolean;
+  /** Unread message count of a row (server-side read state); shown as a count instead of a dot */
+  unreadCountOf?(row: ConversationRow): number;
   isPinned(row: ConversationRow): boolean;
   onTogglePin(row: ConversationRow): void;
   /** "New group chat" */
@@ -127,6 +129,7 @@ export function ChatConversationList({
   activeConversationId,
   onSelectConversation,
   isUnread,
+  unreadCountOf,
   isPinned,
   onTogglePin,
   onNewGroup,
@@ -168,6 +171,7 @@ export function ChatConversationList({
     row,
     active: row.id === activeConversationId,
     unread: isUnread(row),
+    unreadCount: unreadCountOf?.(row) ?? 0,
     pinned: isPinned(row),
     onSelect: onSelectConversation,
     onTogglePin,
@@ -291,6 +295,7 @@ function Row({
   row,
   active,
   unread,
+  unreadCount,
   pinned,
   onSelect,
   onTogglePin,
@@ -298,6 +303,7 @@ function Row({
   row: ConversationRow;
   active: boolean;
   unread: boolean;
+  unreadCount: number;
   pinned: boolean;
   onSelect(row: ConversationRow): void;
   onTogglePin(row: ConversationRow): void;
@@ -327,7 +333,18 @@ function Row({
           </span>
         )}
         <span className="min-w-0 flex-1 truncate">{isChannel ? row.title.replace(/^#+\s*/, '') : row.title}</span>
-        {unread && <span aria-label="unread" className="h-2 w-2 shrink-0 rounded-full bg-primary" data-testid={`conv-unread-${row.id}`} />}
+        {unread &&
+          (unreadCount > 0 ? (
+            <span
+              aria-label={`${unreadCount} unread`}
+              className="min-w-[18px] shrink-0 rounded-full bg-primary px-1.5 text-center text-[11px] font-bold leading-[18px] text-white"
+              data-testid={`conv-unread-${row.id}`}
+            >
+              {unreadCount > 99 ? '99+' : unreadCount}
+            </span>
+          ) : (
+            <span aria-label="unread" className="h-2 w-2 shrink-0 rounded-full bg-primary" data-testid={`conv-unread-${row.id}`} />
+          ))}
       </button>
       <button
         type="button"

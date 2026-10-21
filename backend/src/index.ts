@@ -2979,7 +2979,7 @@ void (async () => {
 			// `reply-channel` skill. See chat-v2.gateway.ts for the contract.
 			try {
 				const [
-					{ ChatV2Gateway, devAnonymousTokenVerifier },
+					{ ChatV2Gateway, devAnonymousTokenVerifier, buildReadStateEvent },
 					{ ChatV2DispatcherService, agentAuthorOf },
 					{ ChatV2MentionResolver },
 					{ getChatV2Service },
@@ -3141,6 +3141,13 @@ void (async () => {
 				}
 				await this.startOwnerMessageWatchdog(chatService);
 				await this.startOwnerCompletionReport(chatService);
+				// Owner read state (#1400): every change (read, mark-unread, new
+				// message raising a count) goes out as a `read_state` frame — to local
+				// WS subscribers and, through the gateway's broadcast hook, over the
+				// relay to Portal / phone.
+				chatService.on('read_state', (state: { channelId: string; lastReadSeq: number; unreadCount: number }) => {
+					chatGateway.broadcast(state.channelId, buildReadStateEvent(state));
+				});
 				this.chatV2Gateway = chatGateway;
 				this.chatV2Dispatcher = chatDispatcher;
 				// The chat-v2 router mounted earlier reads realtime deps from

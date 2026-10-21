@@ -353,7 +353,10 @@ export type ChatRpcMethod =
   | 'createHuddle'
   | 'listHuddleMembers'
   | 'listMessages'
-  | 'sendMessage';
+  | 'sendMessage'
+  | 'markChannelRead'
+  | 'markChannelUnread'
+  | 'getUnread';
 
 /** Set form for runtime validation. */
 export const CHAT_RPC_METHODS: readonly ChatRpcMethod[] = [
@@ -366,6 +369,9 @@ export const CHAT_RPC_METHODS: readonly ChatRpcMethod[] = [
   'listHuddleMembers',
   'listMessages',
   'sendMessage',
+  'markChannelRead',
+  'markChannelUnread',
+  'getUnread',
 ] as const;
 
 /**

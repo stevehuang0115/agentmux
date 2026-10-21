@@ -42,6 +42,9 @@ function requireChatWriter(req: Request, res: Response, next: NextFunction): voi
  * - `POST   /channels/huddle` — create an ad-hoc multi-agent group chat
  * - `GET    /channels/:id`
  * - `DELETE /channels/:id`
+ * - `POST   /channels/:id/read` — mark read (forward-only), body `{seq?}`
+ * - `POST   /channels/:id/unread` — mark a message unread, body `{seq}`
+ * - `GET    /unread` — total + per-channel unread
  * - `GET    /channels/:id/messages`
  * - `POST   /channels/:id/messages`
  * - `GET    /search` — keyword search over the chat history the caller can see
@@ -69,6 +72,10 @@ export function createChatV2Router(
   router.post('/channels/huddle', requireAuth, requireChatWriter, handlers.createHuddle);
   router.get('/channels/:id', requireAuth, handlers.getChannel);
   router.delete('/channels/:id', requireAuth, requireChatWriter, handlers.archiveChannel);
+
+  router.post('/channels/:id/read', requireAuth, requireChatWriter, handlers.markChannelRead);
+  router.post('/channels/:id/unread', requireAuth, requireChatWriter, handlers.markChannelUnread);
+  router.get('/unread', requireAuth, handlers.getUnread);
 
   router.get('/channels/:id/messages', requireAuth, handlers.listMessages);
   router.post('/channels/:id/messages', requireAuth, requireChatWriter, handlers.sendMessage);

@@ -572,6 +572,9 @@ export interface ChatV2ControllerHandlers {
   createChannel: (req: Request, res: Response) => void;
   getChannel: (req: Request, res: Response) => void;
   archiveChannel: (req: Request, res: Response) => void;
+  markChannelRead: (req: Request, res: Response) => void;
+  markChannelUnread: (req: Request, res: Response) => void;
+  getUnread: (req: Request, res: Response) => void;
   listMessages: (req: Request, res: Response) => void;
   sendMessage: (req: Request, res: Response) => void | Promise<void>;
   ensureDmChannel: (req: Request, res: Response) => void;
@@ -751,6 +754,32 @@ export function createChatV2Controller(
         const principal = principalFromRequest(req);
         const channel = service.getChannel(req.params.id, principal);
         res.json({ success: true, data: channel });
+      }),
+
+    markChannelRead: (req, res) =>
+      runHandler(res, () => {
+        const principal = principalFromRequest(req);
+        const seq = (req.body as { seq?: unknown } | undefined)?.seq;
+        const state = service.markChannelRead(
+          req.params.id,
+          principal,
+          seq === undefined || seq === null ? undefined : (seq as number),
+        );
+        res.json({ success: true, data: state });
+      }),
+
+    markChannelUnread: (req, res) =>
+      runHandler(res, () => {
+        const principal = principalFromRequest(req);
+        const seq = (req.body as { seq?: unknown } | undefined)?.seq;
+        const state = service.markChannelUnread(req.params.id, principal, seq as number);
+        res.json({ success: true, data: state });
+      }),
+
+    getUnread: (req, res) =>
+      runHandler(res, () => {
+        const principal = principalFromRequest(req);
+        res.json({ success: true, data: service.getUnreadSummary(principal) });
       }),
 
     archiveChannel: (req, res) =>
