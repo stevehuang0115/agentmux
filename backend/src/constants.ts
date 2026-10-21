@@ -6280,6 +6280,28 @@ export const OWNER_RECEIPT_CONSTANTS = {
 		OPTION_ON: 'Turn on nightly — this format',
 		OPTION_PER_ASK: 'Keep per-ask format — every ask, one line each',
 	},
+	/**
+	 * The weekly "how often agents pulled the owner in" line (#1387, first
+	 * slice). Specs: specs/owner-pulls-weekly.md.
+	 */
+	PULLS_WEEKLY: {
+		/** Local weekday it goes out with the receipt (0 = Sunday) */
+		REPORT_WEEKDAY: 0,
+		/** The week counted: the 7 days before the report; compared with the 7 before that (ms) */
+		WINDOW_MS: 7 * 24 * 60 * 60 * 1000,
+		/** Teams named on the line before "+N more" */
+		MAX_TEAMS: 3,
+		/** Traces read for the owner-touch count (most recent first) */
+		MAX_TRACES: 500,
+	},
+} as const;
+
+/** How each pull kind reads on the owner's weekly line (#1387). */
+export const PULLS_WEEKLY_KIND_LABELS = {
+	decision: 'decision needed',
+	review: 'review or approval',
+	fyi: 'FYI that did not need an answer',
+	stuck: 'agent stuck or error',
 } as const;
 
 /**
@@ -8648,6 +8670,10 @@ export const EXPERIMENT_CONSTANTS = {
 	/** A check-in whose process read (or send) failed is retried after this, doubling up to the max */
 	CHECK_IN_RETRY_MIN_MS: 30 * 60 * 1000,
 	CHECK_IN_RETRY_MAX_MS: 24 * 60 * 60 * 1000,
+	/** A supervisor session name (#1026): what an agent session name looks like */
+	SUPERVISOR_PATTERN: /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/,
+	/** Statuses in which a card's supervisor and creator may read its autopilot project (access ends when measured or cancelled) */
+	SUPERVISION_STATUSES: ['planned', 'running'] as readonly string[],
 } as const;
 
 /**
@@ -9132,6 +9158,28 @@ export const TICKET_HYGIENE_CONSTANTS = {
 	ORPHAN_LABEL: 'orphaned',
 	/** Entries in the per-ticket "already sent" memory are dropped after this long (days) */
 	STATE_RETENTION_DAYS: 30,
+} as const;
+
+/**
+ * Routine nudge (crewly#1034): when a ticket is verified done and its result
+ * describes recurring work, the verifying lead gets ONE internal WorkItem
+ * telling it to set a routine or say why not. Never creates the cron itself.
+ */
+export const TICKET_ROUTINE_NUDGE_CONSTANTS = {
+	/** Kill switch: `0` turns the nudge off */
+	ENV_SWITCH: 'CREWLY_TICKET_ROUTINE_NUDGE',
+	/** `metadata.kind` of the nudge WorkItem */
+	METADATA_KIND: 'ticket_routine_nudge',
+	/** Prefix of the ticket Log line that marks the nudge as sent (also the dedupe key) */
+	LOG_MARKER: 'routine nudge sent to',
+	/** Actor written in the ticket Log */
+	ACTOR: 'crewly-routine-nudge',
+	/** Max characters of the result text scanned for a cadence */
+	MAX_SCAN_CHARS: 6000,
+	/** Max characters of the matched sentence quoted in the nudge */
+	MAX_QUOTE_CHARS: 240,
+	/** Max characters of the ticket title in the nudge */
+	TITLE_MAX_CHARS: 120,
 } as const;
 
 /**

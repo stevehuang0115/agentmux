@@ -129,6 +129,7 @@ import { clampStallMinutes, defaultStallMinutes } from '../trace/trace-metrics.j
 import type { TraceEvent, TraceIndexEntry, TraceRoot } from '../trace/trace.types.js';
 import type { TraceListFilter } from '../trace/trace-store.js';
 import type { OwnerDecision } from '../../types/decision.types.js';
+import type { ExperimentSupervision } from '../../types/experiment.types.js';
 import { RestartDrainService } from '../restart/restart-drain.service.js';
 
 /** Skip reasons in words (run trace). */
@@ -287,6 +288,12 @@ export interface TicketAutopilotDeps {
   traces?: AutopilotTraceReader;
   /** Whether an autopilot experiment on the project is running (turns the retro on by default) */
   runningExperiment?: (projectId: string) => Promise<boolean>;
+  /**
+   * What a session may read of a project as an experiment supervisor (#1026):
+   * read-only stats, runs and traces; null = it supervises nothing there.
+   * Absent = no supervisor access.
+   */
+  supervisionOf?: (session: string, projectId: string) => Promise<ExperimentSupervision | null>;
   /** Retro side effects; absent = no retro is scheduled and submits answer 503 */
   retro?: AutopilotRetroDeps;
   /**
@@ -1452,7 +1459,7 @@ export class TicketAutopilotService {
    * Stats of a project over the last `days` days (today included).
    *
    * @param ref - Project id, name or path
-   * @param caller - Owner, orchestrator or a lead of a project team
+   * @param caller - Owner, orchestrator, a lead of a project team, or an experiment supervisor (its labels only)
    * @param opts - days (1..STATS_MAX_DAYS), label, stallMinutes
    * @returns Stats, with the project and its settings
    * @throws ProjectTicketError(400/403/404)
@@ -1463,10 +1470,12 @@ export class TicketAutopilotService {
     opts: { days?: number; label?: string; stallMinutes?: number } = {},
   ): Promise<AutopilotStats & { project: { id: string; name: string }; settings: ResolvedTicketAutopilotSettings; pausedForToday: boolean }> {
     const project = await this.deps.workflow.resolveProject(ref);
-    await this.requireReader(caller, project);
+    const { label, labelScoped } = await this.requireStatsReader(caller, project, opts.label);
     const days = this.daysParam(opts.days);
     const range = rangeDays(this.now(), days);
-    const stats = await this.statsFor(project, range[0], range[range.length - 1], opts.label ?? null, opts.stallMinutes);
+    const stats = await this.statsFor(project, range[0], range[range.length - 1], label ?? null, opts.stallMinutes);
+    // A label-scoped supervisor does not learn the project's other labels.
+    if (labelScoped && label) stats.labels = stats.labels.filter((l) => l.toLowerCase() === label);
     const status = await this.statusOf(project);
     return { ...stats, project: { id: project.id, name: project.name }, settings: status.settings, pausedForToday: status.pausedForToday };
   }
@@ -1540,24 +1549,25 @@ export class TicketAutopilotService {
    * Run traces and ticket traces of the last `days` days, newest day first.
    *
    * @param ref - Project id, name or path
-   * @param caller - Owner, orchestrator or a lead of a project team
+   * @param caller - Owner, orchestrator, a lead of a project team, or an experiment supervisor (its labels only)
    * @param opts - days, label
    * @returns Days with their traces
    */
   async getRuns(ref: string, caller: ProjectTicketCaller, opts: { days?: number; label?: string } = {}): Promise<{ project: { id: string; name: string }; days: AutopilotRunDay[] }> {
     const project = await this.deps.workflow.resolveProject(ref);
-    await this.requireReader(caller, project);
+    const access = await this.requireStatsReader(caller, project, opts.label);
     const range = rangeDays(this.now(), this.daysParam(opts.days));
     const wanted = new Set(range);
     const entries = this.traceReader().listTagged({ autopilotProjectId: project.id, since: new Date(dayStartMs(range[0])) });
-    const label = opts.label?.trim().toLowerCase();
+    const label = access.label?.trim().toLowerCase();
     const byDay = new Map<string, AutopilotRunDay>(range.map((d) => [d, { day: d, runTraceId: null, traces: [] }]));
     for (const e of entries) {
       const day = e.tags?.autopilot?.day;
       if (!day || !wanted.has(day)) continue;
       const row = byDay.get(day) as AutopilotRunDay;
       if (e.root.kind === 'autopilot') {
-        row.runTraceId = e.traceId;
+        // A day's run trace spans every label: not for a label-scoped supervisor.
+        if (!access.labelScoped) row.runTraceId = e.traceId;
         continue;
       }
       const labels = e.tags?.labels ?? [];
@@ -1651,6 +1661,53 @@ export class TicketAutopilotService {
     }
     const { access } = await this.deps.workflow.accessOf(caller, project);
     return access !== 'outsider';
+  }
+
+  /**
+   * What a caller may read of a project as an experiment supervisor (#1026).
+   * Read-only: it never makes the caller a member, so it gains no ticket
+   * assignment, triage or write path.
+   *
+   * @param projectRef - Project id, name or path
+   * @param caller - Caller
+   * @returns The scope, or null (no session, unknown project, not a supervisor)
+   */
+  async supervisionFor(projectRef: string, caller: ProjectTicketCaller): Promise<ExperimentSupervision | null> {
+    if (!caller.session || !this.deps.supervisionOf) return null;
+    let project: Project;
+    try {
+      project = await this.deps.workflow.resolveProject(projectRef);
+    } catch {
+      return null;
+    }
+    return this.deps.supervisionOf(caller.session, project.id).catch(() => null);
+  }
+
+  /**
+   * Readers of the stats and runs: {@link requireReader}'s callers, or an
+   * experiment supervisor of the project, held to its card's labels.
+   *
+   * @param caller - Caller
+   * @param project - Project
+   * @param label - Requested label filter
+   * @returns The label filter to apply, and whether it is forced by a supervisor scope
+   * @throws ProjectTicketError(400) a supervisor of several labels named none; (403) not a reader, or a label outside the scope
+   */
+  private async requireStatsReader(caller: ProjectTicketCaller, project: Project, label?: string): Promise<{ label?: string; labelScoped: boolean }> {
+    const { access } = await this.deps.workflow.accessOf(caller, project);
+    if (access === 'owner' || access === 'orchestrator' || access === 'lead') return { label, labelScoped: false };
+    const scope = caller.session && this.deps.supervisionOf ? await this.deps.supervisionOf(caller.session, project.id).catch(() => null) : null;
+    if (!scope) {
+      throw new ProjectTicketError(403, 'Only the owner, the orchestrator, a team lead of the project or a supervisor of its experiment can read its autopilot stats');
+    }
+    if (scope.labels === null) return { label, labelScoped: false };
+    const wanted = label?.trim().toLowerCase();
+    if (!wanted) {
+      if (scope.labels.length === 1) return { label: scope.labels[0], labelScoped: true };
+      throw new ProjectTicketError(400, `Pass a label: you supervise ${scope.labels.join(', ')} on this project`);
+    }
+    if (!scope.labels.includes(wanted)) throw new ProjectTicketError(403, `Your experiment on this project covers ${scope.labels.join(', ')} only`);
+    return { label: wanted, labelScoped: true };
   }
 
   /**

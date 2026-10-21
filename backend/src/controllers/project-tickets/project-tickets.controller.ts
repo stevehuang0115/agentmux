@@ -25,7 +25,7 @@ import { isProjectTicketStatus } from '../../types/project-ticket.types.js';
 import { TicketAutopilotService, type AutopilotRetroDeps, type OwnerNotice } from '../../services/project-tickets/ticket-autopilot.service.js';
 import { goalChangedAt, openExperimentsOf, readProjectGoal } from '../../services/project-tickets/ticket-autopilot-goal.js';
 import { applyRetroGapDecision } from '../../services/project-tickets/ticket-autopilot-retro.js';
-import { ExperimentService } from '../../services/experiments/experiment.service.js';
+import { ExperimentService, supervisionOf } from '../../services/experiments/experiment.service.js';
 import { WikiIngestService } from '../../services/wiki/wiki-ingest.service.js';
 import { resolveProjectDataDir } from '../../services/core/crewly-home.utils.js';
 import { existsSync } from 'fs';
@@ -39,6 +39,7 @@ import { DecisionError, DecisionService } from '../../services/decisions/decisio
 import { getTicketThreadStore, slackArchiveLink } from '../../services/decisions/ticket-thread-store.js';
 import { defaultLeadShareDigest } from '../../services/tl-delegation/lead-share.wiring.js';
 import * as path from 'path';
+import { TriggerEngine } from '../../services/v3/trigger-engine.service.js';
 
 /**
  * The wired workflow service; builds the default one from the process
@@ -55,6 +56,8 @@ export function projectTicketWorkflow(): ProjectTicketWorkflowService {
       directory: StorageService.getInstance(),
       // A stopped assignee is started through the normal member-start path.
       wakeAssignee: createHttpAssigneeWaker(),
+      // The routine nudge (#1034) skips a ticket a schedule already names.
+      listTriggers: () => TriggerEngine.getInstance().list(),
     });
     ProjectTicketWorkflowService.setInstance(wf);
   }
@@ -108,6 +111,9 @@ export function createDefaultTicketAutopilot(
     // (specs/2026-10-03-autopilot-experiments.md §4).
     runningExperiment: async (projectId) =>
       ((await ExperimentService.getInstance()?.list({ status: 'running' })) ?? []).some((e) => e.autopilot?.projectId === projectId),
+    // An experiment's supervisor and creator read its project's stats, runs
+    // and traces while the card is planned or running (#1026).
+    supervisionOf: async (session, projectId) => supervisionOf((await ExperimentService.getInstance()?.list()) ?? [], session, projectId),
     retro: createAutopilotRetroDeps(),
     // Goal replan (specs/2026-10-04-autopilot-goal-replan.md): the project's
     // goals log + active project OKRs, and its open experiment cards.

@@ -622,6 +622,60 @@ describe('TicketAutopilotService', () => {
       expect(await actions(runs.days[0].runTraceId as string)).toContain('dispatch');
     });
 
+    it('an experiment supervisor reads stats, runs and nothing else (#1026)', async () => {
+      await enable();
+      const t = await wf.create('p-ce', { title: 'Feed chips', labels: ['feed'], status: 'ready' }, owner);
+      const other = await wf.create('p-ce', { title: 'Web nav', labels: ['web'], status: 'ready' }, owner);
+      const started = await wf.assign('p-ce', t.id, 'ce-dev', lead);
+      await wf.assign('p-ce', other.id, 'ce-owen', lead);
+      await settle();
+      const traceId = started.workItem!.traceId as string;
+      const atlas = { session: 'think-tank-atlas' };
+      const whole = { session: 'think-tank-sage' };
+      const dir = (wf as unknown as { directory: Record<string, unknown> }).directory;
+      dir.getProjects = async () => [project, crewly];
+      const deps = (svc as unknown as { deps: Record<string, unknown> }).deps;
+      deps.supervisionOf = async (session: string, projectId: string) => {
+        if (projectId !== 'p-ce') return null;
+        if (session === atlas.session) return { labels: ['feed'] };
+        if (session === whole.session) return { labels: null };
+        return null;
+      };
+
+      // Allowed: its project, held to its label.
+      const stats = await svc.getStats('p-ce', atlas, { days: 1 });
+      expect(stats.total.started).toBe(1);
+      expect(stats.labels).toEqual(['feed']);
+      expect((await svc.getStats('p-ce', atlas, { days: 1, label: 'FEED' })).total.started).toBe(1);
+      const runs = await svc.getRuns('p-ce', atlas, { days: 1 });
+      expect(runs.days[0].traces.map((r) => r.traceId)).toEqual([traceId]);
+      expect(runs.days[0].runTraceId).toBeNull(); // the day's run spans every label
+      expect(await svc.supervisionFor('CE', atlas)).toEqual({ labels: ['feed'] });
+      // An unlabelled card: the whole project, run trace included.
+      expect((await svc.getStats('p-ce', whole, { days: 1 })).total.started).toBe(2);
+      expect((await svc.getRuns('p-ce', whole, { days: 1 })).days[0].runTraceId).toBeTruthy();
+
+      // Denied: another label, another project, strangers, and every write path.
+      await expect(svc.getStats('p-ce', atlas, { label: 'web' })).rejects.toMatchObject({ status: 403 });
+      await expect(svc.getRuns('p-ce', atlas, { label: 'web' })).rejects.toMatchObject({ status: 403 });
+      await expect(svc.getStats('p-crewly', atlas)).rejects.toMatchObject({ status: 403 });
+      await expect(svc.getRuns('p-crewly', atlas)).rejects.toMatchObject({ status: 403 });
+      await expect(svc.getStats('p-ce', { session: 'stranger' })).rejects.toMatchObject({ status: 403 });
+      expect(await svc.supervisionFor('p-crewly', atlas)).toBeNull();
+      expect(await svc.supervisionFor('p-gone', atlas)).toBeNull();
+      await expect(svc.submitSelfReview('p-ce', { gap: 'g', nextBet: 'n' }, atlas)).rejects.toMatchObject({ status: 403 });
+      await expect(svc.submitRetro('p-ce', { day: '2026-09-30', summary: 'x', problems: [] }, atlas)).rejects.toMatchObject({ status: 403 });
+      // Not a member: no project-wide trace access and no ticket work.
+      expect(await svc.canReadProjectTraces('p-ce', atlas)).toBe(false);
+      // Triage and dispatch never offer the supervisor a ticket (it is on no project team).
+      await wf.create('p-ce', { title: 'Feed more', labels: ['feed'] }, owner);
+      await wf.create('p-ce', { title: 'Feed ready', labels: ['feed'], status: 'ready' }, owner);
+      advance(HOUR);
+      await svc.tick();
+      expect(pool.items.size).toBeGreaterThan(0);
+      expect(JSON.stringify([...pool.items.values()])).not.toContain(atlas.session);
+    });
+
     it('schedules yesterday\'s retro once, at 09:00, only when it is on', async () => {
       await enable();
       await wf.create('p-ce', { title: 'A' }, owner);

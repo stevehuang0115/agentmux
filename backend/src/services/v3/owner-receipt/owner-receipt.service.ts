@@ -23,6 +23,7 @@ import { getCrewlyHomePath } from '../../core/crewly-home.utils.js';
 import { redactSensitive } from '../../wiki/wiki-redaction.js';
 import { buildReceiptData, isReceiptEmpty, localDate, localParts, resolveReceiptWindow, type ReceiptCostSource } from './owner-receipt-data.js';
 import { renderReceiptSlack } from './owner-receipt.renderer.js';
+import { renderPullsWeekly, type PullsWeekly } from './owner-pulls-weekly.js';
 import type { IntakeLogReading } from '../ticket-intake-log.js';
 import {
   applySettingsPatch,
@@ -52,6 +53,8 @@ export interface OwnerReceiptServiceDeps {
   cost?: ReceiptCostSource;
   /** The intake outcome log (#828 coverage); absent = coverage 不详 */
   readIntakeLog?: () => Promise<IntakeLogReading>;
+  /** The weekly "pulled you in" rollup (#1387); absent = no weekly line */
+  loadPullsWeekly?: (now: Date) => Promise<PullsWeekly | null>;
   now?: () => Date;
 }
 
@@ -171,6 +174,15 @@ export class OwnerReceiptService {
   }
 
   /**
+   * The weekly "pulled you in" rollup for the seven days before now (#1387).
+   *
+   * @returns The rollup, or null when it is not wired
+   */
+  pullsWeekly(): Promise<PullsWeekly | null> {
+    return this.deps.loadPullsWeekly ? this.deps.loadPullsWeekly(this.now()) : Promise.resolve(null);
+  }
+
+  /**
    * Send the receipt now (manual send, or the scheduler) and move the window.
    * The window only moves when the send succeeded, so a failed night's asks
    * are in the next receipt.
@@ -218,8 +230,12 @@ export class OwnerReceiptService {
    * @returns What happened
    */
   private async sendNow(): Promise<SendResult> {
-    const { data, text } = await this.generate();
-    if (isReceiptEmpty(data) || !text) {
+    const generated = await this.generate();
+    const { data } = generated;
+    // #1387: once a week, the "pulled you in" line rides along (or goes alone).
+    const weekly = await this.weeklyPullsLine();
+    const text = [generated.text, weekly?.text].filter(Boolean).join('\n\n');
+    if ((isReceiptEmpty(data) && !weekly?.text) || !text) {
       // Nothing done worth telling, nothing waiting on him: no message at all.
       await this.markSent(data);
       this.logger.info('Owner receipt skipped (nothing to say)', { from: data.window.from, to: data.window.to });
@@ -234,6 +250,7 @@ export class OwnerReceiptService {
     }
     if (!ok) return { sent: false, reason: 'sender_failed', text, data };
     await this.markSent(data);
+    if (weekly) await this.markPullsSent(weekly.localDate);
     this.logger.info('Owner receipt sent', {
       highlights: data.highlights.length,
       decisions: data.decisionsTotal,
@@ -241,6 +258,38 @@ export class OwnerReceiptService {
       to: data.window.to,
     });
     return { sent: true, text, data };
+  }
+
+  /**
+   * The weekly pulls line, when today is the report weekday and this week's
+   * line has not gone out. Failures are logged and the line is left out.
+   *
+   * @returns The redacted line and the local date to record, or null
+   */
+  private async weeklyPullsLine(): Promise<{ text: string; localDate: string } | null> {
+    if (!this.deps.loadPullsWeekly) return null;
+    const now = this.now();
+    const { settings, lastPullsLocalDate } = await this.getState();
+    const today = localDate(now, settings.timezone);
+    if (localParts(now, settings.timezone).weekday !== OWNER_RECEIPT_CONSTANTS.PULLS_WEEKLY.REPORT_WEEKDAY) return null;
+    if (lastPullsLocalDate === today) return null;
+    try {
+      const rollup = await this.deps.loadPullsWeekly(now);
+      return rollup ? { text: redactSensitive(renderPullsWeekly(rollup)), localDate: today } : null;
+    } catch (err) {
+      this.logger.warn('Weekly pulls line left out', { error: err instanceof Error ? err.message : String(err) });
+      return null;
+    }
+  }
+
+  /**
+   * Record that this week's pulls line went out.
+   *
+   * @param localDate - Local date it went out
+   */
+  private async markPullsSent(localDate: string): Promise<void> {
+    const state = await this.getState();
+    await this.writeState({ ...state, lastPullsLocalDate: localDate });
   }
 
   /**

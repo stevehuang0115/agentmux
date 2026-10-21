@@ -11,6 +11,7 @@
 
 import type { Request as ExpressRequest, Response } from 'express';
 import { getOwnerReceiptService, type OwnerReceiptService } from '../../services/v3/owner-receipt/owner-receipt.service.js';
+import { renderPullsWeekly } from '../../services/v3/owner-receipt/owner-pulls-weekly.js';
 import { rejectNonOwner } from '../../middleware/caller-identity.middleware.js';
 
 /**
@@ -81,6 +82,28 @@ export async function getReceipt(req: ExpressRequest, res: Response): Promise<vo
       ...(mode ? { mode: mode as 'since_last_receipt' | 'local_day' } : {}),
     });
     res.json({ success: true, data: { receipt: data, text } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: (error as Error).message });
+  }
+}
+
+/**
+ * GET /api/owner-receipt/pulls — how often agents pulled the owner in over the
+ * last seven days, by kind, outcome and team, against the week before (#1387).
+ *
+ * @param _req - Express request
+ * @param res - Express response
+ */
+export async function getPullsWeekly(_req: ExpressRequest, res: Response): Promise<void> {
+  const svc = serviceOr503(res);
+  if (!svc) return;
+  try {
+    const pulls = await svc.pullsWeekly();
+    if (!pulls) {
+      res.status(503).json({ success: false, error: 'Weekly pulls are not wired' });
+      return;
+    }
+    res.json({ success: true, data: { pulls, text: renderPullsWeekly(pulls) } });
   } catch (error) {
     res.status(500).json({ success: false, error: (error as Error).message });
   }
