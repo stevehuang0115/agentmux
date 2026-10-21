@@ -9134,6 +9134,56 @@ export const DRIVE_CONSTANTS = {
 } as const;
 
 /**
+ * Meetings P2b (crewly#1415): a voice 1:1 meeting with one agent. Cloud asks
+ * this machine for the agent's meeting pack at join (`op:'meeting_pack'`),
+ * searches its wiki live (`op:'wiki_search'`) and sends write-backs (a
+ * delivery carrying `writeBack`) that land in the thread they belong to.
+ */
+export const MEETING_CONSTANTS = {
+	/** Capability advertised to Cloud while the Drive handler runs with a pack builder */
+	CAPABILITY: 'meeting_pack',
+	/** Metadata `source` on the chat rows a write-back records: the owner's voice, via Cloud */
+	SOURCE: 'cloud-talk',
+	/** Metadata `via` on those rows (tells them apart from Talk and Drive mode rows) */
+	VIA: 'meeting',
+	/** How far back owner↔agent conversations are read for the agenda (ms) */
+	AGENDA_WINDOW_MS: 14 * 24 * 60 * 60 * 1000,
+	/** Agent timeline rows read at most */
+	TIMELINE_SCAN: 200,
+	/** Agenda topics at most */
+	AGENDA_MAX: 15,
+	/** One agenda topic: longest one-line topic (characters) */
+	TOPIC_MAX_CHARS: 120,
+	/** One agenda topic: recent lines kept, and their length */
+	TOPIC_RECENT_MAX: 3,
+	TOPIC_RECENT_MAX_CHARS: 300,
+	/** Owner↔agent messages in the pack at most, and their length */
+	MESSAGES_MAX: 20,
+	MESSAGE_MAX_CHARS: 600,
+	/** Handover text kept (characters) */
+	HANDOVER_MAX_CHARS: 12_000,
+	/** Work items listed at most */
+	WORK_MAX: 15,
+	/** Waiting-on-owner items at most */
+	WAITING_MAX: 10,
+	/** Recent decisions at most, and how far back (ms) */
+	DECISIONS_MAX: 10,
+	DECISIONS_WINDOW_MS: 30 * 24 * 60 * 60 * 1000,
+	/** Wiki pages in the pack at most, and their length */
+	WIKI_PAGES_MAX: 10,
+	WIKI_PAGE_MAX_CHARS: 1500,
+	/** Live wiki search: hits returned at most, and their length */
+	WIKI_HITS_MAX: 5,
+	WIKI_HIT_MAX_CHARS: 700,
+	/** Whole pack: token budget (estimate: CJK 1 a character, else 4 characters a token) */
+	PACK_MAX_TOKENS: 30_000,
+	/** A write-back's longest text (characters) */
+	WRITE_BACK_MAX_CHARS: 1500,
+	/** New-topic threads remembered per session + topic (so a second write-back reuses the thread) */
+	NEW_THREADS_MAX: 200,
+} as const;
+
+/**
  * Ticket hygiene: keeps the project tickets honest so status views (Drive
  * mode, boards) do not show finished work as open.
  *

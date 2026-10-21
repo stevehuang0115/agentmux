@@ -7,6 +7,7 @@
  * critically the OAuth scope set used to issue new Google credentials.
  */
 import {
+	MEETING_CONSTANTS,
   HANDOVER_CONSTANTS,
   OPEN_ITEMS_CONSTANTS,
   ORC_WAKE_CONSTANTS,
@@ -632,4 +633,13 @@ describe('OPEN_ITEMS_CONSTANTS due defaults (crewly#1360)', () => {
     expect(OPEN_ITEMS_CONSTANTS.CHAT_PROMISE_DEFAULT_DUE_MS).toBeLessThan(OPEN_ITEMS_CONSTANTS.DEFAULT_DUE_MS);
     expect(OPEN_ITEMS_CONSTANTS.ESTIMATE_WINDOW_MS).toBe(10 * 60 * 1000);
   });
+});
+
+describe('MEETING_CONSTANTS', () => {
+	it('advertises meeting_pack and keeps the pack within the Cloud budget', () => {
+		expect(MEETING_CONSTANTS.CAPABILITY).toBe('meeting_pack');
+		expect(MEETING_CONSTANTS.SOURCE).toBe('cloud-talk');
+		expect(MEETING_CONSTANTS.PACK_MAX_TOKENS).toBeLessThanOrEqual(30_000);
+		expect(MEETING_CONSTANTS.AGENDA_MAX).toBeLessThanOrEqual(15);
+	});
 });

@@ -30,7 +30,11 @@
  *    machine stores a copy as `~/.crewly/drive-logs/<date>-<sessionId>.md` +
  *    `.jsonl` (see drive-log.store.ts), readable by a local Claude Code;
  *  - two-phase answers (v3): the delivered words ask for `reply --drive
- *    --ack` within seconds, then the full result.
+ *    --ack` within seconds, then the full result;
+ *  - meetings (P2b, crewly#1415, `deps.meeting`): `meeting_pack` builds the
+ *    pack for a 1:1 meeting with one agent, `wiki_search` searches its wiki
+ *    live, and a delivery carrying `writeBack` is written into the thread it
+ *    belongs to (drive-meeting.service.ts) and reported back as written.
  *
  * Nothing the owner or the agents say is written to this machine's server
  * logs; the session log above is a separate file, kept 30 days.
@@ -38,7 +42,7 @@
  * @module services/drive/drive-agent.service
  */
 
-import { DRIVE_CONSTANTS } from '../../constants.js';
+import { DRIVE_CONSTANTS, MEETING_CONSTANTS } from '../../constants.js';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
 import { clip, speakable } from '../briefing/briefing.utils.js';
 import { getDriveLogStore, type DriveLogStore } from './drive-log.store.js';
@@ -46,11 +50,14 @@ import type { OwnerTurnMark } from '../briefing/briefing-cards.js';
 import type { IncomingMessage } from '../cloud/cloud-sync.types.js';
 import { isDriveModeRow } from './drive-row.utils.js';
 import { messagesToOwner, pickRecall, type RecallFeedMessage } from './drive-recall.js';
+import type { DriveMeetingService } from './drive-meeting.service.js';
 import {
   parseDeliveryFetch,
   parseDriveRelayData,
+  parseMeetingPackFetch,
   parseRecallFetch,
   parseStateFetch,
+  parseWikiFetch,
   type DriveDeliveryFetch,
   type DriveRelayData,
   type DriveTargetKind,
@@ -143,20 +150,25 @@ export interface DriveAgentDeps {
   refreshStatus?: () => Promise<void>;
   /** Where session logs are kept (default: `~/.crewly/drive-logs`) */
   logStore?: DriveLogStore;
+  /** 1:1 meetings (P2b): pack, live wiki search and write-backs; absent = not offered */
+  meeting?: Pick<DriveMeetingService, 'buildPack' | 'searchWiki' | 'writeBack'>;
   fetchImpl?: (input: string, init: RequestInit) => Promise<Response>;
   now?: () => Date;
   logger?: ComponentLogger;
 }
 
 let active = false;
+let meetingActive = false;
 
 /**
  * Capabilities to advertise to Cloud (heartbeat and uploads).
  *
- * @returns `['drive_message']` while the handler runs, else `[]`
+ * @returns `['drive_message']` while the handler runs (plus `meeting_pack`
+ *   when it builds meeting packs), else `[]`
  */
 export function driveCapabilities(): string[] {
-  return active ? [C.CAPABILITY] : [];
+  if (!active) return [];
+  return meetingActive ? [C.CAPABILITY, MEETING_CONSTANTS.CAPABILITY] : [C.CAPABILITY];
 }
 
 /** The machine side of Drive mode — see module docs. */
@@ -185,6 +197,7 @@ export class DriveAgentService {
     this.started = true;
     this.deps.source?.on('message', this.listener);
     active = true;
+    meetingActive = !!this.deps.meeting;
   }
 
   /** Unsubscribe. */
@@ -193,6 +206,7 @@ export class DriveAgentService {
     this.started = false;
     this.deps.source?.off('message', this.listener);
     active = false;
+    meetingActive = false;
   }
 
   /**
@@ -216,6 +230,8 @@ export class DriveAgentService {
       else if (data.op === 'warm') await this.warm(data, instanceId);
       else if (data.op === 'refresh') await this.deps.refreshStatus?.();
       else if (data.op === 'log') await this.saveLog(data, instanceId);
+      else if (data.op === 'meeting_pack') await this.meetingPack(data, instanceId);
+      else if (data.op === 'wiki_search') await this.wikiSearch(data, instanceId);
       else await this.end(data, instanceId);
       return 'done';
     } catch (error) {
@@ -234,7 +250,47 @@ export class DriveAgentService {
     const raw = await this.cloudGet(`/${data.sessionId}/machine/deliveries/${encodeURIComponent(data.id as string)}?instanceId=${encodeURIComponent(instanceId)}`);
     const d = parseDeliveryFetch(raw);
     if (!d) throw new Error('Cloud sent a malformed delivery');
+    if (d.writeBack && this.deps.meeting) {
+      await this.writeBack(d, instanceId);
+      return;
+    }
     await this.deliverFetched(d);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Meetings (P2b)
+  // ---------------------------------------------------------------------------
+
+  /** A meeting outcome: written into its thread (no Drive conversation), then reported to Cloud. */
+  private async writeBack(d: DriveDeliveryFetch, instanceId: string): Promise<void> {
+    if (this.deps.agentExists && !(await this.deps.agentExists(d.target.agentSession))) {
+      throw new Error(`No agent ${d.target.agentSession} on this machine`);
+    }
+    const meeting = this.deps.meeting as NonNullable<DriveAgentDeps['meeting']>;
+    const out = await meeting.writeBack({ sessionId: d.sessionId, agentSession: d.target.agentSession, text: d.text, writeBack: d.writeBack as NonNullable<DriveDeliveryFetch['writeBack']> });
+    await this.cloudPost(`/${d.sessionId}/machine/deliveries/${encodeURIComponent(d.id)}/written`, { instanceId, ...(out.threadRef ? { threadRef: out.threadRef } : {}) });
+    this.logger.info('Meeting write-back written', { sessionId: d.sessionId, kind: d.writeBack?.kind, via: out.via, newThread: !d.writeBack?.threadRef });
+  }
+
+  /** `op:'meeting_pack'`: build the agent's pack and post it. */
+  private async meetingPack(data: DriveRelayData, instanceId: string): Promise<void> {
+    if (!this.deps.meeting) return;
+    const path = `/${data.sessionId}/machine/packs/${encodeURIComponent(data.id as string)}`;
+    const req = parseMeetingPackFetch(await this.cloudGet(`${path}?instanceId=${encodeURIComponent(instanceId)}`));
+    if (!req) throw new Error('Cloud sent a malformed pack request');
+    if (this.deps.agentExists && !(await this.deps.agentExists(req.agentSession))) throw new Error(`No agent ${req.agentSession} on this machine`);
+    const pack = await this.deps.meeting.buildPack(req);
+    await this.cloudPost(path, { instanceId, pack });
+  }
+
+  /** `op:'wiki_search'`: search the agent's wiki and post the hits. */
+  private async wikiSearch(data: DriveRelayData, instanceId: string): Promise<void> {
+    if (!this.deps.meeting) return;
+    const path = `/${data.sessionId}/machine/wiki/${encodeURIComponent(data.id as string)}`;
+    const req = parseWikiFetch(await this.cloudGet(`${path}?instanceId=${encodeURIComponent(instanceId)}`));
+    if (!req) throw new Error('Cloud sent a malformed wiki search');
+    const { hits, ms } = await this.deps.meeting.searchWiki(req);
+    await this.cloudPost(path, { instanceId, hits, ms });
   }
 
   /**
