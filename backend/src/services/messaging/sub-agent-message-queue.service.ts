@@ -332,18 +332,22 @@ export class SubAgentMessageQueue {
 	 * submitted a paste of it that had been sitting in the box), so a held
 	 * retry does not deliver it twice.
 	 *
+	 * Also takes back a message held while its agent was being started, once
+	 * it is about to be sent directly.
+	 *
 	 * @param sessionName - The agent
 	 * @param data - The message
+	 * @param why - Why it is removed (logged)
 	 * @returns True when a queued copy was removed
 	 */
-	remove(sessionName: string, data: string): boolean {
+	remove(sessionName: string, data: string, why = 'delivered from the input box'): boolean {
 		const queue = this.pendingMessages.get(sessionName);
 		if (!queue) return false;
 		const i = queue.findIndex((m) => m.data === data);
 		if (i < 0) return false;
 		queue.splice(i, 1);
 		this.save();
-		this.logger.info('Removed a queued message that was delivered from the input box', { sessionName });
+		this.logger.info('Removed a queued message', { sessionName, why });
 		return true;
 	}
 

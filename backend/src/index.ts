@@ -3080,6 +3080,16 @@ void (async () => {
 							});
 						});
 					},
+					// The message is on the persisted queue before activate-on-send
+					// starts the agent: a restart mid-start no longer loses it (the
+					// boot restore brings back agents with queued messages and
+					// register-self delivers them). Taken back off when it is sent
+					// directly, so it never arrives twice.
+					holdDuringActivation: (agentSession, prompt) => {
+						SubAgentMessageQueue.getInstance().enqueue(agentSession, prompt);
+					},
+					releaseHeld: (agentSession, prompt) =>
+						SubAgentMessageQueue.getInstance().remove(agentSession, prompt, 'released after the agent started'),
 					// Every owner message that reached an agent is watched until
 					// it is answered (specs/2026-09-30-owner-message-guarantee.md).
 					onDispatched: async (channel, message, result) => {

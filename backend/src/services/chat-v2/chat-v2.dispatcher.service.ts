@@ -281,6 +281,25 @@ export interface ChatV2DispatcherOptions {
    */
   holdForStart?: (agentSession: string, prompt: string) => void;
   /**
+   * Puts a prompt on the agent's persisted queue before activate-on-send
+   * starts the agent, without scheduling anything. Starting an agent takes
+   * seconds to minutes; a restart in that window used to lose the message,
+   * which lived only in the awaiting call (steamfun-ops 2026-10-21: the
+   * owner's DM to Avery died with the auto-update restart and was never
+   * answered). Held first, it survives the restart: the boot restore brings
+   * the agent back for its queued messages and register-self delivers them.
+   * Needs {@link releaseHeld}; when either is omitted nothing is held early.
+   */
+  holdDuringActivation?: (agentSession: string, prompt: string) => void;
+  /**
+   * Takes the copy {@link holdDuringActivation} put on the queue back off it.
+   *
+   * @returns True when the copy was still queued and is now removed; false
+   *   when it is gone (the agent registered during the start and its queue
+   *   flush already took it)
+   */
+  releaseHeld?: (agentSession: string, prompt: string) => boolean;
+  /**
    * Pause before the one retry of a failed (not deferred) activation, ms.
    * Defaults to {@link ACTIVATE_RETRY_DELAY_MS}.
    */
@@ -835,6 +854,8 @@ export class ChatV2DispatcherService {
   private readonly huddleLeaderFor?: (channelId: string) => Promise<string | null>;
   private readonly activateAgent?: (agentSession: string) => Promise<boolean | 'deferred'>;
   private readonly holdForStart?: (agentSession: string, prompt: string) => void;
+  private readonly holdDuringActivation?: (agentSession: string, prompt: string) => void;
+  private readonly releaseHeld?: (agentSession: string, prompt: string) => boolean;
   private readonly activateRetryDelayMs: number;
   private readonly recentTurnsFor?: (channelId: string, threadId?: string) => readonly ChatContextTurn[];
   private readonly prepareInbound?: ChatV2DispatcherOptions['prepareInbound'];
@@ -855,6 +876,8 @@ export class ChatV2DispatcherService {
     this.huddleLeaderFor = options.huddleLeaderFor;
     this.activateAgent = options.activateAgent;
     this.holdForStart = options.holdForStart;
+    this.holdDuringActivation = options.holdDuringActivation;
+    this.releaseHeld = options.releaseHeld;
     this.activateRetryDelayMs = options.activateRetryDelayMs ?? ACTIVATE_RETRY_DELAY_MS;
     this.recentTurnsFor = options.recentTurnsFor;
     this.prepareInbound = options.prepareInbound;
@@ -983,6 +1006,63 @@ export class ChatV2DispatcherService {
         err: err instanceof Error ? err.message : String(err),
       });
       return false;
+    }
+  }
+
+  /**
+   * Make a message durable before activate-on-send starts its agent: it goes
+   * on the agent's persisted queue first, so a restart while the agent is
+   * starting cannot lose it (the awaiting call dies with the process; the
+   * queue is restored at boot and register-self delivers it).
+   *
+   * @param channel - Where the message was sent
+   * @param message - The message
+   * @param sessionName - Agent about to be started
+   * @param prompt - Prompt that would be delivered
+   * @param chatThreadId - Chat thread of the message, when it has one
+   * @returns True when the prompt is now on the queue
+   */
+  private holdBeforeActivation(
+    channel: ChatChannelDTO,
+    message: ChatMessageDTO,
+    sessionName: string,
+    prompt: string,
+    chatThreadId: string | undefined,
+  ): boolean {
+    const holder = this.holdDuringActivation;
+    if (!holder || !this.releaseHeld) return false;
+    try {
+      this.withDeliveryMeta(channel, message, sessionName, prompt, chatThreadId, () => holder(sessionName, prompt));
+      return true;
+    } catch (err) {
+      this.logger.warn('chat-v2: could not hold a message while its agent starts', {
+        sessionName,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Take back the copy {@link holdBeforeActivation} queued, before the
+   * message is delivered (or failed) another way, so it never arrives twice.
+   *
+   * @param sessionName - The agent
+   * @param prompt - The held prompt
+   * @returns 'released' when it was still queued and is now removed;
+   *   'taken' when the agent's queue flush already took it (the agent
+   *   registered during the start): the queue delivers it, nothing to send
+   */
+  private releaseHeldCopy(sessionName: string, prompt: string): 'released' | 'taken' {
+    try {
+      return this.releaseHeld?.(sessionName, prompt) ? 'released' : 'taken';
+    } catch (err) {
+      // Could not tell: send it. A duplicate beats a message nobody delivers.
+      this.logger.warn('chat-v2: could not release a message held while its agent started', {
+        sessionName,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return 'released';
     }
   }
 
@@ -1626,28 +1706,42 @@ export class ChatV2DispatcherService {
           sessionName,
           responseMode,
         });
+        const threadId = options.threadId ?? message.threadId ?? message.id;
+        // Durable before the (slow) start: a restart mid-activation must not
+        // take the message with it (steamfun-ops 2026-10-21).
+        const heldPrompt = result.prompt;
+        const preHeld =
+          heldPrompt !== undefined && this.holdBeforeActivation(channel, message, sessionName, heldPrompt, threadId);
         const activated = await this.activateWithRetry(sessionName);
         if (activated === 'deferred' && result.prompt !== undefined) {
           // The start waits for a running-agent slot. The message is held on
           // the agent's queue and delivered when it starts: not a failure.
-          const threadId = options.threadId ?? message.threadId ?? message.id;
           if (this.hold(channel, message, sessionName, result.prompt, threadId)) {
             // The held prompt already carries what the agent overheard.
             this.contextBacklog.take(sessionName, channel.id, message.id);
             result = { ok: true, queued: true, deferred: true };
+          } else if (preHeld && heldPrompt !== undefined) {
+            this.releaseHeldCopy(sessionName, heldPrompt);
           }
+        } else if (activated && preHeld && heldPrompt !== undefined && this.releaseHeldCopy(sessionName, heldPrompt) === 'taken') {
+          // The agent registered during the start and its queue flush took the
+          // message (with what it overheard): delivered from there, not again.
+          this.contextBacklog.take(sessionName, channel.id, message.id);
+          result = { ok: true, queued: true, deferred: true };
         } else if (activated) {
           result = await attempt(sessionName, responseMode);
           if (!result.ok && result.prompt !== undefined) {
             // The start was accepted but the session is not up yet (a boot
             // restore or runtime switch is still creating it): hold the
             // message on the agent's queue; registration delivers it.
-            const threadId = options.threadId ?? message.threadId ?? message.id;
             if (this.hold(channel, message, sessionName, result.prompt, threadId)) {
               this.contextBacklog.take(sessionName, channel.id, message.id);
               result = { ok: true, queued: true, deferred: true };
             }
           }
+        } else if (preHeld && heldPrompt !== undefined) {
+          // Could not be started: reported as a failure, as before.
+          this.releaseHeldCopy(sessionName, heldPrompt);
         }
       }
       if (result.ok) {
@@ -1856,15 +1950,26 @@ export class ChatV2DispatcherService {
           channelId: channel.id,
           agentSession: channel.agentSession,
         });
+        // Durable before the (slow) start: a restart mid-activation must not
+        // take the message with it (steamfun-ops 2026-10-21).
+        const preHeld = this.holdBeforeActivation(channel, message, channel.agentSession, prompt, message.threadId ?? undefined);
         const activated = await this.activateWithRetry(channel.agentSession);
         if (activated === 'deferred') {
           // The start waits for a running-agent slot: hold the message on the
-          // agent's queue; it is delivered when the agent starts.
+          // agent's queue; it is delivered when the agent starts. (The early
+          // copy is the same queue entry: an identical message is not re-added.)
           if (this.hold(channel, message, channel.agentSession, prompt, message.threadId ?? undefined)) {
             this.noteOriginThread(channel.agentSession, channel.id, undefined);
             return { dispatched: true, deferred: true };
           }
+          if (preHeld) this.releaseHeldCopy(channel.agentSession, prompt);
         } else if (activated) {
+          if (preHeld && this.releaseHeldCopy(channel.agentSession, prompt) === 'taken') {
+            // The agent registered during the start and its queue flush took
+            // the message: it is delivered from there, not sent again.
+            this.noteOriginThread(channel.agentSession, channel.id, undefined);
+            return { dispatched: true, deferred: true };
+          }
           try {
             result = await this.sendToAgent(channel, message, channel.agentSession, prompt, message.threadId ?? undefined);
           } catch (err) {
@@ -1878,6 +1983,9 @@ export class ChatV2DispatcherService {
             this.noteOriginThread(channel.agentSession, channel.id, undefined);
             return { dispatched: true, deferred: true };
           }
+        } else if (preHeld) {
+          // Could not be started: reported as a failure, as before.
+          this.releaseHeldCopy(channel.agentSession, prompt);
         }
       }
 
