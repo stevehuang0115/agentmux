@@ -8,6 +8,8 @@
  *
  * - **commitment**: a first-person future deliverable for the owner
  *   ("明天中午给我，我核过以后挑最有用的几条发你", "I'll send the draft tonight");
+ *   A plan of concrete next steps with no deliverable named counts too
+ *   ("让它们跑完，对比后看差多少", "then I'll do step 2"; crewly#1386);
  * - **question**: a direct question that asks the owner to decide or confirm
  *   ("这个读法，你同意吗？", "Should I keep the appendix?") — and only the
  *   message's FINAL question (nothing but a fallback or a sign-off after it).
@@ -356,6 +358,97 @@ export function isCommitment(s: string): boolean {
   }
   if (EN_COMMIT.test(t)) return !EN_SKIP.test(t) && !deliverableIsHedged(t, EN_COMMIT);
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// Next steps without a deliverable (crewly#1386)
+// ---------------------------------------------------------------------------
+
+/** A step number ("第 2 步", "第二步"). */
+const ZH_STEP_NO = '第\\s*[\\d一二三四五六七八九十]+\\s*步';
+
+/** Concrete next-step actions (Chinese). */
+const ZH_STEP_ACTION = `对比|比较|比一下|检查|核对|跑|开始|继续|处理|生成|提交|复刻|还原|修|测试|验证|整理|汇总|剪|拼|渲染|出图|出片|挑|合成|上传|部署|进入|推进|做|改|${ZH_STEP_NO}`;
+
+/** "X 完 / 之后 / 然后 …": one step after another (a bare 再 is not enough: "我再看看" is not a plan). */
+const ZH_SEQUENCE = `然后|接着|之后|以后|[完好](?:后|了|以后|之后)|完(?=我|再|就|[，,；;…]|$)|结束后|下一步|接下来|${ZH_STEP_NO}`;
+
+/** First person doing a step ("我对比", "我们再跑第 2 步", "我把三条对比一下"); "给我们的结果" is not. */
+const ZH_SELF_ACTS = new RegExp(`(?:我们|咱们|我)(?:会|就|先|再|然后|接着|来|去|马上|立刻|继续|开始|要|打算|准备|一起|把[^，,。；;]{0,12})*\\s*(?:${ZH_STEP_ACTION})`, 'u');
+
+/** A plan written without a subject: it opens on the sequence ("让它们跑完…", "这批之后…", "接下来…"). */
+const ZH_PLAN_OPEN = /^(?:先|等|让|这批|这轮|这几条|这几个|接下来|下一步|然后|接着|跑完|做完|生成完|渲染完)/u;
+
+/** A sequence followed by a concrete action in the same sentence ("跑完…对比", "之后到第 2 步"). */
+const ZH_SEQUENCE_THEN_ACTION = new RegExp(`(?:${ZH_SEQUENCE})[^。！？!?]{0,24}?(?:${ZH_STEP_ACTION})`, 'u');
+
+/** A clause about what already happened ("三条已经提交", "刚才跑完了"). */
+const ZH_PAST_CLAUSE = /已经|已(?:提交|发|跑|做|改|生成|渲染|完成)|刚才|刚刚|之前|上次|昨天|发现|当时|了\s*$/u;
+
+/** Opinions, advice and hedges: not a commitment ("我觉得之后可以再试", "建议先对比"). */
+const ZH_OPINION = /觉得|认为|建议|可以考虑|也许|或许|可能|不确定|看情况|说不定/u;
+
+/** First-person future (English) — the subject of a next step. */
+const EN_SELF_FUTURE = "\\b(?:i'?ll|i will|i'm going to|i am going to|we'?ll|we will|i'?m gonna)\\b";
+
+/** Concrete next-step actions (English). */
+const EN_STEP_ACTION =
+  '\\b(?:do|start|run|re-?run|compare|check|review|move on|continue|replicate|render|generate|build|fix|test|look at|work on|tackle|handle|pick up|redo|process|merge|kick off|begin|proceed|go on|step \\d+)\\b';
+
+/** A first-person future step ("then I'll do step 2", "I'll compare them next"). */
+const EN_SELF_STEP = new RegExp(`${EN_SELF_FUTURE}[^.?!]{0,60}?${EN_STEP_ACTION}`, 'i');
+
+/** Sequencing (English): then / next / after that / once they finish / step N. */
+const EN_SEQUENCE =
+  /\b(?:then|next|afterwards|after (?:that|this|these|those|it|they|which)|(?:once|when) (?:it|they|that|this|these|those|the \w+(?: \w+)?) (?:finish|finishes|are done|is done|complete|completes|land|lands)|step \d+)\b/i;
+
+/** Hedges, opinions and lessons (English): not a commitment. */
+const EN_NEXT_SKIP = /\b(?:maybe|might|probably|perhaps|could|i think|not sure|next time|we'?ll see|you)\b/i;
+
+/**
+ * Whether a sentence commits to concrete next steps with no deliverable named
+ * ("让它们跑完，对比后看差多少", "这批之后到第 2 步结束", "then I'll do step 2").
+ * {@link isCommitment} needs a deliverable for the owner ("发你", "send you"),
+ * so a plan of next steps was never tracked and nobody came back to it when
+ * the owner moved on (crewly#1386, Pia 2026-10-18).
+ *
+ * Conservative on purpose — it needs all of:
+ * - the agent as the one acting: a first-person subject doing a step
+ *   ("我对比", "I'll run"), or (Chinese only) a sentence that opens on the
+ *   sequence itself ("让它们跑完…", "这批之后…", "接下来…");
+ * - a sequence: one step after another (然后 / 之后 / X 完后 / 第 N 步,
+ *   then / next / after that / once they finish / step N);
+ * - a concrete action (对比, 跑, 复刻, compare, run, do step 2 …);
+ * - no question, condition, habit, caveat, opinion or hedge, nothing addressed
+ *   to the owner as the actor (你 / you), and (Chinese) the step itself not in
+ *   the past ("三条已经提交，" is dropped, the rest is judged).
+ *
+ * @param s - Sentence
+ * @returns True for a first-person future plan of concrete next steps
+ *
+ * @example
+ * isNextStepCommitment('三条已经提交，让它们跑完，对比后看差多少。'); // true
+ * isNextStepCommitment('我再看看。'); // false — no sequence, no concrete step
+ */
+export function isNextStepCommitment(s: string): boolean {
+  const t = s.replace(/「[^」]*」|『[^』]*』|“[^”]*”|"[^"]*"|（[^）]*）|\([^)]*\)/g, ' ').trim();
+  if (!t || /[?？]\s*$/.test(t)) return false;
+  if (HABITUAL.test(t) || ASKS_OWNER.test(t) || CAVEAT.test(t) || HEDGE.test(t)) return false;
+  if (/[一-鿿]/.test(t)) {
+    if (/你|您/u.test(t) || ZH_CONDITIONAL.test(t) || ZH_OPINION.test(t)) return false;
+    // Drop the clauses that report what already happened; the rest must be the plan.
+    const rest = t
+      .split(/[，,；;：:]/)
+      .map((c) => c.trim())
+      .filter((c) => c && !ZH_PAST_CLAUSE.test(c.replace(/[。！!…\s]+$/u, '')))
+      .join('，');
+    if (!rest || ZH_THIRD_PARTY.test(rest)) return false;
+    if (!new RegExp(ZH_SEQUENCE, 'u').test(rest)) return false;
+    if (ZH_SELF_ACTS.test(rest)) return true;
+    return ZH_PLAN_OPEN.test(rest) && ZH_SEQUENCE_THEN_ACTION.test(rest);
+  }
+  if (EN_SKIP.test(t) || EN_NEXT_SKIP.test(t)) return false;
+  return EN_SELF_STEP.test(t) && EN_SEQUENCE.test(t);
 }
 
 // ---------------------------------------------------------------------------
@@ -768,7 +861,10 @@ export function extractOpenItems(text: string, opts: ExtractOptions): ExtractedO
     }
     // Any other question is not a promise either.
     if (/[?？]\s*[)）]?$/.test(s.trim())) continue;
-    if (out.commitments.length < max && !addressedToColleague(s, opts) && isCommitment(s)) {
+    // A plan of next steps counts too (crewly#1386), but not as list content or inside a script:
+    // an echoed list of the owner's steps is not the agent promising them.
+    const nextStep = (): boolean => !sentence.listItem && !sentence.scriptFrame && isNextStepCommitment(s);
+    if (out.commitments.length < max && !addressedToColleague(s, opts) && (isCommitment(s) || nextStep())) {
       let { due, source } = parseDue(s, opts.now, opts.defaultDueMs);
       // The estimate often sits in the sentence after (or before) the promise:
       // "改完后我起全新评审 Agent 跑 2 轮，再发你。预计一小时左右。" (crewly#1360).

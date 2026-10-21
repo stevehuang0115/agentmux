@@ -426,6 +426,14 @@ describe('StallWatcherService', () => {
 			expect((await h.deps.store.load()).runs).toHaveLength(1);
 		});
 
+		it('registers jobs submitted to an outside generator with no duration at the default estimate (crewly#1386)', async () => {
+			const h = await harness(dir);
+			await h.service.onMessage(announce({ id: 'pia-1', senderId: 'pia', content: '三条片段已经提交到 Flow 了，作为第 3 步的预览。让它们跑完，对比后看差多少。' }));
+			const runs = h.service.runsOf('pia');
+			expect(runs).toHaveLength(1);
+			expect(runs[0]).toMatchObject({ id: 'pia-1', estimateMs: C.RUN_DEFAULT_ESTIMATE_MS, estimateSource: 'default', expectedBy: T0 + C.RUN_DEFAULT_ESTIMATE_MS });
+		});
+
 		it('ignores interim marks, posts without a duration, and a second announcement in the same thread', async () => {
 			const h = await harness(dir);
 			await h.service.onMessage(announce({ metadata: { interim: true } }));

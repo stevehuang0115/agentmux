@@ -3,7 +3,7 @@
  * commitments and owner questions in Chinese and English, the TKT-185 reply,
  * and the negatives that must NOT become items.
  */
-import { durationMs, estimateDue, extractOpenItems, extractOwnerDecisionQuestions, isCommitment, isOwnerDecisionQuestion, isOwnerQuestion, numeralValue, parseDue, splitSentences } from './open-item-extractor.js';
+import { durationMs, estimateDue, extractOpenItems, extractOwnerDecisionQuestions, isCommitment, isNextStepCommitment, isOwnerDecisionQuestion, isOwnerQuestion, numeralValue, parseDue, splitSentences } from './open-item-extractor.js';
 import { OPEN_ITEMS_CONSTANTS } from '../../constants.js';
 
 /** Thu 2026-10-01 18:00:29 local — when Atlas replied in TKT-185. */
@@ -462,5 +462,69 @@ describe('owner decisions asked in prose (crewly#1369)', () => {
     const msg = 'Should I merge A? Should I merge B? Should I merge C? Should I merge D? Should I merge A?';
     expect(extractOwnerDecisionQuestions(msg, opts).map((q) => q.text)).toEqual(['Should I merge A?', 'Should I merge B?', 'Should I merge C?']);
     expect(extractOwnerDecisionQuestions('', opts)).toEqual([]);
+  });
+});
+
+describe('next steps with no deliverable and no time are promises (crewly#1386, Pia 2026-10-18)', () => {
+  const now = new Date(2026, 9, 18, 16, 3, 0);
+  const PIA_REPLY = [
+    '三条片段已经提交到 Flow 了，作为第 3 步的预览。',
+    '三条已经提交，让它们跑完，对比后看差多少。',
+    '这批之后到第 2 步结束，总共控制在 120 积分以内。',
+  ].join('\n');
+
+  it.each([
+    '三条已经提交，让它们跑完，对比后看差多少。',
+    '这批之后到第 2 步结束，总共控制在 120 积分以内。',
+    '跑完我再对比三条的差别。',
+    '等渲染完，我们接着做第 2 步。',
+    '接下来先复刻参考角色，然后复刻镜头。',
+    "Then I'll do step 2.",
+    "Once they finish, I'll compare the three clips.",
+    "I'll run the second batch next.",
+  ])('detects %s', (s) => {
+    expect(isNextStepCommitment(s)).toBe(true);
+  });
+
+  it.each([
+    ['a vague look', '我再看看。'],
+    ['past', '我跑完之后对比了。'],
+    ['past narration', '我跑完之后发现效果一般。'],
+    ['a status with no plan', '三条已经提交，还在跑。'],
+    ['the owner acts', '你看完之后再决定要不要做第 2 步。'],
+    ['conditional', '如果效果不好，我之后换个模型再跑。'],
+    ['opinion', '我觉得跑完之后可以再对比一下。'],
+    ['advice', '建议先跑完再对比。'],
+    ['habit', '以后每次都先跑完再对比。'],
+    ['a fact about the tool', '它们跑完后会自动保存到 Drive。'],
+    ['no first person, no plan opener', '这个模型之后会更便宜。'],
+    ['a question', '跑完之后我对比一下？'],
+    ['English with no sequence', "I'll be careful."],
+    ['English hedge', "Then I'll maybe compare them."],
+    ['English lesson', "Next time I'll check first."],
+    ['English conditional', "If it fails, then I'll rerun it."],
+    ['English owner acts', "Then you'll run step 2."],
+    ['English past', 'Then I compared the clips.'],
+  ])('ignores %s', (_label, s) => {
+    expect(isNextStepCommitment(s)).toBe(false);
+  });
+
+  it('the reply becomes promises with the caller default due (4 h in a live chat)', () => {
+    const c = extractOpenItems(PIA_REPLY, { now, defaultDueMs: OPEN_ITEMS_CONSTANTS.CHAT_PROMISE_DEFAULT_DUE_MS }).commitments;
+    expect(c.map((x) => x.text)).toEqual(['三条已经提交，让它们跑完，对比后看差多少。', '这批之后到第 2 步结束，总共控制在 120 积分以内。']);
+    for (const x of c) {
+      expect(x.dueSource).toBe('default');
+      expect(x.due.getTime() - now.getTime()).toBe(OPEN_ITEMS_CONSTANTS.CHAT_PROMISE_DEFAULT_DUE_MS);
+    }
+  });
+
+  it('an echoed list of the owner steps is not the agent promising them', () => {
+    const listed = ['你的三步：', '1. 先复刻参考角色，然后复刻镜头', '2. 跑完之后对比差多少'].join('\n');
+    expect(extractOpenItems(listed, { now }).commitments).toEqual([]);
+  });
+
+  it('a plain status report creates nothing', () => {
+    expect(extractOpenItems('三条片段已经提交到 Flow 了。现在还在排队。', { now }).commitments).toEqual([]);
+    expect(extractOpenItems('The three clips are submitted. They are still queued.', { now }).commitments).toEqual([]);
   });
 });
