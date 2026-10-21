@@ -107,6 +107,7 @@ import { RequestCascadeSubscriber } from './services/v3/request-cascade.subscrib
 import { setRequestServiceEventBus, RequestService } from './services/v3/request.service.js';
 import { OwnerReceiptService, setOwnerReceiptService } from './services/v3/owner-receipt/owner-receipt.service.js';
 import { agentNameIndexOf, createSlackOwnerSender, startOwnerReceiptSchedule, teamIndexOf, teamLeadIndexOf } from './services/v3/owner-receipt/owner-receipt.boot.js';
+import { createSpotCheckLoader } from './services/v3/owner-receipt/verified-spot-check.loader.js';
 import { createPullsWeeklyLoader } from './services/v3/owner-receipt/owner-pulls-weekly.loader.js';
 import { getTraceAnalysis } from './services/trace/trace-analysis.service.js';
 import { getTraceStore } from './services/trace/trace-store.js';
@@ -803,6 +804,11 @@ export class CrewlyServer {
 					loadAgentNameIndex: async () => agentNameIndexOf(await StorageService.getInstance().getTeams()),
 					sender: createSlackOwnerSender(() => getSlackService()),
 					readIntakeLog: () => intakeOutcomeLog.read(),
+					// #1315: every receipt, a spot-check that verified work's files still exist.
+					loadSpotCheck: createSpotCheckLoader({
+						listWorkItems: () => TaskPoolService.getInstance().getAllItems(),
+						loadTeamIndex: async () => teamIndexOf(await StorageService.getInstance().getTeams()),
+					}),
 					// #1387: once a week, how often agents pulled the owner in.
 					loadPullsWeekly: createPullsWeeklyLoader({
 						listDecisions: async () => {

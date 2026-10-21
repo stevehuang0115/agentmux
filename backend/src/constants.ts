@@ -6294,6 +6294,24 @@ export const OWNER_RECEIPT_CONSTANTS = {
 		/** Traces read for the owner-touch count (most recent first) */
 		MAX_TRACES: 500,
 	},
+	/**
+	 * Daily spot-check of verified WorkItems (#1315, phase 1): re-check that the
+	 * file artifacts recorded as evidence still exist. Never changes a WorkItem.
+	 */
+	VERIFIED_SPOT_CHECK: {
+		/** WorkItems sampled per day */
+		SAMPLE_SIZE: 5,
+		/** Only items completed this recently are eligible (ms) */
+		WINDOW_MS: 24 * 60 * 60 * 1000,
+		/** Discrepancies named on the owner line before "+N more" */
+		MAX_LISTED: 3,
+		/**
+		 * Directory markers of agent worktrees the disk janitor removes after merge
+		 * (the segment after a marker is the worktree root). A missing file inside
+		 * a worktree that is gone is "worktree cleaned", not a discrepancy.
+		 */
+		WORKTREE_MARKERS: ['.claude/worktrees', '.crewly/worktrees', 'crewly-worktrees'] as readonly string[],
+	},
 } as const;
 
 /** How each pull kind reads on the owner's weekly line (#1387). */

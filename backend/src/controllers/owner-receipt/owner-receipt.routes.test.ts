@@ -13,6 +13,7 @@ describe('createOwnerReceiptRouter', () => {
     expect(routes).toEqual([
       { path: '/', methods: ['get'] },
       { path: '/pulls', methods: ['get'] },
+      { path: '/spot-check', methods: ['get'] },
       { path: '/settings', methods: ['get'] },
       { path: '/settings', methods: ['put'] },
       { path: '/settings', methods: ['post'] },
