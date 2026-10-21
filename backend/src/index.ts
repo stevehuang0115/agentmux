@@ -130,7 +130,7 @@ import { driveCapabilities } from './services/drive/drive-agent.service.js';
 import { canvasCapabilities } from './services/board/canvas/canvas-inbound.service.js';
 import { isBoardPushDisabled } from './services/board/board-push.service.js';
 import { teamMoveCapabilities } from './services/team-move/team-move-driver.service.js';
-import { SUB_AGENT_QUEUE_CONSTANTS, CHAT_CONTEXT_CONSTANTS, SAFE_RESTART, AUTO_UPDATE_CONSTANTS, PROCESS_EXIT_CODES, CLAUDE_STARTUP_CONSTANTS, WEB_CONSTANTS, TICKET_CONSTANTS, UNASSIGNED_ROUTE_CONSTANTS, CLOUD_TALK_CONSTANTS, STANDING_ANSWERS_CONSTANTS, TICKET_AUTOPILOT_CONSTANTS, TICKET_HYGIENE_CONSTANTS, EXPERIMENT_CONSTANTS, WORK_ITEM_DESTINATION_CONSTANTS, CODEX_USAGE_SYNC_CONSTANTS, ANTIGRAVITY_USAGE_SYNC_CONSTANTS, OWNER_AUTH_CONSTANTS, CREWLY_APPS_CONSTANTS, SLACK_AGENT_DM_CONSTANTS, BRIEFING_CONSTANTS, DRIVE_CONSTANTS, POOL_PRUNE_CONSTANTS, STALL_WATCHER_CONSTANTS } from './constants.js';
+import { SUB_AGENT_QUEUE_CONSTANTS, CHAT_CONTEXT_CONSTANTS, SAFE_RESTART, AUTO_UPDATE_CONSTANTS, PROCESS_EXIT_CODES, CLAUDE_STARTUP_CONSTANTS, WEB_CONSTANTS, TICKET_CONSTANTS, UNASSIGNED_ROUTE_CONSTANTS, CLOUD_TALK_CONSTANTS, STANDING_ANSWERS_CONSTANTS, TICKET_AUTOPILOT_CONSTANTS, TICKET_HYGIENE_CONSTANTS, EXPERIMENT_CONSTANTS, WORK_ITEM_DESTINATION_CONSTANTS, CODEX_USAGE_SYNC_CONSTANTS, ANTIGRAVITY_USAGE_SYNC_CONSTANTS, OWNER_AUTH_CONSTANTS, CREWLY_APPS_CONSTANTS, SLACK_AGENT_DM_CONSTANTS, BRIEFING_CONSTANTS, DRIVE_CONSTANTS, MEETING_CONSTANTS, ORC_CONVERSATION_CONSTANTS, POOL_PRUNE_CONSTANTS, STALL_WATCHER_CONSTANTS } from './constants.js';
 import { randomUUID } from 'crypto';
 import { PtyActivityTrackerService } from './services/agent/pty-activity-tracker.service.js';
 import { InFlightTurnTracker } from './services/restart/in-flight-turn-tracker.service.js';
@@ -3377,6 +3377,8 @@ void (async () => {
 						// "Let me check with the teams" (Drive kickoff): set below, once the
 						// status snapshot sync exists, and read by the Drive handler at run time.
 						let driveStatusCheck: { run: () => Promise<unknown> } | null = null;
+						// The status snapshot builder (set below with the briefing sync), read by meeting packs.
+						let driveSnapshot: (() => Promise<import('./services/drive/drive-briefing.contract.js').BriefingSnapshot>) | null = null;
 
 						// Drive mode (specs/2026-10-08-drive-mode.md §7): Crewly Cloud hosts
 						// the voice session; this machine delivers the owner's words to its
@@ -3406,7 +3408,85 @@ void (async () => {
 							const cloudClient = CloudClientService.getInstance();
 							const owner = { userId: SLACK_AGENT_DM_CONSTANTS.OWNER_USER_ID, source: 'oss' as const };
 							const botTokenOf = (session: string): string | undefined => getSlackAgentIdentityService()?.getInstalled(session)?.botToken;
+							// Meetings P2b (crewly#1415): a 1:1 voice meeting with one agent —
+							// its pack, live wiki search and write-backs into the right thread.
+							const [{ DriveMeetingService }, meetingWiring, { DecisionService }, { WikiSearchService }] = await Promise.all([
+								import('./services/drive/drive-meeting.service.js'),
+								import('./services/drive/drive-meeting.wiring.js'),
+								import('./services/decisions/decision.service.js'),
+								import('./services/wiki/wiki-search.service.js'),
+							]);
+							const meeting = new DriveMeetingService({
+								timeline: async (agentSession, sinceMs) =>
+									chatService
+										.getAgentTimeline({ agentSession, principal: owner, limit: MEETING_CONSTANTS.TIMELINE_SCAN })
+										.items.filter((r) => r.createdAt >= sinceMs)
+										.map((r) => ({
+											id: r.id,
+											channelId: r.channelId,
+											channelType: r.channelType,
+											channelName: r.channelName,
+											...(r.threadId ? { threadId: r.threadId } : {}),
+											senderType: r.senderType,
+											senderKind: r.senderKind,
+											senderId: r.senderId,
+											content: r.content,
+											createdAt: r.createdAt,
+											...(r.metadata ? { metadata: r.metadata } : {}),
+										})),
+								decisions: async () => ((await DecisionService.getInstance()?.list('all')) ?? []).map(meetingWiring.decisionSource),
+								snapshot: async () => (driveSnapshot ? driveSnapshot() : null),
+								handover: (agentSession) => meetingWiring.readLatestHandover(path.join(getCrewlyHomePath(), ORC_CONVERSATION_CONSTANTS.HANDOVER_DIR), agentSession),
+								vaults: async (agentSession) =>
+									meetingWiring.vaultsOfAgent(await this.storageService.getTeams(), await this.storageService.getProjects(), agentSession, getCrewlyHomePath()),
+								searchWiki: async (vaults, query, agentSession) => {
+									const role = meetingWiring.teamsOfAgent(await this.storageService.getTeams(), agentSession)[0]?.role;
+									const out = await WikiSearchService.getInstance().searchAllVaults({ vaults, query, ...(role ? { viewerRole: role } : {}) });
+									return out.ok ? out.hits.map(meetingWiring.wikiHitToPage) : [];
+								},
+								readPage: meetingWiring.readWikiPage,
+								answerDecision: async (id, text) => {
+									const svc = DecisionService.getInstance();
+									if (!svc) return false;
+									await svc.answerInWords(id, text, 'voice');
+									return true;
+								},
+								slackDmOf: (agentSession) => {
+									const link = getSlackAgentDmService()?.findByAgentSession(agentSession);
+									return link && botTokenOf(agentSession) ? { slackChannelId: link.slackChannelId, chatChannelId: link.chatChannelId } : null;
+								},
+								chatChannelOfSlack: (slackChannelId) => {
+									const dm = getSlackAgentDmService()?.findBySlackChannelId(slackChannelId);
+									if (dm) return { chatChannelId: dm.chatChannelId, dm: true };
+									const room = getSlackTeamChannelService()?.findBySlackChannelId(slackChannelId);
+									return room ? { chatChannelId: room.chatChannelId, dm: false } : null;
+								},
+								slackRootId: (chatChannelId, threadTs) => chatService.findSlackThreadRoot(chatChannelId, threadTs)?.id ?? null,
+								postSlack: async ({ agentSession, slackChannelId, threadTs, text }) => {
+									const slack = getSlackService();
+									if (!slack.isConnected()) return null;
+									const token = botTokenOf(agentSession);
+									// An agent's DM belongs to its own bot (the workspace bot cannot post there).
+									if (!token && getSlackAgentDmService()?.findBySlackChannelId(slackChannelId)) return null;
+									return slack.sendMessage({ channelId: slackChannelId, text, ...(threadTs ? { threadTs } : {}), skipChatV2Mirror: true, ...(token ? { botToken: token } : {}) });
+								},
+								ownerDmChannel: (agentSession) => chatService.ensureDmChannel({ agentSession, principal: owner }).channel.id,
+								recordOwnerTurn: async ({ channelId, threadId, text, metadata }) => {
+									const { message } = chatService.recordTurn({
+										channelId,
+										senderType: 'user',
+										senderId: owner.userId,
+										content: text,
+										...(threadId ? { threadId } : {}),
+										clientMessageId: `meeting-${randomUUID()}`,
+										metadata,
+									});
+									await chatDispatcher.dispatchMessage(chatService.getChannel(channelId, owner), message);
+									return { messageId: message.id };
+								},
+							});
 							const drive = new DriveAgentService({
+								meeting,
 								source: sync,
 								cloud: {
 									getToken: () => cloudClient.getToken(),
@@ -3544,8 +3624,7 @@ void (async () => {
 								listTickets: async (projectPath) => (await ProjectTicketService.getInstance().list(projectPath)).tickets,
 								listWorkItems: () => TaskPoolService.getInstance().getAllItems(),
 							});
-							const briefingSync = new DriveBriefingSyncService({
-								build: async () =>
+							const buildSnapshot = async (): Promise<import('./services/drive/drive-briefing.contract.js').BriefingSnapshot> =>
 									buildBriefingSnapshot(
 										await collectSnapshotSources({
 											getTeams: () => this.storageService.getTeams(),
@@ -3558,7 +3637,10 @@ void (async () => {
 											// Charters and chore-free work lists for the high-level overview.
 											roster: async () => (await import('./services/team-roster/team-roster.service.js')).TeamRosterService.getInstance().getRoster(),
 										}),
-									),
+									);
+							driveSnapshot = buildSnapshot;
+							const briefingSync = new DriveBriefingSyncService({
+								build: buildSnapshot,
 								cloud: {
 									getToken: () => cloudClient.getToken(),
 									getCloudUrl: () => cloudClient.getCloudUrl(),

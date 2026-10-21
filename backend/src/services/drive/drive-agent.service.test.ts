@@ -308,3 +308,68 @@ describe('session log copy (op:log)', () => {
     expect(await bad.service.handle(push({ v: 1, kind: 'drive', op: 'log', sessionId: SID, instanceId: 'mac' }))).toBe('failed');
   });
 });
+
+describe('meetings (P2b)', () => {
+  const meetingDep = () => {
+    const calls: Array<[string, unknown]> = [];
+    const meeting = {
+      buildPack: jest.fn(async (req: unknown) => {
+        calls.push(['pack', req]);
+        return { v: 1, agent: { name: 'Ella', session: 'ella' }, agenda: [], estTokens: 10 } as never;
+      }),
+      searchWiki: jest.fn(async (req: unknown) => {
+        calls.push(['wiki', req]);
+        return { hits: [{ title: 'Brand voice', where: 'Marketing/brand.md', text: 'Short and warm.' }], ms: 12 };
+      }),
+      writeBack: jest.fn(async (input: unknown) => {
+        calls.push(['write', input]);
+        return { threadRef: 'slack:D0ELLA:1760950000.000100', via: 'slack' as const };
+      }),
+    };
+    return { meeting, calls };
+  };
+
+  it('advertises meeting_pack only with a pack builder', () => {
+    const plain = harness();
+    plain.service.start();
+    expect(driveCapabilities()).toEqual(['drive_message']);
+    plain.service.stop();
+    const m = harness({}, { meeting: meetingDep().meeting });
+    m.service.start();
+    expect(driveCapabilities()).toEqual(['drive_message', 'meeting_pack']);
+    m.service.stop();
+    expect(driveCapabilities()).toEqual([]);
+  });
+
+  it('meeting_pack: fetches the request, builds the pack, posts it back', async () => {
+    const { meeting, calls } = meetingDep();
+    const h = harness({ [`/machine/packs/${SID}`]: { agentSession: 'ella', name: 'Ella', language: 'en' } }, { meeting });
+    expect(await h.service.handle(push({ v: 1, kind: 'drive', op: 'meeting_pack', sessionId: SID, id: SID, instanceId: 'mac' }))).toBe('done');
+    expect(calls[0]).toEqual(['pack', { agentSession: 'ella', name: 'Ella', language: 'en' }]);
+    expect(h.calls[1]).toMatchObject({ method: 'POST', url: `https://api.crewlyai.com/api/cloud/talk/session/${SID}/machine/packs/${SID}`, body: { instanceId: 'mac', pack: { agent: { name: 'Ella' } } } });
+  });
+
+  it('a pack for an agent not on this machine fails', async () => {
+    const { meeting } = meetingDep();
+    const h = harness({ [`/machine/packs/${SID}`]: { agentSession: 'ghost', name: 'Ghost', language: 'en' } }, { meeting, agentExists: async (s) => s === 'ella' });
+    expect(await h.service.handle(push({ v: 1, kind: 'drive', op: 'meeting_pack', sessionId: SID, id: SID, instanceId: 'mac' }))).toBe('failed');
+    expect(meeting.buildPack).not.toHaveBeenCalled();
+  });
+
+  it('wiki_search: answers with hits and the time it took', async () => {
+    const { meeting } = meetingDep();
+    const h = harness({ '/machine/wiki/w1': { agentSession: 'ella', query: 'brand voice' } }, { meeting });
+    expect(await h.service.handle(push({ v: 1, kind: 'drive', op: 'wiki_search', sessionId: SID, id: 'w1', instanceId: 'mac' }))).toBe('done');
+    expect(h.calls[1]).toMatchObject({ method: 'POST', body: { instanceId: 'mac', ms: 12, hits: [{ title: 'Brand voice' }] } });
+  });
+
+  it('a write-back delivery goes into its thread (no Drive conversation) and is reported written', async () => {
+    const { meeting, calls } = meetingDep();
+    const wb = { kind: 'decision', topic: 'Launch headline', threadRef: 'slack:D0ELLA:1760950000.000100' };
+    const h = harness({ '/machine/deliveries/d1/written': { written: true }, '/machine/deliveries/d1': delivery({ text: 'Use headline B', writeBack: wb }) }, { meeting });
+    expect(await h.service.handle(push({ v: 1, kind: 'drive', op: 'deliver', sessionId: SID, id: 'd1', instanceId: 'mac' }))).toBe('done');
+    expect(h.delivered).toHaveLength(0);
+    expect(calls[0]).toEqual(['write', { sessionId: SID, agentSession: 'ella', text: 'Use headline B', writeBack: wb }]);
+    expect(h.calls[1]).toMatchObject({ method: 'POST', url: expect.stringContaining('/machine/deliveries/d1/written'), body: { instanceId: 'mac', threadRef: 'slack:D0ELLA:1760950000.000100' } });
+  });
+});
