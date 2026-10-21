@@ -639,7 +639,7 @@ describe('MEETING_CONSTANTS', () => {
 	it('advertises meeting_pack and keeps the pack within the Cloud budget', () => {
 		expect(MEETING_CONSTANTS.CAPABILITY).toBe('meeting_pack');
 		expect(MEETING_CONSTANTS.SOURCE).toBe('cloud-talk');
-		expect(MEETING_CONSTANTS.PACK_MAX_TOKENS).toBeLessThanOrEqual(30_000);
+		expect(MEETING_CONSTANTS.PACK_MAX_TOKENS).toBeLessThanOrEqual(15_000);
 		expect(MEETING_CONSTANTS.AGENDA_MAX).toBeLessThanOrEqual(15);
 	});
 });
