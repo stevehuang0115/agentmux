@@ -176,7 +176,7 @@ export interface TicketAutopilotPool {
 export interface TicketAutopilotDirectory {
   getTeams(): Promise<Team[]>;
   getProjects(): Promise<Project[]>;
-  saveProject(project: Project): Promise<void>;
+  saveProject(project: Project, opts?: { ticketAutopilot?: 'replace'; caller?: string }): Promise<void>;
 }
 
 /** The ticket store (read only). */
@@ -273,6 +273,8 @@ export interface TicketAutopilotDeps {
    * budget honours them: +X raises it for the day, unlimited lifts it.
    */
   boosts?: TicketAutopilotBoostSource;
+  /** Whether any spend cap (agent, team or total) covers these teams; absent = unknown (no warning) */
+  teamsCapped?: (teamIds: string[]) => boolean;
   /** Sends to the owner; resolves false when it could not be sent (retried on the next tick) */
   notifyOwner: (notice: OwnerNotice) => Promise<boolean>;
   /** JSON file holding the autopilot's bookkeeping */
@@ -651,7 +653,7 @@ export class TicketAutopilotService {
       throw new ProjectTicketError(400, `driver ${result.settings.driver} is not a team lead on a team that works on ${project.name}`);
     }
     const updated: Project = { ...project, ticketAutopilot: result.settings, updatedAt: this.now().toISOString() };
-    await this.deps.directory.saveProject(updated);
+    await this.deps.directory.saveProject(updated, { ticketAutopilot: 'replace', caller: `autopilot.updateSettings by ${caller.session ?? 'owner'}` });
     this.logger.info('Ticket autopilot settings changed', {
       projectId: project.id,
       by: caller.session ?? 'owner',
@@ -809,7 +811,7 @@ export class TicketAutopilotService {
     const spent = usage.budget;
     const budget = this.budgetToday(settings, spendTeams).tokens;
 
-    if (settings.enabled && spent >= budget) await this.noticeBudgetPaused(project, ps, spent, budget, now, teams[0]?.name, usage.raw);
+    if (settings.enabled && spent >= budget) await this.noticeBudgetPaused(project, ps, spent, budget, now, teams[0]?.name, usage.raw, this.hasNoSpendCap(spendTeams));
     this.traceBudgetState(project, ps, settings.enabled && spent >= budget, spent, budget, now, usage.raw);
 
     const { tickets } = await this.deps.tickets.list(project.path);
@@ -1332,12 +1334,13 @@ export class TicketAutopilotService {
    * @param now - Clock
    * @param teamName - The project's team, for the boost hint
    * @param rawSpent - Raw tokens used today, shown beside the weighted figure
+   * @param uncapped - True when no spend cap covers the team (the notice then says other work keeps running)
    */
-  private async noticeBudgetPaused(project: Project, ps: ProjectState, spent: number, budget: number, now: Date, teamName?: string, rawSpent?: number): Promise<void> {
+  private async noticeBudgetPaused(project: Project, ps: ProjectState, spent: number, budget: number, now: Date, teamName?: string, rawSpent?: number, uncapped = false): Promise<void> {
     const today = localDateKey(now);
     if (ps.budgetNoticeDate === today) return;
     const ok = await this.deps
-      .notifyOwner({ title: 'Ticket autopilot paused', message: buildBudgetPausedMessage(project.name, spent, budget, teamName, rawSpent), urgent: false })
+      .notifyOwner({ title: 'Ticket autopilot paused', message: buildBudgetPausedMessage(project.name, spent, budget, teamName, rawSpent, uncapped), urgent: false })
       .catch(() => false);
     if (ok) {
       ps.budgetNoticeDate = today;
@@ -2700,6 +2703,20 @@ export class TicketAutopilotService {
   }
 
   /**
+   * Whether the teams are known to have no spend cap at all.
+   *
+   * @param teams - The project's teams
+   * @returns True only when the cap source says no cap covers them
+   */
+  private hasNoSpendCap(teams: Team[]): boolean {
+    try {
+      return this.deps.teamsCapped ? !this.deps.teamsCapped(teams.map((t) => t.id)) : false;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Convert every project's pre-token USD budget to tokens, once, and log it
    * (USAGE_CONSTANTS.TOKENS_PER_USD).
    *
@@ -2713,7 +2730,7 @@ export class TicketAutopilotService {
       const { dailyBudgetUsd, ...rest } = stored;
       const tokens = stored.dailyBudgetTokens ?? legacyBudgetTokens(stored) ?? undefined;
       const next = { ...rest, ...(tokens !== undefined ? { dailyBudgetTokens: tokens } : {}) };
-      await this.deps.directory.saveProject({ ...project, ticketAutopilot: next, updatedAt: this.now().toISOString() });
+      await this.deps.directory.saveProject({ ...project, ticketAutopilot: next, updatedAt: this.now().toISOString() }, { ticketAutopilot: 'replace', caller: 'autopilot.migrateUsdBudgets' });
       this.logger.info('Ticket autopilot budget converted from USD to tokens', {
         projectId: project.id,
         dailyBudgetUsd,

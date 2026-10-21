@@ -99,6 +99,13 @@ export function createDefaultTicketAutopilot(
     ledger: TokenUsageService.getInstance(),
     // The same usage boosts the token caps use (team / everyone boosts).
     boosts: (teamIds) => getSpendCapService()?.boostForTeams(teamIds) ?? { extra: 0, unlimited: false },
+    // True when any cap (total, default-agent, or one on these teams / their agents) is set.
+    teamsCapped: (teamIds) => {
+      const cfg = getSpendCapService()?.getConfig();
+      if (!cfg) return true; // no cap service: unknown, so no warning
+      const isCap = (v: unknown): boolean => typeof v === 'number' && v > 0;
+      return isCap(cfg.totalCapTokens) || isCap(cfg.defaultAgentCapTokens) || teamIds.some((id) => isCap(cfg.teamCapsTokens[id])) || Object.values(cfg.agentCapsTokens).some(isCap);
+    },
     notifyOwner,
     stateFile: path.join(getCrewlyHomePath(), TICKET_AUTOPILOT_CONSTANTS.STATE_FILENAME),
     roleDescription: async (role) => (await getRoleService().getRoleByName(role))?.description ?? null,
