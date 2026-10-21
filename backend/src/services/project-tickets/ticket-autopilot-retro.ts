@@ -157,7 +157,7 @@ export function statsLines(s: AutopilotPeriodStats): string[] {
   const lines = [
     `Tickets: ${s.triaged} triaged, ${s.started} started, ${s.done} done, ${s.verified} verified, ${s.sentBack} sent back, ${s.stalled} stalled${s.replans ? `; ${s.replans} goal replan${s.replans === 1 ? '' : 's'}` : ''}`,
     `Cycle time: start → done median ${s.cycleTime.toDone.medianMs === null ? 'n/a' : durationWords(s.cycleTime.toDone.medianMs)}, start → verified median ${s.cycleTime.toVerified.medianMs === null ? 'n/a' : durationWords(s.cycleTime.toVerified.medianMs)}`,
-    `Owner touches: ${s.ownerTouches.total} (answered ${s.ownerTouches.answered}, approved ${s.ownerTouches.approved}, sent back ${s.ownerTouches.sentBack}, corrected ${s.ownerTouches.corrected})`,
+    `Owner touches: ${s.ownerTouches.total} (answered ${s.ownerTouches.answered}, approved ${s.ownerTouches.approved}, sent back ${s.ownerTouches.sentBack}, corrected ${s.ownerTouches.corrected}, other ${s.ownerTouches.other})`,
     `Stalls: ${s.stalls.count} (${durationWords(s.stalls.totalMs)})${s.stalls.count > 0 ? ` — ${topStallCauses(s).join('; ')}` : ''}`,
     `Harness interventions: ${s.interventions.total} (nudges ${s.interventions.nudges}, redeliveries ${s.interventions.redeliveries}, wakes ${s.interventions.wakes}, corrections ${s.interventions.corrections}, refusals ${s.interventions.guardBlocks}, misroutes ${s.interventions.misroutes})`,
     `Cost: ${tokenWords(s.tokens)} tokens traced, ${usdWords(s.costUsd)}; team ledger ${tokenWords(s.budget.ledgerTokens)} of ${tokenWords(s.budget.dailyBudgetTokens)} budget (${Math.round(s.budget.pct * 100)}%)${s.pausedMs > 0 ? `; paused on the budget ${durationWords(s.pausedMs)}` : ''}`,
