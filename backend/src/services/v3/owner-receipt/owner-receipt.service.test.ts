@@ -7,6 +7,7 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import { createRequest, type Request } from '../../../types/v2/request.types.js';
+import { rollupPulls } from './owner-pulls-weekly.js';
 import { OwnerReceiptService, getOwnerReceiptService, setOwnerReceiptService } from './owner-receipt.service.js';
 
 /** 2026-09-26 21:00 EDT */
@@ -235,6 +236,48 @@ describe('OwnerReceiptService', () => {
     const again = build({ requests: [ticket(1, '2026-09-26T15:00:00Z')], clock });
     await Promise.all([again.svc.tick(), again.svc.tick()]);
     expect(again.sent).toHaveLength(1);
+  });
+
+  it('adds the weekly pulls line on the report weekday, once, and sends it alone when nothing else is to say (#1387)', async () => {
+    // Sunday 9/27 21:00 EDT
+    const clock = { now: new Date('2026-09-28T01:00:00Z') };
+    const sent: string[] = [];
+    const rollup = rollupPulls([{ at: '2026-09-25T15:00:00Z', kind: 'decision', team: 'CE', outcome: 'answered' }], clock.now);
+    const svc = new OwnerReceiptService({
+      listRequests: async () => [],
+      listWorkItems: async () => [],
+      loadTeamIndex: async () => new Map(),
+      loadPullsWeekly: async () => rollup,
+      sender: async (t) => (sent.push(t), true),
+      statePath: null,
+      now: () => clock.now,
+    });
+    expect(await svc.tick()).toMatchObject({ sent: true });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('*Pulled you in 1 time this week*');
+    expect((await svc.getState()).lastPullsLocalDate).toBe('2026-09-27');
+    // Same day again, and the next weekday: no second line.
+    expect(await svc.tick()).toBeNull();
+    clock.now = new Date('2026-09-29T01:00:00Z');
+    expect(await svc.tick()).toMatchObject({ sent: false, reason: 'nothing_to_say' });
+    expect(sent).toHaveLength(1);
+    expect((await svc.pullsWeekly())?.thisWeek.total).toBe(1);
+  });
+
+  it('a failing weekly loader leaves the line out without failing the receipt', async () => {
+    const clock = { now: new Date('2026-09-28T01:00:00Z') };
+    const svc = new OwnerReceiptService({
+      listRequests: async () => [],
+      listWorkItems: async () => [],
+      loadTeamIndex: async () => new Map(),
+      loadPullsWeekly: async () => {
+        throw new Error('boom');
+      },
+      sender: async () => true,
+      statePath: null,
+      now: () => clock.now,
+    });
+    expect(await svc.tick()).toMatchObject({ sent: false, reason: 'nothing_to_say' });
   });
 
   it('singleton accessors', () => {

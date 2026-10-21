@@ -6280,6 +6280,28 @@ export const OWNER_RECEIPT_CONSTANTS = {
 		OPTION_ON: 'Turn on nightly — this format',
 		OPTION_PER_ASK: 'Keep per-ask format — every ask, one line each',
 	},
+	/**
+	 * The weekly "how often agents pulled the owner in" line (#1387, first
+	 * slice). Specs: specs/owner-pulls-weekly.md.
+	 */
+	PULLS_WEEKLY: {
+		/** Local weekday it goes out with the receipt (0 = Sunday) */
+		REPORT_WEEKDAY: 0,
+		/** The week counted: the 7 days before the report; compared with the 7 before that (ms) */
+		WINDOW_MS: 7 * 24 * 60 * 60 * 1000,
+		/** Teams named on the line before "+N more" */
+		MAX_TEAMS: 3,
+		/** Traces read for the owner-touch count (most recent first) */
+		MAX_TRACES: 500,
+	},
+} as const;
+
+/** How each pull kind reads on the owner's weekly line (#1387). */
+export const PULLS_WEEKLY_KIND_LABELS = {
+	decision: 'decision needed',
+	review: 'review or approval',
+	fyi: 'FYI that did not need an answer',
+	stuck: 'agent stuck or error',
 } as const;
 
 /**

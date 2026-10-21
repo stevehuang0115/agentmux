@@ -215,6 +215,8 @@ export interface OwnerReceiptState {
   lastSentAt?: string;
   /** Local date (YYYY-MM-DD) of the last send, so one day gets one receipt */
   lastSentLocalDate?: string;
+  /** Local date (YYYY-MM-DD) the weekly pulls line last went out (#1387), so one week gets one line */
+  lastPullsLocalDate?: string;
   /** The one-time format ask (#856 follow-up), once it was asked */
   formatAsk?: ReceiptFormatAsk;
 }
