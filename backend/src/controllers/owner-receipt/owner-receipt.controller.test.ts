@@ -137,3 +137,39 @@ describe('GET /api/owner-receipt/pulls', () => {
     expect((await request(app).get('/api/owner-receipt/pulls')).status).toBe(503);
   });
 });
+
+describe('GET /api/owner-receipt/spot-check', () => {
+  it('returns the run and its line, with the WorkItem id in the data only', async () => {
+    setOwnerReceiptService(
+      new OwnerReceiptService({
+        listRequests: async () => [],
+        listWorkItems: async () => [],
+        loadTeamIndex: async () => new Map(),
+        loadSpotCheck: async () => ({
+          at: NOW.toISOString(),
+          eligible: 1,
+          sampled: 1,
+          artifactsChecked: 1,
+          skipped: 0,
+          discrepancies: [{ workItemId: 'wi-1', team: 'CE', artifactPath: '/tmp/a.md' }],
+        }),
+        statePath: null,
+        now: () => NOW,
+      }),
+    );
+    const res = await request(app).get('/api/owner-receipt/spot-check');
+    expect(res.status).toBe(200);
+    expect(res.body.data.spotCheck.discrepancies[0].workItemId).toBe('wi-1');
+    expect(res.body.data.text).toContain('1 sampled, 1 discrepancy');
+    expect(res.body.data.text).not.toContain('wi-1');
+  });
+
+  it('503s when not wired, or the service is not ready', async () => {
+    setOwnerReceiptService(
+      new OwnerReceiptService({ listRequests: async () => [], listWorkItems: async () => [], loadTeamIndex: async () => new Map(), statePath: null, now: () => NOW }),
+    );
+    expect((await request(app).get('/api/owner-receipt/spot-check')).status).toBe(503);
+    setOwnerReceiptService(null);
+    expect((await request(app).get('/api/owner-receipt/spot-check')).status).toBe(503);
+  });
+});
