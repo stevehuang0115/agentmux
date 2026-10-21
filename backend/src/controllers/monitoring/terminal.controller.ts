@@ -1761,6 +1761,9 @@ export function noteAgentToAgent(target: string, req: Pick<Request, 'headers'> &
 		const body = (req.body ?? {}) as Record<string, unknown>;
 		const text = typeof body.message === 'string' ? body.message : body.mode === 'message' && typeof body.data === 'string' ? body.data : null;
 		if (text) getTurnTriggerTracker().noteSender(target, text, sender);
+		// Writing to the agent whose message this one is answering answers it:
+		// a later bare reply does not go back there (crewly#1381 item 3).
+		getTurnTriggerTracker().noteAnsweredAgent(sender, target);
 		// Writing to an agent answers what that agent asked this one.
 		try {
 			getAgentAskLedger()?.noteAnswered(sender, target);

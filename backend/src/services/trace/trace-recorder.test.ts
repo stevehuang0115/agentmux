@@ -12,6 +12,7 @@ import {
 	assignRequestTrace,
 	assignWorkItemTrace,
 	carryAgentMessageTrace,
+	noteMidTurnDelivery,
 	noteTurnDelivery,
 	startGoalTrace,
 	traceDecisionChanged,
@@ -32,6 +33,7 @@ import {
 	withWorkItemTraceMarker,
 	workItemTraceMarker,
 } from './trace-recorder.js';
+import { getTurnTriggerTracker } from './turn-trigger.js';
 import { createRequest } from '../../types/v2/request.types.js';
 import { createWorkItem, type WorkItem } from '../../types/v2/work-item.types.js';
 import type { OwnerDecision } from '../../types/decision.types.js';
@@ -90,6 +92,28 @@ describe('trace-recorder', () => {
 		setTraceStoreForTesting(null);
 		setTraceContextForTesting(null);
 		fs.rmSync(dir, { recursive: true, force: true });
+	});
+
+	// crewly#1381 item 2: a message handed over at a tool boundary is the
+	// agent's latest input; the turn stays on its trace.
+	describe('noteMidTurnDelivery', () => {
+		afterEach(() => getTurnTriggerTracker().reset());
+
+		it('records the handed-over message in the turn-trigger tracker without moving the trace', () => {
+			const id = startGoalTrace({ kind: 'goal', summary: 'g', session: 'pia' })!;
+			getTurnTriggerTracker().noteDelivery('pia', '[CHAT:room-a] <steve@Pia>\n\nthe video thread', {});
+			noteMidTurnDelivery('pia', '[MESSAGE from Atlas (Think Tank) — a colleague, not the owner. Answer with send-message --to think-tank-atlas-b4e166f6; do not post it in an owner thread.]\nthe timings?');
+			expect(getTurnTriggerTracker().routedTrigger('pia')).toEqual(
+				expect.objectContaining({ triggerKind: 'agent_message', sender: 'think-tank-atlas-b4e166f6', traceId: id }),
+			);
+			expect(getTraceContext().currentTrace('pia')).toBe(id);
+		});
+
+		it('ignores empty input and never throws', () => {
+			expect(() => noteMidTurnDelivery('', 'x')).not.toThrow();
+			expect(() => noteMidTurnDelivery('pia', '')).not.toThrow();
+			expect(getTurnTriggerTracker().routedTrigger('pia')).toBeNull();
+		});
 	});
 
 	describe('autonomy metric events (#984)', () => {

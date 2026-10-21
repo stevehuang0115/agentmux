@@ -21,6 +21,7 @@ import * as path from 'path';
 import { OWNER_HOOK_MESSAGE_CONSTANTS } from '../../constants.js';
 import { getCrewlyHomePath } from '../core/crewly-home.utils.js';
 import { SubAgentMessageQueue, type SurfacedOwnerMessage } from './sub-agent-message-queue.service.js';
+import { noteMidTurnDelivery } from '../trace/trace-recorder.js';
 
 /**
  * Writes an owner message too long for the note to a file, returning its
@@ -240,6 +241,9 @@ function fitBody(data: string, room: number): string {
  * @param queue - The message queue
  * @param maxChars - Room for the note (what the other notes of this hook call leave)
  * @param overflow - Where an owner message too long for the note is written in full
+ * @param noteSurfaced - Records the handed-over text as the agent's latest
+ *   input (turn-trigger tracker), so a later bare `reply` answers it and not
+ *   the input the turn started with (crewly#1381 item 2)
  * @returns The note, or null
  */
 export function ownerHookNoteFor(
@@ -248,11 +252,18 @@ export function ownerHookNoteFor(
 	queue: SubAgentMessageQueue = SubAgentMessageQueue.getInstance(),
 	maxChars: number = OWNER_HOOK_MESSAGE_CONSTANTS.MAX_CONTEXT_CHARS,
 	overflow: OwnerMessageOverflowWriter = defaultOverflowWriter(sessionName),
+	noteSurfaced: (session: string, text: string) => void = noteMidTurnDelivery,
 ): string | null {
 	const C = OWNER_HOOK_MESSAGE_CONSTANTS;
 	if (env[C.KILL_SWITCH_ENV] === C.KILL_SWITCH_OFF_VALUE) return null;
 	const message = queue.takeOwnerMessageForHook(sessionName);
-	return message ? buildOwnerHookNote(message, maxChars, { overflow }) : null;
+	if (!message) return null;
+	try {
+		noteSurfaced(sessionName, message.data);
+	} catch {
+		// Bookkeeping only: the note still goes.
+	}
+	return buildOwnerHookNote(message, maxChars, { overflow });
 }
 
 /**
