@@ -220,6 +220,23 @@ outcome metrics, same config unless given), `startedAt?`.
 - While a card is `running` with an autopilot scope, the project's daily
   retro defaults to on (§4).
 
+### Supervisor read access (#1026)
+
+An autopilot card's creator and its optional `supervisor` (an agent session
+set at create) watch the run without directing it. While the card is
+`planned` or `running` they may read, with `X-Agent-Session`:
+
+- `GET …/:project/stats` and `…/runs` of the card's project. A labelled card
+  holds them to its label: no label means its label, another label is 403,
+  and the day's run trace (which spans every label) is left out of `runs`.
+- autopilot-tagged traces of that project (`/api/traces…`), only those with
+  the card's label when it has one.
+
+Nothing else: other projects stay 403, retro / self-review submits and every
+write path still need a lead, and the supervisor is not made a project
+member, so triage and dispatch never offer it tickets. Access ends when the
+card is measured (`done`) or cancelled.
+
 ## 4. Daily autopilot retro (minimal #985)
 
 Per project, opt-in: `ticketAutopilot.retro: true | false` (absent = on
