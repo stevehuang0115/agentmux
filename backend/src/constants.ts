@@ -9139,6 +9139,28 @@ export const TICKET_HYGIENE_CONSTANTS = {
 } as const;
 
 /**
+ * Routine nudge (crewly#1034): when a ticket is verified done and its result
+ * describes recurring work, the verifying lead gets ONE internal WorkItem
+ * telling it to set a routine or say why not. Never creates the cron itself.
+ */
+export const TICKET_ROUTINE_NUDGE_CONSTANTS = {
+	/** Kill switch: `0` turns the nudge off */
+	ENV_SWITCH: 'CREWLY_TICKET_ROUTINE_NUDGE',
+	/** `metadata.kind` of the nudge WorkItem */
+	METADATA_KIND: 'ticket_routine_nudge',
+	/** Prefix of the ticket Log line that marks the nudge as sent (also the dedupe key) */
+	LOG_MARKER: 'routine nudge sent to',
+	/** Actor written in the ticket Log */
+	ACTOR: 'crewly-routine-nudge',
+	/** Max characters of the result text scanned for a cadence */
+	MAX_SCAN_CHARS: 6000,
+	/** Max characters of the matched sentence quoted in the nudge */
+	MAX_QUOTE_CHARS: 240,
+	/** Max characters of the ticket title in the nudge */
+	TITLE_MAX_CHARS: 120,
+} as const;
+
+/**
  * Drive mode v3 status briefing (specs/2026-10-09-drive-mode-v3.md §1): the
  * compact per-team / per-agent snapshot this machine keeps up to date and
  * pushes to Crewly Cloud, so the voice answers status questions with no
