@@ -168,8 +168,8 @@ describe('trace-metrics', () => {
 			const events = [
 				requestCreated(0, 'req-1', 'open'),
 				delivered(0, 'ella', 'owner_message', 'build the page'),
-				// Unprompted: a correction.
-				delivered(20, 'ella', 'owner_message', 'make it blue'),
+				// The owner changes the work: a correction.
+				delivered(20, 'ella', 'owner_message', 'no, make it blue'),
 				// Agent replies, then the owner answers.
 				outbound(30, 'ella'),
 				delivered(40, 'ella', 'owner_message', 'yes go ahead'),
@@ -190,8 +190,26 @@ describe('trace-metrics', () => {
 			];
 			const m = computeTraceMetrics(root({ refs: { requestId: 'req-1' } }), events, { now });
 			// manual is computed but not collected yet: left out of the total (#999).
-			expect(m.ownerTouches).toEqual({ answered: 1, approved: 2, sentBack: 1, corrected: 1, manual: 1, total: 5 });
+			expect(m.ownerTouches).toEqual({ answered: 1, approved: 2, sentBack: 1, corrected: 1, other: 0, manual: 1, total: 5 });
 			expect(m.rework.sendBacks).toBe(1);
+		});
+
+		it('counts only what the owner wrote; a correction needs a rejection signal (crewly#1389)', () => {
+			const chat = (who: string, text: string): string => `[CHAT:c1] <${who}@#ce> ${text}`;
+			const events = [
+				requestCreated(0, 'req-1', 'open'),
+				// Another agent's room post and a context-only digest share the owner's prefix.
+				delivered(10, 'ella', 'owner_message', chat('Owen (agent)', '[Slack thread so far — oldest→newest, 2 messages]\n  Owen [bot]: done')),
+				delivered(12, 'ella', 'owner_message', '[CHAT:c1] <Rex (agent)@#ce> [Context only — not for you to answer] Messages in this room'),
+				// The owner agreeing, then asking something new, with no agent post between.
+				delivered(20, 'ella', 'owner_message', chat('UOWNER', '好的')),
+				delivered(25, 'ella', 'owner_message', chat('UOWNER', 'what about the FAQ page?')),
+				// The owner's words after the thread digest are what is classified.
+				delivered(30, 'ella', 'owner_message', chat('UOWNER', '[Slack thread so far — 1 message]\n  Ella [bot]: shipped\n[end of Slack thread — the message you are asked about follows.]\n不对，我要的是视频')),
+			];
+			const m = computeTraceMetrics(root({ refs: { requestId: 'req-1' } }), events, { now, detail: true });
+			expect(m.ownerTouches).toEqual({ answered: 0, approved: 0, sentBack: 0, corrected: 1, other: 2, manual: 0, total: 3 });
+			expect(m.ownerTouchEvents?.map((t) => t.text)).toEqual(['好的', 'what about the FAQ page?', '不对，我要的是视频']);
 		});
 
 		it('counts a decision answer as answered and an approval-kind decision as approved', () => {

@@ -12,6 +12,7 @@
 
 import { TRACE_CONSTANTS } from '../../constants.js';
 import { eventCostUsd, eventTokens } from '../monitoring/token-usage.service.js';
+import { isAgentAuthoredChat } from './trace-markers.js';
 import type { TraceEvent, TraceRoot } from './trace.types.js';
 
 // ---------------------------------------------------------------------------
@@ -78,7 +79,7 @@ export interface TraceMetrics {
 	 * dashboard marker is not authenticated (an agent could send it), so it is
 	 * left out of `total` and not shown until owner sessions (#999) land.
 	 */
-	ownerTouches: { answered: number; approved: number; sentBack: number; corrected: number; manual: number; total: number };
+	ownerTouches: { answered: number; approved: number; sentBack: number; corrected: number; other: number; manual: number; total: number };
 	rework: { sendBacks: number; retries: number; failedVerifications: number; subagentSendBacks: number; total: number };
 	stalls: {
 		thresholdMinutes: number;
@@ -145,8 +146,10 @@ export interface TraceMetricsOptions {
 
 /** One owner touch and when it happened (`detail` only). */
 export interface OwnerTouchEvent {
-	kind: 'answered' | 'approved' | 'sentBack' | 'corrected';
+	kind: 'answered' | 'approved' | 'sentBack' | 'corrected' | 'other';
 	at: string;
+	/** The owner's message text, for a touch made by a message (deduped across traces) */
+	text?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +343,35 @@ export function isProgressEvent(e: TraceEvent): boolean {
  */
 function ownerMessageText(e: TraceEvent): string {
 	return e.summary.replace(/^Owner message delivered to \S+: /, '');
+}
+
+/**
+ * What the owner wrote in a delivered message: without the routing prefix and
+ * sender header, and after any Slack thread / channel context block.
+ *
+ * @param text - Delivered text
+ * @returns The owner's own words
+ */
+export function ownerWords(text: string): string {
+	const afterContext = text.split(/\[end of Slack [^\]]*\]\s*/).pop() ?? text;
+	return afterContext.replace(/^\s*\[G?CHAT:[^\]]*\]\s*(?:<[^>]*>\s*)?/, '').trim();
+}
+
+/**
+ * The owner rejected or changed the work: a positive signal, so a plain
+ * 「好的」 or a new question is never a correction (crewly#1389).
+ */
+const CORRECTION_RE =
+	/^\s*(?:不是|不对|不行|不要|别)|不对|错了|搞错|弄错|重做|重新做|打回|改成|我要的是|我说的是|不是我要的|\bwrong\b|\bnot what I\b|\bredo\b|\brevert\b|\bundo\b|^\s*no\b/i;
+
+/**
+ * Whether an owner message corrects the work.
+ *
+ * @param text - Delivered text
+ * @returns True on a rejection / change signal
+ */
+export function isOwnerCorrection(text: string): boolean {
+	return CORRECTION_RE.test(ownerWords(text));
 }
 
 /**
@@ -616,7 +648,7 @@ export function computeTraceMetrics(root: TraceRoot, events: ReadonlyArray<Trace
 		busy.explicit === 0 && busy.inferred === 0 ? 'none' : busy.explicit === 0 ? 'inferred' : busy.inferred === 0 ? 'turn_events' : 'mixed';
 
 	// --- Owner touches, rework, interventions, usage --------------------------
-	const touches = { answered: 0, approved: 0, sentBack: 0, corrected: 0, manual: 0 };
+	const touches = { answered: 0, approved: 0, sentBack: 0, corrected: 0, other: 0, manual: 0 };
 	const rework = { sendBacks: 0, retries: 0, failedVerifications: 0, subagentSendBacks: 0 };
 	const interventions = { nudges: 0, redeliveries: 0, wakes: 0, corrections: 0, guardBlocks: 0, misroutes: 0 };
 	const touchTimes: number[] = [];
@@ -633,10 +665,10 @@ export function computeTraceMetrics(root: TraceRoot, events: ReadonlyArray<Trace
 	const agents = new Set<string>();
 	let experiment: TraceMetrics['outcome']['experiment'];
 
-	const touch = (kind: OwnerTouchEvent['kind'], t: number): void => {
+	const touch = (kind: OwnerTouchEvent['kind'], t: number, text?: string): void => {
 		touches[kind] += 1;
 		touchTimes.push(t);
-		if (options.detail) touchEvents.push({ kind, at: new Date(t).toISOString() });
+		if (options.detail) touchEvents.push({ kind, at: new Date(t).toISOString(), ...(text !== undefined ? { text } : {}) });
 		agentSpoke = false;
 	};
 	const addUsage = (map: Map<string, UsageBreakdown>, key: string, tokens: { input: number; cachedInput: number; output: number; total: number }, cost: number): void => {
@@ -659,12 +691,15 @@ export function computeTraceMetrics(root: TraceRoot, events: ReadonlyArray<Trace
 			case 'turn.delivered': {
 				if (e.refs.session && e.actor.kind !== 'owner') agents.add(e.refs.session);
 				if (dataStr(e, 'kind') !== 'owner_message' || e.actor.kind !== 'owner') break;
-				if (e.refs.session) agents.add(e.refs.session);
 				const text = ownerMessageText(e);
+				// Traces recorded before the delivery kind was split carry other
+				// agents' room posts and digests as owner messages (crewly#1389).
+				if (isAgentAuthoredChat(text)) break;
+				if (e.refs.session) agents.add(e.refs.session);
 				const dup = recentOwnerMessages.some((m) => m.text === text && t - m.t <= TRACE_CONSTANTS.OWNER_MESSAGE_DEDUPE_MS);
 				recentOwnerMessages.push({ text, t });
 				if (dup || t - start <= TRACE_CONSTANTS.ROOT_GRACE_MS) break;
-				touch(agentSpoke ? 'answered' : 'corrected', t);
+				touch(isOwnerCorrection(text) ? 'corrected' : agentSpoke ? 'answered' : 'other', t, ownerWords(text));
 				break;
 			}
 			case 'decision.created': {
@@ -829,7 +864,7 @@ export function computeTraceMetrics(root: TraceRoot, events: ReadonlyArray<Trace
 		agents: [...agents].sort(),
 		time: { wallMs, activeMs, waitingOwnerMs, waitingAgentMs, idleMs, activeSource },
 		// `manual` is not collected yet (see TraceMetrics.ownerTouches): not in the total.
-		ownerTouches: { ...touches, total: touches.answered + touches.approved + touches.sentBack + touches.corrected },
+		ownerTouches: { ...touches, total: touches.answered + touches.approved + touches.sentBack + touches.corrected + touches.other },
 		rework: { ...rework, total: total(rework) },
 		stalls: { thresholdMinutes: stallMinutes, count: stalls.length, totalMs: stalls.reduce((s, x) => s + x.ms, 0), byCause, items: kept },
 		interventions: { ...interventions, total: total(interventions) },
