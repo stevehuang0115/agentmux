@@ -13,7 +13,7 @@
 
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import { OWNER_RECEIPT_CONSTANTS } from '../../../constants.js';
+import { OWNER_RECEIPT_CONSTANTS, WORKTREE_CONSTANTS } from '../../../constants.js';
 import type { WorkItem } from '../../../types/v2/work-item.types.js';
 import { artifactBaseDirs } from '../../task-pool/completion-evidence.service.js';
 
@@ -39,6 +39,8 @@ export interface SpotCheckResult {
   artifactsChecked: number;
   /** Evidence entries not checked: URLs, commands, blocked reports, relative paths with no base */
   skipped: number;
+  /** Of `skipped`: file artifacts inside a worktree the janitor already removed ("worktree cleaned") */
+  worktreeCleaned: number;
   discrepancies: SpotCheckDiscrepancy[];
 }
 
@@ -137,6 +139,42 @@ export function fileTargetsOf(wi: WorkItem, homeDir: string): { targets: FileTar
 }
 
 /**
+ * The worktree root an absolute path lies in: the WorkItem's recorded
+ * worktree, else the directory after a known worktree marker.
+ *
+ * @param abs - Absolute artifact path
+ * @param wi - The WorkItem
+ * @returns The worktree root, or null when the path is outside any worktree
+ */
+export function worktreeRootOf(abs: string, wi: WorkItem): string | null {
+  for (const base of artifactBaseDirsOfWorktree(wi)) {
+    if (abs === base || abs.startsWith(base + path.sep)) return base;
+  }
+  const norm = abs.split(path.sep).join('/');
+  for (const marker of OWNER_RECEIPT_CONSTANTS.VERIFIED_SPOT_CHECK.WORKTREE_MARKERS) {
+    const needle = `/${marker}/`;
+    const at = norm.indexOf(needle);
+    if (at < 0) continue;
+    const rest = norm.slice(at + needle.length).split('/')[0];
+    if (rest) return norm.slice(0, at + needle.length) + rest;
+  }
+  return null;
+}
+
+/**
+ * Recorded worktree paths of a WorkItem (`metadata.worktree.path` / `workdir`).
+ *
+ * @param wi - The WorkItem
+ * @returns Absolute paths
+ */
+function artifactBaseDirsOfWorktree(wi: WorkItem): string[] {
+  const wt = (wi.metadata ?? {})[WORKTREE_CONSTANTS.METADATA_KEY];
+  if (typeof wt !== 'object' || wt === null) return [];
+  const rec = wt as Record<string, unknown>;
+  return ['path', 'workdir'].map((k) => rec[k]).filter((v): v is string => typeof v === 'string' && path.isAbsolute(v));
+}
+
+/**
  * Run the spot-check.
  *
  * @param input - WorkItems, clock, team lookup, file check
@@ -172,6 +210,7 @@ export async function runSpotCheck(input: SpotCheckInput): Promise<SpotCheckResu
     sampled: sample.length,
     artifactsChecked: 0,
     skipped: 0,
+    worktreeCleaned: 0,
     discrepancies: [],
   };
   for (const { wi, targets, skipped } of sample) {
@@ -192,6 +231,32 @@ export async function runSpotCheck(input: SpotCheckInput): Promise<SpotCheckResu
           }
         } catch {
           // an unreadable path counts as not found
+        }
+      }
+      if (!found) {
+        // The janitor removes worktrees after merge: a file inside a worktree
+        // that is itself gone was cleaned, not lost.
+        let cleaned = true;
+        for (const c of target.candidates) {
+          const root = worktreeRootOf(c, wi);
+          let rootGone = false;
+          if (root) {
+            try {
+              rootGone = !(await input.exists(root));
+            } catch {
+              rootGone = false;
+            }
+          }
+          if (!rootGone) {
+            cleaned = false; // outside any worktree, or its worktree still exists: really missing
+            break;
+          }
+        }
+        if (cleaned) {
+          result.artifactsChecked -= 1;
+          result.skipped += 1;
+          result.worktreeCleaned += 1;
+          continue;
         }
       }
       if (!found) result.discrepancies.push({ workItemId: wi.id, team, artifactPath: target.raw });

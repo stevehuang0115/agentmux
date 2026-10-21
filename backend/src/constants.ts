@@ -6305,6 +6305,12 @@ export const OWNER_RECEIPT_CONSTANTS = {
 		WINDOW_MS: 24 * 60 * 60 * 1000,
 		/** Discrepancies named on the owner line before "+N more" */
 		MAX_LISTED: 3,
+		/**
+		 * Directory markers of agent worktrees the disk janitor removes after merge
+		 * (the segment after a marker is the worktree root). A missing file inside
+		 * a worktree that is gone is "worktree cleaned", not a discrepancy.
+		 */
+		WORKTREE_MARKERS: ['.claude/worktrees', '.crewly/worktrees', 'crewly-worktrees'] as readonly string[],
 	},
 } as const;
 

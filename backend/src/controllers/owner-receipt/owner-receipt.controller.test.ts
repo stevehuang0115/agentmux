@@ -151,6 +151,7 @@ describe('GET /api/owner-receipt/spot-check', () => {
           sampled: 1,
           artifactsChecked: 1,
           skipped: 0,
+          worktreeCleaned: 0,
           discrepancies: [{ workItemId: 'wi-1', team: 'CE', artifactPath: '/tmp/a.md' }],
         }),
         statePath: null,

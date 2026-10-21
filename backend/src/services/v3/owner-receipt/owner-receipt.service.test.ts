@@ -297,6 +297,7 @@ describe('OwnerReceiptService spot-check line (#1315)', () => {
     sampled,
     artifactsChecked: sampled,
     skipped: 0,
+    worktreeCleaned: 0,
     discrepancies,
   });
   const make = (loadSpotCheck: (() => Promise<ReturnType<typeof spot> | null>) | undefined, withTicket: boolean) => {

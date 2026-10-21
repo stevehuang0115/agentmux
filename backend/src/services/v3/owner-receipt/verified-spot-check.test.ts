@@ -123,6 +123,48 @@ describe('runSpotCheck', () => {
     expect(r.discrepancies).toHaveLength(1);
   });
 
+  describe('worktrees the janitor removes', () => {
+    const only = (gone: string[]) => async (p: string) => !gone.some((g) => p === g || p.startsWith(`${g}/`));
+
+    it('counts a file in a cleaned marker-path worktree as skipped (worktree cleaned), not a discrepancy', async () => {
+      const root = '/repo/.claude/worktrees/agent-1';
+      const r = await runSpotCheck({
+        workItems: [wi('a', [{ type: 'artifact', path: `${root}/out/a.md` }])],
+        now: NOW,
+        teamOf,
+        exists: only([root]),
+      });
+      expect(r).toMatchObject({ sampled: 1, artifactsChecked: 0, skipped: 1, worktreeCleaned: 1, discrepancies: [] });
+    });
+
+    it('counts a relative path under the WorkItem\'s recorded, now-removed worktree as skipped', async () => {
+      const root = '/somewhere/wt-7';
+      const r = await runSpotCheck({
+        workItems: [wi('a', [{ type: 'artifact', path: 'out/a.md' }], { metadata: { worktree: { path: root, workdir: root } } })],
+        now: NOW,
+        teamOf,
+        exists: only([root]),
+      });
+      expect(r).toMatchObject({ skipped: 1, worktreeCleaned: 1, discrepancies: [] });
+    });
+
+    it('reports missing when the worktree still exists', async () => {
+      const r = await runSpotCheck({
+        workItems: [wi('a', [{ type: 'artifact', path: '/repo/.crewly/worktrees/wi-1/out/a.md' }])],
+        now: NOW,
+        teamOf,
+        exists: only(['/repo/.crewly/worktrees/wi-1/out/a.md']),
+      });
+      expect(r.discrepancies).toHaveLength(1);
+      expect(r.worktreeCleaned).toBe(0);
+    });
+
+    it('reports missing when the path is outside any worktree', async () => {
+      const r = await runSpotCheck({ workItems: [wi('a', [{ type: 'artifact', path: '/data/a.md' }])], now: NOW, teamOf, exists: async () => false });
+      expect(r.discrepancies).toHaveLength(1);
+    });
+  });
+
   it('never mutates the WorkItems', async () => {
     const items = [wi('a', [{ type: 'artifact', path: '/x/a.md' }, { type: 'command', command: 'x', exitCode: 0 }])];
     const before = JSON.stringify(items);
@@ -150,7 +192,7 @@ describe('seededRandom / daySeed', () => {
 });
 
 describe('renderSpotCheck', () => {
-  const base: SpotCheckResult = { at: NOW.toISOString(), eligible: 3, sampled: 3, artifactsChecked: 3, skipped: 0, discrepancies: [] };
+  const base: SpotCheckResult = { at: NOW.toISOString(), eligible: 3, sampled: 3, artifactsChecked: 3, skipped: 0, worktreeCleaned: 0, discrepancies: [] };
 
   it('says zero discrepancies out loud', () => {
     expect(renderSpotCheck(base)).toBe('*Spot-check of verified work:* 3 sampled, 0 discrepancies');
