@@ -33,6 +33,7 @@ import { stripTraceMarkers } from '../trace/trace-markers.js';
 import { getTraceContext } from '../trace/trace-context.service.js';
 import { getTurnTriggerTracker, type TurnTrigger } from '../trace/turn-trigger.js';
 import { triggeredByMetadata, triggeredByPhrase, withTriggeredByLine } from './triggered-by.js';
+import { stripOwnerTextIds } from '../../utils/owner-text-ids.utils.js';
 import { memberNameFromSession } from '../../utils/member-session-name.utils.js';
 
 /** How long an identical reply from one agent counts as a duplicate send. */
@@ -614,11 +615,11 @@ export async function provenanceForAgentPost(
   try {
     const d = deps ?? (await defaultReplyDeliveryDeps());
     const p = await provenanceOf({ session: input.session, content: input.content, interim: input.interim }, input.conversationId, d, undefined, input.thread);
-    if (!p) return { content: input.content };
+    if (!p) return { content: stripOwnerTextIds(input.content) };
     const record = p.metadata[TURN_TRIGGER_CONSTANTS.METADATA_KEY] as Record<string, unknown> | undefined;
-    return { content: p.content ?? input.content, ...(record ? { triggeredBy: record } : {}) };
+    return { content: stripOwnerTextIds(p.content ?? input.content), ...(record ? { triggeredBy: record } : {}) };
   } catch {
-    return { content: input.content };
+    return { content: stripOwnerTextIds(input.content) };
   }
 }
 
@@ -651,6 +652,7 @@ async function attempt(
   );
   const metadata = { ...(deliversTicket ?? {}), ...(provenance?.metadata ?? {}) };
   if (provenance?.content !== undefined) input = { ...input, content: provenance.content };
+  input = { ...input, content: stripOwnerTextIds(input.content) };
   if (dest.kind === 'conversation') {
     if (input.interim !== true && input.addsNew !== true && dest.thread && d.priorRoomAnswer) {
       const prior = await d.priorRoomAnswer({ conversationId: dest.conversationId, thread: dest.thread, agentSession: input.session }).catch(() => null);

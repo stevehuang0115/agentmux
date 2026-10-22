@@ -8053,6 +8053,27 @@ export const REPLY_ROUTING_CONSTANTS = {
  * row and shown as one muted line when the post is not a direct answer to the
  * owner's message in the same conversation.
  */
+/**
+ * Internal decision / ticket ids taken out of agent posts the owner reads
+ * (crewly#1427, utils/owner-text-ids.utils.ts).
+ */
+export const OWNER_TEXT_IDS_CONSTANTS = {
+	/** One internal id: decision card, request ticket, project ticket */
+	ID_PATTERN: /\b(?:D|TKT|CREW)-\d{1,6}\b/g,
+	/** A bracket holding only ids: "(D-897)", "（D-829 / TKT-537）" */
+	PAREN_ONLY_IDS_PATTERN: /[ \t]*[(（]\s*(?:(?:D|TKT|CREW)-\d{1,6}\s*[/,，、&]?\s*)+[)）]/g,
+	/** A card/ticket noun followed by its id: "决策卡 D-919", "card D-7" — the noun stays */
+	NOUN_THEN_ID_PATTERN: /(决策卡|发布卡|卡片|卡|工单|cards?|decisions?|tickets?)[ \t]*(?:D|TKT|CREW)-\d{1,6}\b/gi,
+	/** A post addressed to an agent keeps its ids */
+	AGENT_MENTION_PATTERN: /(?:^|\s)@[A-Za-z][\w-]*/,
+	/** Code spans and links are never changed */
+	PROTECTED_PATTERN: /(`[^`]*`|https?:\/\/\S+)/,
+	/** Chinese text gets the Chinese fallback */
+	CJK_PATTERN: /[\u4e00-\u9fff]/,
+	FALLBACK_ZH: '那张卡',
+	FALLBACK_EN: 'that card',
+} as const;
+
 export const TURN_TRIGGER_CONSTANTS = {
 	/** chat-v2 message metadata key holding the provenance record */
 	METADATA_KEY: 'triggeredBy',

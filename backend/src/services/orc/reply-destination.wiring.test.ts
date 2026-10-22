@@ -71,6 +71,12 @@ describe('deliverReply', () => {
     expect(d.deliver).toHaveBeenCalledWith(expect.objectContaining({ content: 'preview: https://x' }));
   });
 
+  it('takes decision ids out of what the owner reads (#1427)', async () => {
+    const d = deps();
+    await deliverReply({ session: 'owen', content: '这一项已随另一张卡(D-897)一起上线', reference: { ticket: 'TKT-187' } }, d);
+    expect(d.deliver).toHaveBeenCalledWith(expect.objectContaining({ content: '这一项已随另一张卡一起上线' }));
+  });
+
   it('a conversation that does not take it → ok:false with the command, never a guess', async () => {
     const failingPost = jest.fn(async () => { throw new Error('channel_not_found'); });
     const d = deps({ deliverToConversation: jest.fn(async () => null), workDestination: async () => work(failingPost as never) });
