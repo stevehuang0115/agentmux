@@ -1,5 +1,5 @@
 /**
- * Owner pulls, weekly (#1387, first slice) — how often agents put something in
+ * Owner pulls, weekly (#1387) — how often agents put something in
  * front of the owner, by kind and by team, and what became of it.
  *
  * Measures only; it never changes when agents ping the owner. Pure functions:
@@ -51,7 +51,8 @@ export interface PullRecord {
   kind: PullKind;
   /** Team name, or the unknown-team label */
   team: string;
-  outcome: PullOutcome;
+  /** What became of it; absent when nothing tracks it (a plain agent post) */
+  outcome?: PullOutcome;
 }
 
 /** Facts about one agent post to the owner that is not a card. */
@@ -201,10 +202,72 @@ export function pullsFromOpenItems(
   return out;
 }
 
+/** An agent-started post in the owner's DM, as the post log keeps it. */
+export interface AgentPostRecord {
+  /** When it was posted (ISO) */
+  at: string;
+  /** Agent session that posted */
+  agent: string;
+  /** Its last sentence is a question */
+  endsWithQuestion: boolean;
+}
+
+/**
+ * Whether a post's last sentence is a question (`?` or `？` at its end, past
+ * trailing emoji, quotes and closing brackets).
+ *
+ * @param text - Post text
+ * @returns True when it ends with a question
+ */
+export function endsWithQuestion(text: string): boolean {
+  return /[?？][\s\p{Extended_Pictographic}\p{Pe}\p{Pf}"'*_~`]*$/u.test(text.trim());
+}
+
+/**
+ * Turn agent-started posts in the owner's DM into pull records, by the FYI
+ * rule. A post the same agent made right around a card it opened is that
+ * card's post: the card already counts it. Whether a WorkItem then stayed
+ * blocked on the owner is not known for a post, so rule 3 is not applied.
+ *
+ * @param posts - Logged posts
+ * @param decisions - Every card (for rule 2)
+ * @param teamOfAgent - Team name for an agent session, or null
+ * @returns Records (no outcome: nothing tracks an answer to a plain post)
+ */
+export function pullsFromAgentPosts(
+  posts: readonly AgentPostRecord[],
+  decisions: readonly OwnerDecision[],
+  teamOfAgent: (session: string) => string | null,
+): PullRecord[] {
+  const window = OWNER_RECEIPT_CONSTANTS.PULLS_WEEKLY.CARD_POST_WINDOW_MS;
+  const cardTimes = new Map<string, number[]>();
+  for (const d of decisions) {
+    const at = Date.parse(d.askedAt ?? d.createdAt);
+    if (!Number.isFinite(at)) continue;
+    for (const who of new Set([d.asker, d.requestedBy])) {
+      if (who) cardTimes.set(who, [...(cardTimes.get(who) ?? []), at]);
+    }
+  }
+  const out: PullRecord[] = [];
+  for (const post of posts) {
+    const at = Date.parse(post.at);
+    if (!Number.isFinite(at)) continue;
+    const openedDecisionCard = (cardTimes.get(post.agent) ?? []).some((t) => Math.abs(t - at) <= window);
+    if (openedDecisionCard) continue;
+    out.push({
+      at: post.at,
+      kind: classifyAgentPost({ endsWithQuestion: post.endsWithQuestion, openedDecisionCard, workItemBlockedOnOwner: false, reportsFailure: false }),
+      team: teamOfAgent(post.agent) ?? OWNER_RECEIPT_CONSTANTS.UNASSIGNED_TEAM,
+    });
+  }
+  return out;
+}
+
 /** Counts for one week. */
 export interface PullsWeek {
   total: number;
   byKind: Record<PullKind, number>;
+  /** Only pulls whose outcome is tracked (not plain agent posts) */
   byOutcome: Record<PullOutcome, number>;
   /** Most pulls first, then by name */
   byTeam: Array<{ team: string; count: number }>;
@@ -242,7 +305,7 @@ function countWeek(records: readonly PullRecord[], fromMs: number, toMs: number)
     if (!Number.isFinite(t) || t < fromMs || t >= toMs) continue;
     week.total += 1;
     week.byKind[r.kind] += 1;
-    week.byOutcome[r.outcome] += 1;
+    if (r.outcome) week.byOutcome[r.outcome] += 1;
     teams.set(r.team, (teams.get(r.team) ?? 0) + 1);
   }
   week.byTeam = [...teams.entries()].map(([team, count]) => ({ team, count })).sort((a, b) => b.count - a.count || a.team.localeCompare(b.team));
@@ -318,7 +381,7 @@ export function renderPullsWeekly(w: PullsWeekly): string {
     const kinds = PULL_KINDS.filter((k) => thisWeek.byKind[k] > 0).map((k) => `${thisWeek.byKind[k]} ${PULLS_WEEKLY_KIND_LABELS[k]}`);
     lines.push(`• By kind: ${kinds.join(', ')}`);
     const outcomes = PULL_OUTCOMES.filter((o) => thisWeek.byOutcome[o] > 0).map((o) => `${o.replace('_', ' ')} ${thisWeek.byOutcome[o]}`);
-    lines.push(`• ${outcomes.join(', ').replace(/^./, (c) => c.toUpperCase())}`);
+    if (outcomes.length > 0) lines.push(`• ${outcomes.join(', ').replace(/^./, (c) => c.toUpperCase())}`);
     const max = OWNER_RECEIPT_CONSTANTS.PULLS_WEEKLY.MAX_TEAMS;
     const shown = thisWeek.byTeam.slice(0, max).map((t) => `${t.team} ${t.count}`);
     const rest = thisWeek.byTeam.length - shown.length;
