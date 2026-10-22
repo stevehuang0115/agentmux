@@ -243,6 +243,16 @@ describe('agent-started DM posts (FYI count)', () => {
     expect(recs).toHaveLength(1);
   });
 
+  it('keeps a post next to a card that is not a pull (withdrawn or Crewly\'s own)', () => {
+    const at = ago(1);
+    const recs = pullsFromAgentPosts(
+      [{ at, agent: 'atlas', endsWithQuestion: false }],
+      [card({ askedAt: at, status: 'cancelled' }), card({ askedAt: at, system: { key: 'x' }, kind: 'runtime_terms' })],
+      () => null,
+    );
+    expect(recs).toHaveLength(1);
+  });
+
   it('shows FYIs in the kinds, and no outcome line when nothing has one', () => {
     const text = renderPullsWeekly(rollupPulls([rec({ kind: 'fyi', outcome: undefined }), rec({ kind: 'fyi', outcome: undefined })], NOW));
     expect(text).toContain('2 FYI that did not need an answer');

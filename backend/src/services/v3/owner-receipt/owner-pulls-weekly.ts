@@ -242,6 +242,8 @@ export function pullsFromAgentPosts(
   const window = OWNER_RECEIPT_CONSTANTS.PULLS_WEEKLY.CARD_POST_WINDOW_MS;
   const cardTimes = new Map<string, number[]>();
   for (const d of decisions) {
+    // Only a card that counts as a pull may stand in for the post.
+    if ((d.system && d.kind !== 'spend_cap') || !decisionPullOutcome(d)) continue;
     const at = Date.parse(d.askedAt ?? d.createdAt);
     if (!Number.isFinite(at)) continue;
     for (const who of new Set([d.asker, d.requestedBy])) {

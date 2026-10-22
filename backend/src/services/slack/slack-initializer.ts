@@ -1009,6 +1009,12 @@ export async function startSlackTeamChannels(): Promise<void> {
             const m = getSlackTeamChannelService()?.findBySlackChannelName(name);
             return m ? { id: m.slackChannelId, name: m.slackChannelName ?? name } : null;
           },
+          owesAnswerIn: (agentSession, slackChannelId) => {
+            const watchdog = getOwnerMessageWatchdog();
+            // No watchdog: unknown, so the post is not counted as agent-started.
+            if (!watchdog) return true;
+            return watchdog.owedBy(agentSession).some((e) => e.slackChannelId === slackChannelId);
+          },
         }),
       );
     }

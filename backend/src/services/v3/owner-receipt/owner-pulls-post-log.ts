@@ -1,8 +1,9 @@
 /**
  * Post log for the weekly owner-pulls line (#1387): one JSON line per post an
- * agent started in the owner's DM (a new top-level message, not an answer in
- * the thread of something the owner said). Nothing else records these, and
- * they are where an "FYI that did not need an answer" comes from.
+ * agent started in a DM — a top-level post while it owed no answer there
+ * (decided by `SlackAgentPostService`, reported by `onAgentStartedDmPost`).
+ * Nothing else records these, and they are where an "FYI that did not need an
+ * answer" comes from.
  *
  * Only who, when and whether it ended with a question are kept, never the
  * text. Append-only, best effort: a failed write is logged and never blocks a
@@ -18,24 +19,10 @@ import { OWNER_RECEIPT_CONSTANTS } from '../../../constants.js';
 import { LoggerService } from '../../core/logger.service.js';
 import { endsWithQuestion, type AgentPostRecord } from './owner-pulls-weekly.js';
 
-/** An agent's Slack post, as `onAgentSlackPost` reports it. */
-export interface AgentSlackPostInput {
+/** A post the agent started in a DM, as `onAgentStartedDmPost` reports it. */
+export interface StartedDmPostInput {
   agent: string;
-  slackChannelId: string;
-  threadTs?: string;
   text: string;
-  interim?: boolean;
-}
-
-/**
- * Whether a post is one an agent started in the owner's DM: a DM channel
- * (`D…`), top level (no thread), not an interim line.
- *
- * @param post - The reported post
- * @returns True when it belongs in the log
- */
-export function isAgentStartedDmPost(post: AgentSlackPostInput): boolean {
-  return !!post.agent && post.slackChannelId.startsWith('D') && !post.threadTs && !post.interim && post.text.trim().length > 0;
 }
 
 /** File-backed post log (JSON lines). */
@@ -52,13 +39,13 @@ export class OwnerPullsPostLog {
   }
 
   /**
-   * Log a post if it is one an agent started in the owner's DM.
+   * Log a post an agent started in a DM.
    *
    * @param post - The reported post
-   * @returns Resolves once written (or skipped)
+   * @returns Resolves once written (or skipped when it has no text)
    */
-  note(post: AgentSlackPostInput): Promise<void> {
-    if (!isAgentStartedDmPost(post)) return Promise.resolve();
+  note(post: StartedDmPostInput): Promise<void> {
+    if (!post.agent || !post.text.trim()) return Promise.resolve();
     const record: AgentPostRecord = { at: this.now().toISOString(), agent: post.agent, endsWithQuestion: endsWithQuestion(post.text) };
     const run = this.chain.then(async () => {
       try {

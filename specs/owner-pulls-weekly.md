@@ -26,7 +26,7 @@ Once a week the owner sees one short line: how often agents pulled them in, by k
 |---|---|
 | Decision cards (`ask-owner`, `OwnerDecision`) | Kind, team (`teamId`, else the asker's team), time (`askedAt`/`createdAt`), outcome from `status` |
 | Questions agents left in replies (Request `openItems`, type `question`) | Plain-chat "needs your answer" pulls. A question that has a card (`requestRef`) is counted once, by the card; `superseded`/`cancelled` items are not pulls |
-| Agent-started posts in the owner's DM (post log `owner-pulls-posts.jsonl` in the Requests dir) | Plain posts nothing else tracks: a new top-level message an agent posted in a DM (`D…`), not interim. Answers in a DM go in the thread of the owner's message (owner rule, 2026-09-21), so a top-level post is one the agent started. Ending with a question → decision needed, else FYI. A post within `CARD_POST_WINDOW_MS` (2 min) of a card the same agent asked is that card's post and is counted once, by the card. Only who / when / asked-or-not are kept, never the text; the file is cut back to two weeks past `POST_LOG_MAX_BYTES`. These pulls have no tracked outcome, so they count in the total and kinds but not in the outcomes line |
+| Agent-started DM posts (post log `owner-pulls-posts.jsonl` in the Requests dir) | Plain posts nothing else tracks. `SlackAgentPostService` decides: a top-level DM post made while the agent owes no answer in that DM (no reply placeholder of any age, nothing the owner-message watchdog tracks there) is agent-started and reported through `onAgentStartedDmPost`; a late answer posted top-level is still an answer. Threaded posts, channel posts, file uploads and interim lines are never logged, and each post is reported once. Ending with a question → decision needed, else FYI. A post within `CARD_POST_WINDOW_MS` (2 min) of a card the same agent asked that itself counts is that card's post, counted once, by the card. Only who / when / asked-or-not are kept, never the text; the file is cut back to two weeks past `POST_LOG_MAX_BYTES`. These pulls have no tracked outcome, so they count in the total and kinds but not in the outcomes line |
 | Trace owner touches (`computeTraceMetrics`: answered / approved / sentBack / corrected / other) | The owner's own touches in runs, this week vs last. Owner to agent only: it is the "you replied" side, not a pull count. Agent-authored chat is already excluded there |
 
 The week is the 7 days before the report (`[now-7d, now)`); the comparison is the 7 days before that.
@@ -61,10 +61,10 @@ Any one failing makes it a pull that needed an answer (decision); a post that re
 ## Not in this slice
 
 - **FYI rule 3 is not applied to posts.** Whether a WorkItem stayed blocked on the owner after a plain post is not known, so a post that asked nothing counts as an FYI even if work then waited on the owner.
-- Posts in team channels and owner threads are not counted (only agent-started DM posts); chat-only (no Slack) posts are not counted.
+- Posts in team channels and owner threads are not counted (only agent-started DM posts); chat-only (no Slack) posts and the orchestrator's own Slack posts (`postOrcSlack`) are not counted. A DM to a person other than the owner would count; today agents DM only the owner.
 - "Stuck or error" only covers spend caps; stalled-on-error traces are not counted yet.
 - Owner active minutes, per-agent top sources, a dashboard panel, and whether agents see the number (they could game it; today the API is not owner-gated but the line goes only to the owner).
 
 ## Code
 
-`owner-pulls-weekly.ts` (pure rollup + render), `owner-pulls-weekly.loader.ts` (reads the stores), `owner-pulls-post-log.ts` (the DM post log, fed by `onAgentSlackPost` in `index.ts`), `owner-receipt.service.ts` (weekly send, `pullsWeekly()`), `owner-receipt.controller.ts` (`/pulls`), constants in `OWNER_RECEIPT_CONSTANTS.PULLS_WEEKLY` and `PULLS_WEEKLY_KIND_LABELS`.
+`owner-pulls-weekly.ts` (pure rollup + render), `owner-pulls-weekly.loader.ts` (reads the stores), `owner-pulls-post-log.ts` (the DM post log, fed by `onAgentStartedDmPost` from `slack-agent-post.service.ts` in `index.ts`), `owner-receipt.service.ts` (weekly send, `pullsWeekly()`), `owner-receipt.controller.ts` (`/pulls`), constants in `OWNER_RECEIPT_CONSTANTS.PULLS_WEEKLY` and `PULLS_WEEKLY_KIND_LABELS`.
