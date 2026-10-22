@@ -2224,6 +2224,14 @@ describe('ChatV2Service', () => {
       expect(service.getOwnerMessageTimes(1000, 1)).toEqual([3000]);
     });
 
+    it('getOwnerMessageTimes with a bucket returns one start per bucket the owner wrote in', () => {
+      const ch = createSam();
+      seed(ch.id, 'user', 'a', 2100, 1);
+      seed(ch.id, 'user', 'b', 2900, 2);
+      seed(ch.id, 'user', 'c', 5500, 3);
+      expect(service.getOwnerMessageTimes(1000, 100, 1000)).toEqual([5000, 2000]);
+    });
+
     it('returns empty when there are no owner messages in the window', () => {
       const ch = createSam();
       seed(ch.id, 'user', 'way old', 100, 1);

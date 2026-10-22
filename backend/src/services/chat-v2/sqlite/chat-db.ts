@@ -186,6 +186,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_messages_channel_seq
 CREATE INDEX IF NOT EXISTS ix_messages_channel_created
   ON chat_messages(channel_id, created_at DESC);
 
+-- Owner messages across channels by time (owner active minutes, #1387)
+CREATE INDEX IF NOT EXISTS ix_messages_sender_created
+  ON chat_messages(sender_type, created_at);
+
 -- Phase 1: partial unique index for clientMessageId-based idempotency (spec §4.4)
 CREATE UNIQUE INDEX IF NOT EXISTS uq_messages_client_id
   ON chat_messages(channel_id, json_extract(metadata, '$.clientMessageId'))
