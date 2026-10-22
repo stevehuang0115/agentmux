@@ -37,6 +37,21 @@ describe('createPullsWeeklyLoader', () => {
     expect(w.ownerTouches).toEqual({ thisWeek: 3, lastWeek: 0 });
   });
 
+  it('adds agent-started DM posts, and keeps the pulls when the post log fails', async () => {
+    const base = { listDecisions: async () => [decision({})], listRequests: async () => [], loadTeamIndex: async () => new Map([['ella', 'CE']]) };
+    const load = createPullsWeeklyLoader({ ...base, listAgentPosts: async () => [{ at: ago(3), agent: 'ella', endsWithQuestion: false }] });
+    const w = await load(NOW);
+    expect(w.thisWeek.total).toBe(2);
+    expect(w.thisWeek.byKind.fyi).toBe(1);
+    const broken = createPullsWeeklyLoader({
+      ...base,
+      listAgentPosts: async () => {
+        throw new Error('boom');
+      },
+    });
+    expect((await broken(NOW)).thisWeek.total).toBe(1);
+  });
+
   it('keeps the pulls when the trace read fails', async () => {
     const load = createPullsWeeklyLoader({
       listDecisions: async () => [decision({})],

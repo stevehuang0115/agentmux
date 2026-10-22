@@ -6,6 +6,7 @@
  */
 
 import {
+  onAgentStartedDmPost,
   SlackAgentPostService,
   SlackAgentPostError,
   getSlackAgentPostService,
@@ -482,5 +483,32 @@ describe('app-less agents: mapped channel names and file uploads (2026-10-13)', 
     const res = await service.post({ agentSession: 'crewly-a-sam', target: '#general', text: 'draft', files: ['/p/a.md'], newTopLevel: true });
     expect(res.messageTs).toBe('111.222');
     expect(res.filesFailed).toEqual([{ path: '/p/a.md', error: 'not_in_channel' }]);
+  });
+});
+
+describe('agent-started DM posts (#1387)', () => {
+  const noTyping = { findOwed: () => null, resolve: jest.fn() };
+
+  it('reports a top-level DM post when nothing there waits on the agent', async () => {
+    const seen: unknown[] = [];
+    const off = onAgentStartedDmPost((p) => seen.push(p));
+    const svc = new SlackAgentPostService({ slack, storage: { getTeams: async () => TEAMS }, identities, typing: noTyping, owesAnswerIn: () => false });
+    await svc.post({ agentSession: 'crewly-a-sam', target: 'U0OWNER1', text: 'Posted the schedule.' });
+    off();
+    expect(seen).toEqual([{ agent: 'crewly-a-sam', slackChannelId: 'D-U0OWNER1', text: 'Posted the schedule.' }]);
+  });
+
+  it('does not report a late answer, a threaded post, a channel post, or when the answer state is unknown', async () => {
+    const seen: unknown[] = [];
+    const off = onAgentStartedDmPost((p) => seen.push(p));
+    const owing = new SlackAgentPostService({ slack, storage: { getTeams: async () => TEAMS }, identities, typing: noTyping, owesAnswerIn: () => true });
+    await owing.post({ agentSession: 'crewly-a-sam', target: 'U0OWNER1', text: 'Here is the answer.' });
+    const free = new SlackAgentPostService({ slack, storage: { getTeams: async () => TEAMS }, identities, typing: noTyping, owesAnswerIn: () => false });
+    await free.post({ agentSession: 'crewly-a-sam', target: 'U0OWNER1', text: 'In thread.', threadTs: '1.1' });
+    await free.post({ agentSession: 'crewly-a-sam', target: '#general', text: 'Hi all', newTopLevel: true });
+    const unknown = new SlackAgentPostService({ slack, storage: { getTeams: async () => TEAMS }, identities, typing: noTyping });
+    await unknown.post({ agentSession: 'crewly-a-sam', target: 'U0OWNER1', text: 'No watchdog.' });
+    off();
+    expect(seen).toEqual([]);
   });
 });

@@ -6295,6 +6295,12 @@ export const OWNER_RECEIPT_CONSTANTS = {
 		MAX_TEAMS: 3,
 		/** Traces read for the owner-touch count (most recent first) */
 		MAX_TRACES: 500,
+		/** Log of agent-started posts in the owner's DM (JSON lines, in the Requests dir) */
+		POST_LOG_FILENAME: 'owner-pulls-posts.jsonl',
+		/** The post log is rewritten with only the last two weeks once it grows past this (bytes) */
+		POST_LOG_MAX_BYTES: 256 * 1024,
+		/** A post this close to a card the same agent opened is that card's post, counted once (ms) */
+		CARD_POST_WINDOW_MS: 2 * 60 * 1000,
 	},
 	/**
 	 * Daily spot-check of verified WorkItems (#1315, phase 1): re-check that the

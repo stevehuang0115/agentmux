@@ -1,6 +1,6 @@
 /**
  * Loader for the weekly owner-pulls rollup (#1387): reads decision cards,
- * Request open items and trace owner touches, and hands them to the pure
+ * Request open items, agent-started DM posts and trace owner touches, and hands them to the pure
  * rollup in {@link ./owner-pulls-weekly}.
  *
  * @module services/v3/owner-receipt/owner-pulls-weekly.loader
@@ -11,9 +11,11 @@ import type { OwnerDecision } from '../../../types/decision.types.js';
 import type { Request } from '../../../types/v2/request.types.js';
 import {
   countOwnerTouches,
+  pullsFromAgentPosts,
   pullsFromDecisions,
   pullsFromOpenItems,
   rollupPulls,
+  type AgentPostRecord,
   type PullsWeekly,
 } from './owner-pulls-weekly.js';
 
@@ -30,6 +32,8 @@ export interface PullsWeeklyLoaderDeps {
    * owner-touch count is left out.
    */
   listTraceTouches?: (since: Date, limit: number) => Promise<Array<{ createdAt: string; ownerTouches: number }>>;
+  /** Posts agents started in the owner's DM (the post log); absent = not counted */
+  listAgentPosts?: () => Promise<AgentPostRecord[]>;
 }
 
 /**
@@ -41,11 +45,13 @@ export interface PullsWeeklyLoaderDeps {
 export function createPullsWeeklyLoader(deps: PullsWeeklyLoaderDeps): (now: Date) => Promise<PullsWeekly> {
   return async (now: Date): Promise<PullsWeekly> => {
     const span = OWNER_RECEIPT_CONSTANTS.PULLS_WEEKLY.WINDOW_MS;
-    const [decisions, requests, teams, teamNames] = await Promise.all([
+    const [decisions, requests, teams, teamNames, posts] = await Promise.all([
       deps.listDecisions(),
       deps.listRequests(),
       deps.loadTeamIndex(),
       deps.loadTeamNameById ? deps.loadTeamNameById() : Promise.resolve(new Map<string, string>()),
+      // The pulls stand without the post count.
+      deps.listAgentPosts ? deps.listAgentPosts().catch(() => []) : Promise.resolve([]),
     ]);
     const cardedKeys = new Set<string>();
     for (const d of decisions) if (d.requestRef) cardedKeys.add(`${d.requestRef.requestId}:${d.requestRef.itemId}`);
@@ -53,6 +59,7 @@ export function createPullsWeeklyLoader(deps: PullsWeeklyLoaderDeps): (now: Date
     const records = [
       ...pullsFromDecisions(decisions, (d) => teamNames.get(d.teamId ?? '') ?? teams.get(d.asker) ?? teams.get(d.requestedBy) ?? null),
       ...pullsFromOpenItems(items, cardedKeys, (session) => teams.get(session) ?? null),
+      ...pullsFromAgentPosts(posts, decisions, (session) => teams.get(session) ?? null),
     ];
     let touches: { thisWeek: number; lastWeek: number } | undefined;
     if (deps.listTraceTouches) {

@@ -109,6 +109,8 @@ import { OwnerReceiptService, setOwnerReceiptService } from './services/v3/owner
 import { agentNameIndexOf, createSlackOwnerSender, startOwnerReceiptSchedule, teamIndexOf, teamLeadIndexOf } from './services/v3/owner-receipt/owner-receipt.boot.js';
 import { createSpotCheckLoader } from './services/v3/owner-receipt/verified-spot-check.loader.js';
 import { createPullsWeeklyLoader } from './services/v3/owner-receipt/owner-pulls-weekly.loader.js';
+import { OwnerPullsPostLog } from './services/v3/owner-receipt/owner-pulls-post-log.js';
+import { onAgentStartedDmPost } from './services/slack/slack-agent-post.service.js';
 import { getTraceAnalysis } from './services/trace/trace-analysis.service.js';
 import { getTraceStore } from './services/trace/trace-store.js';
 import { IntakeOutcomeLog } from './services/v3/ticket-intake-log.js';
@@ -764,6 +766,9 @@ export class CrewlyServer {
 		try {
 			// #828 coverage: every owner message's fate, for the receipt's coverage line.
 			const intakeOutcomeLog = new IntakeOutcomeLog(RequestService.getInstance().getRequestsDir());
+			// #1387: posts agents start in a DM, for the weekly FYI count.
+			const pullsPostLog = new OwnerPullsPostLog(RequestService.getInstance().getRequestsDir());
+			onAgentStartedDmPost((post) => void pullsPostLog.note(post));
 			const ticketIntake = new TicketIntakeService({
 				requests: RequestService.getInstance(),
 				findWorkItem: (id) => TaskPoolService.getInstance().findWorkItem(id),
@@ -822,6 +827,7 @@ export class CrewlyServer {
 							const rows = await getTraceAnalysis().withMetrics(getTraceStore().list({ since, limit }));
 							return rows.map((r) => ({ createdAt: r.root.createdAt, ownerTouches: r.metrics?.ownerTouches ?? 0 }));
 						},
+						listAgentPosts: () => pullsPostLog.read(),
 					}),
 				});
 				setOwnerReceiptService(receipt);

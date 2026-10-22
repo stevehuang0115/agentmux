@@ -75,6 +75,35 @@ export interface SlackAgentPostServiceDeps {
    * workspace bot is not a member of.
    */
   findMappedChannelByName?: (name: string) => { id: string; name: string } | null;
+  /**
+   * Whether the agent still owes a person an answer in this DM (the owner
+   * message watchdog). With no placeholder left either, a top-level DM post
+   * is one the agent started (#1387).
+   */
+  owesAnswerIn?: (agentSession: string, slackChannelId: string) => boolean;
+}
+
+/** A top-level DM post the agent started, not an answer (#1387). */
+export interface AgentStartedDmPost {
+  agent: string;
+  slackChannelId: string;
+  text: string;
+}
+
+const startedDmPostListeners = new Set<(post: AgentStartedDmPost) => void>();
+
+/**
+ * Listen to top-level DM posts agents start (not answers to something they
+ * were asked): the weekly owner-pulls line counts them.
+ *
+ * @param listener - Called once per post; errors are swallowed
+ * @returns Unsubscribe
+ */
+export function onAgentStartedDmPost(listener: (post: AgentStartedDmPost) => void): () => void {
+  startedDmPostListeners.add(listener);
+  return () => {
+    startedDmPostListeners.delete(listener);
+  };
 }
 
 /** One post request. */
@@ -165,6 +194,24 @@ export class SlackAgentPostService {
     } catch (err) {
       this.logger.warn('Mention linking failed — posting as written', { error: errText(err) });
       return text;
+    }
+  }
+
+  /**
+   * Whether a top-level DM post is one the agent started: it owes no answer
+   * there (no reply placeholder of any age, nothing the watchdog tracks). A
+   * late answer the agent posts top-level is still an answer.
+   *
+   * @param agentSession - The agent
+   * @param channelId - The DM
+   * @returns True when nothing in this DM waits on the agent
+   */
+  private isStartedByAgent(agentSession: string, channelId: string): boolean {
+    try {
+      if (this.deps.typing?.findOwed(agentSession, channelId)) return false;
+      return !(this.deps.owesAnswerIn?.(agentSession, channelId) ?? true);
+    } catch {
+      return false;
     }
   }
 
@@ -294,6 +341,15 @@ export class SlackAgentPostService {
 
     if (req.threadTs) this.deps.typing?.noteAnswerPosted?.(channelId, req.threadTs);
     reportOwnerThreadAgentPost({ agent: agentSession, slackChannelId: channelId, ...(req.threadTs ? { threadTs: req.threadTs } : {}), text: rawText });
+    if (kind === 'dm' && !req.threadTs && this.isStartedByAgent(agentSession, channelId)) {
+      for (const listener of startedDmPostListeners) {
+        try {
+          listener({ agent: agentSession, slackChannelId: channelId, text: rawText });
+        } catch {
+          /* best-effort */
+        }
+      }
+    }
     this.logger.info('Agent posted to Slack', {
       agentSession,
       channelId,

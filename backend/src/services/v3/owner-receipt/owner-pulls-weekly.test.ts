@@ -10,6 +10,8 @@ import {
   countOwnerTouches,
   decisionPullKind,
   decisionPullOutcome,
+  endsWithQuestion,
+  pullsFromAgentPosts,
   pullsFromDecisions,
   pullsFromOpenItems,
   renderPullsWeekly,
@@ -200,5 +202,60 @@ describe('renderPullsWeekly', () => {
 
   it('shows the drop when this week had none', () => {
     expect(renderPullsWeekly(rollupPulls([rec({ at: ago(9) })], NOW))).toBe('*Pulled you in 0 times this week* (down 1 from last week)');
+  });
+});
+
+describe('agent-started DM posts (FYI count)', () => {
+  it('tells a question from a statement at the end of a post', () => {
+    expect(endsWithQuestion('Draft is ready. Send it today?')).toBe(true);
+    expect(endsWithQuestion('今天发吗？ 🙂')).toBe(true);
+    expect(endsWithQuestion('Is this ok?" ')).toBe(true);
+    expect(endsWithQuestion('Why? Because the deadline moved. Done.')).toBe(false);
+  });
+
+  it('counts a post that asked nothing as an FYI, a question as a decision, without an outcome', () => {
+    const recs = pullsFromAgentPosts(
+      [
+        { at: ago(1), agent: 'ella', endsWithQuestion: false },
+        { at: ago(2), agent: 'ella', endsWithQuestion: true },
+      ],
+      [],
+      (s) => (s === 'ella' ? 'CE' : null),
+    );
+    expect(recs).toEqual([
+      { at: ago(1), kind: 'fyi', team: 'CE' },
+      { at: ago(2), kind: 'decision', team: 'CE' },
+    ]);
+  });
+
+  it('leaves out a post made right around a card the same agent opened', () => {
+    const at = ago(1);
+    const near = new Date(Date.parse(at) + 60_000).toISOString();
+    const recs = pullsFromAgentPosts(
+      [
+        { at: near, agent: 'atlas', endsWithQuestion: false },
+        { at: near, agent: 'vera', endsWithQuestion: false },
+      ],
+      [card({ askedAt: at, asker: 'atlas', requestedBy: 'atlas' })],
+      () => null,
+    );
+    expect(recs.map((r) => r.team)).toEqual(['Unassigned']);
+    expect(recs).toHaveLength(1);
+  });
+
+  it('keeps a post next to a card that is not a pull (withdrawn or Crewly\'s own)', () => {
+    const at = ago(1);
+    const recs = pullsFromAgentPosts(
+      [{ at, agent: 'atlas', endsWithQuestion: false }],
+      [card({ askedAt: at, status: 'cancelled' }), card({ askedAt: at, system: { key: 'x' }, kind: 'runtime_terms' })],
+      () => null,
+    );
+    expect(recs).toHaveLength(1);
+  });
+
+  it('shows FYIs in the kinds, and no outcome line when nothing has one', () => {
+    const text = renderPullsWeekly(rollupPulls([rec({ kind: 'fyi', outcome: undefined }), rec({ kind: 'fyi', outcome: undefined })], NOW));
+    expect(text).toContain('2 FYI that did not need an answer');
+    expect(text).not.toMatch(/Answered|Open \d/);
   });
 });
