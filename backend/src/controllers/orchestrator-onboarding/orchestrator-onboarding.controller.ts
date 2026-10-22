@@ -118,11 +118,17 @@ async function usableExtraTemplates(): Promise<TeamTemplate[]> {
   const { TemplateService } = await import('../../services/template/template.service.js');
   const { CloudClientService } = await import('../../services/cloud/cloud-client.service.js');
   const { SkillTierService } = await import('../../services/skill/skill-tier.service.js');
-  const tier = CloudClientService.getInstance().getTier();
-  const tiers = SkillTierService.getInstance();
-  return TemplateService.getInstance()
-    .listExtraTemplates()
-    .filter((t) => !t.requiredTier || tiers.isTierSufficient(tier, t.requiredTier));
+  try {
+    const tier = CloudClientService.getInstance().getTier();
+    const tiers = SkillTierService.getInstance();
+    return TemplateService.getInstance()
+      .listExtraTemplates()
+      .filter((t) => !t.requiredTier || tiers.isTierSufficient(tier, t.requiredTier));
+  } catch (err) {
+    // Recommending stays total: without the catalog, the built-in mappings answer.
+    logger.warn('Could not read extra templates for onboarding', { err });
+    return [];
+  }
 }
 
 /**

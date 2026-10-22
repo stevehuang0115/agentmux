@@ -484,14 +484,17 @@ function scoreMapping(mapping: HardcodedMapping, haystack: string): number {
 }
 
 /**
- * Count how many of a catalog template's tags appear in the haystack. A
- * kebab-case tag also matches with spaces ("social-media" ↔ "social media").
+ * Count how many of a catalog template's tags appear in the haystack as whole
+ * words ("ai" does not match "email"). A kebab-case tag also matches with
+ * spaces ("social-media" ↔ "social media").
  */
 function scoreTemplate(template: CatalogTemplate, haystack: string): number {
   let score = 0;
   for (const tag of template.tags ?? []) {
-    const kw = tag.toLowerCase();
-    if (kw && (haystack.includes(kw) || haystack.includes(kw.replace(/-/g, ' ')))) score += 1;
+    const kw = tag.toLowerCase().trim();
+    if (!kw) continue;
+    const words = kw.split(/[-\s]+/).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    if (new RegExp(`(?<![\\p{L}\\p{N}])${words.join('[-\\s]+')}(?![\\p{L}\\p{N}])`, 'u').test(haystack)) score += 1;
   }
   return score;
 }

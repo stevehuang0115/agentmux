@@ -279,6 +279,12 @@ describe('recommendTeam — catalog templates (Crewly Pro)', () => {
     expect(recommendTeam(ctx, [education])).toEqual(recommendTeam(ctx));
   });
 
+  it('matches tags as whole words', () => {
+    const ai: CatalogTemplate = { ...education, id: 'pro-ai', tags: ['ai', 'social-media'] };
+    expect(recommendTeam(baseCtx('retail shop', ['answer email']), [ai]).templateId).not.toBe('pro-ai');
+    expect(recommendTeam(baseCtx('retail shop', ['ai drafts for social media']), [ai]).templateId).toBe('pro-ai');
+  });
+
   it('ignores a catalog template with no roles', () => {
     const rec = recommendTeam(baseCtx('k12 education', ['curriculum']), [{ ...education, roles: [] }]);
     expect(rec.templateId).not.toBe('pro-education-smb');

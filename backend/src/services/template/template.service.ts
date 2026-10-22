@@ -158,8 +158,11 @@ export class TemplateService {
   /** Templates directory path */
   private templatesDir: string;
 
-  /** IDs of templates loaded from `CREWLY_TEMPLATE_DIRS` (e.g. Crewly Pro's) */
-  private extraIds: Set<string> = new Set();
+  /**
+   * Templates loaded from `CREWLY_TEMPLATE_DIRS` (e.g. Crewly Pro's): id →
+   * the directory they came from, where their norms live.
+   */
+  private extraRoots: Map<string, string> = new Map();
 
   /** Whether templates have been loaded */
   private loaded: boolean = false;
@@ -197,7 +200,7 @@ export class TemplateService {
    */
   loadTemplates(): number {
     this.templates.clear();
-    this.extraIds.clear();
+    this.extraRoots.clear();
 
     // The base dir first, then every `CREWLY_TEMPLATE_DIRS` entry (Crewly Pro
     // points it at its paid templates). A base template keeps its id: an
@@ -208,7 +211,7 @@ export class TemplateService {
       const before = new Map(this.templates);
       this.loadTemplatesFrom(dir);
       for (const id of this.templates.keys()) {
-        if (!before.has(id)) this.extraIds.add(id);
+        if (!before.has(id)) this.extraRoots.set(id, dir);
       }
       for (const [id, template] of before) this.templates.set(id, template);
     }
@@ -227,7 +230,12 @@ export class TemplateService {
 
     for (const entry of readdirSync(dir)) {
       const fullPath = join(dir, entry);
-      const stat = statSync(fullPath);
+      let stat;
+      try {
+        stat = statSync(fullPath);
+      } catch {
+        continue; // a broken link or unreadable entry is not a template
+      }
 
       if (stat.isDirectory()) {
         // Check for template.json in subdirectory (new format)
@@ -251,7 +259,17 @@ export class TemplateService {
    */
   listExtraTemplates(): TeamTemplate[] {
     if (!this.loaded) this.loadTemplates();
-    return Array.from(this.templates.values()).filter((t) => this.extraIds.has(t.id));
+    return Array.from(this.templates.values()).filter((t) => this.extraRoots.has(t.id));
+  }
+
+  /**
+   * The directory a template's own files (template.json, norms/) are in.
+   *
+   * @param templateId - Template ID
+   * @returns `<templates dir>/<id>`
+   */
+  private templateHome(templateId: string): string {
+    return join(this.extraRoots.get(templateId) ?? this.templatesDir, templateId);
   }
 
   /**
@@ -471,7 +489,7 @@ export class TemplateService {
    */
   private copyTeamNorms(templateId: string, teamId: string): void {
     try {
-      const normsSourceDir = join(this.templatesDir, templateId, 'norms');
+      const normsSourceDir = join(this.templateHome(templateId), 'norms');
       if (!existsSync(normsSourceDir)) return;
 
       const normsFiles = readdirSync(normsSourceDir).filter(f => f.endsWith('.md'));
@@ -526,7 +544,7 @@ export class TemplateService {
    */
   private loadTemplateJson(templateId: string): Record<string, unknown> | null {
     try {
-      const jsonPath = join(this.templatesDir, templateId, 'template.json');
+      const jsonPath = join(this.templateHome(templateId), 'template.json');
       if (!existsSync(jsonPath)) return null;
       return JSON.parse(readFileSync(jsonPath, 'utf-8'));
     } catch {

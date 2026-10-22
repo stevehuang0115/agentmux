@@ -5,7 +5,7 @@
  * @module services/template/template.test
  */
 
-import { mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { TemplateService } from './template.service.js';
@@ -230,6 +230,21 @@ describe('TemplateService', () => {
       expect(template?.verificationPipeline.steps[0].method).toBe('manual_review');
       expect(service.listExtraTemplates().map((t) => t.id)).toEqual(['pro-education-smb']);
       expect(service.createTeamFromTemplate('pro-education-smb', 'School')?.memberCount).toBe(1);
+    });
+
+    it('copies the norms of a template from its own extra dir', () => {
+      writeProTemplate('pro-education-smb');
+      mkdirSync(join(extraDir, 'pro-education-smb', 'norms'));
+      writeFileSync(join(extraDir, 'pro-education-smb', 'norms', 'content-sop.md'), '# SOP');
+      const savedHome = process.env.CREWLY_HOME;
+      process.env.CREWLY_HOME = join(extraDir, 'home');
+      try {
+        const result = TemplateService.getInstance(tempDir).createTeamFromTemplate('pro-education-smb', 'School');
+        expect(existsSync(join(extraDir, 'home', 'teams', String(result?.team.id), 'norms', 'content-sop.md'))).toBe(true);
+      } finally {
+        if (savedHome === undefined) delete process.env.CREWLY_HOME;
+        else process.env.CREWLY_HOME = savedHome;
+      }
     });
 
     it('never lets an extra dir replace a base template', () => {
