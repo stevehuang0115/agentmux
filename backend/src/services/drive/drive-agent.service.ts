@@ -500,13 +500,16 @@ export class DriveAgentService {
     (this.deps.keepWarm ?? getDriveKeepWarm()).end(data.sessionId);
     const wanted = new Set(state.conversations.map((c) => c.conversationId));
     const local = (await this.deps.store.list()).filter((c) => c.sessionId === data.sessionId && wanted.has(c.conversationId) && !c.closedAt && !c.recapAskedAt);
-    for (const c of local) {
-      const ok = await this.deps.notifyAgent(c.agentSession, recapRequest(c)).catch(() => false);
+    // One recap per agent: an agent that answered for itself and for its team posted two recaps to the owner (2026-10-22).
+    const byAgent = new Map<string, DriveLocalConversation[]>();
+    for (const c of local) byAgent.set(c.agentSession, [...(byAgent.get(c.agentSession) ?? []), c]);
+    for (const [agentSession, cs] of byAgent) {
+      const ok = await this.deps.notifyAgent(agentSession, recapRequest(cs)).catch(() => false);
       if (!ok) {
-        this.logger.warn('Drive mode: could not ask for a recap', { sessionId: c.sessionId, conversationId: c.conversationId, agent: c.agentSession });
+        this.logger.warn('Drive mode: could not ask for a recap', { sessionId: data.sessionId, conversationIds: cs.map((c) => c.conversationId), agent: agentSession });
         continue;
       }
-      await this.deps.store.update(c.sessionId, c.conversationId, (cur) => (cur ? { ...cur, recapAskedAt: this.now().toISOString() } : null), this.now().getTime());
+      for (const c of cs) await this.deps.store.update(c.sessionId, c.conversationId, (cur) => (cur ? { ...cur, recapAskedAt: this.now().toISOString() } : null), this.now().getTime());
     }
   }
 
@@ -580,19 +583,26 @@ export function ownerTurnText(sessionId: string, kind: DriveTargetKind, name: st
 }
 
 /**
- * The harness note asking an agent for its recap.
+ * The harness note asking an agent for its recap: one recap however many
+ * of the session's conversations the agent answered (its own, its team's).
  *
- * @param c - Conversation
+ * @param conv - The agent's conversation(s) in the session
  * @returns Note text
  */
-export function recapRequest(c: DriveLocalConversation): string {
-  const where = c.kind === 'channel' ? c.targetName : c.kind === 'team' ? `your DM with the owner (for the ${c.targetName} team)` : 'your DM with the owner';
-  const transcript = c.turns
-    .slice(-12)
-    .map((t) => `${t.from === 'owner' ? 'Owner' : t.name}: ${clip(t.text, 400)}`)
+export function recapRequest(conv: DriveLocalConversation | readonly DriveLocalConversation[]): string {
+  const cs = Array.isArray(conv) ? (conv as readonly DriveLocalConversation[]) : [conv as DriveLocalConversation];
+  const c = cs[0];
+  const placeOf = (x: DriveLocalConversation): string => (x.kind === 'channel' ? x.targetName : x.kind === 'team' ? `your DM with the owner (for the ${x.targetName} team)` : 'your DM with the owner');
+  const where = placeOf(c);
+  const transcript = cs
+    .flatMap((x) => x.turns.map((t) => ({ ...t, label: cs.length > 1 && x.kind === 'team' ? ` (as the ${x.targetName} team)` : '' })))
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+    .slice(-12 * cs.length)
+    .map((t) => `${t.from === 'owner' ? 'Owner' : t.name}${t.label}: ${clip(t.text, 400)}`)
     .join('\n');
+  const several = cs.length > 1 ? ` You answered in ${cs.length} conversations of it (${cs.map((x) => (x.kind === 'team' ? `for the ${x.targetName} team` : x.kind === 'channel' ? x.targetName : 'as yourself')).join(', ')}): ONE recap covers them all.` : '';
   return [
-    `[Drive mode ended · session ${c.sessionId}] The owner ended the Drive mode conversation with you. Post ONE recap now, for reading:`,
+    `[Drive mode ended · session ${c.sessionId}] The owner ended the Drive mode conversation with you.${several} Post ONE recap now, for reading:`,
     `reply --drive ${c.sessionId} --recap "Drive mode recap — you said …; I did / answered …; next: … (or: nothing pending / waiting on X)"`,
     `It is posted in ${where}. After it the conversation is closed: no follow-ups or nudges unless the recap names a next step.`,
     '',
