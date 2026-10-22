@@ -165,6 +165,8 @@ export class ModelTierService implements DecisionKindHandler {
   private ticking = false;
   private restarts: Promise<void> = Promise.resolve();
 
+  private readonly submitting = new Set<string>();
+
   constructor(private readonly deps: ModelTierDeps) {}
 
   private now(): Date {
@@ -440,6 +442,17 @@ export class ModelTierService implements DecisionKindHandler {
   }
 
   private async submit(ctx: LeadContext): Promise<Record<string, unknown>> {
+    // The hourly auto-submit and the lead's own --submit can overlap; one wins.
+    if (this.submitting.has(ctx.team.id)) throw new ModelTierError(409, 'This review is being submitted already');
+    this.submitting.add(ctx.team.id);
+    try {
+      return await this.submitOnce(ctx);
+    } finally {
+      this.submitting.delete(ctx.team.id);
+    }
+  }
+
+  private async submitOnce(ctx: LeadContext): Promise<Record<string, unknown>> {
     const state = await this.deps.store.get(ctx.team.id);
     const draft = state.draft;
     if (!draft || (draft.changes.length === 0 && draft.routing.length === 0)) {
@@ -487,7 +500,7 @@ export class ModelTierService implements DecisionKindHandler {
       notice: 'applied',
       undoOf: draft.reviewId,
       changes: applied.map((c) => reverseEntry(c, team, 'the owner undid it')),
-      routing: [],
+      routing: before.filter((r) => !(team.tierRoutingRules ?? []).includes(r)),
       removeRouting: draft.routing.filter((r) => !before.includes(r)),
     };
     let noticeId: string | null = null;
@@ -736,35 +749,48 @@ export class ModelTierService implements DecisionKindHandler {
     const now = this.now();
     const applied: AppliedTierChange[] = [];
     const modelChanged: string[] = [];
+    // An undo puts back only members whose latest change is the one undone:
+    // a later change (by the owner's card or another batch) wins.
+    const latest = new Map<string, string>();
+    if (s.kind === 'undo') for (const a of (await this.deps.store.get(s.teamId)).applied) latest.set(a.memberId, a.decisionId);
     for (const c of s.changes) {
       const m = team.members.find((x) => x.id === c.memberId);
       if (!m || m.role === 'orchestrator') continue;
-      if (s.kind === 'undo' && (m.tier ?? null) !== c.from) continue;
+      if (s.kind === 'undo' && ((m.tier ?? null) !== c.from || (s.undoOf && latest.get(m.id) !== s.undoOf))) continue;
       const runtime = m.runtimeType ?? RUNTIME_TYPES.CLAUDE_CODE;
       const modelBefore = effectiveMemberModelId(team, { ...m, runtimeType: runtime });
+      // What the member had right now, not when the change was proposed: the
+      // record (and the undo built from it) must put back this state.
+      const tierBefore = m.tier ?? null;
+      const fixedBefore = m.modelId;
       if (c.clearTier) delete m.tier;
       else m.tier = c.to;
       if (c.clearsModelId && m.modelId === c.clearsModelId) delete m.modelId;
-      if (c.restoreModelId) m.modelId = c.restoreModelId;
+      // Never overwrite a fixed model someone set after the change being reverted.
+      if (c.restoreModelId && !m.modelId) m.modelId = c.restoreModelId;
       if (effectiveMemberModelId(team, { ...m, runtimeType: runtime }) !== modelBefore && sessionOf(m)) modelChanged.push(sessionOf(m));
-      const lowered = !c.clearTier && tierRank(c.to) < tierRank(effectiveFromTier(c, m.runtimeType ?? RUNTIME_TYPES.CLAUDE_CODE, team.tierModels));
+      const actual: TierChangeEntry = { ...c, from: tierBefore, fromModel: modelBefore };
+      delete actual.clearsModelId;
+      if (fixedBefore && !m.modelId) actual.clearsModelId = fixedBefore;
+      const lowered = !c.clearTier && tierRank(c.to) < tierRank(effectiveFromTier(actual, runtime, team.tierModels));
       applied.push({
-        ...c,
+        ...actual,
         appliedAt: now.toISOString(),
         decisionId,
         baseline: baselineBefore(items, memberLedgerKeys(m), now.getTime()),
         guard: lowered && s.kind === 'review' ? 'watching' : 'not_watched',
       });
     }
-    if (s.routing.length) {
-      const rules = [...(team.tierRoutingRules ?? [])];
-      for (const r of s.routing) if (!rules.includes(r)) rules.push(r);
-      team.tierRoutingRules = rules.slice(-20);
-    }
+    // Removal first, so an undo can take its rules out and put back the ones they pushed out.
     if (s.removeRouting?.length) {
       const rules = (team.tierRoutingRules ?? []).filter((r) => !s.removeRouting!.includes(r));
       if (rules.length) team.tierRoutingRules = rules;
       else delete team.tierRoutingRules;
+    }
+    if (s.routing.length) {
+      const rules = [...(team.tierRoutingRules ?? [])];
+      for (const r of s.routing) if (!rules.includes(r)) rules.push(r);
+      team.tierRoutingRules = rules.slice(-20);
     }
     team.updatedAt = now.toISOString();
     await this.deps.saveTeam(team);

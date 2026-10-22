@@ -386,6 +386,44 @@ describe('ModelTierService', () => {
       expect(member('m-sam').modelId).toBe('opus');
     });
 
+    it('Undo puts back what the member had when the change applied, not when it was proposed', async () => {
+      await service.propose('mkt-owen', { member: 'Ella', tier: 'weak', reason: 'polls' });
+      // The owner moved Ella by hand while the draft waited.
+      await service.updateSettings('t1', { memberTiers: { 'm-ella': 'strong' } });
+      await service.propose('mkt-owen', { submit: true });
+      expect(member('m-ella').tier).toBe('weak');
+      await service.onSettled({ ...decisions.get('D-1')!, status: 'resolved', chosenKey: 'a' } as OwnerDecision);
+      expect(member('m-ella').tier).toBe('strong');
+    });
+
+    it('Undo of an older batch leaves a member a later batch changed again', async () => {
+      await service.propose('mkt-owen', { member: 'Ella', tier: 'weak', reason: 'polls' });
+      await service.propose('mkt-owen', { submit: true });
+      await service.propose('mkt-owen', { member: 'Ella', tier: 'mid', reason: 'more work' });
+      await service.propose('mkt-owen', { submit: true });
+      await service.propose('mkt-owen', { member: 'Ella', tier: 'weak', reason: 'quiet again' });
+      await service.propose('mkt-owen', { submit: true });
+      await service.onSettled({ ...decisions.get('D-1')!, status: 'resolved', chosenKey: 'a' } as OwnerDecision);
+      expect(member('m-ella').tier).toBe('weak');
+    });
+
+    it('Undo puts back routing rules the batch pushed out', async () => {
+      const old = Array.from({ length: 20 }, (_, i) => `rule ${i}`);
+      teams[0].tierRoutingRules = [...old];
+      await service.propose('mkt-owen', { routing: 'polling -> Ella' });
+      await service.propose('mkt-owen', { submit: true });
+      expect(team().tierRoutingRules).toEqual([...old.slice(1), 'polling -> Ella']);
+      await service.onSettled({ ...decisions.get('D-1')!, status: 'resolved', chosenKey: 'a' } as OwnerDecision);
+      expect([...team().tierRoutingRules!].sort()).toEqual([...old].sort());
+    });
+
+    it('two submits at the same time apply once', async () => {
+      await service.propose('mkt-owen', { member: 'Ella', tier: 'weak', reason: 'polls' });
+      const both = await Promise.allSettled([service.propose('mkt-owen', { submit: true }), service.propose('mkt-owen', { submit: true })]);
+      expect(both.filter((r) => r.status === 'fulfilled' && (r.value as { applied?: boolean }).applied)).toHaveLength(1);
+      expect(asks).toHaveLength(1);
+    });
+
     it('Keep, the deadline or a skip change nothing and tell the lead nothing', async () => {
       await service.propose('mkt-owen', { member: 'Ella', tier: 'weak', reason: 'polls' });
       await service.propose('mkt-owen', { submit: true });
