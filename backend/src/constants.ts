@@ -4667,6 +4667,8 @@ export const SUB_AGENT_QUEUE_CONSTANTS = {
 	MAX_QUEUE_SIZE: 50,
 	/** Failed delivery attempts (send failed or threw) before a queued message is reported undeliverable */
 	MAX_DELIVERY_ATTEMPTS: 5,
+	/** Rounds of attempts a message gets kept, not dropped, while its agent is down (each round waits for a start) */
+	MAX_KEEPS_WHILE_DOWN: 3,
 	/** Delay between flushed messages on registration (ms) */
 	FLUSH_INTER_MESSAGE_DELAY: 2000,
 	/**

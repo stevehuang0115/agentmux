@@ -8037,16 +8037,11 @@ void (async () => {
 	 * @param opts - A sample message (its `[CHAT:…]` header), a kind for the orchestrator queue key, the Slack title for the orchestrator case
 	 */
 	private tellAboutAgent(sessionName: string, text: string, opts: { sample?: string; kind: string; title: string }): void {
-		// In the chat the message came from, when it names one…
-		const chat = opts.sample ? /^\s*\[CHAT:([^\]\s:]+)/.exec(opts.sample) : null;
-		if (chat) {
-			try {
-				getChatV2Service().recordTurn({ channelId: chat[1], senderType: 'system', senderId: 'crewly', content: text, metadata: { source: 'system' } });
-			} catch {
-				// The channel may be gone; the orchestrator still hears below.
-			}
-		}
-		// …and to the orchestrator, unless it is the one in trouble.
+		// Not in the owner's thread: "No action needed: … busy for 10 min" and
+		// "N message(s) were dropped" lines read as a log there (23 in 8 days,
+		// 2026-10-22 audit; specs: owner thread is not a log). The owner thread
+		// that waits on the agent hears it through the owner-thread sentinel.
+		// The orchestrator is told, unless it is the one in trouble.
 		if (sessionName !== ORCHESTRATOR_SESSION_NAME) {
 			this.messageQueueService.enqueue({ content: `[SYSTEM]\n${text}\n[/SYSTEM]`, conversationId: `system:${opts.kind}:${sessionName}`, source: 'system_event' });
 			return;
@@ -8058,7 +8053,7 @@ void (async () => {
 				.then((sent) => sent !== false, () => false)
 			: Promise.resolve(false);
 		void viaSlack.then((sent) => {
-			if (sent || chat) return;
+			if (sent) return;
 			this.tellOrchestratorChat(text);
 		});
 	}
@@ -8251,6 +8246,10 @@ void (async () => {
 			queue.setHandOverPreparer(async (sessionName, workItemId, data) => {
 				const { prepareWorkItemHandOver } = await import('./controllers/monitoring/terminal.controller.js');
 				return prepareWorkItemHandOver(sessionName, workItemId, data);
+			});
+			queue.setDownCheck((sessionName) => {
+				const backend = getSessionBackendSync();
+				return !!backend && !backend.sessionExists(sessionName);
 			});
 			queue.setDropListener((sessionName, dropped, reason) => {
 				const why = reason === 'aged-out'

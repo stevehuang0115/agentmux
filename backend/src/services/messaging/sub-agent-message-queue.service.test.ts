@@ -32,6 +32,7 @@ jest.mock('../../constants.js', () => ({
 		MAX_QUEUE_SIZE: 5, // Small size for testing overflow
 		FLUSH_INTER_MESSAGE_DELAY: 2000,
 		MAX_AGE_MS: 6 * 60 * 60 * 1000,
+		MAX_KEEPS_WHILE_DOWN: 3,
 	},
 }));
 
@@ -447,6 +448,21 @@ describe('SubAgentMessageQueue', () => {
 			await queue.flush('ella', send); // fifth failed attempt
 			expect(queue.getQueueSize('ella')).toBe(0);
 			expect(listener).toHaveBeenCalledWith('ella', [expect.objectContaining({ data: 'first', attempts: 5 }), expect.objectContaining({ data: 'second', attempts: 5 })], 'undeliverable');
+		});
+
+		it('an agent that is down keeps its messages for its next start, for a few rounds, then they are reported (2026-10-22 audit)', async () => {
+			const listener = jest.fn();
+			queue.setDropListener(listener);
+			queue.setDownCheck(() => true);
+			queue.enqueue('pia', 'owner work');
+			const send = jest.fn(async () => ({ success: false, error: 'Session does not exist' }));
+			for (let i = 0; i < 15; i++) await queue.flush('pia', send);
+			expect(queue.getQueueSize('pia')).toBe(1);
+			expect(listener).not.toHaveBeenCalled();
+			for (let i = 0; i < 5; i++) await queue.flush('pia', send);
+			expect(queue.getQueueSize('pia')).toBe(0);
+			expect(listener).toHaveBeenCalledWith('pia', [expect.objectContaining({ data: 'owner work', keptWhileDown: 3 })], 'undeliverable');
+			queue.setDownCheck(null);
 		});
 
 		it('reports messages aged out at load, once a listener is set', () => {
