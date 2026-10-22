@@ -1948,6 +1948,9 @@ describe('buildModuleConfigFromTeamMember — WIRE-1 wiring', () => {
 		expect(on.teamTiers?.optimizeUsage).toBe(true);
 		expect(on.teamTiers?.routingRules).toEqual(['polling -> Ella']);
 		expect(on.teamTiers?.members.find((m) => m.name === 'Ella')).toEqual({ name: 'Ella', tier: 'weak', model: 'haiku' });
+		expect(on.teamTiers?.changeMode).toBe('approve');
+		const auto = buildModuleConfigFromTeamMember(member, { ...team, tierChangeMode: 'auto' }, makeRuntime());
+		expect(auto.teamTiers?.changeMode).toBe('auto');
 	});
 
 	it('resolves orgRole=team-lead for canDelegate=true members', () => {

@@ -14,6 +14,7 @@ import {
   canRemind,
   canSkip,
   isSkipWord,
+  isNoticeCard,
   settledLine,
   skipChoice,
   choiceFromReaction,
@@ -303,6 +304,22 @@ describe('Skip (specs/2026-10-01-decision-skip.md)', () => {
       const actions = blocksOf(renderOpenCard(d, 'i', NOW)).find((b) => b.type === 'actions')!;
       expect(actions.elements.some((e: any) => e.action_id === 'decision:skip')).toBe(false);
     }
+  });
+
+  it('a model-tier notice (the change already happened) has no Remind or Skip; skipping keeps it', () => {
+    const notice = decision({
+      kind: 'model_tier_change',
+      options: [{ key: 'a', label: 'Undo' }, { key: 'b', label: 'Keep' }],
+      defaultKey: 'b',
+      tierChange: { teamId: 't', teamName: 'T', reviewId: 'r', kind: 'undo', notice: 'applied', changes: [], routing: [], askerSession: 's', askerName: 'Owen' },
+    });
+    expect(isNoticeCard(notice)).toBe(true);
+    expect(isNoticeCard(decision())).toBe(false);
+    expect(canRemind(notice)).toBe(false);
+    expect(canSkip(notice)).toBe(false);
+    expect(skipChoice(notice)).toEqual({ kind: 'option', key: 'b' });
+    const actions = blocksOf(renderOpenCard(notice, 'i', NOW)).find((b) => b.type === 'actions')!;
+    expect(actions.elements.map((e: any) => e.text.text)).toEqual(['Undo', 'Keep']);
   });
 
   it('skip means a real skip, or the safe "no" where Skip is not offered', () => {

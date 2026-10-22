@@ -3856,6 +3856,16 @@ export const MODEL_TIER_CONSTANTS = {
 	DRAFT_AUTO_SUBMIT_MS: 2 * 60 * 60 * 1000,
 	/** How long a tier card waits for the owner (default = keep as is) */
 	DECISION_DEADLINE_MS: 72 * 60 * 60 * 1000,
+	/** Who changes tiers while "Optimize usage" is on (crewly#1173 phase 2) */
+	CHANGE_MODES: ['approve', 'auto'],
+	/** Default change mode: the owner approves every change (phase 1 behaviour) */
+	DEFAULT_CHANGE_MODE: 'approve',
+	/** How long the Undo button of an auto-mode notice stays live (then the notice closes; nothing changes) */
+	NOTICE_DEADLINE_MS: 72 * 60 * 60 * 1000,
+	/** Reason recorded for the planned relaunch of an idle member whose model changed */
+	RELAUNCH_REASON: 'model_tier_change',
+	/** Work-item statuses that mean a member holds work in progress (no restart then) */
+	BUSY_WORK_STATUSES: ['running', 'accepted'],
 	/** Work titles listed per member in the report */
 	REPORT_MAX_TITLES: 5,
 	/** Max characters of a reason / routing rule */

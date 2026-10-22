@@ -238,8 +238,20 @@ export function renderOpenCard(d: OwnerDecision, instanceId: string, now: Date =
  * @param d - Decision
  * @returns True when snoozing is allowed
  */
-export function canRemind(d: Pick<OwnerDecision, 'kind' | 'system'>): boolean {
-  return d.kind !== 'browser_action' && d.kind !== 'gmail_send' && !d.system;
+export function canRemind(d: Pick<OwnerDecision, 'kind' | 'system'> & Partial<Pick<OwnerDecision, 'tierChange'>>): boolean {
+  return d.kind !== 'browser_action' && d.kind !== 'gmail_send' && !d.system && !isNoticeCard(d);
+}
+
+/**
+ * Whether a card is a notice: the change already happened and its one
+ * action undoes it (model-tier auto mode, crewly#1173). Nothing to snooze
+ * or skip — not answering keeps it.
+ *
+ * @param d - Decision
+ * @returns True for a notice
+ */
+export function isNoticeCard(d: Partial<Pick<OwnerDecision, 'tierChange'>>): boolean {
+  return !!d.tierChange?.notice;
 }
 
 /**
@@ -252,21 +264,24 @@ export function canRemind(d: Pick<OwnerDecision, 'kind' | 'system'>): boolean {
  * @param d - Decision
  * @returns True when the Skip button is shown
  */
-export function canSkip(d: Pick<OwnerDecision, 'kind' | 'system' | 'sensitive'> & Partial<Pick<OwnerDecision, 'merge' | 'options'>>): boolean {
+export function canSkip(d: Pick<OwnerDecision, 'kind' | 'system' | 'sensitive'> & Partial<Pick<OwnerDecision, 'merge' | 'options' | 'tierChange'>>): boolean {
   if (d.merge && d.options && noOption(d.options)) return false;
+  if (isNoticeCard(d)) return false;
   return d.kind !== 'browser_action' && d.kind !== 'gmail_send' && !d.system && !d.sensitive;
 }
 
 /**
- * What "skip" means for a card: a real skip where {@link canSkip}; else the
- * safe way out — its "no" option, else its default when that never lets
+ * What "skip" means for a card: a real skip where {@link canSkip}; a
+ * notice's default (keep what happened); else the safe way out — its "no" option, else its default when that never lets
  * anything through, else a real skip (dropping a sensitive ask does nothing).
  *
  * @param d - Decision
  * @returns Choice
  */
-export function skipChoice(d: Pick<OwnerDecision, 'kind' | 'system' | 'sensitive' | 'options' | 'defaultKey'> & Partial<Pick<OwnerDecision, 'merge'>>): DecisionChoice {
+export function skipChoice(d: Pick<OwnerDecision, 'kind' | 'system' | 'sensitive' | 'options' | 'defaultKey'> & Partial<Pick<OwnerDecision, 'merge' | 'tierChange'>>): DecisionChoice {
   if (canSkip(d)) return { kind: 'skip' };
+  // A notice's default keeps what already happened.
+  if (isNoticeCard(d) && d.options.some((o) => o.key === d.defaultKey)) return { kind: 'option', key: d.defaultKey };
   const no = noOption(d.options);
   if (no) return { kind: 'option', key: no.key };
   if (defaultIsSafe(d) && d.options.some((o) => o.key === d.defaultKey)) return { kind: 'option', key: d.defaultKey };

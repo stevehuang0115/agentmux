@@ -130,11 +130,26 @@ export interface TierChangeSubject {
   teamName: string;
   /** Review id (`review` cards) or guard id (`revert` cards) */
   reviewId: string;
-  /** `review`: the lead's proposals; `revert`: the quality guard asks to move a member back */
-  kind: 'review' | 'revert';
+  /**
+   * What applying does. `review`: the lead's proposals (watched by the
+   * quality guard); `revert`: move a member back after the guard found worse
+   * work; `undo`: the owner's tap on an auto-mode notice — puts back exactly
+   * the changes the notice is about (not watched).
+   */
+  kind: 'review' | 'revert' | 'undo';
+  /**
+   * Set on auto-mode notices (the change already happened; the one action
+   * undoes it): `applied` — the lead's changes went in; `reverted` — the
+   * quality guard moved a member back.
+   */
+  notice?: 'applied' | 'reverted';
+  /** Id of the applied batch an `undo` reverses (its applied entries are marked `undone`) */
+  undoOf?: string;
   changes: TierChangeEntry[];
   /** Task routing rules the lead proposed */
   routing: string[];
+  /** Routing rules an `undo` removes again (the ones the undone batch added) */
+  removeRouting?: string[];
   askerSession: string;
   askerName: string;
 }

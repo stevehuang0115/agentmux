@@ -30,6 +30,7 @@ import {
 import { runtimeLabel } from './runtime-fallback.types.js';
 import { createRuntimeUsageProbe, type CrewlyAgentProbeTarget } from './runtime-usage-probe.js';
 import { clearPlannedRelaunch, markPlannedRelaunch } from '../agent/planned-relaunch.registry.js';
+import { isAgentBusy, startMemberSession, stopForRelaunch } from '../agent/member-relaunch.js';
 
 /** Reason recorded for the fallback's relaunches. */
 const PLANNED_RELAUNCH_REASON = 'runtime_fallback';
@@ -237,36 +238,20 @@ export function startBackendRuntimeFallback(ctx: RuntimeFallbackWiringContext): 
 	};
 
 	const relaunchSession = async (agent: FallbackAgentInfo, reg: RegistrationLike): Promise<boolean> => {
-		await reg.stopSessionForRelaunch(agent.sessionName);
-		const { PtyActivityTrackerService } = await import('../agent/pty-activity-tracker.service.js');
-		PtyActivityTrackerService.getInstance().clearSession(agent.sessionName);
-		// Grace-revokes of the old session must not flag the new one as hung.
-		const { TaskPoolService } = await import('../task-pool/task-pool.service.js');
-		try {
-			TaskPoolService.getInstance().clearHungState(agent.sessionName);
-		} catch {
-			// task pool not ready
-		}
+		await stopForRelaunch(reg, agent.sessionName);
 		if (agent.isOrchestrator) {
 			const { OrchestratorRestartService } = await import('../orchestrator/orchestrator-restart.service.js');
 			return OrchestratorRestartService.getInstance().attemptRestart({ planned: true, reason: PLANNED_RELAUNCH_REASON });
 		}
-		const found = await findMember(agent.sessionName);
-		if (!found) return false;
-		let projectPath: string | undefined;
-		if (found.team.projectIds[0]) {
-			projectPath = (await ctx.storage.getProjects()).find((p) => p.id === found.team.projectIds[0])?.path;
-		}
-		projectPath ??= (await persistence().catch(() => null))?.getSessionMetadata(agent.sessionName)?.cwd;
-		const result = await reg.createAgentSession({
-			sessionName: agent.sessionName,
-			role: found.member.role,
-			projectPath,
-			memberId: found.member.id,
-			teamId: found.team.id,
-		});
-		if (!result.success) ctx.logger.warn('Relaunch failed', { sessionName: agent.sessionName, error: result.error });
-		return result.success;
+		return startMemberSession(
+			{
+				storage: ctx.storage,
+				cwdOf: async (s) => (await persistence().catch(() => null))?.getSessionMetadata(s)?.cwd,
+				logger: ctx.logger,
+			},
+			reg,
+			agent.sessionName,
+		);
 	};
 
 	const service = new RuntimeFallbackService({
@@ -296,13 +281,7 @@ export function startBackendRuntimeFallback(ctx: RuntimeFallbackWiringContext): 
 				return false;
 			}
 		},
-		isBusy: async (sessionName) => {
-			const { ActivityMonitorService } = await import('../monitoring/activity-monitor.service.js');
-			const { PtyActivityTrackerService } = await import('../agent/pty-activity-tracker.service.js');
-			if (ActivityMonitorService.getInstance().getObservedWorkingStatus(sessionName) === 'in_progress') return true;
-			const tracker = PtyActivityTrackerService.getInstance();
-			return tracker.hasActivity(sessionName) && tracker.getIdleTimeMs(sessionName) < RUNTIME_FALLBACK_CONSTANTS.IDLE_QUIET_MS;
-		},
+		isBusy: (sessionName) => isAgentBusy(sessionName, RUNTIME_FALLBACK_CONSTANTS.IDLE_QUIET_MS),
 		getAvailability: async (settings) => {
 			const { getHarnessService } = await import('../harness/harness.service.js');
 			const { getSettingsService } = await import('../settings/settings.service.js');

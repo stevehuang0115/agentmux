@@ -7436,7 +7436,17 @@ void (async () => {
 			// Model tiers (crewly#1173): the lead's weekly usage review and the
 			// owner's one card per review that applies tier changes.
 			await import('./services/model-tiers/model-tier.wiring.js')
-				.then((m) => m.startModelTiers({ crewlyHome: this.config.crewlyHome, decisions, sendToAgent, packageRoot: findPackageRoot(__dirname) }))
+				.then((m) =>
+					m.startModelTiers({
+						crewlyHome: this.config.crewlyHome,
+						decisions,
+						sendToAgent,
+						packageRoot: findPackageRoot(__dirname),
+						// Restart an idle member whose model changed (crewly#1173 phase 2).
+						registration: () => this.apiController.agentRegistrationService,
+						sessionExists: (sessionName) => getSessionBackendSync()?.sessionExists(sessionName) ?? false,
+					}),
+				)
 				.catch((err) => this.logger.warn('Model tier reviews not wired (non-critical)', { error: err instanceof Error ? err.message : String(err) }));
 			decisions.start();
 			this.logger.info('Decision cards started');
