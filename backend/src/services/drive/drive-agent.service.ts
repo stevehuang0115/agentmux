@@ -115,7 +115,8 @@ export interface DriveAgentDeps {
   /**
    * Record the owner's words as an owner turn and deliver them: the agent's
    * DM (agent / team lead), or the room of a team channel (a new thread on
-   * the first turn, then that thread). Text carries the Drive mode note.
+   * the first turn, then that thread). `text` (with the Drive mode note) goes
+   * to the agent; `ownerText` (the owner's words alone) is what the chat shows.
    */
   deliverOwnerTurn: (input: {
     kind: DriveTargetKind;
@@ -124,6 +125,7 @@ export interface DriveAgentDeps {
     channelId?: string;
     threadId?: string;
     text: string;
+    ownerText: string;
   }) => Promise<{ channelId: string; threadId?: string }>;
   /** Record an agent's spoken answer in its conversation (chat-v2, kept off Slack) */
   recordAgentTurn: (input: { agentSession: string; channelId: string; threadId?: string; text: string; interim: boolean; sessionId: string }) => Promise<void>;
@@ -177,6 +179,8 @@ export class DriveAgentService {
   private readonly now: () => Date;
   private readonly fetchImpl: (input: string, init: RequestInit) => Promise<Response>;
   private readonly inFlight = new Set<string>();
+  /** Conversations whose recap is being posted now (`sessionId/conversationId`) */
+  private readonly recapping = new Set<string>();
   private readonly listener = (msg: IncomingMessage): void => {
     void this.handle(msg);
   };
@@ -310,6 +314,7 @@ export class DriveAgentService {
       ...(d.target.slackChannelId ? { slackChannelId: d.target.slackChannelId } : {}),
       ...(existing ? { channelId: existing.channelId, ...(existing.threadId ? { threadId: existing.threadId } : {}) } : {}),
       text: ownerTurnText(d.sessionId, d.target.kind, d.target.name, d.text),
+      ownerText: d.text,
     });
     const at = this.now().toISOString();
     const conv = await this.deps.store.update(
@@ -404,6 +409,19 @@ export class DriveAgentService {
   }
 
   private async recap(conv: DriveLocalConversation, agentSession: string, text: string): Promise<{ conversationId: string; closed: boolean }> {
+    // A second `--recap` while the first is still posting (a retried call) is the
+    // same recap: the owner got the same recap 2–3 times seconds apart (2026-10-22 audit).
+    const key = `${conv.sessionId}/${conv.conversationId}`;
+    if (this.recapping.has(key)) return { conversationId: conv.conversationId, closed: true };
+    this.recapping.add(key);
+    try {
+      return await this.postRecapOnce(conv, agentSession, text);
+    } finally {
+      this.recapping.delete(key);
+    }
+  }
+
+  private async postRecapOnce(conv: DriveLocalConversation, agentSession: string, text: string): Promise<{ conversationId: string; closed: boolean }> {
     const nextStep = !NOTHING_PENDING.test(text);
     const posted = await this.deps.postRecap({ conversation: conv, agentSession, text, nextStep });
     await this.forward(conv, agentSession, text, { recap: true, nextStep }).catch((err) => {

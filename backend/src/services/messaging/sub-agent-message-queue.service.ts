@@ -51,6 +51,8 @@ export interface QueuedAgentMessage {
 	sessionName: string;
 	/** Failed delivery attempts so far (a send that threw or reported failure) */
 	attempts?: number;
+	/** Times it was kept, instead of dropped, because the agent was down */
+	keptWhileDown?: number;
 	/**
 	 * The WorkItem this message hands over (a `/deliver` with `workItemId`
 	 * held by the restart drain): its hand-over — dispatcher dedup, fresh
@@ -188,6 +190,8 @@ export class SubAgentMessageQueue {
 	private refresher: QueuedMessageRefresher | null = null;
 	/** Told when undelivered messages are dropped (never silently: crewly#1014) */
 	private dropListener: QueueDropListener | null = null;
+	/** Whether an agent's session is down (no live session) */
+	private isDown: ((sessionName: string) => boolean) | null = null;
 	/** Prepares queued WorkItem briefs (wired by the terminal controller) */
 	private handOverPreparer: QueuedHandOverPreparer | null = null;
 	/** Told about each message the flush delivered */
@@ -358,6 +362,18 @@ export class SubAgentMessageQueue {
 	 *
 	 * @param listener - The listener, or null
 	 */
+	/**
+	 * Install the check for an agent whose session is down. Messages that ran
+	 * out of attempts because the agent was not running are kept for its next
+	 * start (the queued-wake sweep starts it) instead of dropped: 10-16 Pia and
+	 * Atlas each lost owner work that way (2026-10-22 audit).
+	 *
+	 * @param check - Whether a session is down, or null to always drop
+	 */
+	setDownCheck(check: ((sessionName: string) => boolean) | null): void {
+		this.isDown = check;
+	}
+
 	setDropListener(listener: QueueDropListener | null): void {
 		this.dropListener = listener;
 		if (!listener) return;
@@ -826,7 +842,24 @@ export class SubAgentMessageQueue {
 			this.pendingMessages.set(sessionName, ownerFirst([...failedAgain, ...heldAgain, ...queue]));
 			this.save();
 		}
-		if (undeliverable.length > 0) this.reportDrop(sessionName, undeliverable, 'undeliverable');
+		if (undeliverable.length > 0) {
+			let down = false;
+			try {
+				down = this.isDown?.(sessionName) ?? false;
+			} catch {
+				down = false;
+			}
+			const maxKeeps = SUB_AGENT_QUEUE_CONSTANTS.MAX_KEEPS_WHILE_DOWN;
+			const keep = down ? undeliverable.filter((m) => (m.keptWhileDown ?? 0) < maxKeeps) : [];
+			const drop = undeliverable.filter((m) => !keep.includes(m));
+			if (keep.length > 0) {
+				const rest = this.pendingMessages.get(sessionName) ?? [];
+				this.pendingMessages.set(sessionName, ownerFirst([...keep.map((m) => ({ ...m, attempts: 0, keptWhileDown: (m.keptWhileDown ?? 0) + 1 })), ...rest]));
+				this.save();
+				this.logger.warn('Queued messages kept for the next start: the agent is down', { sessionName, kept: keep.length });
+			}
+			if (drop.length > 0) this.reportDrop(sessionName, drop, 'undeliverable');
+		}
 		if (out.skippedStale > 0) {
 			this.logger.info('Dropped stale queued messages instead of delivering them', {
 				sessionName,

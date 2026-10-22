@@ -3507,7 +3507,7 @@ void (async () => {
 									tryRefreshToken: () => cloudClient.tryRefreshToken(),
 								},
 								identity: async () => ({ instanceId: (await DeviceIdentityService.getInstance().getOrCreateIdentity()).deviceId }),
-								deliverOwnerTurn: async ({ kind, agentSession, slackChannelId, channelId, threadId, text }) => {
+								deliverOwnerTurn: async ({ kind, agentSession, slackChannelId, channelId, threadId, text, ownerText }) => {
 									// A team channel → its room; an agent or a team → the (lead's) DM.
 									const room = kind === 'channel' && slackChannelId ? getSlackTeamChannelService()?.findBySlackChannelId(slackChannelId)?.chatChannelId : undefined;
 									const chId = channelId ?? room ?? chatService.ensureDmChannel({ agentSession, principal: owner }).channel.id;
@@ -3515,12 +3515,13 @@ void (async () => {
 										channelId: chId,
 										senderType: 'user',
 										senderId: owner.userId,
-										content: text,
+										content: ownerText,
 										...(threadId ? { threadId } : {}),
 										clientMessageId: `drive-${randomUUID()}`,
 										metadata: { source: 'cloud-talk', inputMode: 'voice', via: DRIVE_CONSTANTS.VIA },
 									});
-									await chatDispatcher.dispatchMessage(chatService.getChannel(chId, owner), message);
+									// The chat shows the owner's words; the agent gets them with the Drive mode note.
+									await chatDispatcher.dispatchMessage(chatService.getChannel(chId, owner), { ...message, content: text });
 									// A room conversation is one thread, rooted at its first turn.
 									const root = chatService.getChannel(chId, owner).type === 'dm' ? undefined : (threadId ?? message.id);
 									return { channelId: chId, ...(root ? { threadId: root } : {}) };
@@ -8036,16 +8037,11 @@ void (async () => {
 	 * @param opts - A sample message (its `[CHAT:…]` header), a kind for the orchestrator queue key, the Slack title for the orchestrator case
 	 */
 	private tellAboutAgent(sessionName: string, text: string, opts: { sample?: string; kind: string; title: string }): void {
-		// In the chat the message came from, when it names one…
-		const chat = opts.sample ? /^\s*\[CHAT:([^\]\s:]+)/.exec(opts.sample) : null;
-		if (chat) {
-			try {
-				getChatV2Service().recordTurn({ channelId: chat[1], senderType: 'system', senderId: 'crewly', content: text, metadata: { source: 'system' } });
-			} catch {
-				// The channel may be gone; the orchestrator still hears below.
-			}
-		}
-		// …and to the orchestrator, unless it is the one in trouble.
+		// Not in the owner's thread: "No action needed: … busy for 10 min" and
+		// "N message(s) were dropped" lines read as a log there (23 in 8 days,
+		// 2026-10-22 audit; specs: owner thread is not a log). The owner thread
+		// that waits on the agent hears it through the owner-thread sentinel.
+		// The orchestrator is told, unless it is the one in trouble.
 		if (sessionName !== ORCHESTRATOR_SESSION_NAME) {
 			this.messageQueueService.enqueue({ content: `[SYSTEM]\n${text}\n[/SYSTEM]`, conversationId: `system:${opts.kind}:${sessionName}`, source: 'system_event' });
 			return;
@@ -8057,7 +8053,7 @@ void (async () => {
 				.then((sent) => sent !== false, () => false)
 			: Promise.resolve(false);
 		void viaSlack.then((sent) => {
-			if (sent || chat) return;
+			if (sent) return;
 			this.tellOrchestratorChat(text);
 		});
 	}
@@ -8250,6 +8246,10 @@ void (async () => {
 			queue.setHandOverPreparer(async (sessionName, workItemId, data) => {
 				const { prepareWorkItemHandOver } = await import('./controllers/monitoring/terminal.controller.js');
 				return prepareWorkItemHandOver(sessionName, workItemId, data);
+			});
+			queue.setDownCheck((sessionName) => {
+				const backend = getSessionBackendSync();
+				return !!backend && !backend.sessionExists(sessionName);
 			});
 			queue.setDropListener((sessionName, dropped, reason) => {
 				const why = reason === 'aged-out'

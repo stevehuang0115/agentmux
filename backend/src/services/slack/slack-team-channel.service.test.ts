@@ -3394,6 +3394,17 @@ describe('agent identities', () => {
     expect(chat.messages.filter((m) => m.metadata?.slackTs === '200.1')).toHaveLength(1);
   });
 
+  it('two copies of one Slack message arriving at the same time are recorded once (2026-10-22 audit)', async () => {
+    await service.ensureTeamChannel(team());
+    const [a, b] = await Promise.all([
+      service.routeInbound(inbound({ text: '@sam 看一下', ts: '201.1' })),
+      service.routeInbound(inbound({ text: '@sam 看一下', ts: '201.1' })),
+    ]);
+    expect([a!.duplicate, b!.duplicate].filter(Boolean)).toHaveLength(1);
+    expect(dispatcher!.dispatchMessage).toHaveBeenCalledTimes(1);
+    expect(chat.messages.filter((m) => m.metadata?.slackTs === '201.1')).toHaveLength(1);
+  });
+
   it('tries another agent bot when the first one is not in the private channel', async () => {
     // The huddle roster grows as agents are @'d there and never shrinks, and
     // a bot can be removed from a private channel afterwards — so "a huddle

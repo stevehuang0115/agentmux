@@ -9,7 +9,7 @@
  */
 
 import path from 'path';
-import { STALL_WATCHER_CONSTANTS } from '../../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, STALL_WATCHER_CONSTANTS } from '../../constants.js';
 import type { Team } from '../../types/index.js';
 import type { WorkItem } from '../../types/v2/work-item.types.js';
 import type { Request } from '../../types/v2/request.types.js';
@@ -56,6 +56,21 @@ const HARNESS_SOURCE = /^harness\b/i;
  * @param input - Items, tickets and the claim
  * @returns True when something is assigned
  */
+/**
+ * Who takes the lead's step of the stall ladder for an agent: its team lead,
+ * or the orchestrator when no lead runs on this machine (the lead is on
+ * another machine, or the team has none). Owen's stalled promise went to
+ * "lead: null" and nobody followed up (2026-10-22 audit).
+ *
+ * @param teams - Teams on this machine
+ * @param session - The stalled agent
+ * @returns Lead session, the orchestrator, or null for the orchestrator itself
+ */
+export function stallLeadFor(teams: Parameters<typeof findLeadSessionFor>[0], session: string): string | null {
+	if (session === ORCHESTRATOR_SESSION_NAME) return null;
+	return findLeadSessionFor(teams, session) ?? ORCHESTRATOR_SESSION_NAME;
+}
+
 export function assignmentBackedBy(input: {
 	items: readonly WorkItem[];
 	tickets: readonly AssignmentTicket[];
@@ -210,7 +225,7 @@ export async function createStallWatcher(input: StallWatcherWiringInput): Promis
 		},
 		releaseClaim: (workItemId, reason) => pool().releaseBack(workItemId, reason, { unassign: true }),
 		deliverToAgent: input.sendToAgent,
-		leadOf: async (session) => findLeadSessionFor(await teams(), session),
+		leadOf: async (session) => stallLeadFor(await teams(), session),
 		displayName: async (session) => membersBySession(await teams()).get(session)?.name ?? memberNameFromSession(session),
 		notifyOwner: input.notifyOwner,
 		recordPromiseStep: async (requestId, itemId, step, at) => {

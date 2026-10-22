@@ -2424,6 +2424,8 @@ export const SLACK_TEAM_CHANNEL_CONSTANTS = {
 	INBOUND_REACTION: 'eyes',
 	/** How many routed Slack messages to remember for duplicate-copy suppression */
 	SEEN_INBOUND_MAX: 500,
+	/** How long a message's first copy holds off a second copy still racing it (ms) */
+	INBOUND_IN_FLIGHT_MS: 30_000,
 	/** Synthetic team-id prefix for channels linked on the fly (no Crewly team behind them) */
 	ADHOC_TEAM_PREFIX: 'adhoc:',
 	/**
@@ -4665,6 +4667,8 @@ export const SUB_AGENT_QUEUE_CONSTANTS = {
 	MAX_QUEUE_SIZE: 50,
 	/** Failed delivery attempts (send failed or threw) before a queued message is reported undeliverable */
 	MAX_DELIVERY_ATTEMPTS: 5,
+	/** Rounds of attempts a message gets kept, not dropped, while its agent is down (each round waits for a start) */
+	MAX_KEEPS_WHILE_DOWN: 3,
 	/** Delay between flushed messages on registration (ms) */
 	FLUSH_INTER_MESSAGE_DELAY: 2000,
 	/**
