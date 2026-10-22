@@ -188,6 +188,72 @@ describe('TemplateService', () => {
     });
   });
 
+  describe('CREWLY_TEMPLATE_DIRS (Crewly Pro templates)', () => {
+    let extraDir: string;
+    const saved = process.env.CREWLY_TEMPLATE_DIRS;
+
+    beforeEach(() => {
+      extraDir = join(tmpdir(), `crewly-template-extra-${Date.now()}`);
+      mkdirSync(extraDir, { recursive: true });
+      process.env.CREWLY_TEMPLATE_DIRS = extraDir;
+    });
+
+    afterEach(() => {
+      if (saved === undefined) delete process.env.CREWLY_TEMPLATE_DIRS;
+      else process.env.CREWLY_TEMPLATE_DIRS = saved;
+      rmSync(extraDir, { recursive: true, force: true });
+    });
+
+    /** A Pro-style template.json: vertical category, no pipeline, no runtime. */
+    function writeProTemplate(id: string): void {
+      mkdirSync(join(extraDir, id));
+      writeFileSync(join(extraDir, id, 'template.json'), JSON.stringify({
+        id,
+        name: 'Education SMB Team',
+        description: 'Curriculum and engagement',
+        category: 'education',
+        version: '1.0.0',
+        tags: ['education', 'curriculum'],
+        hierarchical: false,
+        roles: [{ role: 'curriculum-designer', label: 'Curriculum Designer', defaultName: 'Alex', count: 1, hierarchyLevel: 2, canDelegate: false, defaultSkills: [] }],
+      }));
+    }
+
+    it('loads a template that leaves out the pipeline and runtime, with defaults', () => {
+      writeProTemplate('pro-education-smb');
+
+      const service = TemplateService.getInstance(tempDir);
+      const template = service.getTemplate('pro-education-smb');
+      expect(template).not.toBeNull();
+      expect(template?.category).toBe('custom');
+      expect(template?.defaultRuntime).toBe('claude-code');
+      expect(template?.verificationPipeline.steps[0].method).toBe('manual_review');
+      expect(service.listExtraTemplates().map((t) => t.id)).toEqual(['pro-education-smb']);
+      expect(service.createTeamFromTemplate('pro-education-smb', 'School')?.memberCount).toBe(1);
+    });
+
+    it('never lets an extra dir replace a base template', () => {
+      const baseJson = createValidTemplateJson();
+      mkdirSync(join(tempDir, 'test-dev'));
+      writeFileSync(join(tempDir, 'test-dev', 'template.json'), JSON.stringify(baseJson));
+      mkdirSync(join(extraDir, 'test-dev'));
+      writeFileSync(join(extraDir, 'test-dev', 'template.json'), JSON.stringify({ ...baseJson, name: 'Impostor' }));
+
+      const service = TemplateService.getInstance(tempDir);
+      expect(service.getTemplate(String(baseJson.id))?.name).toBe(baseJson.name);
+      expect(service.listExtraTemplates()).toEqual([]);
+    });
+
+    it('lists no extra templates when the variable is unset', () => {
+      writeProTemplate('pro-education-smb');
+      delete process.env.CREWLY_TEMPLATE_DIRS;
+
+      const service = TemplateService.getInstance(tempDir);
+      expect(service.getTemplate('pro-education-smb')).toBeNull();
+      expect(service.listExtraTemplates()).toEqual([]);
+    });
+  });
+
   describe('listTemplates', () => {
     it('should return summaries with source "local"', () => {
       const templateDir = join(tempDir, 'test-dev');

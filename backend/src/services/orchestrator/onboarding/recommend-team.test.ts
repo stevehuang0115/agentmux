@@ -15,6 +15,7 @@ import {
   HARDCODED_MAPPING_COUNT,
   HARDCODED_MAPPING_KEYS,
   type BusinessContext,
+  type CatalogTemplate,
   type TeamRecommendation,
 } from './recommend-team.js';
 
@@ -245,5 +246,41 @@ describe('recommendTeam — properties', () => {
     for (const a of rec.agents) {
       expect(a.skillIds.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('recommendTeam — catalog templates (Crewly Pro)', () => {
+  const education: CatalogTemplate = {
+    id: 'pro-education-smb',
+    name: 'Education SMB Team',
+    description: 'Curriculum design and student engagement.',
+    tags: ['education', 'k12', 'curriculum', 'student-engagement'],
+    roles: [
+      { role: 'curriculum-designer', label: 'Curriculum Designer', jobDescription: 'Designs the course plan.', defaultSkills: ['content-calendar'] },
+      { role: 'engagement-manager', label: 'Engagement Manager', defaultSkills: [] },
+    ],
+  };
+
+  it('picks a catalog template that matches better than any built-in mapping', () => {
+    const rec = recommendTeam(
+      baseCtx('k12 education tutoring center', ['curriculum planning', 'student engagement emails']),
+      [education],
+    );
+    expect(rec.templateId).toBe('pro-education-smb');
+    expect(rec.source).toBe('template:pro-education-smb');
+    expect(rec.agents.map((a) => a.role)).toEqual(['curriculum-designer', 'engagement-manager']);
+    expect(rec.agents[0].responsibilities).toBe('Designs the course plan.');
+    expect(rec.agents[1].responsibilities).toBe('Engagement Manager');
+    expectShape(rec);
+  });
+
+  it('keeps the built-in pick when the catalog matches no better', () => {
+    const ctx = baseCtx('small Shopify skincare shop', ['weekly blog content', 'customer support replies']);
+    expect(recommendTeam(ctx, [education])).toEqual(recommendTeam(ctx));
+  });
+
+  it('ignores a catalog template with no roles', () => {
+    const rec = recommendTeam(baseCtx('k12 education', ['curriculum']), [{ ...education, roles: [] }]);
+    expect(rec.templateId).not.toBe('pro-education-smb');
   });
 });
