@@ -10,6 +10,7 @@ import type { ModuleConfig, OrgRole } from './prompt-modules/prompt-module.inter
 import { getAgentBehaviorLogService } from '../observability/agent-behavior-log.singleton.js';
 import { canMemberDelegate, getLeadSubordinates, isTeamLead } from '../../utils/team.utils.js';
 import { effectiveMemberModelId } from '../../utils/member-default-model.utils.js';
+import { tierChangeModeOf } from '../../utils/model-tier.utils.js';
 import { RUNTIME_TYPES } from '../../constants.js';
 
 /**
@@ -247,6 +248,7 @@ export function buildModuleConfigFromTeamMember(
 			? {
 					teamTiers: {
 						optimizeUsage: true,
+						changeMode: tierChangeModeOf(team),
 						members: (team.members ?? [])
 							.filter((m) => m.role !== 'orchestrator')
 							.map((m) => {
