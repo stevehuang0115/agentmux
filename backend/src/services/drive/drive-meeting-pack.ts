@@ -255,6 +255,8 @@ export function buildAgenda(s: Pick<MeetingPackSources, 'now' | 'agent' | 'timel
     if (row.createdAt < since) continue;
     const side = sideOf(row, s.agent.session);
     if (!side || !row.content?.trim()) continue;
+    // A meeting's own outcome, written in the owner's name, is not something new he raised.
+    if (row.metadata?.source === C.SOURCE && row.metadata?.via === C.VIA) continue;
     const ref = threadRefOfRow(row);
     if (!ref) continue;
     const t = threads.get(ref) ?? { rows: [], sides: new Set<string>() };
