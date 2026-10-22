@@ -53,6 +53,8 @@ export interface PullRecord {
   team: string;
   /** What became of it; absent when nothing tracks it (a plain agent post) */
   outcome?: PullOutcome;
+  /** Who caused it (display name or session); absent when unknown */
+  agent?: string;
 }
 
 /** Facts about one agent post to the owner that is not a card. */
@@ -148,6 +150,7 @@ export function pullsFromDecisions(decisions: readonly OwnerDecision[], teamOf: 
       kind: decisionPullKind(d),
       team: teamOf(d) ?? OWNER_RECEIPT_CONSTANTS.UNASSIGNED_TEAM,
       outcome,
+      ...((d.asker || d.requestedBy) ? { agent: d.asker || d.requestedBy } : {}),
     });
   }
   return out;
@@ -197,6 +200,7 @@ export function pullsFromOpenItems(
       kind: classifyAgentPost({ endsWithQuestion: true, openedDecisionCard: false, workItemBlockedOnOwner: false, reportsFailure: false }),
       team: teamOfAgent(item.agent) ?? OWNER_RECEIPT_CONSTANTS.UNASSIGNED_TEAM,
       outcome,
+      ...(item.agent ? { agent: item.agent } : {}),
     });
   }
   return out;
@@ -210,6 +214,11 @@ export interface AgentPostRecord {
   agent: string;
   /** Its last sentence is a question */
   endsWithQuestion: boolean;
+  /**
+   * `stuck`: not a post but a notice that work stalled and was put in front of
+   * the owner (the stall watcher's owner step); who and when only.
+   */
+  kind?: 'stuck';
 }
 
 /**
@@ -254,12 +263,15 @@ export function pullsFromAgentPosts(
   for (const post of posts) {
     const at = Date.parse(post.at);
     if (!Number.isFinite(at)) continue;
-    const openedDecisionCard = (cardTimes.get(post.agent) ?? []).some((t) => Math.abs(t - at) <= window);
+    const stuck = post.kind === 'stuck';
+    // A stuck notice is not a post a card could stand in for.
+    const openedDecisionCard = !stuck && (cardTimes.get(post.agent) ?? []).some((t) => Math.abs(t - at) <= window);
     if (openedDecisionCard) continue;
     out.push({
       at: post.at,
-      kind: classifyAgentPost({ endsWithQuestion: post.endsWithQuestion, openedDecisionCard, workItemBlockedOnOwner: false, reportsFailure: false }),
+      kind: classifyAgentPost({ endsWithQuestion: post.endsWithQuestion, openedDecisionCard, workItemBlockedOnOwner: false, reportsFailure: stuck }),
       team: teamOfAgent(post.agent) ?? OWNER_RECEIPT_CONSTANTS.UNASSIGNED_TEAM,
+      agent: post.agent,
     });
   }
   return out;
@@ -273,6 +285,8 @@ export interface PullsWeek {
   byOutcome: Record<PullOutcome, number>;
   /** Most pulls first, then by name */
   byTeam: Array<{ team: string; count: number }>;
+  /** The agents (with their team) that caused the most pulls, most first */
+  bySource: Array<{ agent: string; team: string; count: number }>;
 }
 
 /** The weekly rollup. */
@@ -288,6 +302,11 @@ export interface PullsWeekly {
    * approvals, send-backs, corrections), when the caller supplied them.
    */
   ownerTouches?: { thisWeek: number; lastWeek: number };
+  /**
+   * Estimated minutes the owner was active (distinct 5-minute buckets with an
+   * owner message, times the bucket), when the caller supplied message times.
+   */
+  ownerActiveMinutes?: { thisWeek: number; lastWeek: number };
 }
 
 function emptyWeek(): PullsWeek {
@@ -296,12 +315,14 @@ function emptyWeek(): PullsWeek {
     byKind: { decision: 0, review: 0, fyi: 0, stuck: 0 },
     byOutcome: { answered: 0, aged_out: 0, ignored: 0, open: 0 },
     byTeam: [],
+    bySource: [],
   };
 }
 
 function countWeek(records: readonly PullRecord[], fromMs: number, toMs: number): PullsWeek {
   const week = emptyWeek();
   const teams = new Map<string, number>();
+  const sources = new Map<string, { agent: string; team: string; count: number }>();
   for (const r of records) {
     const t = Date.parse(r.at);
     if (!Number.isFinite(t) || t < fromMs || t >= toMs) continue;
@@ -309,7 +330,14 @@ function countWeek(records: readonly PullRecord[], fromMs: number, toMs: number)
     week.byKind[r.kind] += 1;
     if (r.outcome) week.byOutcome[r.outcome] += 1;
     teams.set(r.team, (teams.get(r.team) ?? 0) + 1);
+    if (r.agent) {
+      const key = `${r.team}\u0000${r.agent}`;
+      const src = sources.get(key) ?? { agent: r.agent, team: r.team, count: 0 };
+      src.count += 1;
+      sources.set(key, src);
+    }
   }
+  week.bySource = [...sources.values()].sort((a, b) => b.count - a.count || a.agent.localeCompare(b.agent) || a.team.localeCompare(b.team));
   week.byTeam = [...teams.entries()].map(([team, count]) => ({ team, count })).sort((a, b) => b.count - a.count || a.team.localeCompare(b.team));
   return week;
 }
@@ -320,9 +348,15 @@ function countWeek(records: readonly PullRecord[], fromMs: number, toMs: number)
  * @param records - All pull records (any age)
  * @param now - End of the counted week
  * @param ownerTouches - Optional owner-touch counts from traces
+ * @param ownerActiveMinutes - Optional owner active minutes ({@link countOwnerActiveMinutes})
  * @returns The rollup
  */
-export function rollupPulls(records: readonly PullRecord[], now: Date, ownerTouches?: { thisWeek: number; lastWeek: number }): PullsWeekly {
+export function rollupPulls(
+  records: readonly PullRecord[],
+  now: Date,
+  ownerTouches?: { thisWeek: number; lastWeek: number },
+  ownerActiveMinutes?: { thisWeek: number; lastWeek: number },
+): PullsWeekly {
   const span = OWNER_RECEIPT_CONSTANTS.PULLS_WEEKLY.WINDOW_MS;
   const to = now.getTime();
   const from = to - span;
@@ -334,6 +368,7 @@ export function rollupPulls(records: readonly PullRecord[], now: Date, ownerTouc
     lastWeek,
     change: thisWeek.total - lastWeek.total,
     ...(ownerTouches ? { ownerTouches } : {}),
+    ...(ownerActiveMinutes ? { ownerActiveMinutes } : {}),
   };
 }
 
@@ -360,6 +395,30 @@ export function countOwnerTouches(
   return out;
 }
 
+/**
+ * Estimate the owner's active minutes in each week from the times of their
+ * messages: distinct buckets ({@link OWNER_RECEIPT_CONSTANTS.PULLS_WEEKLY.ACTIVE_BUCKET_MS})
+ * holding at least one message, times the bucket length. Only times are read,
+ * never text.
+ *
+ * @param messageTimes - Epoch ms of owner messages (any age)
+ * @param now - End of the counted week
+ * @returns Active minutes for this and last week
+ */
+export function countOwnerActiveMinutes(messageTimes: readonly number[], now: Date): { thisWeek: number; lastWeek: number } {
+  const { WINDOW_MS: span, ACTIVE_BUCKET_MS: bucket } = OWNER_RECEIPT_CONSTANTS.PULLS_WEEKLY;
+  const to = now.getTime();
+  const thisBuckets = new Set<number>();
+  const lastBuckets = new Set<number>();
+  for (const t of messageTimes) {
+    if (!Number.isFinite(t) || t >= to) continue;
+    if (t >= to - span) thisBuckets.add(Math.floor(t / bucket));
+    else if (t >= to - 2 * span) lastBuckets.add(Math.floor(t / bucket));
+  }
+  const minutes = bucket / 60_000;
+  return { thisWeek: thisBuckets.size * minutes, lastWeek: lastBuckets.size * minutes };
+}
+
 /** `+3`, `-2`, `no change`. */
 function changeWords(change: number): string {
   if (change === 0) return 'same as last week';
@@ -367,7 +426,7 @@ function changeWords(change: number): string {
 }
 
 /**
- * Render the weekly line for the owner (Slack mrkdwn, at most four lines, no
+ * Render the weekly line for the owner (Slack mrkdwn, at most seven lines, no
  * ticket or card numbers). Empty string when there were no pulls this week
  * and last week: nothing to say.
  *
@@ -388,6 +447,11 @@ export function renderPullsWeekly(w: PullsWeekly): string {
     const shown = thisWeek.byTeam.slice(0, max).map((t) => `${t.team} ${t.count}`);
     const rest = thisWeek.byTeam.length - shown.length;
     lines.push(`• By team: ${shown.join(', ')}${rest > 0 ? `, +${rest} more` : ''}`);
+    const sources = thisWeek.bySource.slice(0, OWNER_RECEIPT_CONSTANTS.PULLS_WEEKLY.MAX_SOURCES).map((s) => `${s.agent} (${s.team}) ${s.count}`);
+    if (sources.length > 0) lines.push(`• Top sources: ${sources.join(', ')}`);
+  }
+  if (w.ownerActiveMinutes && w.ownerActiveMinutes.thisWeek + w.ownerActiveMinutes.lastWeek > 0) {
+    lines.push(`• You were active about ${w.ownerActiveMinutes.thisWeek} min (last week ${w.ownerActiveMinutes.lastWeek})`);
   }
   if (w.ownerTouches && w.ownerTouches.thisWeek + w.ownerTouches.lastWeek > 0) {
     lines.push(`• You replied or approved ${w.ownerTouches.thisWeek} times in runs (last week ${w.ownerTouches.lastWeek})`);

@@ -6,7 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { OWNER_RECEIPT_CONSTANTS } from '../../../constants.js';
-import { OwnerPullsPostLog } from './owner-pulls-post-log.js';
+import { OwnerPullsPostLog, getOwnerPullsPostLog, setOwnerPullsPostLog } from './owner-pulls-post-log.js';
 
 jest.mock('../../core/logger.service.js', () => ({
   LoggerService: { getInstance: () => ({ createComponentLogger: () => ({ warn: jest.fn() }) }) },
@@ -49,5 +49,20 @@ describe('OwnerPullsPostLog', () => {
     const log = new OwnerPullsPostLog(dir, () => NOW);
     await log.note({ agent: 'ella', text: 'Done.' });
     expect(await log.read()).toEqual([{ at: NOW.toISOString(), agent: 'ella', endsWithQuestion: false }]);
+  });
+
+  it('logs stalled work as a stuck record: who and when only', async () => {
+    const log = new OwnerPullsPostLog(dir, () => NOW);
+    await log.noteStuck('atlas');
+    await log.noteStuck('');
+    expect(await log.read()).toEqual([{ at: NOW.toISOString(), agent: 'atlas', endsWithQuestion: false, kind: 'stuck' }]);
+  });
+
+  it('shares one log through the accessor', () => {
+    const log = new OwnerPullsPostLog(dir, () => NOW);
+    setOwnerPullsPostLog(log);
+    expect(getOwnerPullsPostLog()).toBe(log);
+    setOwnerPullsPostLog(null);
+    expect(getOwnerPullsPostLog()).toBeNull();
   });
 });

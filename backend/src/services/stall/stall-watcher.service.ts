@@ -121,6 +121,8 @@ export interface StallWatcherDeps {
 	displayName: (session: string) => Promise<string>;
 	/** One plain line to the owner (the owner-alert notifier); false when not sent */
 	notifyOwner: (line: string) => Promise<boolean>;
+	/** Called once after the owner was told an agent's work stalled (who only; the weekly owner-pulls count, #1387) */
+	onOwnerTold?: (agent: string) => void;
 	/** Stamp a ladder step on an open-items commitment, so the open-items sweep does not repeat it */
 	recordPromiseStep: (requestId: string, itemId: string, step: LadderStep, at: Date) => Promise<void>;
 	/** The speaker's teammates (for "X is doing it") */
@@ -779,6 +781,11 @@ export class StallWatcherService {
 				return null;
 			}
 			await item.onStep?.('owner', new Date(now)).catch(() => undefined);
+			try {
+				this.deps.onOwnerTold?.(item.agent);
+			} catch {
+				/* a count must never block the ladder */
+			}
 		}
 		ladder.ownerAt = now;
 		this.deps.trace?.({ session: item.agent, summary: `Stall watcher: owner told about ${item.key}`, ...(item.workItemId ? { workItemId: item.workItemId } : {}), data: { reason: 'stall', step: 'owner', key: item.key, dryRun: dry } });

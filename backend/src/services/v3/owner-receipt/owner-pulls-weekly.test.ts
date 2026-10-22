@@ -3,10 +3,12 @@
  * rule, week over week, per team, and the rendered line.
  */
 
+import { OWNER_RECEIPT_CONSTANTS } from '../../../constants.js';
 import type { OwnerDecision } from '../../../types/decision.types.js';
 import type { RequestOpenItem } from '../../../types/v2/open-item.types.js';
 import {
   classifyAgentPost,
+  countOwnerActiveMinutes,
   countOwnerTouches,
   decisionPullKind,
   decisionPullOutcome,
@@ -223,8 +225,8 @@ describe('agent-started DM posts (FYI count)', () => {
       (s) => (s === 'ella' ? 'CE' : null),
     );
     expect(recs).toEqual([
-      { at: ago(1), kind: 'fyi', team: 'CE' },
-      { at: ago(2), kind: 'decision', team: 'CE' },
+      { at: ago(1), kind: 'fyi', team: 'CE', agent: 'ella' },
+      { at: ago(2), kind: 'decision', team: 'CE', agent: 'ella' },
     ]);
   });
 
@@ -257,5 +259,59 @@ describe('agent-started DM posts (FYI count)', () => {
     const text = renderPullsWeekly(rollupPulls([rec({ kind: 'fyi', outcome: undefined }), rec({ kind: 'fyi', outcome: undefined })], NOW));
     expect(text).toContain('2 FYI that did not need an answer');
     expect(text).not.toMatch(/Answered|Open \d/);
+  });
+});
+
+describe('stuck notices', () => {
+  it('counts a stalled-work notice as stuck, with no outcome, and no card stands in for it', () => {
+    const at = ago(1);
+    const recs = pullsFromAgentPosts([{ at, agent: 'atlas', endsWithQuestion: false, kind: 'stuck' }], [card({ askedAt: at })], () => 'CE');
+    expect(recs).toEqual([{ at, kind: 'stuck', team: 'CE', agent: 'atlas' }]);
+  });
+});
+
+describe('top sources', () => {
+  it('ranks the agents that caused the most pulls, with their team, and renders the top three', () => {
+    const recs = [
+      rec({ agent: 'Sam', team: 'CE' }),
+      rec({ agent: 'Sam', team: 'CE' }),
+      rec({ agent: 'Sam', team: 'CE' }),
+      rec({ agent: 'Lee', team: 'SteamFun' }),
+      rec({ agent: 'Lee', team: 'SteamFun' }),
+      rec({ agent: 'Pia', team: 'CE' }),
+      rec({ agent: 'Zed', team: 'CE' }),
+      rec({ team: 'CE' }),
+    ];
+    const w = rollupPulls(recs, NOW);
+    expect(w.thisWeek.bySource.map((s) => `${s.agent}/${s.team}/${s.count}`)).toEqual(['Sam/CE/3', 'Lee/SteamFun/2', 'Pia/CE/1', 'Zed/CE/1']);
+    expect(renderPullsWeekly(w)).toContain('• Top sources: Sam (CE) 3, Lee (SteamFun) 2, Pia (CE) 1');
+  });
+
+  it('adds a decision card asker and an open-item agent as the source', () => {
+    expect(pullsFromDecisions([card()], () => 'CE')[0].agent).toBe('atlas');
+    const item = { id: 'q', type: 'question', text: 't', agent: 'vera', sourceMessageId: 'm', createdAt: ago(1), status: 'open' } as unknown as RequestOpenItem;
+    expect(pullsFromOpenItems([{ requestId: 'r', item }], new Set(), () => 'CE')[0].agent).toBe('vera');
+  });
+
+  it('leaves the line out when no pull names an agent', () => {
+    expect(renderPullsWeekly(rollupPulls([rec()], NOW))).not.toContain('Top sources');
+  });
+});
+
+describe('owner active minutes', () => {
+  const bucket = OWNER_RECEIPT_CONSTANTS.PULLS_WEEKLY.ACTIVE_BUCKET_MS;
+  const t = (days: number, ms = 0): number => Math.floor((NOW.getTime() - days * DAY) / bucket) * bucket + ms;
+
+  it('counts distinct buckets with an owner message, times the bucket, this week and last', () => {
+    const times = [t(1), t(1, 1000), t(1, bucket - 1), t(1, bucket), t(3), t(9), t(9, 2 * bucket), NOW.getTime() + 1000, t(20), Number.NaN];
+    // This week: day-1 bucket (3 messages) + next bucket + day-3 bucket = 3 buckets. Last week: 2.
+    expect(countOwnerActiveMinutes(times, NOW)).toEqual({ thisWeek: (3 * bucket) / 60_000, lastWeek: (2 * bucket) / 60_000 });
+  });
+
+  it('is zero with no messages and shown next to the pull count only when there is activity', () => {
+    expect(countOwnerActiveMinutes([], NOW)).toEqual({ thisWeek: 0, lastWeek: 0 });
+    const withActive = rollupPulls([rec()], NOW, undefined, { thisWeek: 40, lastWeek: 55 });
+    expect(renderPullsWeekly(withActive)).toContain('• You were active about 40 min (last week 55)');
+    expect(renderPullsWeekly(rollupPulls([rec()], NOW, undefined, { thisWeek: 0, lastWeek: 0 }))).not.toContain('active');
   });
 });

@@ -1114,6 +1114,14 @@ export async function agentResponse(
         conversationIdWasExplicit = true;
       }
       if (placement.slackThread) slackThreadKey = placement.slackThread;
+      // #1387: nothing named the place, no work item and no fresh owner turn: the
+      // orchestrator is starting this top-level DM post itself, so it is an
+      // agent-started pull like a member's.
+      if (placement.via === 'owner-dm' && !placement.slackThread && !isAgentStatusMarker(String(content)) && !ORC_STATUS_FORWARDING.STATUS_SHAPED.test(String(content))) {
+        void import('../../services/slack/slack-agent-post.service.js')
+          .then((m) => m.reportAgentStartedDmPost({ agent: ORCHESTRATOR_SESSION_NAME, text: String(content ?? '') }))
+          .catch(() => undefined);
+      }
     }
 
     // An agent's message to a person (anything that is not a status line)

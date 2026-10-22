@@ -31,6 +31,8 @@ export interface StallWatcherWiringInput {
 	sendToAgent: (session: string, text: string) => Promise<boolean>;
 	/** One plain line to the owner (the owner-alert notifier) */
 	notifyOwner: (line: string) => Promise<boolean>;
+	/** Called once after the owner was told an agent's work stalled (#1387) */
+	onOwnerTold?: (agent: string) => void;
 	/** The boot-pressure gate */
 	bootGate?: StallBootGate;
 }
@@ -213,6 +215,7 @@ export async function createStallWatcher(input: StallWatcherWiringInput): Promis
 		leadOf: async (session) => findLeadSessionFor(await teams(), session),
 		displayName: async (session) => membersBySession(await teams()).get(session)?.name ?? memberNameFromSession(session),
 		notifyOwner: input.notifyOwner,
+		...(input.onOwnerTold ? { onOwnerTold: input.onOwnerTold } : {}),
 		recordPromiseStep: async (requestId, itemId, step, at) => {
 			await OpenItemsService.getInstance()?.recordStallStep(requestId, itemId, step, at);
 		},

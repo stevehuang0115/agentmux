@@ -65,4 +65,37 @@ describe('createPullsWeeklyLoader', () => {
     expect(w.thisWeek.total).toBe(1);
     expect(w.ownerTouches).toBeUndefined();
   });
+
+  it('names the agents behind the pulls, and estimates the owner active minutes from message times only', async () => {
+    const at = (days: number, min = 0): number => NOW.getTime() - days * 86400000 + min * 60000;
+    const load = createPullsWeeklyLoader({
+      listDecisions: async () => [decision({ asker: 'atlas', requestedBy: 'atlas' })],
+      listRequests: async () => [],
+      loadTeamIndex: async () => new Map([['atlas', 'CE']]),
+      loadAgentNameIndex: async () => new Map([['atlas', 'Atlas']]),
+      listAgentPosts: async () => [{ at: ago(3), agent: 'crewly-orc', endsWithQuestion: false }],
+      // Two messages in one 5-minute bucket count once; one last week.
+      listOwnerMessageTimes: async () => [at(1), at(1) + 60000, at(2), at(9)],
+    });
+    const w = await load(NOW);
+    expect(w.thisWeek.bySource.map((x) => [x.agent, x.team, x.count])).toEqual([
+      ['Atlas', 'CE', 1],
+      ['Orchestrator', 'Unassigned', 1],
+    ]);
+    expect(w.ownerActiveMinutes).toEqual({ thisWeek: 10, lastWeek: 5 });
+  });
+
+  it('keeps the pulls when the owner message read fails', async () => {
+    const load = createPullsWeeklyLoader({
+      listDecisions: async () => [decision({})],
+      listRequests: async () => [],
+      loadTeamIndex: async () => new Map(),
+      listOwnerMessageTimes: async () => {
+        throw new Error('boom');
+      },
+    });
+    const w = await load(NOW);
+    expect(w.thisWeek.total).toBe(1);
+    expect(w.ownerActiveMinutes).toBeUndefined();
+  });
 });

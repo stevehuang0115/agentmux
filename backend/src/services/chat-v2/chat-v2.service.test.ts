@@ -2214,6 +2214,16 @@ describe('ChatV2Service', () => {
       expect(got).toEqual(['再来一条', '好，启动 Phase 1']);
     });
 
+    it('getOwnerMessageTimes returns only the times of owner messages in the window, newest first', () => {
+      const ch = createSam();
+      seed(ch.id, 'user', 'old', 500, 1);
+      seed(ch.id, 'agent', 'agent', 2000, 2);
+      seed(ch.id, 'user', 'a', 2000, 3);
+      seed(ch.id, 'user', 'b', 3000, 4);
+      expect(service.getOwnerMessageTimes(1000)).toEqual([3000, 2000]);
+      expect(service.getOwnerMessageTimes(1000, 1)).toEqual([3000]);
+    });
+
     it('returns empty when there are no owner messages in the window', () => {
       const ch = createSam();
       seed(ch.id, 'user', 'way old', 100, 1);

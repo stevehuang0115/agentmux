@@ -90,12 +90,15 @@ export async function getReceipt(req: ExpressRequest, res: Response): Promise<vo
 
 /**
  * GET /api/owner-receipt/pulls — how often agents pulled the owner in over the
- * last seven days, by kind, outcome and team, against the week before (#1387).
+ * last seven days, by kind, outcome, team and agent, with the owner's active
+ * minutes, against the week before (#1387). Owner only.
  *
- * @param _req - Express request
+ * @param req - Express request
  * @param res - Express response
  */
-export async function getPullsWeekly(_req: ExpressRequest, res: Response): Promise<void> {
+export async function getPullsWeekly(req: ExpressRequest, res: Response): Promise<void> {
+  // Owner only: an agent that can read the number could game it.
+  if (rejectNonOwner(req, res, { success: false, error: 'Only the owner can read how often agents pulled them in' })) return;
   const svc = serviceOr503(res);
   if (!svc) return;
   try {

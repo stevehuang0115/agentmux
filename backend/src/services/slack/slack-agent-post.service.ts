@@ -86,7 +86,8 @@ export interface SlackAgentPostServiceDeps {
 /** A top-level DM post the agent started, not an answer (#1387). */
 export interface AgentStartedDmPost {
   agent: string;
-  slackChannelId: string;
+  /** The DM; absent when the post did not go through this service (the orchestrator's own post) */
+  slackChannelId?: string;
   text: string;
 }
 
@@ -104,6 +105,23 @@ export function onAgentStartedDmPost(listener: (post: AgentStartedDmPost) => voi
   return () => {
     startedDmPostListeners.delete(listener);
   };
+}
+
+/**
+ * Report a top-level DM post an agent started, from a path that does not go
+ * through {@link SlackAgentPostService} (the orchestrator's own owner-DM
+ * post). Same listeners, same once-per-post rule; errors are swallowed.
+ *
+ * @param post - The post (the text is read for its last sentence only)
+ */
+export function reportAgentStartedDmPost(post: AgentStartedDmPost): void {
+  for (const listener of startedDmPostListeners) {
+    try {
+      listener(post);
+    } catch {
+      /* best-effort */
+    }
+  }
 }
 
 /** One post request. */
@@ -342,13 +360,7 @@ export class SlackAgentPostService {
     if (req.threadTs) this.deps.typing?.noteAnswerPosted?.(channelId, req.threadTs);
     reportOwnerThreadAgentPost({ agent: agentSession, slackChannelId: channelId, ...(req.threadTs ? { threadTs: req.threadTs } : {}), text: rawText });
     if (kind === 'dm' && !req.threadTs && this.isStartedByAgent(agentSession, channelId)) {
-      for (const listener of startedDmPostListeners) {
-        try {
-          listener({ agent: agentSession, slackChannelId: channelId, text: rawText });
-        } catch {
-          /* best-effort */
-        }
-      }
+      reportAgentStartedDmPost({ agent: agentSession, slackChannelId: channelId, text: rawText });
     }
     this.logger.info('Agent posted to Slack', {
       agentSession,

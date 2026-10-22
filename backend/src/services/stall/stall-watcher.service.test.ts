@@ -45,6 +45,7 @@ interface Harness {
 	deps: StallWatcherDeps & {
 		deliverToAgent: jest.Mock<Promise<boolean>, [string, string]>;
 		notifyOwner: jest.Mock<Promise<boolean>, [string]>;
+		onOwnerTold: jest.Mock<void, [string]>;
 		releaseClaim: jest.Mock<Promise<void>, [string, string]>;
 		recordPromiseStep: jest.Mock;
 		trace: jest.Mock;
@@ -83,6 +84,7 @@ async function harness(dir: string, env: NodeJS.ProcessEnv = { [C.ENV_DRY_RUN]: 
 		leadOf: async (session) => (session === 'pia' || session === 'rex' ? 'ella' : null),
 		displayName: async (session) => session.charAt(0).toUpperCase() + session.slice(1),
 		notifyOwner: jest.fn(async (_line: string): Promise<boolean> => true),
+		onOwnerTold: jest.fn(),
 		recordPromiseStep: jest.fn(async () => undefined),
 		teammatesOf: async () => [
 			{ name: 'Pia', session: 'pia' },
@@ -223,6 +225,9 @@ describe('StallWatcherService', () => {
 			h.clock.now = T0 + 3 * H + 30 * MIN;
 			expect((await h.service.tick()).promises).toEqual({ agent: 0, lead: 0, owner: 1 });
 			expect(h.deps.notifyOwner).toHaveBeenCalledTimes(1);
+			// #1387: the stalled agent is reported once for the weekly owner-pulls count.
+			expect(h.deps.onOwnerTold).toHaveBeenCalledTimes(1);
+			expect(h.deps.onOwnerTold).toHaveBeenCalledWith('pia');
 			expect(h.deps.notifyOwner.mock.calls[0][0]).toBe('Pia 说大约 1 小时 内给「一小时内给 W41 完整版」，现在过了 3.5 小时 还没有，已经提醒过 Pia，也问了 Ella。');
 			expect(h.deps.recordPromiseStep).toHaveBeenCalledWith('req-1', 'c-1', 'owner', new Date(T0 + 3 * H + 30 * MIN));
 
