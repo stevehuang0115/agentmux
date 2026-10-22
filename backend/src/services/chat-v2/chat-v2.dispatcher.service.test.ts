@@ -88,8 +88,14 @@ describe('renderChatContext', () => {
   });
 
   it('lists who said what, with the time', () => {
-    const out = renderChatContext([turn()]);
+    const out = renderChatContext([turn()], 'UTC');
     expect(out).toContain('14:05 Atlas: I already looked at the permit');
+  });
+
+  it("shows times in the owner's local zone and says which (#1427)", () => {
+    const out = renderChatContext([turn()], 'America/New_York');
+    expect(out).toContain('10:05 Atlas:');
+    expect(out).toContain("times are the owner's local time, America/New_York");
   });
 
   it('never shows an agent a signed Crewly Apps link from the conversation (apps P3)', () => {
