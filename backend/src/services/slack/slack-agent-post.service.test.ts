@@ -7,6 +7,7 @@
 
 import {
   onAgentStartedDmPost,
+  reportAgentStartedDmPost,
   SlackAgentPostService,
   SlackAgentPostError,
   getSlackAgentPostService,
@@ -496,6 +497,18 @@ describe('agent-started DM posts (#1387)', () => {
     await svc.post({ agentSession: 'crewly-a-sam', target: 'U0OWNER1', text: 'Posted the schedule.' });
     off();
     expect(seen).toEqual([{ agent: 'crewly-a-sam', slackChannelId: 'D-U0OWNER1', text: 'Posted the schedule.' }]);
+  });
+
+  it('reportAgentStartedDmPost reaches the same listeners and survives a throwing one', () => {
+    const seen: unknown[] = [];
+    const offBad = onAgentStartedDmPost(() => {
+      throw new Error('boom');
+    });
+    const off = onAgentStartedDmPost((p) => seen.push(p));
+    reportAgentStartedDmPost({ agent: 'crewly-orc', text: 'Heads up.' });
+    off();
+    offBad();
+    expect(seen).toEqual([{ agent: 'crewly-orc', text: 'Heads up.' }]);
   });
 
   it('does not report a late answer, a threaded post, a channel post, or when the answer state is unknown', async () => {

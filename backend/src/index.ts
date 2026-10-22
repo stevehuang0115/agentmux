@@ -109,7 +109,7 @@ import { OwnerReceiptService, setOwnerReceiptService } from './services/v3/owner
 import { agentNameIndexOf, createSlackOwnerSender, startOwnerReceiptSchedule, teamIndexOf, teamLeadIndexOf } from './services/v3/owner-receipt/owner-receipt.boot.js';
 import { createSpotCheckLoader } from './services/v3/owner-receipt/verified-spot-check.loader.js';
 import { createPullsWeeklyLoader } from './services/v3/owner-receipt/owner-pulls-weekly.loader.js';
-import { OwnerPullsPostLog } from './services/v3/owner-receipt/owner-pulls-post-log.js';
+import { OwnerPullsPostLog, getOwnerPullsPostLog, setOwnerPullsPostLog } from './services/v3/owner-receipt/owner-pulls-post-log.js';
 import { onAgentStartedDmPost } from './services/slack/slack-agent-post.service.js';
 import { getTraceAnalysis } from './services/trace/trace-analysis.service.js';
 import { getTraceStore } from './services/trace/trace-store.js';
@@ -132,7 +132,7 @@ import { driveCapabilities } from './services/drive/drive-agent.service.js';
 import { canvasCapabilities } from './services/board/canvas/canvas-inbound.service.js';
 import { isBoardPushDisabled } from './services/board/board-push.service.js';
 import { teamMoveCapabilities } from './services/team-move/team-move-driver.service.js';
-import { SUB_AGENT_QUEUE_CONSTANTS, CHAT_CONTEXT_CONSTANTS, SAFE_RESTART, AUTO_UPDATE_CONSTANTS, PROCESS_EXIT_CODES, CLAUDE_STARTUP_CONSTANTS, WEB_CONSTANTS, TICKET_CONSTANTS, UNASSIGNED_ROUTE_CONSTANTS, CLOUD_TALK_CONSTANTS, STANDING_ANSWERS_CONSTANTS, TICKET_AUTOPILOT_CONSTANTS, TICKET_HYGIENE_CONSTANTS, EXPERIMENT_CONSTANTS, WORK_ITEM_DESTINATION_CONSTANTS, CODEX_USAGE_SYNC_CONSTANTS, ANTIGRAVITY_USAGE_SYNC_CONSTANTS, OWNER_AUTH_CONSTANTS, CREWLY_APPS_CONSTANTS, SLACK_AGENT_DM_CONSTANTS, BRIEFING_CONSTANTS, DRIVE_CONSTANTS, MEETING_CONSTANTS, ORC_CONVERSATION_CONSTANTS, POOL_PRUNE_CONSTANTS, STALL_WATCHER_CONSTANTS } from './constants.js';
+import { SUB_AGENT_QUEUE_CONSTANTS, CHAT_CONTEXT_CONSTANTS, SAFE_RESTART, AUTO_UPDATE_CONSTANTS, PROCESS_EXIT_CODES, CLAUDE_STARTUP_CONSTANTS, WEB_CONSTANTS, TICKET_CONSTANTS, UNASSIGNED_ROUTE_CONSTANTS, CLOUD_TALK_CONSTANTS, STANDING_ANSWERS_CONSTANTS, TICKET_AUTOPILOT_CONSTANTS, TICKET_HYGIENE_CONSTANTS, EXPERIMENT_CONSTANTS, WORK_ITEM_DESTINATION_CONSTANTS, CODEX_USAGE_SYNC_CONSTANTS, ANTIGRAVITY_USAGE_SYNC_CONSTANTS, OWNER_AUTH_CONSTANTS, CREWLY_APPS_CONSTANTS, SLACK_AGENT_DM_CONSTANTS, BRIEFING_CONSTANTS, DRIVE_CONSTANTS, MEETING_CONSTANTS, ORC_CONVERSATION_CONSTANTS, POOL_PRUNE_CONSTANTS, STALL_WATCHER_CONSTANTS, OWNER_RECEIPT_CONSTANTS } from './constants.js';
 import { randomUUID } from 'crypto';
 import { PtyActivityTrackerService } from './services/agent/pty-activity-tracker.service.js';
 import { InFlightTurnTracker } from './services/restart/in-flight-turn-tracker.service.js';
@@ -768,6 +768,7 @@ export class CrewlyServer {
 			const intakeOutcomeLog = new IntakeOutcomeLog(RequestService.getInstance().getRequestsDir());
 			// #1387: posts agents start in a DM, for the weekly FYI count.
 			const pullsPostLog = new OwnerPullsPostLog(RequestService.getInstance().getRequestsDir());
+			setOwnerPullsPostLog(pullsPostLog);
 			onAgentStartedDmPost((post) => void pullsPostLog.note(post));
 			const ticketIntake = new TicketIntakeService({
 				requests: RequestService.getInstance(),
@@ -828,6 +829,8 @@ export class CrewlyServer {
 							return rows.map((r) => ({ createdAt: r.root.createdAt, ownerTouches: r.metrics?.ownerTouches ?? 0 }));
 						},
 						listAgentPosts: () => pullsPostLog.read(),
+						loadAgentNameIndex: async () => agentNameIndexOf(await StorageService.getInstance().getTeams()),
+						listOwnerMessageTimes: async (sinceMs, limit) => getChatV2Service().getOwnerMessageTimes(sinceMs, limit, OWNER_RECEIPT_CONSTANTS.PULLS_WEEKLY.ACTIVE_BUCKET_MS),
 					}),
 				});
 				setOwnerReceiptService(receipt);
@@ -7524,6 +7527,8 @@ void (async () => {
 					return result.success;
 				},
 				notifyOwner: (line) => slackOwnerAlertNotifier({ title: STALL_WATCHER_CONSTANTS.OWNER_ALERT_TITLE, message: line, urgent: false }),
+				// #1387: stalled work put in front of the owner counts as a "stuck" pull.
+				onOwnerTold: (agent) => void getOwnerPullsPostLog()?.noteStuck(agent),
 				bootGate: this.bootQuietGate(),
 			});
 			getChatV2Service().on('chat_message', (dto: ChatMessageDTO) => {

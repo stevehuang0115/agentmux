@@ -1799,6 +1799,45 @@ export class ChatV2Service extends EventEmitter {
   }
 
   /**
+   * When the owner wrote, as epoch ms, newest first. Same owner filter as
+   * {@link getRecentOwnerMessageContents} (agents quoting the owner or posting
+   * through the reply tool are not the owner), but reads only the time, never
+   * the text: for the owner active-minutes estimate (#1387).
+   *
+   * With `bucketMs`, returns one time per bucket the owner wrote in (the
+   * bucket's start), so a busy fortnight is a few thousand rows, never cut off.
+   *
+   * @param sinceMs - Only messages created at/after this
+   * @param limit - Max times returned (default 100, capped at 100000)
+   * @param bucketMs - Optional bucket size: one time per bucket the owner wrote in
+   * @returns Message times (or bucket starts), newest first
+   */
+  getOwnerMessageTimes(sinceMs: number, limit = 100, bucketMs?: number): number[] {
+    const capped = Math.min(Math.max(1, Math.floor(limit)), 100_000);
+    const bucket = bucketMs && bucketMs > 0 ? Math.floor(bucketMs) : 0;
+    const replySources = OWNER_EVIDENCE_METADATA.AGENT_REPLY_SOURCES;
+    const replySourcePlaceholders = replySources.map(() => '?').join(', ');
+    const rows = this.db
+      .prepare(
+        `SELECT ${bucket ? 'DISTINCT (CAST(created_at AS INTEGER) / CAST(? AS INTEGER)) * CAST(? AS INTEGER)' : 'created_at'} AS created_at FROM chat_messages
+         WHERE sender_type = 'user' AND created_at >= ?
+           AND (
+             metadata IS NULL
+             OR (
+               json_valid(metadata)
+               AND json_extract(metadata, '$.${OWNER_EVIDENCE_METADATA.AUTHOR_AGENT_SESSION}') IS NULL
+               AND json_extract(metadata, '$.${OWNER_EVIDENCE_METADATA.REMOTE_AGENT_SESSION}') IS NULL
+               AND COALESCE(json_extract(metadata, '$.source'), '') NOT IN (${replySourcePlaceholders})
+             )
+           )
+         ORDER BY created_at DESC
+         LIMIT ?`,
+      )
+      .all(...(bucket ? [bucket, bucket] : []), sinceMs, ...replySources, capped) as Array<{ created_at: number }>;
+    return rows.map((r) => r.created_at);
+  }
+
+  /**
    * Returns when the owner last spoke on a channel and when it was last
    * replied to by anyone else (agent/orc/system), as epoch ms.
    *

@@ -1330,6 +1330,40 @@ describe('Chat Controller', () => {
         expect(response.body.data.conversationId).toBe(dmId);
       });
 
+      it('#1387: counts a top-level owner-DM post the orchestrator starts (stale turn, nothing named), and not an answer', async () => {
+        const { onAgentStartedDmPost } = await import('../../services/slack/slack-agent-post.service.js');
+        const seen: Array<{ agent: string }> = [];
+        const off = onAgentStartedDmPost((p) => seen.push(p));
+        const { ORC_REPLY_ROUTE_CONSTANTS } = await import('../../constants.js');
+        const post = (): Promise<unknown> =>
+          request(app)
+            .post('/api/chat/agent-response')
+            .set('X-Agent-Session', ORC)
+            .send({ content: 'Nova needs your ChatGPT login', senderName: 'Orchestrator', senderType: 'orchestrator' });
+        try {
+          const { teamId } = await setupIncident();
+          const { OrcReplyRouteService } = await import('../../services/orc/orc-reply-route.service.js');
+          // The owner last wrote to the orchestrator in a team room.
+          OrcReplyRouteService.getInstance().noteDelivery(ORC, `[CHAT:${teamId}] <UG94JLNGK@Orchestrator>\n\nstatus?`);
+          await post(); // the owner's turn is fresh: this answers it
+          await new Promise((r) => setTimeout(r, 20));
+          expect(seen).toEqual([]);
+
+          const realNow = Date.now;
+          const later = realNow() + ORC_REPLY_ROUTE_CONSTANTS.ORIGIN_TTL_MS + 60_000;
+          jest.spyOn(Date, 'now').mockImplementation(() => later);
+          try {
+            await post(); // hours later, nothing named: the orchestrator is starting it
+            await new Promise((r) => setTimeout(r, 20));
+          } finally {
+            jest.restoreAllMocks();
+          }
+          expect(seen).toEqual([{ agent: ORC, text: 'Nova needs your ChatGPT login' }]);
+        } finally {
+          off();
+        }
+      });
+
       it('an explicit cross-post is kept', async () => {
         const { teamId } = await setupIncident();
         const response = await request(app)

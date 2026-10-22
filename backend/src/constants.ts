@@ -6305,6 +6305,12 @@ export const OWNER_RECEIPT_CONSTANTS = {
 		POST_LOG_MAX_BYTES: 256 * 1024,
 		/** A post this close to a card the same agent opened is that card's post, counted once (ms) */
 		CARD_POST_WINDOW_MS: 2 * 60 * 1000,
+		/** Agents named on the "Top sources" line */
+		MAX_SOURCES: 3,
+		/** Owner activity is counted in buckets of this size: each bucket with a message counts as this many active minutes (ms) */
+		ACTIVE_BUCKET_MS: 5 * 60 * 1000,
+		/** Owner messages read (timestamps only) for the active-minutes estimate */
+		MAX_OWNER_MESSAGES: 50000,
 	},
 	/**
 	 * Daily spot-check of verified WorkItems (#1315, phase 1): re-check that the

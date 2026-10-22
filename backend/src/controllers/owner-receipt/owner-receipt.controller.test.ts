@@ -131,6 +131,11 @@ describe('GET /api/owner-receipt/pulls', () => {
     expect(res.body.data.text).toContain('*Pulled you in 1 time this week*');
   });
 
+  it('refuses an agent (it could game the number)', async () => {
+    const res = await request(app).get('/api/owner-receipt/pulls').set('X-Agent-Session', 'crewly-a-sam');
+    expect(res.status).toBe(403);
+  });
+
   it('503s when the weekly rollup is not wired, or the service is not ready', async () => {
     expect((await request(app).get('/api/owner-receipt/pulls')).status).toBe(503);
     setOwnerReceiptService(null);
