@@ -553,9 +553,9 @@ export function getAppsParts(teams: AppsTeamsSource = defaultTeams): AppsParts {
         roster,
         commentsSlack: {
           // A room-owned comment is answered in its room thread; others in the DM / team-channel mirror.
-          agentReplied: async (appId, commentId, agent, text) => {
+          agentReplied: async (appId, commentId, agent, text, note) => {
             getOwnerCompletionReport()?.noteAppCommentAnswer(appId, commentId);
-            if (await getAppCommentRoom(teams).agentReplied(appId, commentId, agent, text)) return;
+            if (await getAppCommentRoom(teams).agentReplied(appId, commentId, agent, text, note)) return;
             await getAppCommentsSlack().agentReplied(appId, commentId, agent, text);
           },
           statusChanged: async (appId, commentId, agent, action) => {

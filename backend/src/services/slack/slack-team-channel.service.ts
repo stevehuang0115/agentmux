@@ -775,6 +775,13 @@ export class SlackTeamChannelService {
   private readonly seenInbound = new Map<string, ChatMessageDTO>();
   /** Room messages already handed back to the orchestrator. */
   private readonly orcHandedBack = new Set<string>();
+  /**
+   * Inbound messages being handled now (`channel:ts`). The two event types of
+   * one @ arrive milliseconds apart, and the first is still awaiting teams and
+   * identities when the second checks `seenInbound` — both were recorded and
+   * dispatched (~24 doubled rows a week, 2026-10-22 audit).
+   */
+  private readonly inboundInFlight = new Set<string>();
   /** The last room presence Cloud sent per Slack channel — names for a hand-off. */
   private readonly lastRooms = new Map<string, SlackRoomPresence>();
   /** People (not agents) by lower-cased name → Slack user id, for `@Name` in agent replies. */
@@ -1868,6 +1875,15 @@ export class SlackTeamChannelService {
     if (seen && !handoffTo) {
       this.logger.debug('Repeated copy of a team channel message — not dispatched again', { key: seenKey });
       return { mapping, message: seen, mentions: [], dispatch: null, duplicate: true };
+    }
+    if (!handoffTo) {
+      if (this.inboundInFlight.has(seenKey)) {
+        this.logger.debug('Second copy of a team channel message arrived while the first is handled — dropped', { key: seenKey });
+        return { mapping, message: {} as ChatMessageDTO, mentions: [], dispatch: null, duplicate: true };
+      }
+      this.inboundInFlight.add(seenKey);
+      // Held for a while after the first copy is handled: seenInbound covers the rest.
+      setTimeout(() => this.inboundInFlight.delete(seenKey), SLACK_TEAM_CHANNEL_CONSTANTS.INBOUND_IN_FLIGHT_MS).unref?.();
     }
 
     const channel = this.deps.chat.getChannelForBridge(mapping.chatChannelId);

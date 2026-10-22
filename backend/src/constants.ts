@@ -2424,6 +2424,8 @@ export const SLACK_TEAM_CHANNEL_CONSTANTS = {
 	INBOUND_REACTION: 'eyes',
 	/** How many routed Slack messages to remember for duplicate-copy suppression */
 	SEEN_INBOUND_MAX: 500,
+	/** How long a message's first copy holds off a second copy still racing it (ms) */
+	INBOUND_IN_FLIGHT_MS: 30_000,
 	/** Synthetic team-id prefix for channels linked on the fly (no Crewly team behind them) */
 	ADHOC_TEAM_PREFIX: 'adhoc:',
 	/**

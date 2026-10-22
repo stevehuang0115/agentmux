@@ -101,6 +101,8 @@ describe('pushes', () => {
     expect(String(h.delivered[0].text)).toContain(`reply --drive ${SID}`);
     expect(String(h.delivered[0].text)).toContain('把周报发了吗？');
     expect(String(h.delivered[0].text)).toContain('Not in Slack');
+    // The chat shows the owner's words only; the note is for the agent (2026-10-22 audit).
+    expect(h.delivered[0].ownerText).toBe('把周报发了吗？');
   });
 
   it('ignores Talk payloads, other machines and malformed pushes', async () => {
@@ -198,6 +200,18 @@ describe('end and recap', () => {
     expect(h.closed).toEqual([['ella', 'dm-ella']]);
     // Closed: no more replies to it.
     await expect(h.service.agentReply('ella', SID, { text: 'more', interim: false, recap: false })).rejects.toMatchObject({ status: 404, message: expect.stringContaining('closed at') });
+  });
+
+  it('two --recap calls racing each other post one recap (2026-10-22 audit)', async () => {
+    const h = harness();
+    await h.service.deliverFetched(delivery() as never);
+    const text = 'Drive mode recap — you asked about the report; next: nothing pending.';
+    const outs = await Promise.all([
+      h.service.agentReply('ella', SID, { text, interim: false, recap: true }),
+      h.service.agentReply('ella', SID, { text, interim: false, recap: true }),
+    ]);
+    expect(outs.map((o) => o.closed)).toEqual([true, true]);
+    expect(h.recaps).toHaveLength(1);
   });
 
   it('a recap naming a next step keeps it tracked (nextStep true)', async () => {

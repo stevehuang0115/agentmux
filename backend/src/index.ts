@@ -3507,7 +3507,7 @@ void (async () => {
 									tryRefreshToken: () => cloudClient.tryRefreshToken(),
 								},
 								identity: async () => ({ instanceId: (await DeviceIdentityService.getInstance().getOrCreateIdentity()).deviceId }),
-								deliverOwnerTurn: async ({ kind, agentSession, slackChannelId, channelId, threadId, text }) => {
+								deliverOwnerTurn: async ({ kind, agentSession, slackChannelId, channelId, threadId, text, ownerText }) => {
 									// A team channel → its room; an agent or a team → the (lead's) DM.
 									const room = kind === 'channel' && slackChannelId ? getSlackTeamChannelService()?.findBySlackChannelId(slackChannelId)?.chatChannelId : undefined;
 									const chId = channelId ?? room ?? chatService.ensureDmChannel({ agentSession, principal: owner }).channel.id;
@@ -3515,12 +3515,13 @@ void (async () => {
 										channelId: chId,
 										senderType: 'user',
 										senderId: owner.userId,
-										content: text,
+										content: ownerText,
 										...(threadId ? { threadId } : {}),
 										clientMessageId: `drive-${randomUUID()}`,
 										metadata: { source: 'cloud-talk', inputMode: 'voice', via: DRIVE_CONSTANTS.VIA },
 									});
-									await chatDispatcher.dispatchMessage(chatService.getChannel(chId, owner), message);
+									// The chat shows the owner's words; the agent gets them with the Drive mode note.
+									await chatDispatcher.dispatchMessage(chatService.getChannel(chId, owner), { ...message, content: text });
 									// A room conversation is one thread, rooted at its first turn.
 									const root = chatService.getChannel(chId, owner).type === 'dm' ? undefined : (threadId ?? message.id);
 									return { channelId: chId, ...(root ? { threadId: root } : {}) };
