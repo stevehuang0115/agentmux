@@ -107,6 +107,17 @@ describe('buildAgenda', () => {
     expect(agenda[0].recent?.[0].text).toContain('Tuesday / Thursday');
   });
 
+  it('a meeting\'s own write-backs (in the owner\'s name) are not new topics for the next meeting', () => {
+    const wb = { source: MEETING_CONSTANTS.SOURCE, via: MEETING_CONSTANTS.VIA, meetingSessionId: 'drv_1' };
+    const rows = [
+      row({ id: 'w1', channelId: 'dm-ella', threadId: 'bbbbbbbb-0000-4000-8000-000000000003', senderType: 'user', senderKind: 'owner', senderId: 'owner', content: 'From our voice meeting — Decision: karma 积累是行动而非内容选题。', metadata: wb, createdAt: T - 400_000 }),
+      // Real words in the same kind of thread still count.
+      row({ id: 'w2', channelId: 'dm-ella', threadId: 'cccccccc-0000-4000-8000-000000000004', senderType: 'user', senderKind: 'owner', senderId: 'owner', content: 'Can you redo the cover?', createdAt: T - 300_000 }),
+    ];
+    const agenda = buildAgenda({ now: NOW, agent, timeline: rows, decisions: [] });
+    expect(agenda.map((a) => a.topic)).toEqual(['Can you redo the cover?']);
+  });
+
   it('a settled card and another agent’s card are not on it; at most AGENDA_MAX topics', () => {
     const many = Array.from({ length: 30 }, (_, i) => row({ id: `q${i}`, content: `Question ${i}?`, metadata: slackMeta(`17609${String(10000 + i)}.000100`), createdAt: T - i * 1000 }));
     const agenda = buildAgenda({ now: NOW, agent, timeline: many, decisions: [{ ...card, status: 'resolved' }, { ...card, id: 'D-8', asker: 'owen', requestedBy: 'owen' }] });
