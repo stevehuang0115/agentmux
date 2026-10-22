@@ -261,6 +261,24 @@ describe('v3: keep-warm', () => {
     expect(prestarted).toEqual(['ella', 'owen']);
   });
 
+  it('one recap per agent: an agent that answered for itself and for its team gets one request covering both (2026-10-22: Owen posted two recaps)', async () => {
+    const h = harness({
+      '/machine/deliveries/d1': delivery(),
+      '/machine/deliveries/d2': delivery({ id: 'd2', conversationId: 'c2', text: '律所广告怎么样？', target: { kind: 'team', name: 'CE', agentSession: 'ella' } }),
+      '/machine/state': { ended: true, conversations: [{ conversationId: 'c1', agentSession: 'ella' }, { conversationId: 'c2', agentSession: 'ella' }] },
+    });
+    await h.service.handle(push({ v: 1, kind: 'drive', op: 'deliver', sessionId: SID, id: 'd1', instanceId: 'mac' }));
+    await h.service.handle(push({ v: 1, kind: 'drive', op: 'deliver', sessionId: SID, id: 'd2', instanceId: 'mac' }));
+    await h.service.handle(push({ v: 1, kind: 'drive', op: 'end', sessionId: SID, instanceId: 'mac' }));
+    expect(h.notes).toHaveLength(1);
+    expect(h.notes[0].text).toContain('2 conversations');
+    expect(h.notes[0].text).toContain('ONE recap covers them all');
+    expect(h.notes[0].text).toContain('把周报发了吗？');
+    expect(h.notes[0].text).toContain('律所广告怎么样？');
+    await h.service.handle(push({ v: 1, kind: 'drive', op: 'end', sessionId: SID, instanceId: 'mac' }));
+    expect(h.notes).toHaveLength(1);
+  });
+
   it('a warm push after the session ended (or the end itself) drops the list', async () => {
     const keepWarm = new DriveKeepWarm(() => NOW.getTime());
     keepWarm.set(SID, ['ella'], NOW.getTime() + 60_000);

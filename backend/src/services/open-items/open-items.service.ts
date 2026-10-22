@@ -1931,7 +1931,8 @@ export class OpenItemsService {
       const ref = followUpReference(request, current);
       const text =
         `[FOLLOW-UP ${ticketLabel(request)}] You promised the owner: "${short(current.text, 200)}" — due ${formatWhen(new Date(due), now)}, and it hasn't been delivered. ` +
-        `Deliver it now, or tell the owner plainly when it will come and why. Run: ${followUpCommand(ref)} — Crewly posts it in the ticket's thread.` +
+        `Deliver it now, or tell the owner plainly when it will come and why. Run: ${followUpCommand(ref)} — Crewly posts it in the ticket's thread. ` +
+        'First read that thread (search-chat): a teammate you handed this to may already have delivered it there — then say so and close this, never say it is undone from memory (2026-10-22: "没送到她手里" when Pia had posted twice).' +
         staleCommitmentNotice(current, now) +
         reminderFooter(current.wokeAt ? 2 : 1, current.createdAt, now.getTime());
       const ok = await this.remindAgent(request, current.agent, text);

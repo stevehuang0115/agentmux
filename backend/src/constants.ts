@@ -4105,6 +4105,13 @@ export const CLAUDE_TRANSCRIPT_SYNC_CONSTANTS = {
 	 */
 	MAX_DEDUPE_IDS: 200,
 	/**
+	 * Most bytes one pass reads from a transcript. A 745 MB transcript read
+	 * whole failed every minute with "Cannot create a string longer than
+	 * 0x1fffffe8 characters" and took the other sessions' sync down with it
+	 * (2026-10-22). The rest is read on the following passes.
+	 */
+	MAX_READ_BYTES_PER_PASS: 32 * 1024 * 1024,
+	/**
 	 * How many earlier transcripts of a session keep their read offset.
 	 * A session that switches between the owner's Claude Code accounts, or
 	 * gets a new conversation, can come back to a transcript it already
@@ -5563,6 +5570,8 @@ export const CREWLY_APPS_CONSTANTS = {
 	WAKE_RETRY_MAX_MS: 15 * 60_000,
 	/** After this many failed deliveries the orchestrator hears about it, once per batch */
 	WAKE_FAILS_BEFORE_ORC_NOTICE: 3,
+	/** Failed this many times (about 2 h with the backoff): the batch is dropped — the comments stay in the app — and the orchestrator is told once more (2026-10-22: 48 retries over 11 h for an agent that no longer existed) */
+	WAKE_MAX_FAILURES: 12,
 	/**
 	 * One delivery may take at most this long (it can wait behind other
 	 * deliveries to a busy agent). Past it the attempt counts as failed and the

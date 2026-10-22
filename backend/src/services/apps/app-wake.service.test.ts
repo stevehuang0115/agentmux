@@ -737,6 +737,22 @@ describe('AppWakeService — nothing stalls delivery (2026-10-05, 科技晨报)'
     expect(deliver.mock.calls.filter(([s, t]) => s === null && String(t).includes('stalled'))).toHaveLength(1);
   });
 
+  it('gives up after WAKE_MAX_FAILURES, tells the orchestrator once more, and stops retrying (2026-10-22: 48 retries for a gone agent)', async () => {
+    registry.add(ID);
+    deliver.mockImplementation(async (s: string | null) => s === null);
+    cloud.push(ID, ownerData());
+    await svc.tick();
+    await jest.advanceTimersByTimeAsync(90_000); // try 1
+    for (let i = 0; i < CREWLY_APPS_CONSTANTS.WAKE_MAX_FAILURES + 2; i++) await jest.advanceTimersByTimeAsync(CREWLY_APPS_CONSTANTS.WAKE_RETRY_MAX_MS);
+    const toElla = deliver.mock.calls.filter(([s]) => s === 'dev-ella').length;
+    expect(toElla).toBe(CREWLY_APPS_CONSTANTS.WAKE_MAX_FAILURES);
+    expect(svc.pendingKeys()).toHaveLength(0);
+    const orc = deliver.mock.calls.filter(([s]) => s === null);
+    expect(orc).toHaveLength(2);
+    expect(orc[1][1]).toContain('gave up delivering changes');
+    expect(orc[1][1]).toContain(`after ${CREWLY_APPS_CONSTANTS.WAKE_MAX_FAILURES} tries`);
+  });
+
   it('a delivery that never settles times out, is retried, and the cursor then moves on', async () => {
     registry.add(ID);
     deliver.mockImplementationOnce(() => new Promise(() => undefined));

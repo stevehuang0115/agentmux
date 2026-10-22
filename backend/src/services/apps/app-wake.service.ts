@@ -1053,6 +1053,19 @@ export class AppWakeService {
     }
 
     batch.failures++;
+    if (batch.failures >= C.WAKE_MAX_FAILURES) {
+      // Retrying forever for an agent that is gone keeps nobody informed: drop the batch (the comments stay in the app) and say so once.
+      this.outgoing.delete(key);
+      this.logger.warn('App change wake given up after repeated failures; the changes stay in the app', { appId: batch.appId, session: batch.session ?? 'orchestrator', failures: batch.failures });
+      if (batch.session !== null || batch.room) {
+        this.notifyOrc(
+          `[APP CHANGES] Crewly gave up delivering changes in app "${safeAppName(app?.name ?? batch.appId)}" (${batch.appId}) to ` +
+            `${batch.room ? `the ${batch.room.kind} "${safeAppName(batch.room.name)}"` : batch.session} after ${batch.failures} tries. ` +
+            'They are still in the app; if that agent is gone, read them yourself or hand the app to someone.',
+        );
+      }
+      return false;
+    }
     const retry = Math.min(C.WAKE_RETRY_BASE_MS * 2 ** (batch.failures - 1), C.WAKE_RETRY_MAX_MS);
     this.logger.warn('App change wake was not delivered; will retry', { appId: batch.appId, session: batch.session ?? 'orchestrator', failures: batch.failures, retryInMs: retry });
     if (batch.failures >= C.WAKE_FAILS_BEFORE_ORC_NOTICE && !batch.orcNotified && (batch.session !== null || batch.room)) {
