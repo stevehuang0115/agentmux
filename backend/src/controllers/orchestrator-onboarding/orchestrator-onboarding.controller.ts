@@ -205,7 +205,10 @@ export async function synthesizeHierarchyRoute(
     }
     const maxSubteams =
       typeof req.body?.maxSubteams === 'number' ? req.body.maxSubteams : undefined;
-    const plan = synthesizeHierarchyPlan(ctx.value, { maxSubteams });
+    const plan = synthesizeHierarchyPlan(ctx.value, {
+      maxSubteams,
+      catalog: await usableExtraTemplates(),
+    });
     res.status(200).json({ success: true, plan });
   } catch (err) {
     logger.error('synthesize-hierarchy route failed', { err });
