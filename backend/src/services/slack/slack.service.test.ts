@@ -1827,6 +1827,28 @@ describe('SlackService', () => {
       expect(service.getStatus().messagesSent).toBe(1);
     });
 
+    it('hands a Cloud room-join RESULT envelope to its handler and routes nothing (crewly#1430)', async () => {
+      const cloudService = new SlackService();
+      await cloudService.initialize({ ...cloudConfig, allowedUserIds: ['U123'] });
+      const handler = jest.fn().mockResolvedValue(undefined);
+      cloudService.roomJoinResultHandler = handler;
+      const emitted: unknown[] = [];
+      cloudService.on('message', (m) => emitted.push(m));
+      const roomJoinResult = { slackChannelId: 'C0ABC12345', slackChannelName: 'ce-growth', instanceId: 'inst-air', ok: false, joined: [], rejected: ['wang-lead'], error: 'no_local_members' };
+      const result = cloudService.handleCloudEnvelope({
+        eventId: 'roomjoinresult-1',
+        slackTeamId: 'T1',
+        apiAppId: '',
+        source: 'master',
+        roomJoinResult,
+        event: { type: 'crewly_room_join_result', channel: 'C0ABC12345' } as never,
+        receivedAt: new Date().toISOString(),
+      });
+      expect(result).toBeNull();
+      expect(emitted).toHaveLength(0);
+      expect(handler).toHaveBeenCalledWith(roomJoinResult);
+    });
+
     it('hands a Cloud room-join envelope to the handler and routes nothing', async () => {
       const cloudService = new SlackService();
       await cloudService.initialize({ ...cloudConfig, allowedUserIds: ['U123'] });
