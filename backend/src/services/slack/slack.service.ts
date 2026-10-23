@@ -27,7 +27,7 @@ import type {
   SlackRawAttachment,
   SlackInboundMeta,
   SlackCloudEventEnvelope,
-  SlackRoomJoinRequest,
+  SlackRoomJoinRequest, SlackRoomJoinResult,
   SlackInteractionEvent,
   SlackReactionEvent,
 } from '../../types/slack.types.js';
@@ -530,6 +530,8 @@ export class SlackService extends EventEmitter {
 
   /** Handles a Cloud-pushed room-join request (wired to the team-channel service). */
   roomJoinHandler: ((join: SlackRoomJoinRequest) => Promise<unknown> | unknown) | null = null;
+  /** What to do with a room-join result Cloud relayed back to this (asking) machine (crewly#1430) */
+  roomJoinResultHandler: ((result: SlackRoomJoinResult) => Promise<unknown> | unknown) | null = null;
   /** Whether a Slack conversation belongs to an agent's own app (the master bot cannot post there). Set by the initializer. */
   isAgentOwnedConversation: ((channelId: string) => boolean) | null = null;
   /** Slack user id of the person who installed the app (owner notifications go to their DM). Set by the initializer. */
@@ -1051,6 +1053,21 @@ export class SlackService extends EventEmitter {
     const event = envelope?.event;
     if (!event || typeof event !== 'object' || typeof event.type !== 'string') {
       this.logger.warn('Malformed slack_event envelope — dropped', { eventId: envelope?.eventId });
+      return null;
+    }
+    // Room-join result (crewly#1430): the machine we asked says what it did.
+    if (envelope.roomJoinResult || (event.type as string) === SLACK_CLOUD_CONSTANTS.ROOM_JOIN_RESULT_EVENT_TYPE) {
+      const result = envelope.roomJoinResult;
+      if (!result || !result.slackChannelId) {
+        this.logger.warn('Malformed room-join result envelope — dropped', { eventId: envelope.eventId });
+        return null;
+      }
+      this.logger[result.ok ? 'info' : 'warn']('Room-join result from Cloud', { slackChannel: result.slackChannelId, instanceId: result.instanceId, ok: result.ok, joined: result.joined, rejected: result.rejected, ...(result.error ? { error: result.error } : {}) });
+      if (this.roomJoinResultHandler) {
+        void Promise.resolve(this.roomJoinResultHandler(result)).catch((err: unknown) => {
+          this.logger.warn('Room-join result handler failed', { error: err instanceof Error ? err.message : String(err) });
+        });
+      }
       return null;
     }
     // Room join (2026-10-13): another machine's orchestrator put some of our

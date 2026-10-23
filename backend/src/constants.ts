@@ -2552,6 +2552,10 @@ export const SLACK_CLOUD_CONSTANTS = {
 	ROOM_JOIN_PATH: '/rooms/join',
 	/** Event type of the Cloud-pushed room-join envelope */
 	ROOM_JOIN_EVENT_TYPE: 'crewly_room_join',
+	/** `POST` — the asked machine reports a room-join outcome; Cloud relays it to the asking machine (crewly#1430) */
+	ROOM_JOIN_RESULT_PATH: '/rooms/join/result',
+	/** Event type of the Cloud-pushed room-join-result envelope */
+	ROOM_JOIN_RESULT_EVENT_TYPE: 'crewly_room_join_result',
 	/** `GET` — the account's Slack routing log (where each channel message went and why, 14 days) */
 	ROUTING_DECISIONS_PATH: '/routing-decisions',
 	/** GET → who is who across the account (instances, teams, agents, bot users) */

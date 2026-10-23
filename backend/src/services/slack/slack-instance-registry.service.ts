@@ -583,6 +583,19 @@ export class SlackInstanceRegistryService {
   }
 
   /**
+   * Report what became of a room-join request Cloud relayed to this machine,
+   * so the asking machine (and through it the owner) hears about a failure
+   * instead of waiting on a room that never formed (crewly#1430).
+   *
+   * @param body - Channel, the asking machine and the outcome
+   * @throws {SlackIdentityCloudError} when Cloud refuses or cannot be reached
+   */
+  async reportRoomJoin(body: { slackChannelId: string; slackChannelName: string; requesterInstanceId: string; ok: boolean; joined: string[]; rejected: string[]; error?: string }): Promise<void> {
+    const { deviceId } = await this.resolveIdentity();
+    await this.cloudRequest('POST', SLACK_CLOUD_CONSTANTS.ROOM_JOIN_RESULT_PATH, { ...body, instanceId: deviceId });
+  }
+
+  /**
    * The account's Slack routing log for one channel: which machines each
    * message was pushed to, and why (Cloud keeps 14 days).
    *

@@ -203,6 +203,19 @@ export interface SlackRoomJoinRequest {
   requestedByInstanceId: string;
 }
 
+/** What became of a room-join request, reported by the machine that was asked (crewly#1430). */
+export interface SlackRoomJoinResult {
+  slackChannelId: string;
+  slackChannelName: string;
+  /** The machine that did (or could not do) the joining */
+  instanceId: string;
+  ok: boolean;
+  joined: string[];
+  rejected: string[];
+  /** Why not, when `ok` is false */
+  error?: string;
+}
+
 /**
  * `data` of a `slack_event` relay message pushed by Crewly Cloud (contract:
  * Slack v3 events). `event` is the raw Slack event object.
@@ -229,6 +242,8 @@ export interface SlackCloudEventEnvelope {
    * Not a message — never routed as one.
    */
   roomJoin?: SlackRoomJoinRequest;
+  /** Set on a room-join result (`event.type === 'crewly_room_join_result'`): what the asked machine did. Not a message. */
+  roomJoinResult?: SlackRoomJoinResult;
   event: SlackRawInboundEvent;
   /**
    * `block_actions` only (Cloud ≥ auth 1.9.0): the full interactive payload

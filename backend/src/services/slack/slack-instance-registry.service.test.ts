@@ -526,6 +526,17 @@ describe('routing log', () => {
   });
 });
 
+describe('room join result (reporter, crewly#1430)', () => {
+  it('POSTs the outcome to Cloud with our own instance id', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ success: true, data: {} }));
+    await makeService().reportRoomJoin({ slackChannelId: 'C0ABC12345', slackChannelName: 'ce-growth', requesterInstanceId: 'device-2', ok: false, joined: [], rejected: ['wang-lead'], error: 'no_local_members' });
+    const [call] = calls();
+    expect(call.method).toBe('POST');
+    expect(call.url).toBe('https://api.crewlyai.com/api/cloud/slack/rooms/join/result');
+    expect(call.body).toEqual({ slackChannelId: 'C0ABC12345', slackChannelName: 'ce-growth', requesterInstanceId: 'device-2', ok: false, joined: [], rejected: ['wang-lead'], error: 'no_local_members', instanceId: 'device-1' });
+  });
+});
+
 describe('room join request (sender)', () => {
   it('POSTs the contract body to Cloud, with our own instance id as requester', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ success: true, data: {} }));
