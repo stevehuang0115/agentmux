@@ -155,6 +155,20 @@ describe('SubAgentMessageQueue', () => {
 			expect(left[0].attempts).toBe(1);
 		});
 
+		it('counts deferrals and remembers when the agent was last busy for it (crewly#1431)', async () => {
+			queue.enqueue('ella', 'brief');
+			const busy = async (data: string) => {
+				queue.enqueue('ella', data);
+				return { queued: true };
+			};
+			await queue.flush('ella', busy);
+			await queue.flush('ella', busy);
+			const [entry] = queue.peek('ella');
+			expect(entry.deferrals).toBe(2);
+			expect(typeof entry.lastDeferredAt).toBe('number');
+			expect(Date.now() - (entry.lastDeferredAt as number)).toBeLessThan(5_000);
+		});
+
 		it('removes only the copy send re-queued, keeping the original entry id and place', async () => {
 			queue.enqueue('ella', 'first');
 			queue.enqueue('ella', 'second');
