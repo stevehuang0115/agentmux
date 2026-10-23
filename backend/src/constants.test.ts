@@ -574,6 +574,19 @@ describe('WIKI_QUEUE_CONSTANTS (#914 wiki queue hygiene)', () => {
 	});
 });
 
+describe('WIKI_GAPS_CONSTANTS (#914 knowledge gaps)', () => {
+	it('keeps the page under llm-curated, the state in a dot-file, and the query bounds sane', async () => {
+		const { WIKI_GAPS_CONSTANTS: C } = await import('./constants.js');
+		expect(C.DIR.startsWith('llm-curated/')).toBe(true);
+		expect(C.STATE_FILE.startsWith('.')).toBe(true);
+		expect(C.QUERY_MIN_CHARS).toBeLessThan(C.QUERY_MAX_CHARS);
+		expect(C.MAX_GAPS_PER_PAGE).toBeGreaterThan(0);
+		expect(C.MAX_AGENTS_PER_GAP).toBeGreaterThan(0);
+		expect(C.WINDOW_DAYS).toBe(7);
+		expect(C.WORKITEM_KIND).toBe('wiki-knowledge-gaps');
+	});
+});
+
 describe('CREWLY_CHANNEL_CONSTANTS', () => {
 	it('names the registry file and keeps limits in line with Slack and huddles', () => {
 		expect(CREWLY_CHANNEL_CONSTANTS.STORE_FILENAME).toBe('crewly-channels.json');

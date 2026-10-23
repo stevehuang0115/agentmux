@@ -1877,6 +1877,34 @@ export const WIKI_LOG_CONSTANTS = {
 } as const;
 
 /**
+ * Knowledge gaps (#914 P1): the retrieval ledger records every query that
+ * found nothing, and nothing turned those misses into work. Once per ISO
+ * week the maintenance daily pass rolls the window's zero-hit queries into
+ * one page per vault under `llm-curated/gaps/` and hands the team lead one
+ * WorkItem to decide which gaps deserve a page. Deterministic, no LLM.
+ */
+export const WIKI_GAPS_CONSTANTS = {
+	/** Queries from this many days back are rolled up. */
+	WINDOW_DAYS: 7,
+	/** Vault-relative folder of the weekly gap pages. */
+	DIR: 'llm-curated/gaps',
+	/** Vault-root file remembering the last week compiled and its WorkItem (dot-file: walkers skip it). */
+	STATE_FILE: '.wiki-gaps-state.json',
+	/** A query shorter than this is noise (a stray token), not a question. */
+	QUERY_MIN_CHARS: 3,
+	/** A query longer than this is pasted text, not a question; counted but not listed. */
+	QUERY_MAX_CHARS: 160,
+	/** Cap on distinct gaps one page lists (the most-asked first). */
+	MAX_GAPS_PER_PAGE: 50,
+	/** Cap on agent names listed per gap. */
+	MAX_AGENTS_PER_GAP: 5,
+	/** WorkItem `metadata.kind` of the lead's review item. */
+	WORKITEM_KIND: 'wiki-knowledge-gaps',
+	/** Session that authors the page. */
+	CALLER_SESSION: 'system:wiki-knowledge-gaps',
+} as const;
+
+/**
  * Daily agent-memory refresh (#1345): what an agent recorded in the wiki
  * log is reflected into its `memory.json` and the project's memory.
  */
