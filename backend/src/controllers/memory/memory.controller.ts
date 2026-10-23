@@ -29,6 +29,9 @@ const VALID_REMEMBER_CATEGORIES: ReadonlySet<string> = new Set([
 /** Valid scopes for the remember endpoint */
 const VALID_REMEMBER_SCOPES: ReadonlySet<string> = new Set(['agent', 'project']);
 
+/** Longest caller-supplied recall context for POST /memory/my-context (#857). */
+const MY_CONTEXT_RECALL_CONTEXT_MAX_CHARS = 500;
+
 /** Valid scopes for the recall endpoint */
 const VALID_RECALL_SCOPES: ReadonlySet<string> = new Set(['agent', 'project', 'both']);
 
@@ -568,7 +571,7 @@ export async function recordFailure(req: Request, res: Response, next: NextFunct
  */
 export async function getMyContext(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { agentId, agentRole, projectPath } = req.body;
+    const { agentId, agentRole, projectPath, context } = req.body;
 
     if (!agentId || !agentRole || !projectPath) {
       res.status(400).json({
@@ -577,6 +580,15 @@ export async function getMyContext(req: Request, res: Response, next: NextFuncti
       });
       return;
     }
+
+    // #857: the startup protocol used to run `recall` and then this endpoint,
+    // which recalls again — the same search twice. The caller now passes the
+    // search it wants (the startup one names unfinished work and blockers);
+    // without it the generic "current work" context stays.
+    const recallContext =
+      typeof context === 'string' && context.trim().length > 0
+        ? context.trim().slice(0, MY_CONTEXT_RECALL_CONTEXT_MAX_CHARS)
+        : `${agentRole} agent context for current work`;
 
     // Gather context from all memory subsystems in parallel. Knowledge docs are
     // no longer a separate source — agent recall is BM25 over the LLM-wiki.
@@ -588,7 +600,7 @@ export async function getMyContext(req: Request, res: Response, next: NextFuncti
     const [memories, goals, focus, dailyLog, successes, failures] = await Promise.all([
       memoryService.recall({
         agentId,
-        context: `${agentRole} agent context for current work`,
+        context: recallContext,
         scope: 'both',
         projectPath,
       }),
