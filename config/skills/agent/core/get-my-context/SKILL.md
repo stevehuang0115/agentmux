@@ -47,6 +47,11 @@ Retrieve your accumulated context including memories, learnings, and project kno
 | `agentId` | Yes | Your agent ID |
 | `agentRole` | Yes | Your role (e.g., `"developer"`, `"qa"`) |
 | `projectPath` | Yes | Absolute path to the current project |
+| `context` | No | What to recall for (`--context`). Default: `"<role> agent context for current work"`. At startup pass `"<role> session startup, recent tasks, unfinished work, blockers, key decisions"` |
+
+This skill **includes your memory recall** (plus goals, focus, today's log, learnings
+and your task timings). Do not run `recall` as well at startup — that is the same
+search twice (#857).
 
 ## Example
 

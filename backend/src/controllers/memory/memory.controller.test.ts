@@ -800,6 +800,23 @@ describe('MemoryController', () => {
       expect(payload.data).not.toHaveProperty('knowledgeDocs');
     });
 
+    it('recalls with the caller\'s context when given, else the generic one (#857)', async () => {
+      await getMyContext(
+        { body: { agentId: 'dev-001', agentRole: 'developer', projectPath: '/p', context: ' developer session startup, unfinished work ' } } as any,
+        mockRes as any,
+        mockNext,
+      );
+      expect(mockRecall).toHaveBeenCalledWith(expect.objectContaining({ context: 'developer session startup, unfinished work', scope: 'both' }));
+
+      mockRecall.mockClear();
+      await getMyContext({ body: { agentId: 'dev-001', agentRole: 'developer', projectPath: '/p', context: '   ' } } as any, mockRes as any, mockNext);
+      expect(mockRecall).toHaveBeenCalledWith(expect.objectContaining({ context: 'developer agent context for current work' }));
+
+      mockRecall.mockClear();
+      await getMyContext({ body: { agentId: 'dev-001', agentRole: 'developer', projectPath: '/p', context: 'x'.repeat(900) } } as any, mockRes as any, mockNext);
+      expect(mockRecall.mock.calls[0][0].context).toHaveLength(500);
+    });
+
     it("includes the agent's task-timing summary only when it has history", async () => {
       const req = { body: { agentId: 'dev-001', agentRole: 'developer', projectPath: '/p' } } as any;
       await getMyContext(req, mockRes as any, mockNext);
