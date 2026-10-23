@@ -1543,6 +1543,21 @@ export const COMPLETION_EVIDENCE_CONSTANTS = {
 	},
 	/** Worker evidence entries listed, numbered, in a review item's description (#1314). */
 	REVIEW_LISTED_ENTRIES: 10,
+	/**
+	 * The worker's decision record (#875): optional completion fields the
+	 * reviewer reads beside the evidence. Each is a list of short strings.
+	 */
+	DECISION_FIELDS: ['decisions', 'notTaken', 'assumptions'] as const,
+	/** Heading the review brief gives each decision field (#875). */
+	DECISION_LABELS: {
+		decisions: 'Decisions',
+		notTaken: 'Not taken',
+		assumptions: 'Assumptions',
+	} as Record<string, string>,
+	/** Entries of one decision field shown in a review brief (#875). */
+	REVIEW_LISTED_DECISIONS: 5,
+	/** Max characters of one decision entry in a review brief (#875). */
+	DECISION_ENTRY_MAX_CHARS: 300,
 	/** Outcomes a reviewer records for one check (#1314). */
 	CHECK_OUTCOMES: ['pass', 'fail'] as readonly string[],
 	/** The shape of a reviewer's check record, quoted in every refusal (#1314). */

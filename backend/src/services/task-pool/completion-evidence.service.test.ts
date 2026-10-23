@@ -17,6 +17,7 @@ import {
   artifactNotBefore,
   blockedReason,
   decideCompletion,
+  describeDecisionsForReviewer,
   describeEvidenceForReviewer,
   decideReviewAccept,
   resolveEvidenceEnforcementMode,
@@ -70,6 +71,35 @@ describe('blockedReason', () => {
       { type: 'blocked', step: 'deploy', reason: 'no creds' },
     ])).toBe('Blocked at "npm test": db down; Blocked at "deploy": no creds');
   });
+});
+
+describe('describeDecisionsForReviewer (#875)', () => {
+  it('lists decisions, roads not taken and assumptions under their headings', () => {
+    const d = describeDecisionsForReviewer({
+      decisions: ['Kept the v1 schema', 'Used BM25 over embeddings'],
+      notTaken: 'A new table — would need a migration the owner has not approved',
+      assumptions: ['The relay is on 1.5.24'],
+    });
+    expect(d).toMatch(/^Worker's record/);
+    expect(d).toContain('Decisions:\n  - Kept the v1 schema\n  - Used BM25 over embeddings');
+    expect(d).toContain('Not taken:\n  - A new table — would need a migration');
+    expect(d).toContain('Assumptions:\n  - The relay is on 1.5.24');
+  });
+
+  it('caps each list and trims long entries', () => {
+    const d = describeDecisionsForReviewer({ decisions: Array.from({ length: 7 }, (_, i) => `d${i} ${'x'.repeat(400)}`) });
+    expect(d).toContain('d4');
+    expect(d).not.toContain('d5');
+    expect(d).toContain('and 2 more');
+    expect(d.split('\n')[1].length).toBeLessThanOrEqual(300 + 4);
+  });
+
+  it.each([undefined, {}, { decisions: [] }, { decisions: 7 }, { notTaken: ['', '  '] }, { evidence: [{ type: 'artifact', path: '/a' }] }])(
+    'is empty when the worker recorded nothing usable: %j',
+    (output) => {
+      expect(describeDecisionsForReviewer(output as Record<string, unknown> | undefined)).toBe('');
+    },
+  );
 });
 
 describe('describeEvidenceForReviewer', () => {

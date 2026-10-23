@@ -254,6 +254,33 @@ export function blockedReason(blocked: BlockedEvidence[]): string {
  * @param output - The completed WorkItem's `output` (evidence at `output.evidence`)
  * @returns A sentence starting with "Evidence:"
  */
+/**
+ * The worker's decision record (#875), read by the reviewer beside the
+ * evidence: the key decisions made, the options considered and not taken
+ * (with the reason), and the assumptions relied on. Each is an optional list
+ * of short strings on the completion result (a lone string counts as one
+ * entry). Returns '' when the worker recorded none, so a brief without one
+ * stays as it was.
+ */
+export function describeDecisionsForReviewer(output: Record<string, unknown> | undefined): string {
+  const blocks: string[] = [];
+  for (const field of C.DECISION_FIELDS) {
+    const entries = decisionEntries(output?.[field]);
+    if (entries.length === 0) continue;
+    const shown = entries.slice(0, C.REVIEW_LISTED_DECISIONS).map((e) => `  - ${e.slice(0, C.DECISION_ENTRY_MAX_CHARS)}`);
+    if (entries.length > shown.length) shown.push(`  … and ${entries.length - shown.length} more`);
+    blocks.push(`${C.DECISION_LABELS[field]}:\n${shown.join('\n')}`);
+  }
+  if (blocks.length === 0) return '';
+  return `Worker's record — check these hold, not only that the work exists:\n${blocks.join('\n')}`;
+}
+
+/** One decision field as a list of non-empty strings; anything else is nothing. */
+function decisionEntries(raw: unknown): string[] {
+  const list = typeof raw === 'string' ? [raw] : Array.isArray(raw) ? raw : [];
+  return list.filter((e): e is string => typeof e === 'string' && e.trim().length > 0).map((e) => e.trim());
+}
+
 export function describeEvidenceForReviewer(output: Record<string, unknown> | undefined): string {
   const v = validateCompletionEvidence(output?.['evidence']);
   const evidence = v.ok ? v.evidence : [];
