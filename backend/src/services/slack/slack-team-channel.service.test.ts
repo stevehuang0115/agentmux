@@ -1857,6 +1857,39 @@ describe('one pair of eyes per agent that receives it', () => {
     typing = null;
   });
 
+  // 2026-10-23, #air-edu-game: the owner's four messages sat on Milo's queue
+  // (mid-turn) for ten minutes and the thread showed nothing meanwhile.
+  it("an owner message held on the queue of its only recipient (mid-turn) gets a 'will pick this up' placeholder even when that recipient was optional", async () => {
+    typing = { begin: jest.fn().mockResolvedValue(null), resolve: jest.fn(), setPhase: jest.fn().mockResolvedValue(undefined), fail: jest.fn().mockResolvedValue(undefined) };
+    planning([['crewly-alpha-sam', 'optional']]);
+    dispatcher!.dispatchMessage.mockResolvedValue({
+      strategy: 'huddle-broadcast',
+      dispatched: true,
+      huddleOutcomes: [{ sessionName: 'crewly-alpha-sam', responseMode: 'optional', dispatched: true, queued: true, silentByDefault: true }],
+    });
+    service = makeService();
+    await service.ensureTeamChannel(team());
+    identities!.install('crewly-alpha-sam', 'USAM', 'xoxb-sam');
+    await service.routeInbound(inbound({ text: '以后不需要我说好', ts: '509.1', threadTs: '505.1', userId: 'UOWNER' }));
+    expect(typing.begin).toHaveBeenCalledWith({ agentSession: 'crewly-alpha-sam', slackChannelId: 'C1', threadTs: '505.1' }, expect.anything(), 'queued', '509.1');
+
+    // Two optional listeners both holding it: no line per listener; a teammate's message: nothing.
+    typing.begin.mockClear();
+    planning([['crewly-alpha-sam', 'optional'], ['crewly-alpha-leo', 'optional']]);
+    dispatcher!.dispatchMessage.mockResolvedValue({
+      strategy: 'huddle-broadcast',
+      dispatched: true,
+      huddleOutcomes: [
+        { sessionName: 'crewly-alpha-sam', responseMode: 'optional', dispatched: true, queued: true },
+        { sessionName: 'crewly-alpha-leo', responseMode: 'optional', dispatched: true, queued: true },
+      ],
+    });
+    service = makeService();
+    await service.routeInbound(inbound({ text: 'all of you', ts: '509.2', userId: 'UOWNER' }));
+    expect(typing.begin).not.toHaveBeenCalled();
+    typing = null;
+  });
+
   it('shows a placeholder only for agents that owe a reply', async () => {
     // A placeholder is a promise of an answer; an agent only passed the
     // message to judge announces itself if it takes it on.
