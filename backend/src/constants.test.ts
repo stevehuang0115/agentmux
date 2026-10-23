@@ -623,6 +623,13 @@ describe('STALL_WATCHER_CONSTANTS (crewly#1363, crewly#1362)', () => {
     expect(STALL_WATCHER_CONSTANTS.OWNER_LINE_INTERVAL_MS).toBe(24 * 60 * 60 * 1000);
     expect(STALL_WATCHER_CONSTANTS.CLAIM_STALL_MS).toBe(TRACE_CONSTANTS.STALL_MINUTES * 60 * 1000);
     expect(STALL_WATCHER_CONSTANTS.CLAIM_CHECK_WINDOW_MS).toBe(10 * 60 * 1000);
+    // crewly#1427 item 5: words that make a hand-off a plan, not a claim
+    expect(STALL_WATCHER_CONSTANTS.CLAIM_PLAN_ZH.test('你看过说可以,我再')).toBe(true);
+    expect(STALL_WATCHER_CONSTANTS.CLAIM_PLAN_ZH.test('会随这次一起')).toBe(true);
+    expect(STALL_WATCHER_CONSTANTS.CLAIM_PLAN_ZH.test('刚才')).toBe(false);
+    expect(STALL_WATCHER_CONSTANTS.CLAIM_PLAN_ZH.test('视频已经是')).toBe(false);
+    expect(STALL_WATCHER_CONSTANTS.CLAIM_PLAN_EN.test("Once you approve, I'll")).toBe(true);
+    expect(STALL_WATCHER_CONSTANTS.CLAIM_PLAN_EN.test('After the review I')).toBe(false);
     expect(STALL_WATCHER_CONSTANTS.ARM_DELAY_MS).toBe(24 * 60 * 60 * 1000);
     expect(STALL_WATCHER_CONSTANTS.ENV_KILL_SWITCH).toBe('CREWLY_STALL_WATCHER');
     expect(STALL_WATCHER_CONSTANTS.ENV_DRY_RUN).toBe('CREWLY_STALL_WATCHER_DRY_RUN');
