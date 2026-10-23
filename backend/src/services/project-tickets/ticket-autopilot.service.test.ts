@@ -423,6 +423,30 @@ describe('TicketAutopilotService', () => {
       expect(notices.filter((n) => n.title === 'Tickets today')).toHaveLength(1);
     });
 
+    it('carries the spot-check line beside the team leads block; null or a failure adds nothing (crewly#1315)', async () => {
+      const spotCheckDigest = jest.fn(async () => 'Spot check: 10 verified item(s) from the last day re-checked, 0 discrepancies');
+      const leadShareDigest = jest.fn(async () => '*Team leads* (lead share of team tokens)\n- *CE* (Owen): 64%');
+      svc = build({ leadShareDigest, spotCheckDigest });
+      await enable();
+      await wf.create('p-ce', { title: 'Export CSV', status: 'ready' }, owner);
+      clock = at(21, 5);
+      await svc.tick();
+      const digest = notices.find((n) => n.title === 'Tickets today');
+      expect(spotCheckDigest).toHaveBeenCalledWith(clock);
+      expect(digest?.message).toContain('*Team leads*');
+      expect(digest?.message).toContain('\n\nSpot check: 10 verified item(s) from the last day re-checked, 0 discrepancies');
+
+      notices.length = 0;
+      spotCheckDigest.mockRejectedValue(new Error('state unreadable'));
+      clock = new Date(2026, 9, 1, 21, 5);
+      const b = await wf.create('p-ce', { title: 'Another', status: 'ready' }, owner);
+      await wf.assign('p-ce', b.id, 'ce-dev', lead);
+      await svc.tick();
+      const second = notices.find((n) => n.title === 'Tickets today');
+      expect(second?.message).toContain('Another');
+      expect(second?.message).not.toContain('Spot check');
+    });
+
     it('carries the team leads block; a failing block never stops the digest (crewly#1083)', async () => {
       const leadShareDigest = jest.fn(async () => '*Team leads* (lead share of team tokens)\n- *CE* (Owen): 64% of 9.9M today, 55% this week');
       svc = build({ leadShareDigest });

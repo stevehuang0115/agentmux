@@ -132,7 +132,7 @@ import { driveCapabilities } from './services/drive/drive-agent.service.js';
 import { canvasCapabilities } from './services/board/canvas/canvas-inbound.service.js';
 import { isBoardPushDisabled } from './services/board/board-push.service.js';
 import { teamMoveCapabilities } from './services/team-move/team-move-driver.service.js';
-import { SUB_AGENT_QUEUE_CONSTANTS, CHAT_CONTEXT_CONSTANTS, SAFE_RESTART, AUTO_UPDATE_CONSTANTS, PROCESS_EXIT_CODES, CLAUDE_STARTUP_CONSTANTS, WEB_CONSTANTS, TICKET_CONSTANTS, UNASSIGNED_ROUTE_CONSTANTS, CLOUD_TALK_CONSTANTS, STANDING_ANSWERS_CONSTANTS, TICKET_AUTOPILOT_CONSTANTS, TICKET_HYGIENE_CONSTANTS, EXPERIMENT_CONSTANTS, WORK_ITEM_DESTINATION_CONSTANTS, CODEX_USAGE_SYNC_CONSTANTS, ANTIGRAVITY_USAGE_SYNC_CONSTANTS, OWNER_AUTH_CONSTANTS, CREWLY_APPS_CONSTANTS, SLACK_AGENT_DM_CONSTANTS, BRIEFING_CONSTANTS, DRIVE_CONSTANTS, MEETING_CONSTANTS, ORC_CONVERSATION_CONSTANTS, POOL_PRUNE_CONSTANTS, STALL_WATCHER_CONSTANTS, OWNER_RECEIPT_CONSTANTS } from './constants.js';
+import { SUB_AGENT_QUEUE_CONSTANTS, CHAT_CONTEXT_CONSTANTS, SAFE_RESTART, AUTO_UPDATE_CONSTANTS, PROCESS_EXIT_CODES, CLAUDE_STARTUP_CONSTANTS, WEB_CONSTANTS, TICKET_CONSTANTS, UNASSIGNED_ROUTE_CONSTANTS, CLOUD_TALK_CONSTANTS, STANDING_ANSWERS_CONSTANTS, TICKET_AUTOPILOT_CONSTANTS, TICKET_HYGIENE_CONSTANTS, EXPERIMENT_CONSTANTS, WORK_ITEM_DESTINATION_CONSTANTS, CODEX_USAGE_SYNC_CONSTANTS, ANTIGRAVITY_USAGE_SYNC_CONSTANTS, OWNER_AUTH_CONSTANTS, CREWLY_APPS_CONSTANTS, SLACK_AGENT_DM_CONSTANTS, BRIEFING_CONSTANTS, DRIVE_CONSTANTS, MEETING_CONSTANTS, ORC_CONVERSATION_CONSTANTS, POOL_PRUNE_CONSTANTS, STALL_WATCHER_CONSTANTS, VERIFIED_SPOT_CHECK_CONSTANTS, OWNER_RECEIPT_CONSTANTS } from './constants.js';
 import { randomUUID } from 'crypto';
 import { PtyActivityTrackerService } from './services/agent/pty-activity-tracker.service.js';
 import { InFlightTurnTracker } from './services/restart/in-flight-turn-tracker.service.js';
@@ -7547,6 +7547,25 @@ void (async () => {
 			this.logger.info('Stall watcher wired');
 		} catch (error) {
 			this.logger.warn('Stall watcher not started', { error: error instanceof Error ? error.message : String(error) });
+		}
+		// Daily spot check of verified work (crewly#1315): re-checks a sample of
+		// yesterday's verified artifacts; one line in the evening digest, an
+		// owner alert only on a discrepancy. Kill switch: CREWLY_VERIFIED_SPOT_CHECK=0.
+		if (process.env[VERIFIED_SPOT_CHECK_CONSTANTS.ENV_SWITCH] !== '0') {
+			try {
+				const { VerifiedSpotCheckService } = await import('./services/task-pool/verified-spot-check.service.js');
+				const spotCheck = new VerifiedSpotCheckService({
+					getItems: () => TaskPoolService.getInstance().getAllItems(),
+					notifyOwner: slackOwnerAlertNotifier,
+					stateFile: path.join(this.config.crewlyHome, VERIFIED_SPOT_CHECK_CONSTANTS.STATE_FILE),
+					logger: LoggerService.getInstance().createComponentLogger('VerifiedSpotCheck'),
+				});
+				VerifiedSpotCheckService.getInstance()?.stop();
+				VerifiedSpotCheckService.setInstance(spotCheck);
+				spotCheck.start();
+			} catch (error) {
+				this.logger.warn('Verified spot check not started', { error: error instanceof Error ? error.message : String(error) });
+			}
 		}
 		// Held browser actions from before the restart: re-attach or expire
 		// (after the decision service, so expired cards are updated).

@@ -318,6 +318,12 @@ export interface TicketAutopilotDeps {
    */
   leadShareDigest?: (now: Date) => Promise<string | null>;
   /**
+   * The spot-check line of the evening digest (crewly#1315): how many verified
+   * items were re-checked today and how many artifacts were gone. Absent or
+   * null = no line.
+   */
+  spotCheckDigest?: (now: Date) => Promise<string | null>;
+  /**
    * Re-push a live WorkItem's brief to its idle assignee (stalled work).
    * Resolves false (or `failed`) when it was not written, `waiting` when the
    * earlier notice still sits on the member's queue. Absent = stalled work is
@@ -1312,7 +1318,9 @@ export class TicketAutopilotService {
       });
     }
     const leadBlock = this.deps.leadShareDigest ? await this.deps.leadShareDigest(now).catch(() => null) : null;
-    const message = buildDigestMessage(sections, leadBlock);
+    const spotBlock = this.deps.spotCheckDigest ? await this.deps.spotCheckDigest(now).catch(() => null) : null;
+    const extraBlock = [leadBlock, spotBlock].filter((b): b is string => !!b).join('\n\n') || null;
+    const message = buildDigestMessage(sections, extraBlock);
     const ok = message
       ? await this.deps.notifyOwner({ title: 'Tickets today', message, urgent: false }).catch(() => false)
       : true; // nothing worth a message: count the day as done

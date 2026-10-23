@@ -35,6 +35,7 @@ import {
   WAITING_SYNC_CONSTANTS,
   CREWLY_CHANNEL_CONSTANTS,
   STALL_WATCHER_CONSTANTS,
+  VERIFIED_SPOT_CHECK_CONSTANTS,
   TL_DELEGATION_CONSTANTS,
   TRACE_CONSTANTS,
 } from './constants.js';
@@ -596,6 +597,18 @@ describe('HANDOVER_CONSTANTS (interrupted work, crewly#1361)', () => {
     expect(HANDOVER_CONSTANTS.LONG_COMMAND_PATTERN.test('ffmpeg -i a.mov b.mp4')).toBe(true);
     expect(HANDOVER_CONSTANTS.LONG_COMMAND_PATTERN.test('node server.js &')).toBe(true);
     expect(HANDOVER_CONSTANTS.LONG_COMMAND_PATTERN.test('cat README.md')).toBe(false);
+  });
+});
+
+describe('VERIFIED_SPOT_CHECK_CONSTANTS (crewly#1315)', () => {
+  it('samples a day of verified work once a day and lists a bounded number of discrepancies', () => {
+    expect(VERIFIED_SPOT_CHECK_CONSTANTS.WINDOW_MS).toBe(24 * 60 * 60 * 1000);
+    expect(VERIFIED_SPOT_CHECK_CONSTANTS.SAMPLE_SIZE).toBeGreaterThan(0);
+    expect(VERIFIED_SPOT_CHECK_CONSTANTS.CHECK_INTERVAL_MS).toBeLessThan(VERIFIED_SPOT_CHECK_CONSTANTS.WINDOW_MS);
+    expect(VERIFIED_SPOT_CHECK_CONSTANTS.BOOT_DELAY_MS).toBeLessThan(VERIFIED_SPOT_CHECK_CONSTANTS.CHECK_INTERVAL_MS);
+    expect(VERIFIED_SPOT_CHECK_CONSTANTS.STATE_FILE).toMatch(/\.json$/);
+    expect(VERIFIED_SPOT_CHECK_CONSTANTS.MAX_LISTED_DISCREPANCIES).toBeGreaterThan(0);
+    expect(VERIFIED_SPOT_CHECK_CONSTANTS.ENV_SWITCH).toBe('CREWLY_VERIFIED_SPOT_CHECK');
   });
 });
 
