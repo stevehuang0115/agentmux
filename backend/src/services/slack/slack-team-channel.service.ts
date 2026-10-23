@@ -3797,6 +3797,31 @@ export class SlackTeamChannelService {
   }
 
   /**
+   * Local agents Cloud's envelope names in a channel: @-mentioned by name
+   * (`mentionedAgentSessions`) or listed as this machine's members of the
+   * room (`room.members`). The orchestrator is never a room member.
+   *
+   * @param message - The inbound message (a Cloud-routed copy)
+   * @param local - Sessions of this machine's team members
+   * @returns Named local sessions, in envelope order
+   */
+  private async localNamedByCloud(message: SlackIncomingMessage, local: readonly string[]): Promise<string[]> {
+    if (message.channelId.startsWith('D')) return [];
+    const me = message.room && this.deps.resolveInstanceId ? await this.deps.resolveInstanceId().catch(() => null) : null;
+    const named: string[] = [];
+    const add = (raw: string): void => {
+      const s = localAgentSession(raw);
+      if (local.includes(s) && !named.includes(s)) named.push(s);
+    };
+    for (const s of message.mentionedAgentSessions ?? []) add(s);
+    // `local` already restricts to this machine's team members (session names are unique across the account); the instance id only guards against a stale snapshot naming the same agent elsewhere.
+    for (const m of message.room?.members ?? []) {
+      if ((!me || m.instanceId === me) && m.verified !== false) add(m.agentSession);
+    }
+    return named;
+  }
+
+  /**
    * The local agent whose own app delivered this copy, if any.
    *
    * A direct message is never a room: an agent's DM is handled by the DM
@@ -3934,6 +3959,12 @@ export class SlackTeamChannelService {
     // nobody has addressed it yet.
     const receiving = await this.localReceivingAgent(message);
     if (receiving && !sessions.includes(receiving)) sessions.push(receiving);
+    // An agent with no Slack app of its own is never @'d by bot id and no
+    // copy ever comes through its app: Cloud's envelope names it instead
+    // (@-mentioned by name, or a member of the room on this machine). Without
+    // this the Lead's machine never had #ce-x-wang-law and dropped every
+    // owner reply routed to it for nine days (2026-10-23, crewly#1430).
+    for (const s of await this.localNamedByCloud(message, candidates.map((c) => c.sessionName))) if (!sessions.includes(s)) sessions.push(s);
     if (sessions.length === 0) return null;
 
     // The master bot is usually not in this channel (private); the name is
