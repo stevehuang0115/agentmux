@@ -1062,6 +1062,21 @@ describe('routeInbound', () => {
     expect(await service.routeInbound(inbound({ channelId: 'C-other' }))).toBeNull();
   });
 
+  // 2026-10-23, crewly#1430: the Lead on the Air has no Slack app, so its
+  // machine never got #ce-x-wang-law and dropped every reply routed to it.
+  it("an unmapped channel message that Cloud routed here naming a local app-less agent (by name or as a room member) links the room with that agent", async () => {
+    const byName = await service.routeInbound(inbound({ channelId: 'C-wang', ts: '300.1', text: '@Sam 看一下', mentionedAgentSessions: ['crewly-alpha-sam'] }));
+    expect(byName).not.toBeNull();
+    expect(byName!.mapping).toMatchObject({ teamId: 'adhoc:C-wang', slackChannelId: 'C-wang', members: ['crewly-alpha-sam'] });
+    const asMember = await service.routeInbound(
+      inbound({ channelId: 'C-law', ts: '300.2', text: '可以把那些加上吗？', room: { members: [{ agentSession: 'crewly-alpha-sam', displayName: 'Sam', instanceId: 'mac', deviceName: 'Mac', awake: false, verified: true }] } }),
+    );
+    expect(asMember).not.toBeNull();
+    expect(asMember!.mapping).toMatchObject({ teamId: 'adhoc:C-law', members: ['crewly-alpha-sam'] });
+    // A member Cloud lists on ANOTHER machine, or an unknown session, links nothing here.
+    expect(await service.routeInbound(inbound({ channelId: 'C-else', ts: '300.3', room: { members: [{ agentSession: 'air-rex', displayName: 'Rex', instanceId: 'air', deviceName: 'Air', awake: true }] }, mentionedAgentSessions: ['air-rex'] }))).toBeNull();
+  });
+
   it("a dedicated agent @'d by someone else declines politely and gets nothing; its person is served (issue #968)", async () => {
     storage.teams = [team({ members: [member('Sam', 'developer', { dedicatedTo: 'UINFO1' }), member('Leo', 'team-leader')], leaderIds: ['m-leo'] })];
     const declined = await service.routeInbound(inbound({ text: '@sam 看一下', userId: 'USTEVE1' }));
