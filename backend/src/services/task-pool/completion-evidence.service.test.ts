@@ -19,6 +19,7 @@ import {
   decideCompletion,
   describeDecisionsForReviewer,
   describeEvidenceForReviewer,
+  recheckArtifacts,
   decideReviewAccept,
   resolveEvidenceEnforcementMode,
   evidenceRequiredFor,
@@ -70,6 +71,38 @@ describe('blockedReason', () => {
       { type: 'blocked', step: 'npm test', reason: 'db down' },
       { type: 'blocked', step: 'deploy', reason: 'no creds' },
     ])).toBe('Blocked at "npm test": db down; Blocked at "deploy": no creds');
+  });
+});
+
+describe('recheckArtifacts (#1315)', () => {
+  const present = { isDirectory: false, sizeBytes: 10, mtimeMs: 1 };
+  const statOf = (existing: Record<string, { isDirectory: boolean; sizeBytes: number; mtimeMs: number }>) =>
+    async (p: string) => existing[p] ?? null;
+
+  it('reports each local artifact that is gone or empty, resolving relative paths against the WorkItem', async () => {
+    const wi = {
+      metadata: { projectPath: '/proj' },
+      output: { evidence: [
+        { type: 'artifact', path: '/abs/kept.md' },
+        { type: 'artifact', path: '/abs/gone.md' },
+        { type: 'artifact', path: 'out/empty.md' },
+        { type: 'artifact', path: 'https://example.com/pr/1' },
+        { type: 'command', command: 'npm test', exitCode: 0 },
+      ] },
+    };
+    const out = await recheckArtifacts(wi, { statPath: statOf({ '/abs/kept.md': present, '/proj/out/empty.md': { ...present, sizeBytes: 0 } }), homeDir: '/home/x' });
+    expect(out.map((d) => d.artifact)).toEqual(['/abs/gone.md', 'out/empty.md']);
+    expect(out[0].problem).toContain('does not exist');
+    expect(out[1].problem).toContain('empty');
+  });
+
+  it('does not apply the age check: an old but present file holds', async () => {
+    const out = await recheckArtifacts({ metadata: {}, output: { evidence: [{ type: 'artifact', path: '/abs/old.md' }] } }, { statPath: statOf({ '/abs/old.md': { ...present, mtimeMs: 0 } }), homeDir: '/h' });
+    expect(out).toEqual([]);
+  });
+
+  it.each([undefined, {}, { evidence: 'nope' }, { evidence: [] }])('is empty for no usable evidence: %j', async (output) => {
+    expect(await recheckArtifacts({ metadata: {}, output: output as Record<string, unknown> | undefined }, { statPath: async () => null, homeDir: '/h' })).toEqual([]);
   });
 });
 

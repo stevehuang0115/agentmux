@@ -8309,6 +8309,31 @@ export const TRACE_CONSTANTS = {
  * one ladder: the agent once, then its lead once, then one plain line to the
  * owner. The owner is never the retry loop.
  */
+/**
+ * Daily spot check of verified work (crewly#1315): a few verified WorkItems
+ * from the last day are re-checked for their artifacts still existing.
+ */
+export const VERIFIED_SPOT_CHECK_CONSTANTS = {
+	/** `=0` switches the sampler off */
+	ENV_SWITCH: 'CREWLY_VERIFIED_SPOT_CHECK',
+	/** Verified items completed within this window are candidates */
+	WINDOW_MS: 24 * 60 * 60 * 1000,
+	/** Most WorkItems re-checked per run */
+	SAMPLE_SIZE: 10,
+	/** How often the service asks whether today's run is still owed */
+	CHECK_INTERVAL_MS: 60 * 60 * 1000,
+	/** Delay before the first check after boot */
+	BOOT_DELAY_MS: 5 * 60 * 1000,
+	/** State file under CREWLY_HOME: the last run's day and result */
+	STATE_FILE: 'verified-spot-check.json',
+	/** Title of the owner alert when a sampled artifact is gone */
+	OWNER_ALERT_TITLE: 'Verified work spot check',
+	/** Discrepancies listed under the digest line (the rest are counted) */
+	MAX_LISTED_DISCREPANCIES: 5,
+	/** Longest WorkItem title quoted in a discrepancy row */
+	TITLE_MAX_CHARS: 60,
+} as const;
+
 export const STALL_WATCHER_CONSTANTS = {
 	/** `=false` switches the watcher off entirely */
 	ENV_KILL_SWITCH: 'CREWLY_STALL_WATCHER',

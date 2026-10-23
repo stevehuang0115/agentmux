@@ -200,6 +200,41 @@ async function checkArtifact(
   };
 }
 
+/** A named artifact that no longer checks out (crewly#1315). */
+export interface ArtifactDiscrepancy {
+  /** The path as the worker sent it */
+  artifact: string;
+  /** What is wrong with it now */
+  problem: string;
+}
+
+/**
+ * Re-check a verified WorkItem's artifacts some time after completion
+ * (crewly#1315): each local artifact must still exist and be non-empty.
+ * No age check — the file was accepted then; only its presence is in
+ * question now. URLs pass as at completion. Read-only.
+ *
+ * @param workItem - The WorkItem (its `output.evidence` is read)
+ * @param options - File check and home directory, injectable for tests
+ * @returns One entry per artifact that is gone or empty; empty when all hold
+ */
+export async function recheckArtifacts(
+  workItem: Pick<WorkItem, 'output' | 'metadata'>,
+  options: Pick<EvidenceCheckOptions, 'statPath' | 'homeDir'> = {},
+): Promise<ArtifactDiscrepancy[]> {
+  const v = validateCompletionEvidence(workItem.output?.['evidence']);
+  if (!v.ok) return [];
+  const bases = artifactBaseDirs(workItem);
+  const opts = { statPath: options.statPath ?? defaultStatPath, homeDir: options.homeDir ?? os.homedir(), notBeforeMs: null };
+  const out: ArtifactDiscrepancy[] = [];
+  for (const e of v.evidence) {
+    if (e.type !== 'artifact') continue;
+    const check = await checkArtifact(e, bases, opts);
+    if (!check.ok) out.push({ artifact: e.path, problem: check.problem });
+  }
+  return out;
+}
+
 /**
  * An existing local artifact: a file must have content and be newer than the
  * WorkItem (a placeholder or an earlier task's output is not evidence).

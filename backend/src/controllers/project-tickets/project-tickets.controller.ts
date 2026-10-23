@@ -129,6 +129,11 @@ export function createDefaultTicketAutopilot(
     openExperiments: async (project) => openExperimentsOf((await ExperimentService.getInstance()?.list()) ?? [], project),
     // Lead share of team tokens in the evening digest (crewly#1083).
     leadShareDigest: (now) => defaultLeadShareDigest(now),
+    // Today's verified-work spot check, one line (crewly#1315).
+    spotCheckDigest: async (now) => {
+      const { VerifiedSpotCheckService } = await import('../../services/task-pool/verified-spot-check.service.js');
+      return (await VerifiedSpotCheckService.getInstance()?.digestLine(now)) ?? null;
+    },
     // Stalled work: re-push the brief to the idle assignee, and let idle
     // members take ready tickets on the tick (not only on an idle event).
     redeliverWork: async (workItem) => {
