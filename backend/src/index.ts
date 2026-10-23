@@ -1265,11 +1265,30 @@ void (async () => {
 
 			// Wiki maintenance (#1345): hourly queue drain into the vault logs
 			// (the bridge below is the LLM path and is usually switched off),
-			// daily log rotation into llm-curated/log-archive/ and a weekly
-			// digest page compiled from the log. No LLM. Non-fatal.
+			// daily log rotation into llm-curated/log-archive/, a weekly
+			// digest page compiled from the log, and (#914) a weekly
+			// knowledge-gaps page per vault with one review WorkItem for the
+			// vault's team lead. No LLM. Non-fatal.
 			try {
 				const { WikiMaintenanceService } = await import('./services/wiki/wiki-maintenance.service.js');
-				const maintenance = new WikiMaintenanceService({ bootGate: this.bootQuietGate() });
+				const { WikiKnowledgeGapsService } = await import('./services/wiki/wiki-knowledge-gaps.service.js');
+				const { resolveWikiOwner } = await import('./services/wiki/wiki-owner.resolver.js');
+				const gaps = new WikiKnowledgeGapsService({
+					pool: TaskPoolService.getInstance(),
+					// Team leaders own their vault's knowledge; the global vault stays with the orchestrator.
+					resolveTarget: (vaultPath) => resolveWikiOwner(this.storageService, vaultPath),
+					// Never queue a review for a stopped lead: a weekly chore is
+					// not worth a wake the owner never asked for.
+					isTargetAwake: async (sessionName) => {
+						if (sessionName === ORCHESTRATOR_SESSION_NAME) return true;
+						const member = (await this.storageService.getTeams())
+							.flatMap((t) => t.members ?? [])
+							.find((m) => m.sessionName === sessionName);
+						return member?.agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE;
+					},
+				});
+				WikiKnowledgeGapsService.setInstance(gaps);
+				const maintenance = new WikiMaintenanceService({ bootGate: this.bootQuietGate(), gaps });
 				WikiMaintenanceService.setInstance(maintenance);
 				maintenance.start();
 			} catch (maintenanceErr) {
