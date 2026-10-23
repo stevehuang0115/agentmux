@@ -440,7 +440,9 @@ beforeEach(async () => {
 afterEach(async () => {
   service.stop();
   setSlackTeamChannelService(null);
-  await fs.rm(tmpDir, { recursive: true, force: true });
+  // A save the service still had in flight can land while the directory is
+  // being removed (CI: ENOTEMPTY on rmdir, 2026-10-22/23): retry briefly.
+  await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 // ---------------------------------------------------------------------------
