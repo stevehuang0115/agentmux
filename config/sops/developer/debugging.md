@@ -22,6 +22,11 @@ tags:
   - debugging
   - testing
   - quality
+# Rule metadata (#877): what this rule prevents, where seen, when to re-test
+prevents: "none recorded as an incident — no debugging SOP existed; added with a pre-commit scan for leftover [DEBUG- markers, borrowed from mattpocock/skills"
+seenOn: "unknown (2026-10)"
+reviewBy: 2027-01-31
+source: https://github.com/stevehuang0115/crewly/pull/1277
 ---
 
 # Debugging
