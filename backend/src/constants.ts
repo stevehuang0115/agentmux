@@ -8427,6 +8427,14 @@ export const STALL_WATCHER_CONSTANTS = {
 	CLAIM_EN_AFTER_NAME: "(?:is|'s|has been|will be|was|are|'re)\\s+(?:already\\s+)?(?:doing|on|making|working on|handling|building|taking|taking care of|writing|producing|rendering|editing|cutting|preparing|drafting|looking into|picking (?:it|this) up)",
 	/** English hand-off before the name: "handed it to Pia", "assigned this to Pia" */
 	CLAIM_EN_BEFORE_NAME: '(?:handed|gave|passed|assigned|delegated|sent|routed)\\s+(?:it|this|that|the\\s+\\w+(?:\\s+\\w+)?)\\s+(?:over\\s+)?to',
+	/**
+	 * Words before the hand-off that make it a plan, not a claim (crewly#1427 item 5):
+	 * "你看过说可以，我再交给 Dex", "会随这次一起交给 Dex", "你说改，我就做成改动交给 Owen",
+	 * "最后「放进 Flopost」：卡交给 Dex 带进下一次发版" — the 2026-10-23 false nudges.
+	 */
+	CLAIM_PLAN_ZH: /再|(?<!刚)才|会|将|然后|接着|最后|还差|下一步|下一?次|之后|以后|到时候?|打算|计划|准备|如果|要是|一旦|等(?:你|他|她|我|大家)|你(?:说|点|看过|选好|定了?|批准|同意|确认)|说(?:可以|行|好|OK)/iu,
+	/** English words before the hand-off that make it a plan: "once you approve, Pia will be doing it", "then I'll hand it to Dana" */
+	CLAIM_PLAN_EN: /\b(?:will|would|once|if|then|next|later|unless|plan(?:s|ning)? to|going to|as soon as)\b|'ll\b/iu,
 } as const;
 
 
