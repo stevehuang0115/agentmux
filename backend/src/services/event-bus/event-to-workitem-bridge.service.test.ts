@@ -290,6 +290,38 @@ describe('EventToWorkItemBridge', () => {
       b2.bridge.stop();
     });
 
+    it("puts the worker's decision record in the brief, and nothing when there is none (#875)", async () => {
+      const withRecord = buildWorkItem({
+        output: {
+          summary: 'x',
+          evidence: [{ type: 'artifact', path: '/a' }],
+          decisions: ['Kept the v1 schema'],
+          notTaken: ['A new table — needs a migration'],
+          assumptions: ['Relay is on 1.5.24'],
+        },
+      });
+      const taskPool = buildFakeTaskPool([withRecord]);
+      const { bridge, bus } = buildBridge({ taskPool });
+      bridge.start();
+      bus.publish(buildEvent({ type: 'task:done_by_worker' }));
+      await bridge.flushPending();
+      const brief = taskPool.addCalls[0].description;
+      expect(brief).toContain("Worker's record");
+      expect(brief).toContain('Decisions:\n  - Kept the v1 schema');
+      expect(brief).toContain('Not taken:\n  - A new table — needs a migration');
+      expect(brief).toContain('Assumptions:\n  - Relay is on 1.5.24');
+      bridge.stop();
+
+      const noRecord = buildWorkItem({ output: { summary: 'x', evidence: [{ type: 'artifact', path: '/a' }] } });
+      const pool2 = buildFakeTaskPool([noRecord]);
+      const b2 = buildBridge({ taskPool: pool2 });
+      b2.bridge.start();
+      b2.bus.publish(buildEvent({ type: 'task:done_by_worker' }));
+      await b2.bridge.flushPending();
+      expect(pool2.addCalls[0].description).not.toContain("Worker's record");
+      b2.bridge.stop();
+    });
+
     // 2026-09-16: every verify WI is a full orchestrator wake-up. A cron tick
     // re-runs itself, and bridge-auto wiki maintenance re-scans itself, so
     // neither needs a verifier.

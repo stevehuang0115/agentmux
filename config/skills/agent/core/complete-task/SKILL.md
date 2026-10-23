@@ -49,6 +49,9 @@ Mark a task as complete with a summary of the work done. If the task has an outp
 | `evidence` | Yes* | Array of evidence entries — see **Evidence contract** below. *Required: refused without it (400 `evidence_required`), except a review `verdict` |
 | `absoluteTaskPath` | No | **Legacy (V1).** Still accepted so older callers keep working, but it does NOT identify a WorkItem |
 | `output` | No | Structured output object (required if task has an output schema) |
+| `decisions` | No | Array of short strings: the key decisions you made — see **Decision record** below |
+| `notTaken` | No | Array of short strings: options you considered and did not take, each with the reason |
+| `assumptions` | No | Array of short strings: what you relied on without checking |
 | `taskKind` | No | What kind of task this was (`revision`, `new-build`, `new-capability`, `research`, `review`, or your own kebab-case word). Used for task timing; without it the kind named in `report-progress`, then the title, decides |
 | ~~`skipGates`~~ | **Rejected** | **Not supported.** This endpoint runs no quality gates, so there is nothing to skip. Passing it is a hard error. Use the `check-quality-gates` skill for gates. |
 
@@ -91,6 +94,21 @@ If you could not finish, do **not** report done: send a `blocked` entry (or use
 naming the bad entry. A completion with no evidence is refused with 400
 `evidence_required` and nothing is completed (#1312).
 A review verdict (`verdict` set) needs no evidence.
+
+## Decision record (#875)
+
+Evidence shows the work exists; the record shows how you got there. Send any
+of `decisions`, `notTaken`, `assumptions` as arrays of short strings (one
+sentence each). The reviewer sees them in the Verify item under "Worker's
+record" and checks that they hold — a wrong assumption or a road not taken
+for a bad reason is a reason to send the work back, even when every test
+passes. Leave a field out when there is nothing to say; an empty list is fine.
+
+```json
+"decisions":["Kept the v1 schema; the new field goes in metadata"],
+"notTaken":["A new table — needs a migration the owner has not approved"],
+"assumptions":["The relay runs 1.5.24 in production (checked the compose file, not the container)"]
+```
 
 ## Example
 
