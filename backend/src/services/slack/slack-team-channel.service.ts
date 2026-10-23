@@ -2389,6 +2389,29 @@ export class SlackTeamChannelService {
         }
       }
 
+      // An owner message held on a recipient's queue (it is mid-turn) shows
+      // the owner that it is busy, whether or not a placeholder was owed:
+      // Milo answered four messages ten minutes later and the thread showed
+      // nothing meanwhile (2026-10-23, #air-edu-game). Only for a recipient
+      // that owes a reply or the message's only recipient — a room broadcast
+      // must not grow a line per listener.
+      if (this.deps.typing && dispatch?.dispatched && isOwnerAuthored(message, this.deps.getOwnerUserId?.())) {
+        const dispatchedTo = (dispatch.huddleOutcomes ?? []).filter((o) => o.dispatched);
+        for (const o of dispatchedTo) {
+          if (!o.queued || o.deferred || typingTargets.some((t) => t.session === o.sessionName)) continue;
+          if (o.responseMode !== 'required' && dispatchedTo.length !== 1) continue;
+          if (o.sessionName === CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) continue;
+          const member = members.find((m) => m.sessionName === o.sessionName);
+          const installed = this.deps.identities?.getInstalled(o.sessionName);
+          const identity = installed
+            ? { botToken: installed.botToken, displayName: member?.name ?? o.sessionName }
+            : { displayName: member?.name ?? o.sessionName, ...slackIdentityFor(member, o.sessionName) };
+          const key = { agentSession: o.sessionName, slackChannelId: message.channelId, threadTs: slackThreadTs };
+          routeGuard?.notePlaceholder(key);
+          await this.bounded(this.deps.typing.begin(key, identity, 'queued', message.ts), null, 'placeholder', message);
+        }
+      }
+
       this.logger.info('Slack team message routed', {
         teamId: mapping.teamId,
         slackChannel: `#${mapping.slackChannelName}`,
