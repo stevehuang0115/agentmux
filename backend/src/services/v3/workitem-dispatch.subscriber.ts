@@ -753,12 +753,17 @@ export class WorkItemDispatchSubscriber {
   private dropStaleQueuedNotice(workItemId: string, target: string): boolean {
     try {
       const queue = SubAgentMessageQueue.getInstance();
+      const now = Date.now();
       const stale = queue
         .peek(target)
         .filter((m) => (dispatchNoticeWorkItemIds(m.data) ?? []).includes(workItemId))
-        .filter((m) => Date.now() - m.queuedAt >= STALE_QUEUED_NOTICE_MS);
+        .filter((m) => now - m.queuedAt >= STALE_QUEUED_NOTICE_MS)
+        // A notice the queue keeps deferring because the agent is mid-turn had
+        // no chance yet: dropping and redelivering it only queued it twice
+        // behind the same busy agent (Vera, 2026-10-22 22:06–22:12, crewly#1431).
+        .filter((m) => !(m.lastDeferredAt && now - m.lastDeferredAt < STALE_QUEUED_NOTICE_MS));
       if (stale.length === 0) return false;
-      for (const m of stale) queue.remove(target, m.data);
+      for (const m of stale) queue.remove(target, m.data, 'stale dispatch notice');
       this.logger.warn('Stale dispatch notice dropped from the agent queue; redelivering the brief', { workItemId, target, count: stale.length });
       return true;
     } catch {

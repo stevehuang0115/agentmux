@@ -49,6 +49,10 @@ export interface QueuedAgentMessage {
 	queuedAt: number;
 	/** The target session name */
 	sessionName: string;
+	/** Times a flush found the agent busy and kept this message (log noise is cut after the first) */
+	deferrals?: number;
+	/** The last time a flush kept it because the agent was busy (ms): not stale while this is recent */
+	lastDeferredAt?: number;
 	/** Failed delivery attempts so far (a send that threw or reported failure) */
 	attempts?: number;
 	/** Times it was kept, instead of dropped, because the agent was down */
@@ -808,12 +812,17 @@ export class SubAgentMessageQueue {
 					// `send` re-queued it at the back; take that copy out — it goes
 					// back at its original place, with its original queuedAt.
 					this.removeRequeuedCopy(sessionName, sentText, knownIds);
+					queued.deferrals = (queued.deferrals ?? 0) + 1;
+					queued.lastDeferredAt = Date.now();
+					pending[i] = queued;
 					heldAgain = pending.slice(i);
 					out.deferred += heldAgain.length;
-					this.logger.info('Queued message deferred again — agent still busy; it and the messages after it keep their order', {
+					// Every 30 s while the agent is busy: say it once, then every tenth time (657 lines on 2026-10-22, crewly#1431).
+					this.logger[queued.deferrals === 1 || queued.deferrals % 10 === 0 ? 'info' : 'debug']('Queued message deferred again — agent still busy; it and the messages after it keep their order', {
 						sessionName,
 						queuedAt: new Date(queued.queuedAt).toISOString(),
 						keptBehindIt: heldAgain.length - 1,
+						deferrals: queued.deferrals,
 					});
 					break;
 				} else {
