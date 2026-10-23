@@ -1666,6 +1666,22 @@ export const PROJECT_TICKET_CONSTANTS = {
  * runs in CI (`.github/workflows/oss-boundary.yml`) and inside the jest suite.
  * Every path here is relative to the repository root.
  */
+/**
+ * Rule metadata (issue #877): every SOP records the failure it prevents, the
+ * model where that was seen, and a review date — so rules can be re-tested
+ * and deleted when they stop making a difference.
+ */
+export const RULE_METADATA_CONSTANTS = {
+	/** Directory of SOP files whose frontmatter is audited */
+	SOPS_DIR: 'config/sops',
+	/** The three frontmatter fields (plus the optional `source` link) */
+	FIELDS: { PREVENTS: 'prevents', SEEN_ON: 'seenOn', REVIEW_BY: 'reviewBy', SOURCE: 'source' } as const,
+	/** Share of SOPs that must carry all three fields for the check to pass */
+	MIN_COVERAGE: 0.8,
+	/** `prevents` starts with this when no failure was ever recorded for the rule */
+	NO_RECORDED_FAILURE: 'none recorded',
+} as const;
+
 export const OSS_BOUNDARY_CONSTANTS = {
 	/** Allowlist of explicit exceptions; every entry carries a one-line reason */
 	ALLOWLIST_FILE: 'config/oss-boundary-allowlist.json',
